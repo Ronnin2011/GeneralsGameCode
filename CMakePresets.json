@@ -133,17 +133,20 @@
         {
             "name": "win32-dx9",
             "inherits": "win32",
+            "hidden": false,
             "displayName": "Windows 32bit DirectX 9 Release",
+            "architecture": {
+                "value": "Win32",
+                "strategy": "external"
+            },
             "cacheVariables": {
+                "RTS_FLAGS": "/W3",
                 "RTS_BUILD_DIRECTX9": "ON"
-            }
-        },
-        {
-            "name": "win32-dx9",
-            "inherits": "win32",
-            "displayName": "Windows 32bit DirectX 9 Release",
-            "cacheVariables": {
-                "RTS_BUILD_DIRECTX9": "ON"
+            },
+            "vendor": {
+                "jetbrains.com/clion": {
+                    "toolchain": "Visual Studio"
+                }
             }
         },
         {
@@ -204,13 +207,6 @@
             "configurePreset": "win32-vcpkg",
             "displayName": "Build Windows 32bit VCPKG Release",
             "description": "Build Windows 32bit VCPKG Release",
-            "configuration": "Release"
-        },
-        {
-            "name": "win32-dx9",
-            "configurePreset": "win32-dx9",
-            "displayName": "Build Windows 32bit DirectX 9 Release",
-            "description": "Build Windows 32bit DirectX 9 Release",
             "configuration": "Release"
         },
         {
@@ -330,19 +326,6 @@
                 {
                     "type": "build",
                     "name": "win32-vcpkg"
-                }
-            ]
-        },
-        {
-            "name": "win32-dx9",
-            "steps": [
-                {
-                    "type": "configure",
-                    "name": "win32-dx9"
-                },
-                {
-                    "type": "build",
-                    "name": "win32-dx9"
                 }
             ]
         },
