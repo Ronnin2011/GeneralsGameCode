@@ -38,6 +38,9 @@
 
 //#define INDEX_BUFFER_LOG
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include <d3d9.h>  // Native DX9
+
 #include "dx8indexbuffer.h"
 #include "dx8wrapper.h"
 #include "dx8caps.h"
@@ -193,7 +196,7 @@ IndexBufferClass::WriteLockClass::WriteLockClass(IndexBufferClass* index_buffer_
 		DX8_ErrorCode(static_cast<DX8IndexBufferClass*>(index_buffer)->Get_DX8_Index_Buffer()->Lock(
 			0,
 			index_buffer->Get_Index_Count()*sizeof(WORD),
-			(unsigned char**)&indices,
+			(void**)&indices,
 			flags));
 		break;
 	case BUFFER_TYPE_SORTING:
@@ -244,7 +247,7 @@ IndexBufferClass::AppendLockClass::AppendLockClass(IndexBufferClass* index_buffe
 		DX8_ErrorCode(static_cast<DX8IndexBufferClass*>(index_buffer)->index_buffer->Lock(
 			start_index*sizeof(unsigned short),
 			index_range*sizeof(unsigned short),
-			(unsigned char**)&indices,
+			(void**)&indices,
 			0));
 		break;
 	case BUFFER_TYPE_SORTING:
@@ -298,7 +301,8 @@ DX8IndexBufferClass::DX8IndexBufferClass(unsigned short index_count_,UsageType u
 		usage_flags,
 		D3DFMT_INDEX16,
 		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED,
-		&index_buffer));
+		&index_buffer,
+		NULL);  // DX9: pSharedHandle
 }
 
 // ----------------------------------------------------------------------------
@@ -400,7 +404,7 @@ DynamicIBAccessClass::WriteLockClass::WriteLockClass(DynamicIBAccessClass* ib_ac
 			static_cast<DX8IndexBufferClass*>(DynamicIBAccess->IndexBuffer)->Get_DX8_Index_Buffer()->Lock(
 			DynamicIBAccess->IndexBufferOffset*sizeof(WORD),
 			DynamicIBAccess->Get_Index_Count()*sizeof(WORD),
-			(unsigned char**)&Indices,
+			(void**)&Indices,
 			!DynamicIBAccess->IndexBufferOffset ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE));
 		break;
 	case BUFFER_TYPE_DYNAMIC_SORTING:

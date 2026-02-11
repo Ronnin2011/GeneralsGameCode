@@ -29,6 +29,34 @@
 #ifndef __W3DWater_H_
 #define __W3DWater_H_
 
+// Ronin @build 27/10/2025 DX9: Include DX9 headers and define DX8 compatibility types
+#include <d3d9.h>
+
+// Ronin @build 27/10/2025 DX9: Guard typedefs to prevent redefinition errors
+#ifndef DX8_TO_DX9_TYPEDEFS_DEFINED
+#define DX8_TO_DX9_TYPEDEFS_DEFINED
+
+typedef IDirect3D9 IDirect3D8;
+typedef IDirect3DDevice9 IDirect3DDevice8;
+typedef IDirect3DVolume9 IDirect3DVolume8;
+typedef IDirect3DSwapChain9 IDirect3DSwapChain8;
+typedef D3DVIEWPORT9 D3DVIEWPORT8;
+typedef IDirect3DBaseTexture9 IDirect3DBaseTexture8;
+typedef IDirect3DTexture9 IDirect3DTexture8;
+typedef IDirect3DCubeTexture9 IDirect3DCubeTexture8;
+typedef IDirect3DVolumeTexture9 IDirect3DVolumeTexture8;
+typedef IDirect3DSurface9 IDirect3DSurface8;
+typedef IDirect3DVertexBuffer9 IDirect3DVertexBuffer8;
+typedef IDirect3DIndexBuffer9 IDirect3DIndexBuffer8;
+
+// Ronin @build 27/10/2025 DX9: Define LPDIRECT3D* pointer typedefs
+typedef IDirect3DDevice9* LPDIRECT3DDEVICE8;
+typedef IDirect3DVertexBuffer9* LPDIRECT3DVERTEXBUFFER8;
+typedef IDirect3DIndexBuffer9* LPDIRECT3DINDEXBUFFER8;
+typedef IDirect3DTexture9* LPDIRECT3DTEXTURE8;
+
+#endif // DX8_TO_DX9_TYPEDEFS_DEFINED
+
 #include "always.h"
 #include "rendobj.h"
 #include "w3d_file.h"
@@ -40,6 +68,8 @@
 #include "Lib/BaseType.h"
 #include "Common/GameType.h"
 #include "Common/Snapshot.h"
+
+#include <cstddef>
 
 #define INVALID_WATER_HEIGHT 0.0f	///water height guaranteed to be below all terrain.
 
@@ -127,6 +157,9 @@ public:
 
 	void replaceSkyboxTexture(const AsciiString& oldTexName, const AsciiString& newTextName);
 
+	// Ronin @bugfix 26/12/2025: Cleanup function to prevent texture stage state pollution
+	void cleanupWaterShaderState(void);
+
 protected:
 	DX8IndexBufferClass			*m_indexBuffer;	///<indices defining quad
 	SceneClass							*m_parentScene;	///<scene to be reflected
@@ -158,12 +191,19 @@ protected:
 		float tu, tv;
 	};
 
+	static_assert(sizeof(WaterRenderObjClass::SEA_PATCH_VERTEX) == 24, "SEA_PATCH_VERTEX must be 24 bytes");
+	static_assert(offsetof(WaterRenderObjClass::SEA_PATCH_VERTEX, x) == 0, "SEA_PATCH_VERTEX.x offset must be 0");
+	static_assert(offsetof(WaterRenderObjClass::SEA_PATCH_VERTEX, c) == 12, "SEA_PATCH_VERTEX.c offset must be 12");
+	static_assert(offsetof(WaterRenderObjClass::SEA_PATCH_VERTEX, tu) == 16, "SEA_PATCH_VERTEX.tu offset must be 16");
+
+
 	LPDIRECT3DDEVICE8 m_pDev;						///<pointer to D3D Device
 	LPDIRECT3DVERTEXBUFFER8 m_vertexBufferD3D;		///<D3D vertex buffer
 	LPDIRECT3DINDEXBUFFER8	m_indexBufferD3D;	///<D3D index buffer
 	Int						m_vertexBufferD3DOffset;	///<location to start writing vertices
-	DWORD					m_dwWavePixelShader;	///<handle to D3D pixel shader
-	DWORD					m_dwWaveVertexShader;	///<handle to D3D vertex shader
+	// Ronin @build DX9: Changed from DWORD handles to native DX9 shader pointers
+	IDirect3DPixelShader9*	m_dwWavePixelShader;	///<DX9 pixel shader pointer
+	IDirect3DVertexShader9*	m_dwWaveVertexShader;	///<DX9 vertex shader pointer
 	Int	m_numVertices;				///<number of vertices in D3D vertex buffer
 	Int m_numIndices;				///<number of indices in D3D index buffer
 	LPDIRECT3DTEXTURE8 m_pBumpTexture[NUM_BUMP_FRAMES]; ///<animation frames
@@ -173,6 +213,14 @@ protected:
 	TextureClass * m_pReflectionTexture;	///<render target for reflection
 	RenderObjClass	*m_skyBox;		///<box around level
 	WaterTracksRenderSystem *m_waterTrackSystem;	///<object responsible for rendering water wakes
+	// Ronin @build DX9: Changed from DWORD handles to native DX9 shader pointers
+	IDirect3DPixelShader9* m_waterPixelShader;		///<DX9 pixel shader pointer
+	IDirect3DPixelShader9* m_riverWaterPixelShader;		///<DX9 pixel shader pointer
+	IDirect3DPixelShader9* m_trapezoidWaterPixelShader;	///<DX9 pixel shader pointer
+	// Ronin @bugfix 30/11/2025: Cached vertex declarations for water shaders
+	IDirect3DVertexDeclaration9* m_riverWaterDecl;			///<DX9 vertex declaration for river water
+	IDirect3DVertexDeclaration9* m_seaWaterDecl;			///<DX9 vertex declaration for sea/ocean water
+	IDirect3DVertexDeclaration9* m_trapezoidWaterDecl;		///<DX9 vertex declaration for trapezoid water
 
 	enum WaterMeshStatus
 	{
@@ -210,9 +258,6 @@ protected:
 	TextureClass *m_riverTexture;
 	TextureClass *m_whiteTexture;		///< a texture containing only white used for NULL pixel shader stages.
 	TextureClass *m_waterNoiseTexture;
-	DWORD	m_waterPixelShader;		///<D3D handle to pixel shader.
-	DWORD	m_riverWaterPixelShader;		///<D3D handle to pixel shader.
-	DWORD	m_trapezoidWaterPixelShader;	///<handle to D3D vertex shader
 	TextureClass *m_waterSparklesTexture;
 	Real m_riverXOffset;
 	Real m_riverYOffset;

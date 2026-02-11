@@ -88,6 +88,8 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
+#include <d3d9.h>  // Native DX9
+
 #include "boxrobj.h"
 #include "w3d_util.h"
 #include "wwdebug.h"

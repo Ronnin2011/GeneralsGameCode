@@ -1,0 +1,106 @@
+{
+  "configurations": [
+    {
+      "name": "win32-debug",
+      "generator": "Visual Studio 17 2022",
+      "configurationType": "Debug",
+  "buildRoot": "${projectDir}\\build\\win32-debug",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+    "inheritEnvironments": [ "msvc_x86" ],
+ "variables": [
+        {
+  "name": "CMAKE_EXPORT_COMPILE_COMMANDS",
+   "value": "ON",
+          "type": "BOOL"
+  },
+        {
+       "name": "RTS_BUILD_OPTION_DEBUG",
+        "value": "ON",
+          "type": "BOOL"
+     }
+      ]
+    },
+    {
+      "name": "win32",
+      "generator": "Visual Studio 17 2022",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\build\\win32",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+   "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x86" ],
+      "variables": [
+        {
+          "name": "CMAKE_EXPORT_COMPILE_COMMANDS",
+     "value": "ON",
+     "type": "BOOL"
+        },
+        {
+          "name": "RTS_FLAGS",
+          "value": "/W3",
+       "type": "STRING"
+    }
+      ]
+    },
+    {
+      "name": "vc6",
+    "generator": "Ninja",
+      "configurationType": "Release",
+      "buildRoot": "${projectDir}\\build\\vc6",
+      "installRoot": "${projectDir}\\out\\install\\${name}",
+    "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x86" ],
+      "variables": [
+        {
+          "name": "CMAKE_EXPORT_COMPILE_COMMANDS",
+          "value": "ON",
+          "type": "BOOL"
+    },
+  {
+          "name": "CMAKE_BUILD_TYPE",
+          "value": "Release",
+          "type": "STRING"
+ },
+        {
+        "name": "RTS_FLAGS",
+          "value": "/W3",
+          "type": "STRING"
+        }
+      ]
+    },
+    {
+      "name": "vc6-debug",
+      "generator": "Ninja",
+   "configurationType": "Debug",
+    "buildRoot": "${projectDir}\\build\\vc6-debug",
+  "installRoot": "${projectDir}\\out\\install\\${name}",
+      "cmakeCommandArgs": "",
+      "buildCommandArgs": "",
+      "ctestCommandArgs": "",
+      "inheritEnvironments": [ "msvc_x86" ],
+      "variables": [
+        {
+          "name": "CMAKE_EXPORT_COMPILE_COMMANDS",
+          "value": "ON",
+          "type": "BOOL"
+        },
+   {
+          "name": "CMAKE_BUILD_TYPE",
+  "value": "Debug",
+"type": "STRING"
+  },
+        {
+     "name": "RTS_BUILD_OPTION_DEBUG",
+   "value": "ON",
+    "type": "BOOL"
+}
+      ]
+    }
+  ]
+}

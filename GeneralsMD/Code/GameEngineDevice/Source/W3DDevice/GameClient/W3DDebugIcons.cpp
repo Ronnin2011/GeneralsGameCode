@@ -46,6 +46,9 @@
 //         Includes
 //-----------------------------------------------------------------------------
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "W3DDevice/GameClient/W3DDebugIcons.h"
 
 #include "Common/GlobalData.h"

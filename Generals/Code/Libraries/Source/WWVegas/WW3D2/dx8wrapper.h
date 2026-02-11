@@ -43,9 +43,34 @@
 #ifndef DX8_WRAPPER_H
 #define DX8_WRAPPER_H
 
+// Ronin 19/10/2025 DX8-to-DX9 compatibility layer must be included before always.h to block DX8 headers.
+#include <d3d9.h>  // Native DX9
+#include <d3dx9.h> // Ronin @bugfix 02/11/2025 DX9: Required for D3DXLoadSurfaceFromSurface
+
+// Ronin @build 26/10/2025 DX9: Guard typedefs to prevent redefinition errors
+#ifndef DX8_TO_DX9_TYPEDEFS_DEFINED
+#define DX8_TO_DX9_TYPEDEFS_DEFINED
+
+typedef IDirect3D9 IDirect3D8;
+typedef IDirect3DDevice9 IDirect3DDevice8;
+typedef IDirect3DVolume9 IDirect3DVolume8;
+typedef IDirect3DSwapChain9 IDirect3DSwapChain8;
+typedef D3DVIEWPORT9 D3DVIEWPORT8;
+typedef IDirect3DBaseTexture9 IDirect3DBaseTexture8;
+typedef IDirect3DTexture9 IDirect3DTexture8;
+typedef IDirect3DCubeTexture9 IDirect3DCubeTexture8;
+typedef IDirect3DVolumeTexture9 IDirect3DVolumeTexture8;
+typedef IDirect3DSurface9 IDirect3DSurface8;
+
+#endif // DX8_TO_DX9_TYPEDEFS_DEFINED
+
+// Ronin @build 25/10/2025 DX9: Removed render states - map to DX9 equivalents
+#define D3DRS_ZBIAS D3DRS_DEPTHBIAS
+#define D3DFMT_W11V11U10 D3DFMT_UNKNOWN
+
 #include "always.h"
 #include "dllist.h"
-#include "d3d8.h"
+#include "d3d9.h"  // Changed from d3d8.h for DX9 migration
 #include "matrix4.h"
 #include "statistics.h"
 #include "wwstring.h"
@@ -66,9 +91,9 @@
 #define	VALUE_NAME_RENDER_DEVICE_NAME					"RenderDeviceName"
 #define	VALUE_NAME_RENDER_DEVICE_WIDTH				"RenderDeviceWidth"
 #define	VALUE_NAME_RENDER_DEVICE_HEIGHT				"RenderDeviceHeight"
-#define	VALUE_NAME_RENDER_DEVICE_DEPTH				"RenderDeviceDepth"
+#define	VALUE_NAME_RENDER_DEVICE_DEPTH				"RenderDeviceBitDepth"
 #define	VALUE_NAME_RENDER_DEVICE_WINDOWED			"RenderDeviceWindowed"
-#define	VALUE_NAME_RENDER_DEVICE_TEXTURE_DEPTH		"RenderDeviceTextureDepth"
+#define	VALUE_NAME_RENDER_DEVICE_TEXTURE_DEPTH		"RenderDeviceTextureBitDepth"
 
 const unsigned MAX_TEXTURE_STAGES=2;
 const unsigned MAX_VERTEX_STREAMS=2;
@@ -113,6 +138,9 @@ class SurfaceClass;
 extern unsigned number_of_DX8_calls;
 extern bool _DX8SingleThreaded;
 
+// Ronin @build 02/11/2025 DX9: Forward declare DXGetErrorString9A for enhanced error reporting
+const char* DXGetErrorString9A(HRESULT hr);
+
 void DX8_Assert();
 void Log_DX8_ErrorCode(unsigned res);
 
@@ -123,9 +151,51 @@ WWINLINE void DX8_ErrorCode(unsigned res)
 }
 
 #ifdef WWDEBUG
-#define DX8CALL_HRES(x,res) DX8_Assert(); res = DX8Wrapper::_Get_D3D_Device8()->x; DX8_ErrorCode(res); number_of_DX8_calls++;
-#define DX8CALL(x) DX8_Assert(); DX8_ErrorCode(DX8Wrapper::_Get_D3D_Device8()->x); number_of_DX8_calls++;
-#define DX8CALL_D3D(x) DX8_Assert(); DX8_ErrorCode(DX8Wrapper::_Get_D3D8()->x); number_of_DX8_calls++;
+#define DX8CALL_HRES(x,res) \
+	{ \
+		DX8_Assert(); \
+		res = DX8Wrapper::_Get_D3D_Device8()->x; \
+		number_of_DX8_calls++; \
+		if (FAILED(res)) { \
+			WWDEBUG_SAY(("DX8CALL_HRES FAILED: %s returned 0x%08X (%s) at %s:%d", \
+				#x, res, DXGetErrorString9A(res), __FILE__, __LINE__)); \
+			if (res == D3DERR_INVALIDCALL) { \
+				WWDEBUG_SAY(("  D3DERR_INVALIDCALL DETECTED!")); \
+			} \
+		} \
+		DX8_ErrorCode(res); \
+	}
+
+#define DX8CALL(x) \
+	{ \
+		DX8_Assert(); \
+		HRESULT __hr = DX8Wrapper::_Get_D3D_Device8()->x; \
+		number_of_DX8_calls++; \
+		if (FAILED(__hr)) { \
+			WWDEBUG_SAY(("DX8CALL FAILED: %s returned 0x%08X (%s) at %s:%d", \
+				#x, __hr, DXGetErrorString9A(__hr), __FILE__, __LINE__)); \
+			if (__hr == D3DERR_INVALIDCALL) { \
+				WWDEBUG_SAY(("  D3DERR_INVALIDCALL DETECTED!")); \
+			} \
+		} \
+		DX8_ErrorCode(__hr); \
+	}
+
+#define DX8CALL_D3D(x) \
+	{ \
+		DX8_Assert(); \
+		HRESULT __hr = DX8Wrapper::_Get_D3D8()->x; \
+		number_of_DX8_calls++; \
+		if (FAILED(__hr)) { \
+			WWDEBUG_SAY(("DX8CALL_D3D FAILED: %s returned 0x%08X (%s) at %s:%d", \
+				#x, __hr, DXGetErrorString9A(__hr), __FILE__, __LINE__)); \
+			if (__hr == D3DERR_INVALIDCALL) { \
+				WWDEBUG_SAY(("  D3DERR_INVALIDCALL DETECTED!")); \
+			} \
+		} \
+		DX8_ErrorCode(__hr); \
+	}
+
 #define DX8_THREAD_ASSERT() if (_DX8SingleThreaded) { WWASSERT_PRINT(DX8Wrapper::_Get_Main_Thread_ID()==ThreadClass::_Get_Current_Thread_ID(),"DX8Wrapper::DX8 calls must be called from the main thread!"); }
 #else
 #define DX8CALL_HRES(x,res) res = DX8Wrapper::_Get_D3D_Device8()->x; number_of_DX8_calls++;
@@ -176,7 +246,7 @@ struct RenderStateStruct
 	ShaderClass shader;
 	VertexMaterialClass* material;
 	TextureBaseClass * Textures[MAX_TEXTURE_STAGES];
-	D3DLIGHT8 Lights[4];
+	D3DLIGHT9 Lights[4];
 	bool LightEnable[4];
 	Matrix4x4 world;
 	Matrix4x4 view;
@@ -244,6 +314,29 @@ class DX8Wrapper
 		unsigned short vertex_count=0);
 
 public:
+
+	// Ronin @feature 10/11/2025: DX9 shader/FVF management helpers
+
+	/**
+	 * Safely switches to fixed-function pipeline
+	 * Clears all shaders and sets FVF
+	 */
+	//static void Switch_To_Fixed_Function_Pipeline(DWORD fvf);
+
+	/**
+	 * Safely switches to programmable pipeline
+	 * Clears FVF before setting shaders
+	 */
+	//static void Switch_To_Programmable_Pipeline(
+	//	IDirect3DVertexShader9* vs = nullptr,
+//	IDirect3DPixelShader9* ps = nullptr);
+
+	/**
+	 * Debug helper to validate current pipeline state
+	 */
+	//static bool Validate_Pipeline_State();
+
+
 #ifdef EXTENDED_STATS
 	static DX8_Stats stats;
 #endif
@@ -288,7 +381,7 @@ public:
 	static void Set_Render_State(const RenderStateStruct& state);
 	static void Release_Render_State();
 
-	static void Set_DX8_Material(const D3DMATERIAL8* mat);
+	static void Set_DX8_Material(const D3DMATERIAL9* mat);
 
 	static void Set_Gamma(float gamma,float bright,float contrast,bool calibrate=true,bool uselimit=true);
 
@@ -308,16 +401,64 @@ public:
 	static void _Set_DX8_Transform(D3DTRANSFORMSTATETYPE transform,const Matrix3D& m);
 	static void _Get_DX8_Transform(D3DTRANSFORMSTATETYPE transform, Matrix4x4& m);
 
-	static void Set_DX8_Light(int index,D3DLIGHT8* light);
+	static void Set_DX8_Light(int index,D3DLIGHT9* light);
 	static void Set_DX8_Render_State(D3DRENDERSTATETYPE state, unsigned value);
 	static void Set_DX8_Clip_Plane(DWORD Index, CONST float* pPlane);
 	static void Set_DX8_Texture_Stage_State(unsigned stage, D3DTEXTURESTAGESTATETYPE state, unsigned value);
+
+	// Ronin @bugfix 09/11/2025: DX8 to DX9 texture stage state compatibility wrapper
+// This function intercepts SetTextureStageState calls and redirects sampler states to SetSamplerState
+	static inline void Set_DX8_TSS_Compat(unsigned stage, unsigned state, unsigned value) {
+		IDirect3DDevice9* pDev = _Get_D3D_Device8();
+		if (!pDev) return;
+
+		// Check if this is a sampler state (DX8 values 13-21, 25)
+		switch (state) {
+		case 13: // DX8_TSS_ADDRESSU
+			pDev->SetSamplerState(stage, D3DSAMP_ADDRESSU, value);
+			break;
+		case 14: // DX8_TSS_ADDRESSV
+			pDev->SetSamplerState(stage, D3DSAMP_ADDRESSV, value);
+			break;
+		case 25: // DX8_TSS_ADDRESSW
+			pDev->SetSamplerState(stage, D3DSAMP_ADDRESSW, value);
+			break;
+		case 16: // DX8_TSS_MAGFILTER
+			pDev->SetSamplerState(stage, D3DSAMP_MAGFILTER, value);
+			break;
+		case 17: // DX8_TSS_MINFILTER
+			pDev->SetSamplerState(stage, D3DSAMP_MINFILTER, value);
+			break;
+		case 18: // DX8_TSS_MIPFILTER
+			pDev->SetSamplerState(stage, D3DSAMP_MIPFILTER, value);
+			break;
+		case 19: // DX8_TSS_MIPMAPLODBIAS
+			pDev->SetSamplerState(stage, D3DSAMP_MIPMAPLODBIAS, value);
+			break;
+		case 20: // DX8_TSS_MAXMIPLEVEL
+			pDev->SetSamplerState(stage, D3DSAMP_MAXMIPLEVEL, value);
+			break;
+		case 21: // DX8_TSS_MAXANISOTROPY
+			pDev->SetSamplerState(stage, D3DSAMP_MAXANISOTROPY, value);
+			break;
+		default:
+			// Normal texture stage state
+			pDev->SetTextureStageState(stage, (D3DTEXTURESTAGESTATETYPE)state, value);
+			break;
+		}
+		number_of_DX8_calls++;
+	}
+
+	// @build ronin 29/10/2025 DX9: Add these two NEW lines right after Set_DX8_Texture_Stage_State:
+	static void Set_DX8_Sampler_State(unsigned stage, D3DSAMPLERSTATETYPE state, unsigned value);
+	static void Set_Vertex_Shader(unsigned fvf);
+
 	static void Set_DX8_Texture(unsigned int stage, IDirect3DBaseTexture8* texture);
 	static void Set_Light_Environment(LightEnvironmentClass* light_env);
 	static LightEnvironmentClass* Get_Light_Environment() { return Light_Environment; }
 	static void Set_Fog(bool enable, const Vector3 &color, float start, float end);
 
-	static WWINLINE const D3DLIGHT8& Peek_Light(unsigned index);
+	static WWINLINE const D3DLIGHT9& Peek_Light(unsigned index);
 	static WWINLINE bool Is_Light_Enabled(unsigned index);
 
 	static bool Validate_Device(void);
@@ -328,7 +469,7 @@ public:
 	static void Get_Shader(ShaderClass& shader);
 	static void Set_Texture(unsigned stage,TextureBaseClass* texture);
 	static void Set_Material(const VertexMaterialClass* material);
-	static void Set_Light(unsigned index,const D3DLIGHT8* light);
+	static void Set_Light(unsigned index,const D3DLIGHT9* light);
 	static void Set_Light(unsigned index,const LightClass &light);
 
 	static void Apply_Render_State_Changes();	// Apply deferred render state changes (will be called automatically by Draw...)
@@ -384,7 +525,7 @@ public:
 	static unsigned int Get_Free_Texture_RAM();
 
 	static unsigned _Get_Main_Thread_ID() { return _MainThreadID; }
-	static const D3DADAPTER_IDENTIFIER8& Get_Current_Adapter_Identifier() { return CurrentAdapterIdentifier; }
+	static const D3DADAPTER_IDENTIFIER9& Get_Current_Adapter_Identifier() { return CurrentAdapterIdentifier; }
 
 	/*
 	** Statistics
@@ -469,8 +610,8 @@ public:
 
 
 
-	static IDirect3DDevice8* _Get_D3D_Device8() { return D3DDevice; }
-	static IDirect3D8* _Get_D3D8() { return D3DInterface; }
+	static IDirect3DDevice9* _Get_D3D_Device8() { return D3DDevice; }
+	static IDirect3D9* _Get_D3D8() { return D3DInterface; }
 	/// Returns the display format - added by TR for video playback - not part of W3D
 	static WW3DFormat	getBackBufferFormat( void );
 	static bool Reset_Device(bool reload_assets=true);
@@ -630,10 +771,10 @@ protected:
 
 	static DX8Caps*						CurrentCaps;
 
-	static D3DADAPTER_IDENTIFIER8		CurrentAdapterIdentifier;
+	static D3DADAPTER_IDENTIFIER9		CurrentAdapterIdentifier;
 
-	static IDirect3D8 *					D3DInterface;			//d3d8;
-	static IDirect3DDevice8 *			D3DDevice;				//d3ddevice8;
+	static IDirect3D9*					D3DInterface;			//d3d9;
+	static IDirect3DDevice9*			D3DDevice;				//d3ddevice9;
 
 	static IDirect3DSurface8 *			CurrentRenderTarget;
 	static IDirect3DSurface8 *			DefaultRenderTarget;
@@ -660,8 +801,10 @@ WWINLINE void DX8Wrapper::Set_Vertex_Shader(DWORD vertex_shader)
 	if (Vertex_Shader==vertex_shader) return;
 #endif
 
-	Vertex_Shader=vertex_shader;
-	DX8CALL(SetVertexShader(Vertex_Shader));
+	Vertex_Shader = vertex_shader;
+	// Ronin @build 27/10/2025 DX9: Cast DWORD (FVF code or shader handle) to IDirect3DVertexShader9*
+	// DX9 accepts both FVF codes and programmable shader pointers in the same parameter
+	DX8CALL(SetVertexShader((IDirect3DVertexShader9*)(DWORD_PTR)Vertex_Shader));
 }
 
 WWINLINE void DX8Wrapper::Set_Pixel_Shader(DWORD pixel_shader)
@@ -669,8 +812,18 @@ WWINLINE void DX8Wrapper::Set_Pixel_Shader(DWORD pixel_shader)
 	// may be incorrect if shaders are created and destroyed dynamically
 	if (Pixel_Shader==pixel_shader) return;
 
-	Pixel_Shader=pixel_shader;
-	DX8CALL(SetPixelShader(Pixel_Shader));
+	Pixel_Shader = pixel_shader;
+	// Ronin @bugfix 09/11/2025: DX9 separates FVF codes from vertex shaders
+	// FVF codes (small values) go to SetFVF, shader handles go to SetVertexShader
+	if (Vertex_Shader < 0x10000) {
+		// This is an FVF code (small value)
+		DX8CALL(SetFVF(Vertex_Shader));
+		DX8CALL(SetVertexShader(NULL));  // Clear any programmable shader
+	}
+	else {
+		// This is a programmable shader handle
+		DX8CALL(SetVertexShader((IDirect3DVertexShader9*)(DWORD_PTR)Vertex_Shader));
+	}
 }
 
 WWINLINE void DX8Wrapper::Set_Vertex_Shader_Constant(int reg, const void* data, int count)
@@ -681,7 +834,8 @@ WWINLINE void DX8Wrapper::Set_Vertex_Shader_Constant(int reg, const void* data, 
 	if (memcmp(data, &Vertex_Shader_Constants[reg],memsize)==0) return;
 
 	memcpy(&Vertex_Shader_Constants[reg],data,memsize);
-	DX8CALL(SetVertexShaderConstant(reg,data,count));
+	// Ronin @bugfix 09/11/2025: DX9 uses SetVertexShaderConstantF for float constants
+	DX8CALL(SetVertexShaderConstantF(reg, (const float*)data, count));
 }
 
 WWINLINE void DX8Wrapper::Set_Pixel_Shader_Constant(int reg, const void* data, int count)
@@ -692,7 +846,8 @@ WWINLINE void DX8Wrapper::Set_Pixel_Shader_Constant(int reg, const void* data, i
 	if (memcmp(data, &Pixel_Shader_Constants[reg],memsize)==0) return;
 
 	memcpy(&Pixel_Shader_Constants[reg],data,memsize);
-	DX8CALL(SetPixelShaderConstant(reg,data,count));
+	// Ronin @bugfix 09/11/2025: DX9 uses SetPixelShaderConstantF for float constants
+	DX8CALL(SetPixelShaderConstantF(reg, (const float*)data, count));
 }
 // shader system updates KJM ^
 
@@ -783,7 +938,7 @@ WWINLINE void DX8Wrapper::Set_Ambient(const Vector3& color)
 //
 // ----------------------------------------------------------------------------
 
-WWINLINE void DX8Wrapper::Set_DX8_Material(const D3DMATERIAL8* mat)
+WWINLINE void DX8Wrapper::Set_DX8_Material(const D3DMATERIAL9* mat)
 {
 	DX8_RECORD_MATERIAL_CHANGE();
 	WWASSERT(mat);
@@ -791,7 +946,7 @@ WWINLINE void DX8Wrapper::Set_DX8_Material(const D3DMATERIAL8* mat)
 	DX8CALL(SetMaterial(mat));
 }
 
-WWINLINE void DX8Wrapper::Set_DX8_Light(int index, D3DLIGHT8* light)
+WWINLINE void DX8Wrapper::Set_DX8_Light(int index, D3DLIGHT9* light)
 {
 	if (light) {
 		DX8_RECORD_LIGHT_CHANGE();
@@ -835,17 +990,20 @@ WWINLINE void DX8Wrapper::Set_DX8_Clip_Plane(DWORD Index, CONST float* pPlane)
 
 WWINLINE void DX8Wrapper::Set_DX8_Texture_Stage_State(unsigned stage, D3DTEXTURESTAGESTATETYPE state, unsigned value)
 {
-  	if (stage >= MAX_TEXTURE_STAGES)
-  	{	DX8CALL(SetTextureStageState( stage, state, value ));
-  		return;
-  	}
+	if (stage >= MAX_TEXTURE_STAGES)
+	{
+		// Ronin @bugfix 09/11/2025: Use compatibility wrapper for out-of-range stages
+		Set_DX8_TSS_Compat(stage, (unsigned)state, value);
+		return;
+	}
 
-	// Can't monitor state changes because setShader call to GERD may change the states!
-	if (TextureStageStates[stage][(unsigned int)state]==value) return;
+	// Ronin @bugfix 08/01/2026: DX9 cache comparison broken - bypass cache temporarily
+	// TODO: Investigate why cache comparison fails in DX9
+
 #ifdef MESH_RENDER_SNAPSHOT_ENABLED
 	if (WW3D::Is_Snapshot_Activated()) {
-		StringClass value_name(0,true);
-		Get_DX8_Texture_Stage_State_Value_Name(value_name,state,value);
+		StringClass value_name(0, true);
+		Get_DX8_Texture_Stage_State_Value_Name(value_name, state, value);
 		SNAPSHOT_SAY(("DX8 - SetTextureStageState(stage: %d, state: %s, value: %s)",
 			stage,
 			Get_DX8_Texture_Stage_State_Name(state),
@@ -853,10 +1011,14 @@ WWINLINE void DX8Wrapper::Set_DX8_Texture_Stage_State(unsigned stage, D3DTEXTURE
 	}
 #endif
 
-	TextureStageStates[stage][(unsigned int)state]=value;
-	DX8CALL(SetTextureStageState( stage, state, value ));
+	TextureStageStates[stage][(unsigned int)state] = value;
+
+	// Ronin @bugfix 09/11/2025: Use compatibility wrapper to handle sampler states
+	Set_DX8_TSS_Compat(stage, (unsigned)state, value);
+
 	DX8_RECORD_TEXTURE_STAGE_STATE_CHANGE();
 }
+
 
 WWINLINE void DX8Wrapper::Set_DX8_Texture(unsigned int stage, IDirect3DBaseTexture8* texture)
 {
@@ -876,21 +1038,96 @@ WWINLINE void DX8Wrapper::Set_DX8_Texture(unsigned int stage, IDirect3DBaseTextu
 	DX8_RECORD_TEXTURE_CHANGE();
 }
 
+// Ronin @bugfix 25/01/2026 DX9: CopyRects removed in DX9, use StretchRect or UpdateSurface
 WWINLINE void DX8Wrapper::_Copy_DX8_Rects(
-  IDirect3DSurface8* pSourceSurface,
-  CONST RECT* pSourceRectsArray,
-  UINT cRects,
-  IDirect3DSurface8* pDestinationSurface,
-  CONST POINT* pDestPointsArray
+	IDirect3DSurface8* pSourceSurface,
+	CONST RECT* pSourceRectsArray,
+	UINT cRects,
+	IDirect3DSurface8* pDestinationSurface,
+	CONST POINT* pDestPointsArray
 )
 {
-	DX8CALL(CopyRects(
-  pSourceSurface,
-  pSourceRectsArray,
-  cRects,
-  pDestinationSurface,
-  pDestPointsArray));
+	// DX9 removed CopyRects - use StretchRect for compatible surfaces or UpdateSurface for system->default
+	if (!pSourceSurface || !pDestinationSurface) {
+		return; // Nothing to do
+	}
+
+	// Get surface descriptions to determine compatibility
+	D3DSURFACE_DESC srcDesc, dstDesc;
+	pSourceSurface->GetDesc(&srcDesc);
+	pDestinationSurface->GetDesc(&dstDesc);
+
+	// If formats don't match or surfaces are in incompatible pools, use D3DXLoadSurfaceFromSurface
+	bool needsConversion = (srcDesc.Format != dstDesc.Format) ||
+	     (srcDesc.Pool == D3DPOOL_SYSTEMMEM && dstDesc.Pool == D3DPOOL_DEFAULT) ||
+	            (srcDesc.Usage & D3DUSAGE_RENDERTARGET) != (dstDesc.Usage & D3DUSAGE_RENDERTARGET);
+
+	if (cRects > 0 && pSourceRectsArray && pDestPointsArray) {
+		// Copy each rect individually
+		for (UINT i = 0; i < cRects; i++) {
+			RECT destRect;
+			destRect.left = pDestPointsArray[i].x;
+			destRect.top = pDestPointsArray[i].y;
+			destRect.right = destRect.left + (pSourceRectsArray[i].right - pSourceRectsArray[i].left);
+			destRect.bottom = destRect.top + (pSourceRectsArray[i].bottom - pSourceRectsArray[i].top);
+
+			if (needsConversion) {
+				// Use D3DXLoadSurfaceFromSurface for format conversion or incompatible surfaces
+				HRESULT hr = D3DXLoadSurfaceFromSurface(
+					pDestinationSurface, NULL, &destRect,
+					pSourceSurface, NULL, &pSourceRectsArray[i],
+					D3DX_FILTER_NONE, 0);
+				if (FAILED(hr)) {
+					// Log but don't crash - this is non-critical for texture loading
+					WWDEBUG_SAY(("D3DXLoadSurfaceFromSurface failed: 0x%08X", hr));
+				}
+			} else {
+				// Try StretchRect for compatible surfaces
+				HRESULT hr = DX8Wrapper::_Get_D3D_Device8()->StretchRect(
+					pSourceSurface, &pSourceRectsArray[i],
+					pDestinationSurface, &destRect,
+					D3DTEXF_NONE);
+				if (FAILED(hr)) {
+					// Fallback to D3DXLoadSurfaceFromSurface
+					hr = D3DXLoadSurfaceFromSurface(
+						pDestinationSurface, NULL, &destRect,
+						pSourceSurface, NULL, &pSourceRectsArray[i],
+						D3DX_FILTER_NONE, 0);
+					if (FAILED(hr)) {
+						WWDEBUG_SAY(("Both StretchRect and D3DXLoadSurfaceFromSurface failed: 0x%08X", hr));
+					}
+				}
+			}
+		}
+	} else if (cRects == 0 || (!pSourceRectsArray && !pDestPointsArray)) {
+		// Full surface copy
+		if (needsConversion) {
+			HRESULT hr = D3DXLoadSurfaceFromSurface(
+				pDestinationSurface, NULL, NULL,
+				pSourceSurface, NULL, NULL,
+				D3DX_FILTER_NONE, 0);
+			if (FAILED(hr)) {
+				WWDEBUG_SAY(("D3DXLoadSurfaceFromSurface (full) failed: 0x%08X", hr));
+			}
+		} else {
+			HRESULT hr = DX8Wrapper::_Get_D3D_Device8()->StretchRect(
+				pSourceSurface, NULL,
+				pDestinationSurface, NULL,
+				D3DTEXF_NONE);
+			if (FAILED(hr)) {
+				// Fallback to D3DXLoadSurfaceFromSurface
+				hr = D3DXLoadSurfaceFromSurface(
+					pDestinationSurface, NULL, NULL,
+					pSourceSurface, NULL, NULL,
+					D3DX_FILTER_NONE, 0);
+				if (FAILED(hr)) {
+					WWDEBUG_SAY(("Both StretchRect and D3DXLoadSurfaceFromSurface (full) failed: 0x%08X", hr));
+				}
+			}
+		}
+	}
 }
+
 
 WWINLINE Vector4 DX8Wrapper::Convert_Color(unsigned color)
 {
@@ -1036,7 +1273,7 @@ WWINLINE void DX8Wrapper::Clamp_Color(Vector4& color)
 		and edi,ebx
 		cmp edi,edx		// if no less than 1.0 set to 1.0
 		cmovnb edi,edx
-		mov dword ptr[esi],edi
+		mov		dword ptr[esi],edi
 
 		mov edi,dword ptr[esi+4]
 		mov ebx,edi
@@ -1045,7 +1282,7 @@ WWINLINE void DX8Wrapper::Clamp_Color(Vector4& color)
 		and edi,ebx
 		cmp edi,edx		// if no less than 1.0 set to 1.0
 		cmovnb edi,edx
-		mov dword ptr[esi+4],edi
+		mov		dword ptr[esi+4],edi
 
 		mov edi,dword ptr[esi+8]
 		mov ebx,edi
@@ -1054,7 +1291,7 @@ WWINLINE void DX8Wrapper::Clamp_Color(Vector4& color)
 		and edi,ebx
 		cmp edi,edx		// if no less than 1.0 set to 1.0
 		cmovnb edi,edx
-		mov dword ptr[esi+8],edi
+		mov		dword ptr[esi+8],edi
 
 		mov edi,dword ptr[esi+12]
 		mov ebx,edi
@@ -1063,7 +1300,7 @@ WWINLINE void DX8Wrapper::Clamp_Color(Vector4& color)
 		and edi,ebx
 		cmp edi,edx		// if no less than 1.0 set to 1.0
 		cmovnb edi,edx
-		mov dword ptr[esi+12],edi
+		mov		dword ptr[esi+12],edi
 	}
 	return;
 	}
@@ -1238,7 +1475,7 @@ WWINLINE void DX8Wrapper::Get_Transform(D3DTRANSFORMSTATETYPE transform, Matrix4
 	}
 }
 
-WWINLINE const D3DLIGHT8& DX8Wrapper::Peek_Light(unsigned index)
+WWINLINE const D3DLIGHT9& DX8Wrapper::Peek_Light(unsigned index)
 {
 	return render_state.Lights[index];;
 }

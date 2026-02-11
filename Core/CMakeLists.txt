@@ -1,4 +1,5 @@
 # i stands for Interface
+add_library(corei_core_include INTERFACE)
 add_library(corei_gameengine_include INTERFACE)
 add_library(corei_libraries_include INTERFACE)
 add_library(corei_libraries_source_wwvegas INTERFACE)
@@ -6,6 +7,7 @@ add_library(corei_libraries_source_wwvegas_wwlib INTERFACE)
 add_library(corei_main INTERFACE)
 add_library(corei_always INTERFACE)
 
+target_include_directories(corei_core_include INTERFACE "Include")
 target_include_directories(corei_gameengine_include INTERFACE "GameEngine/Include")
 target_include_directories(corei_libraries_include INTERFACE "Libraries/Include")
 target_include_directories(corei_libraries_source_wwvegas INTERFACE "Libraries/Source/WWVegas")
@@ -14,6 +16,7 @@ target_include_directories(corei_main INTERFACE "Main")
 
 target_link_libraries(corei_always INTERFACE
     core_utility
+    corei_core_include
     corei_libraries_include
     resources
 )

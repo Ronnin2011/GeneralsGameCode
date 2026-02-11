@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -81,7 +81,13 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
-#include "ww3d.h"
+// Ronin @refactor 17/10/2025 Integrate RenderDeviceFactory/DX9 backend into WW3D startup (Generals)
+
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include <d3d9.h>  // Native DX9
+
+#include "RenderDeviceFactory.h"
+
 #include "rinfo.h"
 #include "assetmgr.h"
 #include "boxrobj.h"
@@ -275,53 +281,57 @@ void WW3D::Set_Thumbnail_Enabled (bool b)
  *=============================================================================================*/
 WW3DErrorType WW3D::Init(void *hwnd, char *defaultpal, bool lite)
 {
-	assert(IsInitted == false);
-	WWDEBUG_SAY(("WW3D::Init hwnd = %p",hwnd));
-	_Hwnd = (HWND)hwnd;
-	Lite = lite;
+    assert(IsInitted == false);
+    WWDEBUG_SAY(("WW3D::Init hwnd = %p",hwnd));
+    _Hwnd = (HWND)hwnd;
+    Lite = lite;
 
-	/*
-	** Initialize d3d, this also enumerates the available devices and resolutions.
-	*/
-	Init_D3D_To_WW3_Conversion();
-	WWDEBUG_SAY(("Init DX8Wrapper"));
-	if (!DX8Wrapper::Init(_Hwnd, lite)) {
-		return(WW3D_ERROR_INITIALIZATION_FAILED);
-	}
-	WWDEBUG_SAY(("Allocate Debug Resources"));
-	Allocate_Debug_Resources();
+    Init_D3D_To_WW3_Conversion();
+    WWDEBUG_SAY(("Init Render Device via factory"));
 
- 	MMRESULT r=timeBeginPeriod(1);
-	WWASSERT(r==TIMERR_NOERROR);
+    IRenderDevice* renderDev = RenderDeviceFactory::Create(IRenderDevice::API_DX9);
+    if (!renderDev) {
+        WWDEBUG_SAY(("Failed to create DX9 render device"));
+        return(WW3D_ERROR_INITIALIZATION_FAILED);
+    }
 
-	/*
-	** Initialize the dazzle system
-	*/
-	if (!lite) {
-		WWDEBUG_SAY(("Init Dazzles"));
-		FileClass * dazzle_ini_file = _TheFileFactory->Get_File(DAZZLE_INI_FILENAME);
-		if (dazzle_ini_file) {
-			INIClass dazzle_ini(*dazzle_ini_file);
-			DazzleRenderObjClass::Init_From_INI(&dazzle_ini);
-			_TheFileFactory->Return_File(dazzle_ini_file);
-		}
-	}
-	/*
-	** Initialize the default static sort lists
-	** Note that DefaultStaticSortLists[0] is unused.
-	*/
-	DefaultStaticSortLists = W3DNEW DefaultStaticSortListClass();
-	Reset_Current_Static_Sort_Lists_To_Default();
+    if (!renderDev->Init(_Hwnd, lite)) {
+        WWDEBUG_SAY(("Render device Init() failed"));
+        RenderDeviceFactory::Destroy(renderDev);
+        return(WW3D_ERROR_INITIALIZATION_FAILED);
+    }
 
-	/*
-	** Initialize the animation-triggered sound system
-	*/
-	if (!lite) {
-		AnimatedSoundMgrClass::Initialize ();
-		IsInitted = true;
-	}
-	WWDEBUG_SAY(("WW3D Init completed"));
-	return WW3D_ERROR_OK;
+    if (!renderDev->CreateDevice()) {
+        WWDEBUG_SAY(("Render device CreateDevice() failed"));
+        renderDev->Shutdown();
+        RenderDeviceFactory::Destroy(renderDev);
+        return(WW3D_ERROR_INITIALIZATION_FAILED);
+    }
+
+    Allocate_Debug_Resources();
+
+    MMRESULT r=timeBeginPeriod(1);
+    WWASSERT(r==TIMERR_NOERROR);
+
+    if (!lite) {
+        WWDEBUG_SAY(("Init Dazzles"));
+        FileClass * dazzle_ini_file = _TheFileFactory->Get_File(DAZZLE_INI_FILENAME);
+        if (dazzle_ini_file) {
+            INIClass dazzle_ini(*dazzle_ini_file);
+            DazzleRenderObjClass::Init_From_INI(&dazzle_ini);
+            _TheFileFactory->Return_File(dazzle_ini_file);
+        }
+    }
+
+    DefaultStaticSortLists = W3DNEW DefaultStaticSortListClass();
+    Reset_Current_Static_Sort_Lists_To_Default();
+
+    if (!lite) {
+        AnimatedSoundMgrClass::Initialize ();
+        IsInitted = true;
+    }
+    WWDEBUG_SAY(("WW3D Init completed"));
+    return WW3D_ERROR_OK;
 }
 
 
@@ -798,74 +808,90 @@ void WW3D::Set_Texture_Filter(int texture_filter)
  *=============================================================================================*/
 WW3DErrorType WW3D::Begin_Render(bool clear,bool clearz,const Vector3 & color, float dest_alpha, void(*network_callback)(void))
 {
-	if (!IsInitted) {
-		return(WW3D_ERROR_OK);
-	}
+#ifdef _DEBUG
+	WWDEBUG_SAY(("Begin_Render called: IsInitted=%d, IsRendering=%d, IsWindowed=%d",
+		IsInitted, IsRendering, DX8Wrapper::Is_Windowed_Mode()));
 
-	WWPROFILE("WW3D::Begin_Render");
-	WWASSERT(IsInitted);
-	HRESULT hr;
+#endif // _DEBUG
 
-	SNAPSHOT_SAY(("=========================================="));
-	SNAPSHOT_SAY(("========== WW3D::Begin_Render ============"));
-	SNAPSHOT_SAY(("==========================================\n"));
+    if (!IsInitted) {
+#ifdef _DEBUG
+			WWDEBUG_SAY(("❌ Begin_Render: NOT INITTED!"));
+#endif // _DEBUG
 
-	if (DX8Wrapper::_Get_D3D_Device8() && (hr=DX8Wrapper::_Get_D3D_Device8()->TestCooperativeLevel()) != D3D_OK)
-	{
-        // If the device was lost, do not render until we get it back
-        if( D3DERR_DEVICELOST == hr )
-            return WW3D_ERROR_GENERIC;	//other app has the device
+			return(WW3D_ERROR_OK);
+    }
+    WWPROFILE("WW3D::Begin_Render");
+    WWASSERT(IsInitted);
 
-        // Check if the device needs to be reset
-        if( D3DERR_DEVICENOTRESET == hr )
-        {
-            WWDEBUG_SAY(("WW3D::Begin_Render is resetting the device."));
-            DX8Wrapper::Reset_Device();
+    IRenderDevice* dev = RenderDeviceFactory::GetCurrent();
+
+    if (dev) {
+        if (dev->IsDeviceLost()) {
+            if (!dev->ResetDevice()) return WW3D_ERROR_GENERIC;
         }
+    } else {
+        if (DX8Wrapper::_Get_D3D_Device8()) {
 
-		return WW3D_ERROR_GENERIC;
-	}
+#ifdef _DEBUG
+					WWDEBUG_SAY(("✅ Begin_Render: Starting device check..."));
+#endif // _DEBUG
 
-	// Memory allocation statistics
-	LastFrameMemoryAllocations=WWMemoryLogClass::Get_Allocate_Count();
-	LastFrameMemoryFrees=WWMemoryLogClass::Get_Free_Count();
-	WWMemoryLogClass::Reset_Counters();
+					HRESULT hr;
+            if ((hr=DX8Wrapper::_Get_D3D_Device8()->TestCooperativeLevel()) != D3D_OK) {
+                if( D3DERR_DEVICELOST == hr )
+                    return WW3D_ERROR_GENERIC;
+                if( D3DERR_DEVICENOTRESET == hr ) {
+                    WWDEBUG_SAY(("WW3D::Begin_Render is resetting the device."));
+                    DX8Wrapper::Reset_Device();
+                }
+                return WW3D_ERROR_GENERIC;
+            }
+        }
+    }
 
-	TextureLoader::Update();
-//	TextureClass::_Reset_Time_Stamp();
-	DynamicVBAccessClass::_Reset(true);
-	DynamicIBAccessClass::_Reset(true);
+#ifdef _DEBUG
+		WWDEBUG_SAY(("✅ Device is ready, proceeding with BeginScene..."));
+#endif // _DEBUG
 
-	Debug_Statistics::Begin_Statistics();
+    LastFrameMemoryAllocations=WWMemoryLogClass::Get_Allocate_Count();
+    LastFrameMemoryFrees=WWMemoryLogClass::Get_Free_Count();
+    WWMemoryLogClass::Reset_Counters();
 
-	if (IsCapturing && (!PauseRecord || RecordNextFrame)) {
-		Update_Movie_Capture();
-		RecordNextFrame = false;
-	}
+    TextureLoader::Update(network_callback);
+    DynamicVBAccessClass::_Reset(true);
+    DynamicIBAccessClass::_Reset(true);
 
-	WWASSERT(!IsRendering);
-	IsRendering = true;
+    Debug_Statistics::Begin_Statistics();
 
-	// If we want to clear the screen, we need to set the viewport to include the entire screen:
-	if (clear || clearz) {
-		D3DVIEWPORT8 vp;
-		int width, height, bits;
-		bool windowed;
-		WW3D::Get_Render_Target_Resolution(width, height, bits, windowed);
-		vp.X = 0;
-		vp.Y = 0;
-		vp.Width = width;
-		vp.Height = height;
-		vp.MinZ = 0.0f;;
-		vp.MaxZ = 1.0f;
-		DX8Wrapper::Set_Viewport(&vp);
-		DX8Wrapper::Clear(clear, clearz, color, dest_alpha);
-	}
+    if (IsCapturing && (!PauseRecord || RecordNextFrame)) {
+        Update_Movie_Capture();
+        RecordNextFrame = false;
+    }
 
-	// Notify D3D that we are beginning to render the frame
-	DX8Wrapper::Begin_Scene();
+    WWASSERT(!IsRendering);
+    IsRendering = true;
 
-	return WW3D_ERROR_OK;
+    if (clear || clearz) {
+        D3DVIEWPORT9 vp9;
+        int width, height, bits;
+        bool windowed;
+        WW3D::Get_Render_Target_Resolution(width, height, bits, windowed);
+        vp9.X = 0; vp9.Y = 0; vp9.Width = width; vp9.Height = height; vp9.MinZ = 0.0f; vp9.MaxZ = 1.0f;
+
+        if (dev) {
+            dev->SetViewport(&vp9);
+            dev->Clear(clear, clearz, color, dest_alpha, 1.0f);
+        } else {
+            D3DVIEWPORT8 vp8; vp8.X=0; vp8.Y=0; vp8.Width=vp9.Width; vp8.Height=vp9.Height; vp8.MinZ=vp9.MinZ; vp8.MaxZ=vp9.MaxZ;
+            DX8Wrapper::Set_Viewport(&vp8);
+            DX8Wrapper::Clear(clear, clearz, color, dest_alpha, 1.0f);
+        }
+    }
+
+    if (dev) dev->BeginScene(); else DX8Wrapper::Begin_Scene();
+
+    return WW3D_ERROR_OK;
 }
 
 /***********************************************************************************************
@@ -1086,46 +1112,33 @@ void WW3D::Flush(RenderInfoClass & rinfo)
  *=============================================================================================*/
 WW3DErrorType WW3D::End_Render(bool flip_frame)
 {
-	if (!IsInitted) {
-		return(WW3D_ERROR_OK);
-	}
+    if (!IsInitted) {
+        return(WW3D_ERROR_OK);
+    }
 
-	WWPROFILE("WW3D::End_Render");
+    WWPROFILE("WW3D::End_Render");
 
-	WWASSERT(IsRendering);
-	WWASSERT(IsInitted);
+    WWASSERT(IsRendering);
+    WWASSERT(IsInitted);
 
-	// If sorting renderer flush isn't called from within any of the render functions
-	// the sorting arrays will overflow!
+    SortingRendererClass::Flush();
 
-	SortingRendererClass::Flush();
+    IsRendering = false;
 
-	IsRendering = false;
+    IRenderDevice* dev = RenderDeviceFactory::GetCurrent();
+    if (dev) {
+        dev->EndScene(flip_frame);
+    } else {
+        DX8Wrapper::End_Scene(flip_frame);
+    }
 
-	{
-		WWPROFILE("DX8Wrapper::End_Scene");
-		DX8Wrapper::End_Scene(flip_frame);
-	}
+    FrameCount++;
 
-	FrameCount++;
+    Debug_Statistics::End_Statistics();
 
-	{
-		WWPROFILE("End_Statistics");
-		Debug_Statistics::End_Statistics();
-	}
+    DX8Wrapper::Invalidate_Cached_Render_States();
 
-	SNAPSHOT_SAY(("=========================================="));
-	SNAPSHOT_SAY(("========== WW3D::End_Render =============="));
-	SNAPSHOT_SAY(("==========================================\n"));
-
-	Activate_Snapshot(false);
-
-	// (gth) I've found some cases where its not safe to rely on our "shadow" copy (of
-	// matrices for example) across multiple frames.  So even though this is slightly
-	// less "optimal", lets just reset the caches each frame.
-	DX8Wrapper::Invalidate_Cached_Render_States();
-
-	return WW3D_ERROR_OK;
+    return WW3D_ERROR_OK;
 }
 
 

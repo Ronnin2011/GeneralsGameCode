@@ -51,6 +51,9 @@
  *   SkinDecalMeshClass::Process_Material_Run -- scans the mesh for material runs              *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include <d3d9.h>  // Native DX9
+
 #include "decalmsh.h"
 #include "decalsys.h"
 #include "rinfo.h"

@@ -34,13 +34,32 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-
 #if defined(_MSC_VER)
 #pragma once
 #endif
 
 #ifndef TEXTURE_H
 #define TEXTURE_H
+
+// Ronin @build 26/10/2025 DX9: Ensure d3d9.h and typedefs are available
+#include <d3d9.h>
+
+// Ronin @build 26/10/2025 DX9: Guard typedefs to prevent redefinition errors
+#ifndef DX8_TO_DX9_TYPEDEFS_DEFINED
+#define DX8_TO_DX9_TYPEDEFS_DEFINED
+
+typedef IDirect3D9 IDirect3D8;
+typedef IDirect3DDevice9 IDirect3DDevice8;
+typedef IDirect3DVolume9 IDirect3DVolume8;
+typedef IDirect3DSwapChain9 IDirect3DSwapChain8;
+typedef D3DVIEWPORT9 D3DVIEWPORT8;
+typedef IDirect3DBaseTexture9 IDirect3DBaseTexture8;
+typedef IDirect3DTexture9 IDirect3DTexture8;
+typedef IDirect3DCubeTexture9 IDirect3DCubeTexture8;
+typedef IDirect3DVolumeTexture9 IDirect3DVolumeTexture8;
+typedef IDirect3DSurface9 IDirect3DSurface8;
+
+#endif // DX8_TO_DX9_TYPEDEFS_DEFINED
 
 #include "always.h"
 #include "refcount.h"
@@ -50,8 +69,9 @@
 #include "wwstring.h"
 #include "texturefilter.h"
 
-struct IDirect3DBaseTexture8;
-struct IDirect3DTexture8;
+// Ronin @build 25/10/2025 DX9: Forward declarations removed - using typedefs from dx8wrapper.h
+//  // Conflicts with typedef in dx8wrapper.h
+//      // Conflicts with typedef in dx8wrapper.h
 
 class DX8Wrapper;
 class TextureLoader;
@@ -145,7 +165,7 @@ class TextureClass : public W3DMPO, public RefCountClass
 		// Get surface description of a Mip level (defaults to the highest-resolution one)
 		void Get_Level_Description(SurfaceClass::SurfaceDescription &surface_desc, unsigned int level = 0);
 
-		TextureFilterClass& Get_Filter() { return Filter; }
+	.TextureFilterClass& Get_Filter() { return Filter; }
 
 		// Get the surface of one of the mipmap levels (defaults to highest-resolution one)
 		SurfaceClass *Get_Surface_Level(unsigned int level = 0);

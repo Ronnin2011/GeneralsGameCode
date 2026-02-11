@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -39,13 +39,16 @@
 
 //#define VERTEX_BUFFER_LOG
 
+
+#include <d3d9.h>  // Native DX9
+
 #include "dx8vertexbuffer.h"
 #include "dx8wrapper.h"
 #include "dx8fvf.h"
 #include "dx8caps.h"
 #include "thread.h"
 #include "wwmemlog.h"
-#include <d3dx8core.h>
+#include <d3dx9.h>  // Native DX9 extensions
 
 #define DEFAULT_VB_SIZE 5000
 
@@ -55,10 +58,48 @@ static SortingVertexBufferClass* _DynamicSortingVertexArray=NULL;
 static unsigned short _DynamicSortingVertexArraySize=0;
 static unsigned short _DynamicSortingVertexArrayOffset=0;
 
-static bool _DynamicDX8VertexBufferInUse=false;
-static DX8VertexBufferClass* _DynamicDX8VertexBuffer=NULL;
-static unsigned short _DynamicDX8VertexBufferSize=DEFAULT_VB_SIZE;
-static unsigned short _DynamicDX8VertexBufferOffset=0;
+//static bool _DynamicDX8VertexBufferInUse=false;
+//static DX8VertexBufferClass* _DynamicDX8VertexBuffer=NULL;
+//static unsigned short _DynamicDX8VertexBufferSize=DEFAULT_VB_SIZE;
+//static unsigned short _DynamicDX8VertexBufferOffset=0;
+
+// Ronin @bugfix 12/12/2025: Per-FVF vertex buffer pools to eliminate thrashing
+struct DynamicVBPool {
+	DX8VertexBufferClass* vb;
+	unsigned short size;
+	unsigned short offset;
+	bool in_use;
+	DWORD fvf;
+};
+
+// Pre-allocate slots for common FVFs (3D: 0x252, 2D: 0x142, plus extras)
+static constexpr int MAX_DYNAMIC_VB_POOLS = 8;
+static DynamicVBPool gDynamicVBPools[MAX_DYNAMIC_VB_POOLS] = {};
+
+// Pool selection: find existing or allocate new slot for FVF
+static DynamicVBPool* GetPoolForFVF(DWORD fvf) {
+	// First pass: Find existing pool with matching FVF
+	for (int i = 0; i < MAX_DYNAMIC_VB_POOLS; ++i) {
+		if (gDynamicVBPools[i].vb && gDynamicVBPools[i].fvf == fvf) {
+			return &gDynamicVBPools[i];
+		}
+	}
+
+	// Second pass: Allocate unused slot for new FVF
+	for (int i = 0; i < MAX_DYNAMIC_VB_POOLS; ++i) {
+		if (!gDynamicVBPools[i].vb) {
+			gDynamicVBPools[i].fvf = fvf;
+			gDynamicVBPools[i].size = DEFAULT_VB_SIZE;
+			gDynamicVBPools[i].offset = 0;
+			gDynamicVBPools[i].in_use = false;
+			return &gDynamicVBPools[i];
+		}
+	}
+
+	// Fallback: reuse first pool if all slots exhausted (should never happen with 8 slots)
+	WWDEBUG_SAY(("WARNING: All %d dynamic VB pool slots in use! Reusing pool 0.", MAX_DYNAMIC_VB_POOLS));
+	return &gDynamicVBPools[0];
+}
 
 static const FVFInfoClass _DynamicFVFInfo(dynamic_fvf_type);
 
@@ -177,7 +218,7 @@ VertexBufferClass::WriteLockClass::WriteLockClass(VertexBufferClass* VertexBuffe
 		DX8_ErrorCode(static_cast<DX8VertexBufferClass*>(VertexBuffer)->Get_DX8_Vertex_Buffer()->Lock(
 			0,
 			0,
-			(unsigned char**)&Vertices,
+			(void**)&Vertices,
 			flags));	//flags
 		break;
 	case BUFFER_TYPE_SORTING:
@@ -243,7 +284,7 @@ VertexBufferClass::AppendLockClass::AppendLockClass(VertexBufferClass* VertexBuf
 		DX8_ErrorCode(static_cast<DX8VertexBufferClass*>(VertexBuffer)->Get_DX8_Vertex_Buffer()->Lock(
 			start_index*VertexBuffer->FVF_Info().Get_FVF_Size(),
 			index_range*VertexBuffer->FVF_Info().Get_FVF_Size(),
-			(unsigned char**)&Vertices,
+			(void**)&Vertices,
 			0));	// Default (no) flags
 		break;
 	case BUFFER_TYPE_SORTING:
@@ -451,7 +492,8 @@ void DX8VertexBufferClass::Create_Vertex_Buffer(UsageType usage)
 		usage_flags,
 		FVF_Info().Get_FVF(),
 		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED,
-		&VertexBuffer);
+		&VertexBuffer,
+		NULL);  // DX9: pSharedHandle
 	if (SUCCEEDED(ret)) {
 		return;
 	}
@@ -467,15 +509,17 @@ void DX8VertexBufferClass::Create_Vertex_Buffer(UsageType usage)
 	WW3D::_Invalidate_Mesh_Cache();
 
 	//@todo: Find some way to invalidate the textures too
-	ret = DX8Wrapper::_Get_D3D_Device8()->ResourceManagerDiscardBytes(0);
-
+	// Ronin @build 27/10/2025 DX9: Removed - ResourceManagerDiscardBytes doesn't exist in DX9
+	// ret = DX8Wrapper::_Get_D3D_Device8()->ResourceManagerDiscardBytes(0);
+	
 	// Try again...
 	ret=DX8Wrapper::_Get_D3D_Device8()->CreateVertexBuffer(
 		FVF_Info().Get_FVF_Size()*VertexCount,
 		usage_flags,
 		FVF_Info().Get_FVF(),
 		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED,
-		&VertexBuffer);
+		&VertexBuffer,
+		NULL);  // DX9: pSharedHandle
 
 	if (SUCCEEDED(ret)) {
 		WWDEBUG_SAY(("...Vertex buffer creation succesful"));
@@ -719,11 +763,17 @@ void DX8VertexBufferClass::Copy(const Vector3* loc, const Vector2* uv, const Vec
 DynamicVBAccessClass::DynamicVBAccessClass(unsigned t,unsigned fvf,unsigned short vertex_count_)
 	:
 	Type(t),
-	FVFInfo(_DynamicFVFInfo),
+	FVFInfo(FVFInfoClass(fvf)),
 	VertexCount(vertex_count_),
 	VertexBuffer(0)
 {
-	WWASSERT(fvf==dynamic_fvf_type);
+/*#ifdef WWDEBUG
+	WWDEBUG_SAY(("🔧 DynamicVB: Requested FVF=0x%08X, Type=%d, Count=%d",
+		fvf, t, vertex_count_));
+
+#endif // DEBUG*/
+
+	//WWASSERT(fvf==dynamic_fvf_type);
 	WWASSERT(Type==BUFFER_TYPE_DYNAMIC_DX8 || Type==BUFFER_TYPE_DYNAMIC_SORTING);
 
 	if (Type==BUFFER_TYPE_DYNAMIC_DX8) {
@@ -736,71 +786,101 @@ DynamicVBAccessClass::DynamicVBAccessClass(unsigned t,unsigned fvf,unsigned shor
 
 DynamicVBAccessClass::~DynamicVBAccessClass()
 {
-	if (Type==BUFFER_TYPE_DYNAMIC_DX8) {
-		_DynamicDX8VertexBufferInUse=false;
-		_DynamicDX8VertexBufferOffset+=(unsigned) VertexCount;
+	if (Type == BUFFER_TYPE_DYNAMIC_DX8) {
+		// Ronin @bugfix 12/12/2025: Release pool lock and advance offset
+		DynamicVBPool* pool = GetPoolForFVF(FVFInfo.Get_FVF());
+		WWASSERT(pool);  // Pool lookup should never fail
+		if (pool) {
+			WWASSERT(pool->in_use);  // Pool should be marked in-use
+			pool->in_use = false;
+			pool->offset += VertexCount;
+		}
 	}
 	else {
-		_DynamicSortingVertexArrayInUse=false;
-		_DynamicSortingVertexArrayOffset+=VertexCount;
+		_DynamicSortingVertexArrayInUse = false;
+		_DynamicSortingVertexArrayOffset += VertexCount;
 	}
 
-	REF_PTR_RELEASE (VertexBuffer);
+	REF_PTR_RELEASE(VertexBuffer);
 }
 
 // ----------------------------------------------------------------------------
 
 void DynamicVBAccessClass::_Deinit()
 {
-	WWASSERT ((_DynamicDX8VertexBuffer == NULL) || (_DynamicDX8VertexBuffer->Num_Refs() == 1));
-	REF_PTR_RELEASE(_DynamicDX8VertexBuffer);
-	_DynamicDX8VertexBufferInUse=false;
-	_DynamicDX8VertexBufferSize=DEFAULT_VB_SIZE;
-	_DynamicDX8VertexBufferOffset=0;
+	// Ronin @bugfix 12/12/2025: Release all dynamic VB pools
+	for (int i = 0; i < MAX_DYNAMIC_VB_POOLS; ++i) {
+		WWASSERT((gDynamicVBPools[i].vb == nullptr) || (gDynamicVBPools[i].vb->Num_Refs() == 1));
+		REF_PTR_RELEASE(gDynamicVBPools[i].vb);
+		gDynamicVBPools[i].in_use = false;
+		gDynamicVBPools[i].size = DEFAULT_VB_SIZE;
+		gDynamicVBPools[i].offset = 0;
+		gDynamicVBPools[i].fvf = 0;
+	}
 
-	WWASSERT ((_DynamicSortingVertexArray == NULL) || (_DynamicSortingVertexArray->Num_Refs() == 1));
+	// Sorting pool unchanged
+	WWASSERT((_DynamicSortingVertexArray == NULL) || (_DynamicSortingVertexArray->Num_Refs() == 1));
 	REF_PTR_RELEASE(_DynamicSortingVertexArray);
 	WWASSERT(!_DynamicSortingVertexArrayInUse);
-	_DynamicSortingVertexArrayInUse=false;
-	_DynamicSortingVertexArraySize=0;
-	_DynamicSortingVertexArrayOffset=0;
+	_DynamicSortingVertexArrayInUse = false;
+	_DynamicSortingVertexArraySize = 0;
+	_DynamicSortingVertexArrayOffset = 0;
 }
 
 void DynamicVBAccessClass::Allocate_DX8_Dynamic_Buffer()
 {
 	WWMEMLOG(MEM_RENDERER);
-	WWASSERT(!_DynamicDX8VertexBufferInUse);
-	_DynamicDX8VertexBufferInUse=true;
 
-	// If requesting more vertices than dynamic vertex buffer can fit, delete the vb
-	// and adjust the size to the new count.
-	if (VertexCount>_DynamicDX8VertexBufferSize) {
-		REF_PTR_RELEASE(_DynamicDX8VertexBuffer);
-		_DynamicDX8VertexBufferSize=VertexCount;
-		if (_DynamicDX8VertexBufferSize<DEFAULT_VB_SIZE) _DynamicDX8VertexBufferSize=DEFAULT_VB_SIZE;
+	unsigned actualFVF = FVFInfo.Get_FVF();
+
+	// Ronin @bugfix 12/12/2025: Get or allocate pool for this FVF
+	DynamicVBPool* pool = GetPoolForFVF(actualFVF);
+	WWASSERT(pool);  // Pool lookup should never fail
+	WWASSERT(!pool->in_use);  // Only one accessor per pool at a time
+
+	pool->in_use = true;
+
+/*#ifdef WWDEBUG
+	WWDEBUG_SAY(("📦 Allocating from pool: FVF=0x%08X, Size=%d, Offset=%d",
+		actualFVF, pool->size, pool->offset));
+#endif*/
+
+	// If requesting more vertices than pool can fit, grow the pool
+	if (VertexCount > pool->size) {
+		REF_PTR_RELEASE(pool->vb);
+		pool->size = VertexCount;
+		if (pool->size < DEFAULT_VB_SIZE) {
+			pool->size = DEFAULT_VB_SIZE;
+		}
+		pool->offset = 0;
 	}
 
-	// Create a new vb if one doesn't exist currently
-	if (!_DynamicDX8VertexBuffer) {
-		unsigned usage=DX8VertexBufferClass::USAGE_DYNAMIC;
+	// Create buffer if pool doesn't have one yet
+	if (!pool->vb) {
+		unsigned usage = DX8VertexBufferClass::USAGE_DYNAMIC;
 		if (DX8Wrapper::Get_Current_Caps()->Support_NPatches()) {
-			usage|=DX8VertexBufferClass::USAGE_NPATCHES;
+			usage |= DX8VertexBufferClass::USAGE_NPATCHES;
 		}
 
-		_DynamicDX8VertexBuffer=NEW_REF(DX8VertexBufferClass,(
-			dynamic_fvf_type,
-			_DynamicDX8VertexBufferSize,
+		pool->vb = NEW_REF(DX8VertexBufferClass, (
+			actualFVF,
+			pool->size,
 			(DX8VertexBufferClass::UsageType)usage));
-		_DynamicDX8VertexBufferOffset=0;
+		pool->offset = 0;
+
+#ifdef WWDEBUG
+		WWDEBUG_SAY(("Created new VB for pool: FVF=0x%08X, Size=%d",
+			actualFVF, pool->size));
+#endif
 	}
 
-	// Any room at the end of the buffer?
-	if (((unsigned)VertexCount+_DynamicDX8VertexBufferOffset)>_DynamicDX8VertexBufferSize) {
-		_DynamicDX8VertexBufferOffset=0;
+	// Check if buffer needs wrapping (out of space at end)
+	if ((VertexCount + pool->offset) > pool->size) {
+		pool->offset = 0;
 	}
 
-	REF_PTR_SET(VertexBuffer,_DynamicDX8VertexBuffer);
-	VertexBufferOffset=_DynamicDX8VertexBufferOffset;
+	REF_PTR_SET(VertexBuffer, pool->vb);
+	VertexBufferOffset = pool->offset;
 }
 
 void DynamicVBAccessClass::Allocate_Sorting_Dynamic_Buffer()
@@ -836,28 +916,29 @@ DynamicVBAccessClass::WriteLockClass::WriteLockClass(DynamicVBAccessClass* dynam
 	switch (DynamicVBAccess->Get_Type()) {
 	case BUFFER_TYPE_DYNAMIC_DX8:
 #ifdef VERTEX_BUFFER_LOG
-/*		{
-		WWASSERT(!dx8_lock);
-		dx8_lock++;
-		StringClass fvf_name;
-		DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF_Name(fvf_name);
-		WWDEBUG_SAY(("DynamicVertexBuffer->Lock(start_index: %d, index_range: %d, fvf_size: %d, fvf: %s)",
-			DynamicVBAccess->VertexBufferOffset,
-			DynamicVBAccess->Get_Vertex_Count(),
-			DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF_Size(),
-			fvf_name));
-		}
-*/
+		/*		{
+				WWASSERT(!dx8_lock);
+				dx8_lock++;
+				StringClass fvf_name;
+				DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF_Name(fvf_name);
+				WWDEBUG_SAY(("DynamicVertexBuffer->Lock(start_index: %d, index_range: %d, fvf_size: %d, fvf: %s)",
+					DynamicVBAccess->VertexBufferOffset,
+					DynamicVBAccess->Get_Vertex_Count(),
+					DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF_Size(),
+					fvf_name));
+				}
+		*/
 #endif
-		WWASSERT(_DynamicDX8VertexBuffer);
-//		WWASSERT(!_DynamicDX8VertexBuffer->Engine_Refs());
+		// Ronin @bugfix 12/12/2025: Use pool system instead of global buffer
+		WWASSERT(DynamicVBAccess->VertexBuffer);
+		//WWASSERT(!DynamicVBAccess->VertexBuffer->Engine_Refs());
 
 		DX8_Assert();
 		// Lock with discard contents if the buffer offset is zero
 		DX8_ErrorCode(static_cast<DX8VertexBufferClass*>(DynamicVBAccess->VertexBuffer)->Get_DX8_Vertex_Buffer()->Lock(
-			DynamicVBAccess->VertexBufferOffset*_DynamicDX8VertexBuffer->FVF_Info().Get_FVF_Size(),
-			DynamicVBAccess->Get_Vertex_Count()*DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF_Size(),
-			(unsigned char**)&Vertices,
+			DynamicVBAccess->VertexBufferOffset * DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF_Size(),
+			DynamicVBAccess->Get_Vertex_Count() * DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF_Size(),
+			(void**)&Vertices,
 			D3DLOCK_NOSYSLOCK | (!DynamicVBAccess->VertexBufferOffset ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE)));
 		break;
 	case BUFFER_TYPE_DYNAMIC_SORTING:
@@ -899,12 +980,30 @@ DynamicVBAccessClass::WriteLockClass::~WriteLockClass()
 
 void DynamicVBAccessClass::_Reset(bool frame_changed)
 {
-	_DynamicSortingVertexArrayOffset=0;
-	if (frame_changed) _DynamicDX8VertexBufferOffset=0;
+	_DynamicSortingVertexArrayOffset = 0;
+
+	if (frame_changed) {
+		// Ronin @bugfix 12/12/2025: Reset all pool offsets (but keep buffers alive)
+		for (int i = 0; i < MAX_DYNAMIC_VB_POOLS; ++i) {
+			gDynamicVBPools[i].offset = 0;
+		}
+	}
+
 }
 
 unsigned short DynamicVBAccessClass::Get_Default_Vertex_Count(void)
 {
-	return _DynamicDX8VertexBufferSize;
+	// Ronin @bugfix 12/12/2025: Return constant since pool sizes can vary dynamically
+	return DEFAULT_VB_SIZE;
 }
 
+bool DynamicVBAccessClass::Is_In_Use()
+{
+	// Ronin @bugfix 12/12/2025: Check if ANY pool is in use
+	for (int i = 0; i < MAX_DYNAMIC_VB_POOLS; ++i) {
+		if (gDynamicVBPools[i].in_use) {
+			return true;
+		}
+	}
+	return _DynamicSortingVertexArrayInUse;
+}

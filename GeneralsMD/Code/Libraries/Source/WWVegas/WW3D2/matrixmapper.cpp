@@ -50,6 +50,8 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
+#include <d3d9.h>  // Native DX9
+
 #include "matrixmapper.h"
 #include "dx8wrapper.h"
 

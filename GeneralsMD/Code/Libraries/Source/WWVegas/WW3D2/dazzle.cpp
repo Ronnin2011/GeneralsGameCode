@@ -38,6 +38,8 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
+#include <d3d9.h>  // Native DX9
+
 #include "dazzle.h"
 #include "simplevec.h"
 #include "vector2.h"

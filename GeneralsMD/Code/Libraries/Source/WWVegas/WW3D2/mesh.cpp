@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -85,6 +85,8 @@
  *   MeshClass::Replace_VertexMaterial -- Replaces existing vertex material with a new one. Wi *
  *   MeshClass::Make_Unique -- Makes mesh unique in the renderer, but still shares system ram  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+#include <d3d9.h>  // Native DX9
 
 #include "mesh.h"
 #include <assert.h>
@@ -854,7 +856,7 @@ void MeshClass::Render_Material_Pass(MaterialPassClass * pass,IndexBufferClass *
 			}
 		}
 		pass->Install_Materials();
-		DX8Wrapper::Set_Index_Buffer(ib,0);
+		DX8Wrapper::Set_Index_Buffer(ib,0, "1st MeshClass::RenderMaterialPass");
 
 		SNAPSHOT_SAY(("Set_World_Identity"));
 		DX8Wrapper::Set_World_Identity();
@@ -948,7 +950,30 @@ void MeshClass::Render_Material_Pass(MaterialPassClass * pass,IndexBufferClass *
 			pass->Install_Materials();
 
 			DX8Wrapper::Set_Transform(D3DTS_WORLD,Get_Transform());
-			DX8Wrapper::Set_Index_Buffer(dynamic_ib,vertex_offset);
+			DX8Wrapper::Set_Index_Buffer(dynamic_ib,vertex_offset, "2nd MeshClass::RenderMaterialPass");
+
+#ifdef WWDEBUG
+			// @debug Ronin 12/01/2026 Log draw-time device IB to detect mid-flight IB changes
+			{
+				IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
+				if (pDev) {
+					IDirect3DIndexBuffer9* dib = nullptr;
+					const HRESULT hr = pDev->GetIndices(&dib);
+					WWDEBUG_SAY(("?? DRAW-TIME DEVICE IB [Mesh=%s] hr=0x%08X dib=%p tempAptPolys=%d minV=%d vCount=%d baseVOff=%d vertexOff=%d",
+						Get_Name(),
+						(unsigned)hr,
+						dib,
+						temp_apt.Count(),
+						min_v,
+						max_v - min_v + 1,
+						BaseVertexOffset,
+						vertex_offset));
+					if (dib) {
+						dib->Release();
+					}
+				}
+			}
+#endif
 
 			DX8Wrapper::Draw_Triangles(
 				0,
@@ -980,7 +1005,24 @@ void MeshClass::Render_Material_Pass(MaterialPassClass * pass,IndexBufferClass *
 			}
 		}
 		pass->Install_Materials();
-		DX8Wrapper::Set_Index_Buffer(ib,0);
+		DX8Wrapper::Set_Index_Buffer(ib,0, "MeshClass::Render");
+
+		// Ronin @bugfix 29/12/2025 DX9: Set FVF for mesh material pass rendering
+		// Get FVF from the polygon renderer's container
+		if (!Model->PolygonRendererList.Is_Empty()) {
+			DX8FVFCategoryContainer* container = Model->PolygonRendererList.Peek_Head()->Get_Texture_Category()->Get_Container();
+			DWORD containerFVF = container->Get_FVF();
+
+#ifdef WWDEBUG
+			static int rigidMatPassCount = 0;
+			rigidMatPassCount++;
+			if (rigidMatPassCount <= 1000) {
+				WWDEBUG_SAY(("🏗️ MESH.CPP - Rigid Material Pass #%d: Setting FVF=0x%08X",
+					rigidMatPassCount, containerFVF));
+
+			}
+#endif
+		}
 
 		SNAPSHOT_SAY(("Set_World_Transform"));
 		DX8Wrapper::Set_Transform(D3DTS_WORLD,Transform);

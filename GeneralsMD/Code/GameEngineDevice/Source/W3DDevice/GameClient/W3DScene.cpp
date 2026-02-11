@@ -32,6 +32,8 @@
 ///////////////////////////////////////////////////////////////////////////////
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
+
+
 #include <stdlib.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
@@ -868,6 +870,11 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 
 		SortingRendererClass::Flush();	//draw sorted translucent polys like particles.
 	}
+	// Ronin @bugfix 07/11/2025: DX9 requires render state reset after alpha/translucent passes
+	// Water and translucent objects can set depth bias, pixel shaders, texture stages, etc.
+	// that must be cleaned up before particle rendering to prevent state leakage
+	DX8Wrapper::Reset_Pass_Render_States();
+
 	TheDX8MeshRenderer.Clear_Pending_Delete_Lists();
 }
 
@@ -1252,7 +1259,7 @@ void renderStenciledPlayerColor( UnsignedInt color, UnsignedInt stencilRef, Bool
 
 	//draw polygons like this is very inefficient but for only 2 triangles, it's
 	//not worth bothering with index/vertex buffers.
-	m_pDev->SetVertexShader(D3DFVF_XYZRHW | D3DFVF_DIFFUSE);
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE, "renderStenciledPlayerColor");
 
 	// Set stencil states
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_STENCILENABLE, TRUE );

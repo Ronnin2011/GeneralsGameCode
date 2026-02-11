@@ -43,6 +43,10 @@
 #ifndef DX8INDEXBUFFER_H
 #define DX8INDEXBUFFER_H
 
+// Ronin @build 25/10/2025 DX9: Include d3d9.h and create local typedef for compatibility
+#include <d3d9.h>
+typedef IDirect3DIndexBuffer9 IDirect3DIndexBuffer8;
+
 #include "always.h"
 #include "wwdebug.h"
 #include "refcount.h"
@@ -50,7 +54,6 @@
 
 class DX8Wrapper;
 class SortingRendererClass;
-struct IDirect3DIndexBuffer8;
 class DX8IndexBufferClass;
 class SortingIndexBufferClass;
 
@@ -130,8 +133,15 @@ public:
 	DynamicIBAccessClass(unsigned short type, unsigned short index_count);
 	~DynamicIBAccessClass();
 
+	//Ronin @build 04/12/2025 Flag for making sure no multiple accessors while one is already active.
+	static bool Is_In_Use();
+
 	unsigned Get_Type() const { return Type; }
 	unsigned short Get_Index_Count() const { return IndexCount; }
+
+	// Ronin @bugfix 14/12/2025: Accessors for direct device binding workaround
+	IDirect3DIndexBuffer9* Get_D3D_IB() const;
+	unsigned short Get_IB_Offset() const { return IndexBufferOffset; }
 
 	// Call at the end of the execution, or at whatever time you wish to release
 	// the recycled dynamic index buffer.

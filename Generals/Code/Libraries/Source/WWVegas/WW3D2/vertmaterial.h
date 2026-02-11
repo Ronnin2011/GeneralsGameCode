@@ -42,6 +42,8 @@
 #ifndef VERTMATERIAL_H
 #define VERTMATERIAL_H
 
+#include <d3d9.h>  // Native DX9
+
 #include "always.h"
 
 #include "refcount.h"

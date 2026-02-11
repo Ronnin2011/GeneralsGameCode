@@ -55,6 +55,7 @@
  *   Matrix3D::Solve_Linear_System -- 3x3 Gauss-Jordan elimination                             *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+
 #include "matrix3d.h"
 
 #include <math.h>
@@ -65,7 +66,7 @@
 #include "matrix3.h"
 #include "matrix4.h"
 #include "quat.h"
-#include "d3dx8math.h"
+#include "d3dx9math.h"
 
 // some static matrices which are sometimes useful
 const Matrix3D Matrix3D::Identity

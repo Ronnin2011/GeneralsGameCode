@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -38,6 +38,9 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+
+#include <d3d9.h>  // Native DX9
+
 #include "render2d.h"
 #include "mutex.h"
 #include "ww3d.h"
@@ -57,6 +60,11 @@
 #include "wwprofile.h"
 #include "wwmemlog.h"
 #include "assetmgr.h"
+
+#include "Scoped2DStateGuard.h"
+
+//#include <mmsystem.h>
+//#pragma comment(lib, "winmm.lib")
 
 RectClass							Render2DClass::ScreenResolution( 0,0,0,0 );
 
@@ -582,7 +590,9 @@ void	Render2DClass::Add_Rect( const RectClass & rect, float border_width, uint32
 
 void	Render2DClass::Add_Outline( const RectClass & rect, float width, unsigned long color )
 {
-	Add_Outline( rect, width, RectClass( 0,0,1,1 ), color );
+	// This prevents D3DTOP_MODULATE from sampling stale textures when drawing untextured outlines
+	Add_Outline(rect, width, RectClass(0, 0, 1, 1), color);
+
 }
 
 void	Render2DClass::Add_Outline( const RectClass & rect, float width, const RectClass & uv, unsigned long color )
@@ -596,106 +606,298 @@ void	Render2DClass::Add_Outline( const RectClass & rect, float width, const Rect
 	Add_Line (Vector2 (rect.Left, rect.Top + 1),		Vector2 (rect.Right - 1, rect.Top + 1),			width, color);
 	Add_Line (Vector2 (rect.Right, rect.Top),		Vector2 (rect.Right, rect.Bottom - 1),		width, color);
 	Add_Line (Vector2 (rect.Right, rect.Bottom),	Vector2 (rect.Left + 1, rect.Bottom),	width, color);
+
+
 }
 
 void Render2DClass::Render(void)
 {
-	if ( !Indices.Count() || IsHidden) {
+	if (!Indices.Count() || IsHidden) {
 		return;
 	}
 
-	// save the view and projection matrices since we're nuking them
-	Matrix4x4 view,proj;
-	Matrix4x4 identity(true);
+	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+	if (!dev) {
+		WWDEBUG_SAY(("Render2DClass::Render - Failed to get D3D device"));
+		return;
+	}
 
-	DX8Wrapper::Get_Transform(D3DTS_VIEW,view);
-	DX8Wrapper::Get_Transform(D3DTS_PROJECTION,proj);
+
+	// Ronin @bugfix 02/12/2025: RAII guard protects 2D rendering state
+	// Automatically saves/restores IA state, transforms, viewport, and render states
+	// Exception-safe: destructor runs even on early returns or crashes
+	Scoped2DStateGuard stateGuard(dev, "Render2DClass::Render");
+
+	// ========== SET UP 2D RENDERING ==========
 
 	//
-	//	Configure the viewport for entire screen
+	// Configure the viewport for entire screen
 	//
 	int width, height, bits;
 	bool windowed;
-	WW3D::Get_Device_Resolution( width, height, bits, windowed );
-	D3DVIEWPORT8 vp = { 0 };
-	vp.X			= 0;
-	vp.Y			= 0;
-	vp.Width		= width;
-	vp.Height	= height;
-	vp.MinZ		= 0;
-	vp.MaxZ		= 1;
-	DX8Wrapper::Set_Viewport(&vp);
-	DX8Wrapper::Set_Texture(0,Texture);
+	WW3D::Get_Device_Resolution(width, height, bits, windowed);
+	D3DVIEWPORT9 vp = { 0 };
+	vp.X = 0;
+	vp.Y = 0;
+	vp.Width = width;
+	vp.Height = height;
+	vp.MinZ = 0.0f;
+	vp.MaxZ = 1.0f;
+	dev->SetViewport(&vp);
 
-	VertexMaterialClass *vm=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
-	DX8Wrapper::Set_Material(vm);
-	REF_PTR_RELEASE(vm);
+	//DX8Wrapper::Set_Texture(0, Texture);
+	//VertexMaterialClass* vm = VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
+	//DX8Wrapper::Set_Material(vm);
+	//REF_PTR_RELEASE(vm);
 
+	Matrix4x4 identity(true);
 	DX8Wrapper::Set_World_Identity();
 	DX8Wrapper::Set_View_Identity();
-	DX8Wrapper::Set_Transform(D3DTS_PROJECTION,identity);
+	DX8Wrapper::Set_Transform(D3DTS_PROJECTION, identity);
 
-	DynamicVBAccessClass vb(BUFFER_TYPE_DYNAMIC_DX8,dynamic_fvf_type,Vertices.Count());
+	// Ronin @bugfix 14/11/2025 DX9: Disable depth testing/writing for 2D rendering
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZENABLE, FALSE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZWRITEENABLE, FALSE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_LIGHTING, FALSE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_CULLMODE, D3DCULL_NONE);
+
+	// pick the correct FVF for 2D
+	const DWORD render2d_fvf = DX8_FVF_XYZDUV1; // 0x142, XYZ + DIFFUSE + TEX1
+
+	DynamicVBAccessClass vb(BUFFER_TYPE_DYNAMIC_DX8, render2d_fvf, Vertices.Count());
 	{
-		DynamicVBAccessClass::WriteLockClass Lock(&vb);
-		const FVFInfoClass &fi=vb.FVF_Info();
-		unsigned char *va=(unsigned char*)Lock.Get_Formatted_Vertex_Array();
-		int i;
+/*#ifdef DEBUG
 
-		for (i=0; i<Vertices.Count(); i++)
+		WWDEBUG_SAY(("🎨 Render2D created VB: Requested FVF=0x%08X, Actual FVF=0x%08X, Stride=%d",
+			render2d_fvf,
+			vb.FVF_Info().Get_FVF(),
+			vb.Get_Stride()));
+#endif // DEBUG*/
+
+		DynamicVBAccessClass::WriteLockClass Lock(&vb);
+		const FVFInfoClass& fi = vb.FVF_Info();
+		unsigned char* va = (unsigned char*)Lock.Get_Formatted_Vertex_Array();
+
+		for (int i = 0; i < Vertices.Count(); i++)
 		{
-			Vector3 temp(Vertices[i].X,Vertices[i].Y,ZValue);
-			*(Vector3*)(va+fi.Get_Location_Offset())=temp;
-			*(unsigned int*)(va+fi.Get_Diffuse_Offset())=Colors[i];
-			*(Vector2*)(va+fi.Get_Tex_Offset(0))=UVCoordinates[i];
-			va+=fi.Get_FVF_Size();
+			Vector3 temp(Vertices[i].X, Vertices[i].Y, ZValue);
+			*(Vector3*)(va + fi.Get_Location_Offset()) = temp;
+			*(unsigned int*)(va + fi.Get_Diffuse_Offset()) = Colors[i];
+			*(Vector2*)(va + fi.Get_Tex_Offset(0)) = UVCoordinates[i];
+			va += fi.Get_FVF_Size();
 		}
 	}
 
-	DynamicIBAccessClass ib(BUFFER_TYPE_DYNAMIC_DX8,Indices.Count());
+	DynamicIBAccessClass ib(BUFFER_TYPE_DYNAMIC_DX8, Indices.Count());
 	{
 		DynamicIBAccessClass::WriteLockClass Lock(&ib);
-		unsigned short *mem=Lock.Get_Index_Array();
-		for (int i=0; i<Indices.Count(); i++)
-			mem[i]=Indices[i];
+		unsigned short* mem = Lock.Get_Index_Array();
+		// Ronin @perf 18/12/2025: Use memcpy for bulk index copy (POD type)
+		memcpy(mem, &Indices[0], Indices.Count() * sizeof(unsigned short));
 	}
 
+
+
+	// Ronin @bugfix 12/12/2025: Force fixed-function pipeline for 2D rendering
+	// Declaration pollution from previous passes causes vertex layout misinterpretation
+	// Use wrapper helpers to ensure clear of declarations and proper FVF binding
+
+	// Step 1: Call fixed-function layout
+	DX8Wrapper::BindLayoutFVF(render2d_fvf, "Render2D");
+
+	// Step 2: Bind buffers (Set_Vertex_Buffer internally calls Apply)
 	DX8Wrapper::Set_Vertex_Buffer(vb);
-	DX8Wrapper::Set_Index_Buffer(ib,0);
+	DX8Wrapper::Set_Index_Buffer(ib, 0, "Render2DClass::Render");
 
+	// Ronin @bugfix 15/01/2026: Keep wrapper texture cache coherent for 2D pass
+	// Even if this path still uses direct dev->SetTexture for the actual draw (for now),
+	// the wrapper must track what Render2D intends to use to prevent cross-pass pollution.
+	DX8Wrapper::Set_Texture(0, Texture);
+
+
+	// In Render2DClass::Render(), after Set_Index_Buffer:
+	/*IDirect3DIndexBuffer9* activeIB = nullptr;
+	DX8Wrapper::_Get_D3D_Device8()->GetIndices(&activeIB);
+	WWDEBUG_SAY(("📊 Index Buffer after Set: %p (should be %p)", activeIB, ib));
+	if (activeIB) activeIB->Release();*/
+
+	// Step 3: Set 2D shader (marks SHADER_CHANGED flag)
 	if (IsGrayScale)
-	{	//special case added to draw grayscale non-alpha blended images.
+	{
+		// Special case added to draw grayscale non-alpha blended images
 		DX8Wrapper::Set_Shader(ShaderClass::_PresetOpaqueShader);
-		DX8Wrapper::Apply_Render_State_Changes();	//force update of all regular W3D states.
-		if (DX8Wrapper::Get_Current_Caps()->Support_Dot3())
-		{	//Override W3D states with customizations for grayscale
-			DX8Wrapper::Set_DX8_Render_State(D3DRS_TEXTUREFACTOR, 0x80A5CA8E);
-			DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_COLORARG0, D3DTA_TFACTOR | D3DTA_ALPHAREPLICATE);
-			DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-			DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_COLORARG2, D3DTA_TFACTOR | D3DTA_ALPHAREPLICATE);
-			DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_COLOROP, D3DTOP_MULTIPLYADD);
 
-			DX8Wrapper::Set_DX8_Texture_Stage_State( 1, D3DTSS_COLORARG1, D3DTA_CURRENT);
-			DX8Wrapper::Set_DX8_Texture_Stage_State( 1, D3DTSS_COLORARG2, D3DTA_TFACTOR);
-			DX8Wrapper::Set_DX8_Texture_Stage_State( 1, D3DTSS_COLOROP, D3DTOP_DOTPRODUCT3);
+		if (DX8Wrapper::Get_Current_Caps()->Support_Dot3())
+		{
+			// Override W3D states with customizations for grayscale
+			DX8Wrapper::Set_DX8_Render_State(D3DRS_TEXTUREFACTOR, 0x80A5CA8E);
+			DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG0, D3DTA_TFACTOR | D3DTA_ALPHAREPLICATE);
+			DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+			DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG2, D3DTA_TFACTOR | D3DTA_ALPHAREPLICATE);
+			DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLOROP, D3DTOP_MULTIPLYADD);
+
+			DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_COLORARG1, D3DTA_CURRENT);
+			DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_COLORARG2, D3DTA_TFACTOR);
+			DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_COLOROP, D3DTOP_DOTPRODUCT3);
 		}
 		else
-		{	//doesn't have DOT3 blend mode so fake it another way.
+		{
+			// Doesn't have DOT3 blend mode so fake it another way
 			DX8Wrapper::Set_DX8_Render_State(D3DRS_TEXTUREFACTOR, 0x60606060);
-			DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-			DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_COLORARG2, D3DTA_TFACTOR);
-			DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+			DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+			DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG2, D3DTA_TFACTOR);
+			DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
 		}
 	}
 	else
-		DX8Wrapper::Set_Shader(Shader);
-	DX8Wrapper::Draw_Triangles(0,Indices.Count()/3,0,Vertices.Count());
 
-	DX8Wrapper::Set_Transform(D3DTS_VIEW,view);
-	DX8Wrapper::Set_Transform(D3DTS_PROJECTION,proj);
+	//DX8Wrapper::Set_Shader(Shader);
+
+	// Step 4: Explicitly apply all pending changes
+	DX8Wrapper::Apply_Render_State_Changes();
+
+/*#ifdef _DEBUG
+// Check again after Apply (reuse 'dev' - don't redeclare!)
+UINT checkStride = 0;
+UINT checkOffset = 0;
+IDirect3DVertexBuffer9* checkVB = nullptr;
+dev->GetStreamSource(0, &checkVB, &checkOffset, &checkStride);
+WWDEBUG_SAY(("📊 After Apply_Render_State_Changes: VB=%p, Stride=%u (expected 24)", checkVB, checkStride));
+if (checkVB) checkVB->Release();
+#endif*/
+
+
+	// Ronin @bugfix 14/12/2025: Direct draw after Apply_Render_State_Changes
+	// We bypass the wrapper here for precise control, but MUST sync cache after
+
+	{
+		// Force fixed-function pipeline via wrapper (keeps wrapper/device coherent)
+		//DX8Wrapper::BindLayoutFVF(render2d_fvf, "Render2DClass::Render(direct-DIP)");
+		DX8Wrapper::Set_Vertex_Shader(0);
+		DX8Wrapper::Set_Pixel_Shader(0);
+
+		// Ronin @bugfix 18/12/2025: Check for valid D3D texture, not texture name
+		// Font textures are dynamically created and have empty names but are valid
+		bool hasTexture = (Texture != nullptr && Texture->Peek_D3D_Texture() != nullptr);
+
+		// Ronin @bugfix 16/12/2025: BYPASS WRAPPER COMPLETELY for textures
+		// We clear D3D stages directly and DON'T sync with wrapper until AFTER we're done.
+		// This ensures our 2D texture actually gets bound regardless of wrapper's stale cache.
+		//dev->SetTexture(0, nullptr);
+
+		// Ronin @refactor 15/01/2026: Avoid zeroing texture stage 0 behind wrapper’s back.
+		// Scoped2DStateGuard already clears all textures on entry, and we already set wrapper texture intent earlier.
+		// Only clear stage 0 explicitly when we are doing untextured rendering.
+		if (!hasTexture) {
+			DX8Wrapper::Set_Texture(0, nullptr);
+		}
+
+		if (hasTexture) {
+			// Textured rendering: bind texture and modulate with vertex color
+			dev->SetTexture(0, Texture->Peek_D3D_Texture());
+			dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+			dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+			dev->SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+			dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+			dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+			dev->SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+
+		}
+		else {
+			// Untextured rendering: use vertex color ONLY
+			dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
+			dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+			dev->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+			dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE);
+
+		}
+
+		// Ronin @bugfix 18/12/2025: MUST disable stage 1 to prevent stale multi-texture state
+		dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+		dev->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+
+		// Ronin @refactor 15/01/2026: Sync wrapper texture intent with what we actually bound via dev calls
+		DX8Wrapper::Set_Texture(0, hasTexture ? Texture : nullptr);
+
+		// ========== CRITICAL: Set up 2D render states directly ==========
+		// Alpha blending for 2D UI
+		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+		dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
+		dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+
+		// Sampler state for texture filtering
+		dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+
+		// Get D3D resources using public accessors
+		IDirect3DVertexBuffer9* d3dVB = vb.Get_D3D_VB();
+		IDirect3DIndexBuffer9* d3dIB = ib.Get_D3D_IB();
+
+		if (d3dVB && d3dIB) {
+			UINT stride = vb.Get_Stride();  // 24
+			UINT vbOffsetBytes = vb.Get_VB_Offset() * stride;
+
+			dev->SetStreamSource(0, d3dVB, vbOffsetBytes, stride);
+			dev->SetIndices(d3dIB);
+
+			// Direct draw - bypasses wrapper's Apply
+			HRESULT hr = dev->DrawIndexedPrimitive(
+				D3DPT_TRIANGLELIST,
+				0,                          // BaseVertexIndex (indices are already offset)
+				0,                          // MinVertexIndex  
+				Vertices.Count(),           // NumVertices
+				ib.Get_IB_Offset(),         // StartIndex
+				Indices.Count() / 3         // PrimitiveCount
+			);
+/*#ifdef WWDEBUG
+			{
+				IDirect3DBaseTexture9* devT0 = nullptr;
+				dev->GetTexture(0, &devT0); // AddRef'd
+				IDirect3DBaseTexture9* expected = (Texture != nullptr) ? Texture->Peek_D3D_Texture() : nullptr;
+
+				WWDEBUG_SAY((
+					"🎨 [Render2D] after DIP: hasTexture=%d expectedD3D=%p devT0=%p match=%d",
+					hasTexture ? 1 : 0,
+					expected,
+					devT0,
+					(devT0 == expected) ? 1 : 0));
+
+				if (devT0) devT0->Release();
+			}
+#endif*/
+			//WWDEBUG_SAY(("🎨 DIRECT DRAW: HR=0x%08X, Polys=%d", hr, Indices.Count() / 3));
+		}
+		else {
+			WWDEBUG_SAY(("❌ DIRECT DRAW FAILED: VB=%p, IB=%p", d3dVB, d3dIB));
+		}
+	}
+
+	// ========== DRAW 2D GEOMETRY ==========
+	// @Ronin @bugfix 14/12/2025: Direct draw done above - NO LONGER use wrapper draw call. FUCK THAT SHIT!
+	// DX8Wrapper::Draw_Triangles(0, Indices.Count() / 3, 0, Vertices.Count());
+
+// ========== AUTOMATIC STATE RESTORATION ==========
+// Guard destructor automatically:
+//   1. Clears wrapper's cached decl/FVF (forces next pass to rebind)
+//   2. Restores saved VertexDeclaration (if was non-null on entry)
+//   3. Restores saved Vertex buffer stream 0 (if was non-null on entry)
+//   4. Restores saved Index buffer (if was non-null on entry)
+//   5. Restores WORLD/VIEW/PROJECTION transforms
+//   6. Restores Viewport
+//   7. Restores render states (ZENABLE, ZWRITEENABLE, LIGHTING, CULLMODE)
+//   8. Clears all texture stages 0-7 (prevents pollution to next 3D pass)
+//   9. Invalidates wrapper's cached render states
+
+	// Ronin @bugfix 18/12/2025: NOW sync wrapper cache to match reality(only stages we might have used)
+	//DX8Wrapper::Set_Texture(0, nullptr);
+	//DX8Wrapper::Set_Texture(1, nullptr);  // Just in case grayscale used it
+
 	if (IsGrayScale)
-		ShaderClass::Invalidate();	//force both stages to be reset.
+		ShaderClass::Invalidate();	// Force both stages to be reset
 
+	// No manual cleanup needed - guard handles everything!
 }
 
 

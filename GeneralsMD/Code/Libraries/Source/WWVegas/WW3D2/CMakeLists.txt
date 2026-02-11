@@ -202,7 +202,7 @@ set(WW3D2_SRC
     #surfaceclass.h
     texproject.cpp
     texproject.h
-    #textdraw.cpp
+    #textdraw.cpp # unused
     #textdraw.h
     texture.cpp
     texture.h
@@ -216,6 +216,8 @@ set(WW3D2_SRC
     vertmaterial.h
     #visrasterizer.cpp
     #visrasterizer.h
+    # Ronin @feature 26/01/2026: Vertex declaration cache
+    VertexDeclCache.cpp
     #w3d_dep.cpp
     #w3d_dep.h
     w3d_file.h
@@ -238,7 +240,9 @@ set_target_properties(z_ww3d2 PROPERTIES OUTPUT_NAME ww3d2)
 
 target_sources(z_ww3d2 PRIVATE ${WW3D2_SRC})
 
+
 target_link_libraries(z_ww3d2 PRIVATE
     corei_ww3d2
     z_wwcommon
+    d3d9  # DirectX 9 library - required for DX9 migration
 )

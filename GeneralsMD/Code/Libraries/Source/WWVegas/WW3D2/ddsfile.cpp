@@ -17,6 +17,9 @@
 */
 
 // 08/06/02 KM Added cube map and volume texture support
+
+#include <d3d9.h>  // Native DX9
+
 #include "ddsfile.h"
 #include "ffactory.h"
 #include "bufffile.h"

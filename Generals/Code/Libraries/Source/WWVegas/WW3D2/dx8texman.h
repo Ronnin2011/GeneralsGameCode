@@ -43,6 +43,9 @@
 #ifndef DX8TEXTUREMANAGER_H
 #define DX8TEXTUREMANAGER_H
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include <d3d9.h>  // Native DX9
+
 #include "always.h"
 #include "texture.h"
 #include "dx8wrapper.h"

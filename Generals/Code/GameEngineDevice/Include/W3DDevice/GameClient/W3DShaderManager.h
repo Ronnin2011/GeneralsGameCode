@@ -36,6 +36,9 @@
 #ifndef __W3DSHADERMANAGER_H_
 #define __W3DSHADERMANAGER_H_
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "WW3D2/texture.h"
 enum FilterTypes CPP_11(: Int);
 enum FilterModes CPP_11(: Int);
@@ -178,7 +181,8 @@ protected:
 ///converts viewport to black & white.
 class ScreenBWFilter : public W3DFilterInterface
 {
-	DWORD	m_dwBWPixelShader;		///<D3D handle to pixel shader which tints texture to black & white.
+	IDirect3DPixelShader9* m_dwBWPixelShader;		///<D3D handle to pixel shader which tints texture to black & white. //Ronin @build DX9 Update
+			
 public:
 	virtual Int init(void);			///<perform any one time initialization and validation
 	virtual Int shutdown(void);		///<release resources used by shader

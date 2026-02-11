@@ -37,6 +37,9 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+// Ronin 19/10/2025 DX8-to-DX9 compatibility layer must be included FIRST
+#include <d3d9.h>  // Native DX9
+
 #if _MSC_VER >= 1000
 #pragma once
 #endif // _MSC_VER >= 1000
@@ -46,7 +49,7 @@
 
 #include "always.h"
 #include "ww3dformat.h"
-#include <d3d8.h>
+#include <d3d9.h>
 
 class DX8Caps
 {
@@ -209,10 +212,10 @@ public:
 	};
 
 
-	DX8Caps(IDirect3D8* direct3d, IDirect3DDevice8* D3DDevice,WW3DFormat display_format, const D3DADAPTER_IDENTIFIER8& adapter_id);
+	DX8Caps(IDirect3D9* direct3d, IDirect3DDevice9* D3DDevice,WW3DFormat display_format, const D3DADAPTER_IDENTIFIER9& adapter_id);
 	static void Shutdown(void);
 
-	void Compute_Caps(WW3DFormat display_format, const D3DADAPTER_IDENTIFIER8& adapter_id);
+	void Compute_Caps(WW3DFormat display_format, const D3DADAPTER_IDENTIFIER9& adapter_id);
 	bool Support_TnL() const { return SupportTnL; };
 	bool Support_DXTC() const { return SupportDXTC; }
 	bool Support_Gamma() const { return supportGamma; }
@@ -239,10 +242,10 @@ public:
 	bool Support_Render_To_Texture_Format(WW3DFormat format) const { return SupportRenderToTextureFormat[format]; }
 	bool Support_Depth_Stencil_Format(WW3DZFormat format) const { return SupportDepthStencilFormat[format]; }
 
-	D3DCAPS8 const & Get_DX8_Caps() const { return (SupportTnL?hwVPCaps:swVPCaps); }
+	D3DCAPS9 const & Get_DX8_Caps() const { return (SupportTnL?hwVPCaps:swVPCaps); }
 
-	D3DCAPS8 const & Get_HW_VP_Caps() const { return hwVPCaps; };
-	D3DCAPS8 const & Get_SW_VP_Caps() const { return swVPCaps; };
+	D3DCAPS9 const & Get_HW_VP_Caps() const { return hwVPCaps; };
+	D3DCAPS9 const & Get_SW_VP_Caps() const { return swVPCaps; };
 
 private:
 	static VendorIdType Define_Vendor(unsigned vendor_id);
@@ -255,21 +258,21 @@ private:
 	static DeviceTypeS3 Get_S3_Device(unsigned device_id);
 	static DeviceTypeIntel Get_Intel_Device(unsigned device_id);
 
-	void Init_Caps(IDirect3DDevice8* D3DDevice);
-	void Check_Texture_Format_Support(WW3DFormat display_format,const D3DCAPS8& caps);
-	void Check_Render_To_Texture_Support(WW3DFormat display_format,const D3DCAPS8& caps);
-	void Check_Depth_Stencil_Support(WW3DFormat display_format, const D3DCAPS8& caps);
-	void Check_Texture_Compression_Support(const D3DCAPS8& caps);
-	void Check_Bumpmap_Support(const D3DCAPS8& caps);
-	void Check_Shader_Support(const D3DCAPS8& caps);
-	void Check_Maximum_Texture_Support(const D3DCAPS8& caps);
-	void Vendor_Specific_Hacks(const D3DADAPTER_IDENTIFIER8& adapter_id);
+	void Init_Caps(IDirect3DDevice9* D3DDevice);
+	void Check_Texture_Format_Support(WW3DFormat display_format,const D3DCAPS9& caps);
+	void Check_Render_To_Texture_Support(WW3DFormat display_format,const D3DCAPS9& caps);
+	void Check_Depth_Stencil_Support(WW3DFormat display_format, const D3DCAPS9& caps);
+	void Check_Texture_Compression_Support(const D3DCAPS9& caps);
+	void Check_Bumpmap_Support(const D3DCAPS9& caps);
+	void Check_Shader_Support(const D3DCAPS9& caps);
+	void Check_Maximum_Texture_Support(const D3DCAPS9& caps);
+	void Vendor_Specific_Hacks(const D3DADAPTER_IDENTIFIER9& adapter_id);
 
 	int MaxDisplayWidth;
 	int MaxDisplayHeight;
 
-	D3DCAPS8 hwVPCaps;
-	D3DCAPS8 swVPCaps;
+	D3DCAPS9 hwVPCaps;
+	D3DCAPS9 swVPCaps;
 	bool SupportTnL;
 	bool SupportDXTC;
 	bool supportGamma;
@@ -284,7 +287,7 @@ private:
 	int VertexShaderVersion;
 	int PixelShaderVersion;
 	int MaxSimultaneousTextures;
-	IDirect3D8* Direct3D; // warning XDK name conflict KJM
+	IDirect3D9* Direct3D; // warning XDK name conflict KJM
 };
 
 

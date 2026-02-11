@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -42,6 +42,9 @@
 //			  some simple animation : dynamic uv coordinates, scaling, scrolling,
 //			  and alpha.
 //-----------------------------------------------------------------------------
+
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
 
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "W3DDevice/GameClient/W3DWaterTracks.h"
@@ -211,7 +214,7 @@ void WaterTracksObj::init( Real width, Real length, const Vector2 &start, const 
 
 	m_fadeMs = waveTypeInfo[m_type].m_fadeMs;		//time for wave to fade out after it stops on beach
 
-	m_waveInitialWidth=length * waveTypeInfo[m_type].m_initialWidthFraction;///<width of wave segment when it first appears
+	m_waveInitialWidth=length * waveTypeInfo[m_type].m_initialWidthFraction; ///<width of wave segment when it first appears
 	m_waveInitialHeight=m_waveInitialWidth * waveTypeInfo[m_type].m_initialHeightWidthFraction;	///<height of wave segment when it first appears
 	m_waveFinalWidth=length;	///<width of wave segment at full size
 	m_waveFinalHeight=width;		///<final height of unstretched wave
@@ -235,6 +238,12 @@ void WaterTracksObj::init( Real width, Real length, const Vector2 &start, const 
 	}
 
 	m_stageZeroTexture=WW3DAssetManager::Get_Instance()->Get_Texture(texturename);
+
+	if (waveTimeOffset == 0 && m_type != WaveTypeStationary) {
+		Int startOffset = static_cast<Int>(m_timeToReachBeach * 0.5f);
+		m_elapsedMs = startOffset;
+		m_initTimeOffset = startOffset;  // ← This prevents SYNC_WAVES from resetting to 0
+	}
 }
 
 //=============================================================================
@@ -293,30 +302,54 @@ Int WaterTracksObj::update(Int msElapsed)
  */
 //=============================================================================
 
-Int WaterTracksObj::render(DX8VertexBufferClass	*vertexBuffer, Int batchStart)
+Int WaterTracksObj::render(DX8VertexBufferClass* vertexBuffer, Int batchStart)
 {
 	// TheSuperHackers @tweak The wave movement time step is now decoupled from the render update.
 	m_elapsedMs += TheFramePacer->getLogicTimeStepMilliseconds();
 
-	VertexFormatXYZDUV1 *vb;
-	Vector2	waveTailOrigin,waveFrontOrigin;
-	Real	ooWaveDirLen=1.0f/m_waveDir.Length();	//one over length
+
+	// Ronin @bugfix 06/11/2025: Log alpha calculation for first track
+	/*static int debugCount = 0;
+	if (debugCount < 10 && m_type == WaveTypeCloseOcean) {
+		WWDEBUG_SAY(("  WaterTrack elapsedMs=%d, timeToReachBeach=%.2f, will calculate alpha...",
+			m_elapsedMs, m_timeToReachBeach));
+		debugCount++;
+	}*/
+
+	VertexFormatXYZDUV1* vb;
+	Vector2	waveTailOrigin, waveFrontOrigin;
+	Real	ooWaveDirLen = 1.0f / m_waveDir.Length();	//one over length
 	Real	waterHeight;
 	Real	waveAlpha;
 	Real	widthFrac;
 	Real	heightFrac;
 
-	if (batchStart < (WATER_VB_PAGES*WATER_STRIP_X*WATER_STRIP_Y-m_x*m_y))
+	const int maxVertices = WATER_VB_PAGES * WATER_STRIP_X * WATER_STRIP_Y;
+	const int remainingSpace = maxVertices - batchStart;
+
+	if (remainingSpace >= m_x * m_y)
 	{	//we have room in current VB, append new verts
-		if(vertexBuffer->Get_DX8_Vertex_Buffer()->Lock(batchStart*vertexBuffer->FVF_Info().Get_FVF_Size(),m_x*m_y*vertexBuffer->FVF_Info().Get_FVF_Size(),(unsigned char**)&vb,D3DLOCK_NOOVERWRITE) != D3D_OK)
+		if (vertexBuffer->Get_DX8_Vertex_Buffer()->Lock(batchStart * vertexBuffer->FVF_Info().Get_FVF_Size(), m_x * m_y * vertexBuffer->FVF_Info().Get_FVF_Size(), (void**)&vb, D3DLOCK_NOOVERWRITE) != D3D_OK)
+			return batchStart;
+	}
+	else
+	{	//ran out of room in last VB, request a substitute VB with DISCARD
+		if (vertexBuffer->Get_DX8_Vertex_Buffer()->Lock(0, m_x * m_y * vertexBuffer->FVF_Info().Get_FVF_Size(), (void**)&vb, D3DLOCK_DISCARD) != D3D_OK)
+			return batchStart;
+		batchStart = 0;	//reset start of page to first vertex
+	}
+
+	/*if (batchStart < (WATER_VB_PAGES * WATER_STRIP_X * WATER_STRIP_Y - m_x * m_y))
+	{	//we have room in current VB, append new verts
+		if(vertexBuffer->Get_DX8_Vertex_Buffer()->Lock(batchStart*vertexBuffer->FVF_Info().Get_FVF_Size(),m_x*m_y*vertexBuffer->FVF_Info().Get_FVF_Size(),(void**)&vb,D3DLOCK_NOOVERWRITE) != D3D_OK)
 			return batchStart;
 	}
 	else
 	{	//ran out of room in last VB, request a substitute VB.
-		if(vertexBuffer->Get_DX8_Vertex_Buffer()->Lock(0,m_x*m_y*vertexBuffer->FVF_Info().Get_FVF_Size(),(unsigned char**)&vb,D3DLOCK_DISCARD) != D3D_OK)
+		if(vertexBuffer->Get_DX8_Vertex_Buffer()->Lock(0,m_x*m_y*vertexBuffer->FVF_Info().Get_FVF_Size(),(void**)&vb,D3DLOCK_DISCARD) != D3D_OK)
 			return batchStart;
 		batchStart=0;	//reset start of page to first vertex
-	}
+	}*/
 
 	//Adjust wave position in a non-linear way so that it slows down as it hits the target.  Using 1/4 sine wave
 	//seems to work okay since it maxes out at 1.0 at our final position.
@@ -324,43 +357,53 @@ Int WaterTracksObj::render(DX8VertexBufferClass	*vertexBuffer, Int batchStart)
 
 	//Real displacement=m_elapsedMs*waveInitialV+0.5*waveAcceleration*m_elapsed*m_elapsed;
 
-	heightFrac=1.0f;
+	heightFrac = 1.0f;
 	widthFrac = 1.0f;
 
 	if (m_type == WaveTypeStationary)
 	{	//stationary wave
 		waveFrontOrigin = m_startPos;
-		waveFrontOrigin -= m_perpDir*m_waveFinalWidth*0.5f;	//offset to left edge of wave
-		waveTailOrigin = waveFrontOrigin - m_waveFinalHeight * ooWaveDirLen*m_waveDir;
+		waveFrontOrigin -= m_perpDir * m_waveFinalWidth * 0.5f;	//offset to left edge of wave
+		waveTailOrigin = waveFrontOrigin - m_waveFinalHeight * ooWaveDirLen * m_waveDir;
 		waveAlpha = 0.0f;
 
 		if (m_elapsedMs >= m_totalMs)
 			m_elapsedMs = 0;	//done with effect*/
-		if (m_elapsedMs > (m_timeToReachBeach + m_timeToStop -1000 + m_fadeMs))
+		if (m_elapsedMs > (m_timeToReachBeach + m_timeToStop - 1000 + m_fadeMs))
 		{	//fading out
-			waveAlpha = m_elapsedMs-(m_timeToReachBeach + m_timeToStop - 1000 +m_fadeMs);//(m_totalMs-m_timeToRetreat -m_fadeMs - m_elapsedMs)/m_fadeMs;
+			waveAlpha = m_elapsedMs - (m_timeToReachBeach + m_timeToStop - 1000 + m_fadeMs);//(m_totalMs-m_timeToRetreat -m_fadeMs - m_elapsedMs)/m_fadeMs;
 			waveAlpha = waveAlpha / m_timeToRetreat;
 			waveAlpha = 1.0f - waveAlpha;
 			if (waveAlpha < 0.0f)
 				waveAlpha = 0.0f;
 		}
 		else
-		if (m_elapsedMs > (m_timeToReachBeach + m_timeToStop - 1000))
-		{	//start fading up
+			if (m_elapsedMs > (m_timeToReachBeach + m_timeToStop - 1000))
+			{	//start fading up
 
-			waveAlpha = m_elapsedMs-(m_timeToReachBeach + m_timeToStop - 1000);//(m_totalMs-m_timeToRetreat -m_fadeMs - m_elapsedMs)/m_fadeMs;
-			waveAlpha = waveAlpha / m_fadeMs;
-			if (waveAlpha > 1.0f)
-				waveAlpha = 1.0f;
-		}
-	}
-	else
+				waveAlpha = m_elapsedMs - (m_timeToReachBeach + m_timeToStop - 1000);//(m_totalMs-m_timeToRetreat -m_fadeMs - m_elapsedMs)/m_fadeMs;
+				waveAlpha = waveAlpha / m_fadeMs;
+				if (waveAlpha > 1.0f)
+					waveAlpha = 1.0f;
+			}
+}
+
+else
 	{	//moving wave
 
 		//get coordinate of top left of wave strip
 		if (m_elapsedMs < m_timeToReachBeach)
 		{	//wave has not reached beach yet so position only depends on velocity
 			waveAlpha = m_elapsedMs / m_timeToReachBeach;
+
+			// Ronin @bugfix 06/11/2025: Log calculated alpha
+			/*#ifdef _DEBUG
+			if (debugCount < 10 && m_type == WaveTypeCloseOcean) {
+				WWDEBUG_SAY(("    Calculated waveAlpha=%.4f (elapsedMs=%d / timeToReachBeach=%.2f)",
+					waveAlpha, m_elapsedMs, m_timeToReachBeach));
+			}
+			#endif*/
+
 			widthFrac = waveAlpha;
 			widthFrac=(m_waveInitialWidth + widthFrac* (m_waveFinalWidth-m_waveInitialWidth))/m_waveFinalWidth;
 
@@ -423,10 +466,12 @@ Int WaterTracksObj::render(DX8VertexBufferClass	*vertexBuffer, Int batchStart)
 
 	//First insert tail of wave:
 	Vector2 testPoint(waveTailOrigin);
+
 	TheTerrainLogic->isUnderwater(testPoint.X,testPoint.Y,&waterHeight);
 	vb->x=	testPoint.X;
 	vb->y=	testPoint.Y;
 	vb->z=waterHeight+1.5f;
+
 	vb->diffuse=(REAL_TO_INT(waveAlpha*255.0f)<<24) |0xffffff;
 	if (m_flipU)
 		vb->u1=1;
@@ -469,11 +514,34 @@ Int WaterTracksObj::render(DX8VertexBufferClass	*vertexBuffer, Int batchStart)
 	vb->v1=1.0f;
 	vb++;
 
+	// Ronin @diagnostic 06/12/2025: Log actual vertex data to verify geometry
+#ifdef _DEBUG
+	{
+		VertexFormatXYZDUV1* debugVB = vb - 4;  // Rewind to first vertex
+		DWORD alpha0 = (debugVB[0].diffuse >> 24) & 0xFF;
+
+		static int frameLogCount = 0;
+		if (frameLogCount < 3) {
+			WWDEBUG_SAY(("📊 VERTEX DATA Track type=%d:", m_type));
+			WWDEBUG_SAY(("   V0: pos=[%.1f, %.1f, %.1f] alpha=%d uv=[%.2f,%.2f]",
+				debugVB[0].x, debugVB[0].y, debugVB[0].z, alpha0,
+				debugVB[0].u1, debugVB[0].v1));
+			WWDEBUG_SAY(("   V2: pos=[%.1f, %.1f, %.1f]",
+				debugVB[2].x, debugVB[2].y, debugVB[2].z));
+
+			if (alpha0 == 0) {
+				WWDEBUG_SAY(("   ❌ ALPHA IS ZERO!"));
+			}
+			frameLogCount++;
+		}
+	}
+#endif
+
 	vertexBuffer->Get_DX8_Vertex_Buffer()->Unlock();
 
 	Int idxCount=(m_y-1)*(m_x*2+2) - 2;	//index count
 
-	DX8Wrapper::Set_Index_Buffer(TheWaterTracksRenderSystem->m_indexBuffer,batchStart);
+	DX8Wrapper::Set_Index_Buffer(TheWaterTracksRenderSystem->m_indexBuffer,batchStart, "WaterTracksObj::render");
 	DX8Wrapper::Draw_Strip(0,idxCount-2,0,m_x*m_y);	//there are always n-2 primitives for n index strip.
 
 	return batchStart+m_x*m_y;	//return new offset into unused area of vertex buffer
@@ -841,6 +909,9 @@ void WaterTracksRenderSystem::update()
 void TestWaterUpdate(void);
 void setFPMode( void );
 
+// Ronin @bugfix 06/11/2025: F2DW macro needed for depth bias conversion
+static inline DWORD F2DW(FLOAT f) { return *((DWORD*)&f); }
+
 //=============================================================================
 // WaterTracksRenderSystem::flush
 //=============================================================================
@@ -848,14 +919,36 @@ void setFPMode( void );
 //=============================================================================
 void WaterTracksRenderSystem::flush(RenderInfoClass & rinfo)
 {
-/** @todo: Optimize system by drawing tracks as triangle strips and use dynamic vertex buffer access.
+#ifdef WWDEBUG
+	DX8Wrapper::Validate_Pipeline_State("WaterTracks::Render_Entry");
+#endif
+
+	/*bool isTrackVisible = true;
+
+	// Simple frustum check - if NDC coordinates are too far outside [-1,1] range, skip
+	if (fabs(ndcX) > 2.0f || fabs(ndcY) > 2.0f) {
+		isTrackVisible = false;
+	}
+
+	if (!isTrackVisible) {
+		// Skip this track as it's not visible
+		continue;
+	}*/
+
+
+	/** @todo: Optimize system by drawing tracks as triangle strips and use dynamic vertex buffer access.
 May also try rendering all tracks with one call to W3D/D3D by grouping them by texture.
 Try improving the fit to vertical surfaces like cliffs.
 */
 	Int	diffuseLight;
 
-	if (!TheGlobalData->m_showSoftWaterEdge || TheWaterTransparency->m_transparentWaterDepth ==0 )
+	if (!TheGlobalData->m_showSoftWaterEdge || TheWaterTransparency->m_transparentWaterDepth == 0)
+	{
+		WWDEBUG_SAY(("  ❌ EXITING: Water edge disabled or no transparent water depth!"));
+		WWDEBUG_SAY(("=== WATER TRACKS FLUSH ABORTED (CONDITION 1) ==="));
+
 		return;
+	}
 
 	if (TheGlobalData->m_usingWaterTrackEditor)
 		TestWaterUpdate();
@@ -865,11 +958,16 @@ Try improving the fit to vertical surfaces like cliffs.
 	rinfo.Camera.Apply();
 
 	if (!m_usedModules || ShaderClass::Is_Backface_Culling_Inverted())
-		return;	//don't render track marks in reflections.
+	{
+			WWDEBUG_SAY(("  ❌ EXITING: No modules or backface culling inverted (reflection pass)!"));
+			WWDEBUG_SAY(("=== WATER TRACKS FLUSH ABORTED (CONDITION 2) ==="));
+			return;	//don't render track marks in reflections.
+	}
+		WWDEBUG_SAY(("  ✅ All checks passed, proceeding with rendering..."));
 
  	//According to Nvidia there's a D3D bug that happens if you don't start with a
  	//new dynamic VB each frame - so we force a DISCARD by overflowing the counter.
- 	m_batchStart = 0xffff;
+  m_batchStart = 0xffff;
 
 	// adjust shading for time of day.
 	Real shadeR, shadeG, shadeB;
@@ -888,12 +986,58 @@ Try improving the fit to vertical surfaces like cliffs.
 	Matrix3D tm(1);	///set to identity
 	DX8Wrapper::Set_Transform(D3DTS_WORLD,tm);	//position the water surface
 
+	// Step 1: Bind layout BEFORE Apply (prevents stomp)
+	// Use simple FVF for water tracks: XYZ | DIFFUSE | TEX1
+	DX8Wrapper::BindLayoutFVF(DX8_FVF_XYZDUV1, "WaterTracks");
+
+	// Step 2: Bind vertex buffer (sets stream source data)
+	DX8Wrapper::Set_Vertex_Buffer(m_vertexBuffer);
+	if (!m_vertexBuffer) {
+		WWDEBUG_SAY(("❌ Water tracks: No vertex buffer"));
+		return;
+	}
+
+	// Step 3: Set material (vertex colors, lighting properties)
 	DX8Wrapper::Set_Material(m_vertexMaterialClass);
+
+	// Step 4: Apply shader (render state configuration for alpha blending)
 	DX8Wrapper::Set_Shader(m_shaderClass);
 
-	DX8Wrapper::Set_Vertex_Buffer(m_vertexBuffer);
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZBIAS,8);
-	//Force apply of render states so we can override them.
+	// Enforce fixed-function color combine for WaterTracks (stage 0)
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+
+	// Disable higher texture stages to avoid overrides
+	int maxStages = DX8Wrapper::Get_Current_Caps()->Get_Max_Textures_Per_Pass();
+	for (int s = 1; s < maxStages; ++s) {
+		DX8Wrapper::Set_DX8_Texture_Stage_State(s, D3DTSS_COLOROP, D3DTOP_DISABLE);
+		DX8Wrapper::Set_DX8_Texture_Stage_State(s, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+	}
+
+  // DX8 never manually set these states - shader controlled them
+  // Manual override was breaking shader state management in DX9
+
+	// Step 5: Set depth bias for water tracks (expert-recommended values)
+	// DX8 used D3DRS_ZBIAS with integer value 8, DX9 uses D3DRS_DEPTHBIAS with float
+	// Ronin @bugfix 28/11/2025: Depth bias settings
+	float bias = 1.5e-3f;  // Positive bias (expert recommendation: +1e-3 to +2e-3)
+	float slope = 1.5f;    // Slope scale (expert recommendation: 1.0 to 2.0)
+
+	DWORD biasDW = *reinterpret_cast<DWORD*>(&bias);
+	DWORD slopeDW = *reinterpret_cast<DWORD*>(&slope);
+
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, biasDW);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, slopeDW);
+
+
+#ifdef _DEBUG
+	WWDEBUG_SAY(("🎯 Water tracks: Set depth bias=%.8f, slope=%.2f", biasDW, slopeDW));
+#endif
+
+	// Step 6: Apply render state changes.
 	DX8Wrapper::Apply_Render_State_Changes();
 
 	if (TheTerrainRenderObject->getShroud())
@@ -907,16 +1051,66 @@ Try improving the fit to vertical surfaces like cliffs.
 		DX8Wrapper::Set_DX8_Texture_Stage_State( 1, D3DTSS_COLOROP,   D3DTOP_MODULATE );
 		DX8Wrapper::Set_DX8_Texture_Stage_State( 1, D3DTSS_ALPHAOP,   D3DTOP_MODULATE );
 
-		//Shroud shader uses z-compare of EQUAL which wouldn't work on water because it doesn't
-		//write to the zbuffer.  Change to LESSEQUAL.
-		DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
 	}
 
+		// Ronin @bugfix 06/11/2025: Water tracks need LESSEQUAL regardless of shroud state
+		// Must be set AFTER shroud shader which resets it to EQUAL
+		//Shroud shader uses z-compare of EQUAL which wouldn't work on water because it doesn't
+		//write to the zbuffer.  Change to LESSEQUAL.
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+
+	// Ronin @bugfix 06/11/2025: Add rendering loop debug logging
 	Int LastTextureType=-1;
-
 	WaterTracksObj *mod=m_usedModules;
+	int tracksRendered = 0;
 
-	while( mod )
+	while (mod)
+	{
+		if (LastTextureType != mod->m_type)
+		{
+			DX8Wrapper::Set_Texture(0, mod->m_stageZeroTexture);
+			LastTextureType = mod->m_type;
+		}
+
+		Int vertsRendered = mod->render(m_vertexBuffer, m_batchStart);
+
+		m_batchStart = vertsRendered;
+		tracksRendered++;
+		mod = mod->m_nextSystem;
+	}
+
+#ifdef _DEBUG
+	WWDEBUG_SAY(("🌊 Total water tracks rendered: %d", tracksRendered));
+#endif
+
+#ifdef _DEBUG
+	// Extended diagnostics - only enable if tracks still invisible
+	IDirect3DDevice9* pDevDebug = DX8Wrapper::_Get_D3D_Device8();
+	if (pDevDebug) {
+		DWORD alpha = 0, src = 0, dst = 0, zwrite = 0, zfunc = 0;
+		pDevDebug->GetRenderState(D3DRS_ALPHABLENDENABLE, &alpha);
+		pDevDebug->GetRenderState(D3DRS_SRCBLEND, &src);
+		pDevDebug->GetRenderState(D3DRS_DESTBLEND, &dst);
+		pDevDebug->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
+		pDevDebug->GetRenderState(D3DRS_ZFUNC, &zfunc);
+
+		WWDEBUG_SAY(("🌊 Water tracks exit state:"));
+		WWDEBUG_SAY(("   AlphaBlend=%d, Src=%d, Dst=%d", alpha, src, dst));
+		WWDEBUG_SAY(("   ZWrite=%d, ZFunc=%d", zwrite, zfunc));
+	}
+#endif
+
+	m_batchStart = 0;  // Ronin @bugfix 06/11/2025: Reset for next frame
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+
+	/*while (mod)
 	{
 		if (LastTextureType != mod->m_type)
 			DX8Wrapper::Set_Texture(0,mod->m_stageZeroTexture);
@@ -926,15 +1120,66 @@ Try improving the fit to vertical surfaces like cliffs.
 		m_batchStart = vertsRendered;	//advance past vertices already in buffer
 
 		mod = mod->m_nextSystem;
-	}
+	}*/
 
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZBIAS,0);
+	// Ronin @bugfix 25/11/2025: Proper DX9 state cleanup using wrapper functions
+	// CRITICAL: Use wrapper functions to synchronize cache AND invalidate shader state
+	// This prevents state pollution when next renderer uses same _PresetAlphaShader
+
+		// Step 1: Reset depth bias using wrapper (syncs cache)
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, 0);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, 0);
+
+#ifdef _DEBUG
+	WWDEBUG_SAY(("🎯 Water tracks: Restored depth bias to zero"));
+#endif
+
+	// Step 2: Reset alpha blending using wrapper (syncs cache)
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, FALSE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_ONE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_ZERO);
+
+	// Step 3: Reset Z-buffer states using wrapper (syncs cache)
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZWRITEENABLE, TRUE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+
+	// Step 4: Invalidate shader state to force next Apply() to update
+	// Without this, if next renderer uses _PresetAlphaShader, it sees diff==0 and skips updates
+	ShaderClass::Invalidate();
+
+#ifdef _DEBUG
+	WWDEBUG_SAY(("✅ Water tracks cleanup: Wrapper state management complete"));
+
+	// Verify cleanup worked
+	{
+		IDirect3DDevice9* pDevVerify = DX8Wrapper::_Get_D3D_Device8();
+		if (pDevVerify) {
+			DWORD alphaBlend = 0, zWrite = 0;
+			pDevVerify->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
+			pDevVerify->GetRenderState(D3DRS_ZWRITEENABLE, &zWrite);
+			WWDEBUG_SAY(("=== POST-WRAPPER-CLEANUP STATE ==="));
+			WWDEBUG_SAY(("  AlphaBlend: %d (expected: 0), ZWrite: %d (expected: 1)", alphaBlend, zWrite));
+			if (alphaBlend != 0 || zWrite != 1) {
+				WWDEBUG_SAY(("  ❌ WARNING: Wrapper cleanup verification failed!"));
+			}
+			else {
+				WWDEBUG_SAY(("  ✅ Wrapper cleanup verified - states correct"));
+			}
+		}
+	}
+#endif
 
 	if (TheTerrainRenderObject->getShroud())
 	{	//we used the shroud shader, so reset it.
-		DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_EQUAL);
 		W3DShaderManager::resetShader(W3DShaderManager::ST_SHROUD_TEXTURE);
 	}
+
+	WWDEBUG_SAY(("=== WATER TRACKS FLUSH COMPLETE ==="));
+#ifdef _DEBUG
+	//DX8Wrapper::Validate_Pipeline_State("Water Tracks Exit");
+	//WWDEBUG_SAY(("=== WATER TRACKS RENDER END ==="));
+#endif
+
 }
 
 WaterTracksObj *WaterTracksRenderSystem::findTrack(Vector2 &start, Vector2 &end, waveType type)
@@ -960,10 +1205,15 @@ void WaterTracksRenderSystem::saveTracks(void)
 	AsciiString fileName=TheTerrainLogic->getSourceFilename();
 	char path[256];
 
-	strcpy(path,fileName.str());
-	Int len=strlen(path);
+	// Ronin @bugfix 09/02/2026 Use safe string functions and proper extension replacement
+	strlcpy(path, fileName.str(), ARRAY_SIZE(path));
 
-	strcpy(path+len-4,".wak");
+	// Find and replace the extension with .wak
+	char* dot = strrchr(path, '.');
+	if (dot)
+		*dot = '\0';  // Truncate at the last dot
+	strlcat(path, ".wak", ARRAY_SIZE(path));
+
 
 	WaterTracksObj *umod;
 	Int trackCount=0;
@@ -998,10 +1248,13 @@ void WaterTracksRenderSystem::loadTracks(void)
 	AsciiString fileName=TheTerrainLogic->getSourceFilename();
 	char path[256];
 
-	strcpy(path,fileName.str());
-	Int len=strlen(path);
+	// Ronin @bugfix 09/02/2026 Use safe string functions and proper extension replacement
+	strlcpy(path, fileName.str(), ARRAY_SIZE(path));
 
-	strcpy(path+len-4,".wak");
+	char* dot = strrchr(path, '.');
+	if (dot)
+		*dot = '\0';
+	strlcat(path, ".wak", ARRAY_SIZE(path));
 
 	File *file = TheFileSystem->openFile(path, File::READ | File::BINARY);
 	WaterTracksObj *umod;
@@ -1046,6 +1299,11 @@ void WaterTracksRenderSystem::loadTracks(void)
 			}
 		}
 		file->close();
+		WWDEBUG_SAY(("Loaded %d water tracks from %s", trackCount, path));
+	}
+	else
+	{
+		WWDEBUG_SAY(("WARNING: No .wak file found at: %s", path));
 	}
 
 #if 0	//Obsolete code used before there was another editor to place waves.

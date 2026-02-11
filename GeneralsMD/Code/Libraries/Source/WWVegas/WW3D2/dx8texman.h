@@ -44,6 +44,8 @@
 #ifndef DX8TEXTUREMANAGER_H
 #define DX8TEXTUREMANAGER_H
 
+#include <d3d9.h>  // Native DX9
+
 #include "always.h"
 #include "texture.h"
 #include "dx8wrapper.h"

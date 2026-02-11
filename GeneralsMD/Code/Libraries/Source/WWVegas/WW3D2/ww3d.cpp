@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -81,7 +81,9 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
-#include "ww3d.h"
+
+#include <d3d9.h>  // Native DX9
+
 #include "rinfo.h"
 #include "assetmgr.h"
 #include "boxrobj.h"
@@ -268,55 +270,49 @@ void WW3D::Set_NPatches_Level(unsigned level)
  *=============================================================================================*/
 WW3DErrorType WW3D::Init(void *hwnd, char *defaultpal, bool lite)
 {
-	assert(IsInitted == false);
-	WWDEBUG_SAY(("WW3D::Init hwnd = %p",hwnd));
-	_Hwnd = (HWND)hwnd;
-	Lite = lite;
+    assert(IsInitted == false);
+    WWDEBUG_SAY(("WW3D::Init hwnd = %p",hwnd));
+    _Hwnd = (HWND)hwnd;
+    Lite = lite;
 
-	/*
-	** Initialize d3d, this also enumerates the available devices and resolutions.
-	*/
-	Init_D3D_To_WW3_Conversion();
-	WWDEBUG_SAY(("Init DX8Wrapper"));
-	if (!DX8Wrapper::Init(_Hwnd, lite)) {
-		return(WW3D_ERROR_INITIALIZATION_FAILED);
-	}
-	WWDEBUG_SAY(("Allocate Debug Resources"));
-	Allocate_Debug_Resources();
-
- 	MMRESULT r=timeBeginPeriod(1);
-	WWASSERT(r==TIMERR_NOERROR);
-
-	/*
-	** Initialize the dazzle system
-	*/
-	if (!lite) {
-		WWDEBUG_SAY(("Init Dazzles"));
-		FileClass * dazzle_ini_file = _TheFileFactory->Get_File(DAZZLE_INI_FILENAME);
-		if (dazzle_ini_file) {
-			INIClass dazzle_ini(*dazzle_ini_file);
-			DazzleRenderObjClass::Init_From_INI(&dazzle_ini);
-			_TheFileFactory->Return_File(dazzle_ini_file);
+    /*
+    ** Initialize d3d, this also enumerates the available devices and resolutions.
+    */
+    Init_D3D_To_WW3_Conversion();
+		WWDEBUG_SAY(("Init DX8Wrapper"));
+		if (!DX8Wrapper::Init(_Hwnd, lite)) {
+			return(WW3D_ERROR_INITIALIZATION_FAILED);
 		}
-	}
-	/*
-	** Initialize the default static sort lists
-	** Note that DefaultStaticSortLists[0] is unused.
-	*/
-	DefaultStaticSortLists = W3DNEW DefaultStaticSortListClass();
-	Reset_Current_Static_Sort_Lists_To_Default();
+		WWDEBUG_SAY(("Allocate Debug Resources"));
+		Allocate_Debug_Resources();
 
-	/*
-	** Initialize the animation-triggered sound system
-	*/
-	if (!lite) {
-		AnimatedSoundMgrClass::Initialize ();
-		IsInitted = true;
-	}
-	WWDEBUG_SAY(("WW3D Init completed"));
-	return WW3D_ERROR_OK;
+		MMRESULT r = timeBeginPeriod(1);
+		WWASSERT(r == TIMERR_NOERROR);
+
+    /*
+    ** Initialize the dazzle system
+    */
+    if (!lite) {
+        WWDEBUG_SAY(("Init Dazzles"));
+        FileClass * dazzle_ini_file = _TheFileFactory->Get_File(DAZZLE_INI_FILENAME);
+        if (dazzle_ini_file) {
+            INIClass dazzle_ini(*dazzle_ini_file);
+            DazzleRenderObjClass::Init_From_INI(&dazzle_ini);
+            _TheFileFactory->Return_File(dazzle_ini_file);
+        }
+    }
+
+    // Initialize the default static sort lists
+    DefaultStaticSortLists = W3DNEW DefaultStaticSortListClass();
+    Reset_Current_Static_Sort_Lists_To_Default();
+
+    if (!lite) {
+        AnimatedSoundMgrClass::Initialize ();
+        IsInitted = true;
+    }
+    WWDEBUG_SAY(("WW3D Init completed"));
+    return WW3D_ERROR_OK;
 }
-
 
 /***********************************************************************************************
  * WW3D::Shutdown -- shutdown the WW3D Library                                                 *
@@ -332,7 +328,7 @@ WW3DErrorType WW3D::Init(void *hwnd, char *defaultpal, bool lite)
  *=============================================================================================*/
 WW3DErrorType WW3D::Shutdown(void)
 {
-	assert(Lite || IsInitted == true);
+    assert(Lite || IsInitted == true);
 //	WWDEBUG_SAY(("WW3D::Shutdown"));
 
 #ifdef WW3D_DX8
@@ -791,56 +787,96 @@ void WW3D::Set_Texture_Filter(int texture_filter)
  *=============================================================================================*/
 WW3DErrorType WW3D::Begin_Render(bool clear,bool clearz,const Vector3 & color, float dest_alpha, void(*network_callback)(void))
 {
-	if (!IsInitted) {
-		return(WW3D_ERROR_OK);
+
+#ifdef _DEBUG
+	static unsigned long lastLogFrame = 0;
+	if (DX8Wrapper::FrameCount != lastLogFrame) {
+		lastLogFrame = DX8Wrapper::FrameCount;
+		WWDEBUG_SAY(("========== FRAME %lu START ==========", DX8Wrapper::FrameCount));
 	}
+#endif
 
-	WWPROFILE("WW3D::Begin_Render");
-	WWASSERT(IsInitted);
-	HRESULT hr;
+	
+    if (!IsInitted) {
+        return(WW3D_ERROR_OK);
+    }
 
-	SNAPSHOT_SAY(("=========================================="));
-	SNAPSHOT_SAY(("========== WW3D::Begin_Render ============"));
-	SNAPSHOT_SAY(("==========================================\n"));
+    WWPROFILE("WW3D::Begin_Render");
+    WWASSERT(IsInitted);
 
-	if (DX8Wrapper::_Get_D3D_Device8() && (hr=DX8Wrapper::_Get_D3D_Device8()->TestCooperativeLevel()) != D3D_OK)
-	{
-        // If the device was lost, do not render until we get it back
-        if( D3DERR_DEVICELOST == hr )
-            return WW3D_ERROR_GENERIC;	//other app has the device
+		HRESULT hr;
 
-        // Check if the device needs to be reset
-        if( D3DERR_DEVICENOTRESET == hr )
-        {
-            WWDEBUG_SAY(("WW3D::Begin_Render is resetting the device."));
-            DX8Wrapper::Reset_Device();
-        }
+		SNAPSHOT_SAY(("=========================================="));
+		SNAPSHOT_SAY(("========== WW3D::Begin_Render ============"));
+		SNAPSHOT_SAY(("==========================================\n"));
 
-		return WW3D_ERROR_GENERIC;
-	}
+		if ((hr = DX8Wrapper::_Get_D3D_Device8()->TestCooperativeLevel()) != D3D_OK) 
+			{
+			// If the device was lost, do not render until we get it back
+			if (D3DERR_DEVICELOST == hr)
+				return WW3D_ERROR_GENERIC;	//other app has the device
 
-	// Memory allocation statistics
-	LastFrameMemoryAllocations=WWMemoryLogClass::Get_Allocate_Count();
-	LastFrameMemoryFrees=WWMemoryLogClass::Get_Free_Count();
-	WWMemoryLogClass::Reset_Counters();
+			// Check if the device needs to be reset
+			if (D3DERR_DEVICENOTRESET == hr)
+			{
+				WWDEBUG_SAY(("WW3D::Begin_Render is resetting the device."));
+				DX8Wrapper::Reset_Device();
+			}
 
-	TextureLoader::Update(network_callback);
-//	TextureClass::_Reset_Time_Stamp();
-	DynamicVBAccessClass::_Reset(true);
-	DynamicIBAccessClass::_Reset(true);
+			return WW3D_ERROR_GENERIC;
+		}
+		   
+    // Memory allocation statistics
+    LastFrameMemoryAllocations=WWMemoryLogClass::Get_Allocate_Count();
+    LastFrameMemoryFrees=WWMemoryLogClass::Get_Free_Count();
+    WWMemoryLogClass::Reset_Counters();
 
-	Debug_Statistics::Begin_Statistics();
+    TextureLoader::Update(network_callback);
+    DynamicVBAccessClass::_Reset(true);
+		DynamicIBAccessClass::_Reset(true);
 
-	if (IsCapturing && (!PauseRecord || RecordNextFrame)) {
-		Update_Movie_Capture();
-		RecordNextFrame = false;
-	}
+#ifdef _DEBUG
+		// Ronin @diagnostic 06/12/2025: Log actual D3D state at frame start
+		{
+			IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
+			if (pDev) {
+				DWORD fvf = 0;
+				IDirect3DVertexDeclaration9* decl = nullptr;
+				IDirect3DVertexBuffer9* vb = nullptr;
+				UINT offset = 0, stride = 0;
 
-	WWASSERT(!IsRendering);
-	IsRendering = true;
+				pDev->GetFVF(&fvf);
+				pDev->GetVertexDeclaration(&decl);
+				pDev->GetStreamSource(0, &vb, &offset, &stride);
 
-	// If we want to clear the screen, we need to set the viewport to include the entire screen:
-	if (clear || clearz) {
+				WWDEBUG_SAY(("🔍 FRAME START: FVF=0x%08X, Decl=%p, VB=%p, Stride=%u",
+					fvf, decl, vb, stride));
+
+				// Check for stale state from previous frame
+				if (decl != nullptr || stride != 0) {
+					WWDEBUG_SAY(("⚠️ PERSISTING STATE FROM PREVIOUS FRAME DETECTED! (D3D9 doesn’t zero IA state between frames, and it’s normal for the last bound VB/stride to persist.)"));
+				}
+
+				if (decl) decl->Release();
+				if (vb) vb->Release();
+			}
+		}
+#endif
+
+    Debug_Statistics::Begin_Statistics();
+
+    if (IsCapturing && (!PauseRecord || RecordNextFrame)) {
+        Update_Movie_Capture();
+        RecordNextFrame = false;
+    }
+
+    WWASSERT(!IsRendering);
+    IsRendering = true;
+
+		// Ronin @bugfix 21/12/2025: DX9 requires explicit viewport initialization before BeginScene()
+		// Unlike DX8, DX9 does not auto-initialize viewport to render target dimensions.
+		// When -nocinematic is used, Camera::Apply() never runs during startup,
+		// leaving viewport uninitialized and causing water shader artifacts.
 		D3DVIEWPORT8 vp;
 		int width, height, bits;
 		bool windowed;
@@ -849,16 +885,19 @@ WW3DErrorType WW3D::Begin_Render(bool clear,bool clearz,const Vector3 & color, f
 		vp.Y = 0;
 		vp.Width = width;
 		vp.Height = height;
-		vp.MinZ = 0.0f;;
+		vp.MinZ = 0.0f;
 		vp.MaxZ = 1.0f;
 		DX8Wrapper::Set_Viewport(&vp);
-		DX8Wrapper::Clear(clear, clearz, color, dest_alpha);
-	}
 
-	// Notify D3D that we are beginning to render the frame
-	DX8Wrapper::Begin_Scene();
+		// If we want to clear the screen, do it now
+		if (clear || clearz) {
+			DX8Wrapper::Clear(clear, clearz, color, dest_alpha);
+		}
 
-	return WW3D_ERROR_OK;
+    // Notify D3D that we are beginning to render the frame
+		DX8Wrapper::Begin_Scene();
+
+    return WW3D_ERROR_OK;
 }
 
 /***********************************************************************************************
@@ -944,6 +983,11 @@ WW3DErrorType WW3D::Render(SceneClass * scene,CameraClass * cam,bool clear,bool 
 	WWASSERT(IsRendering);
 	WWASSERT(scene);
 	WWASSERT(cam);
+
+#ifdef WWDEBUG
+	WWDEBUG_SAY(("🎥 WW3D::Render(scene,camera): scene=%p cam=%p clear=%d clearz=%d",
+		scene, cam, clear ? 1 : 0, clearz ? 1 : 0));
+#endif
 
 	cam->On_Frame_Update();
 	RenderInfoClass rinfo(*cam);
@@ -1058,7 +1102,20 @@ WW3DErrorType WW3D::Render(
  *=============================================================================================*/
 void WW3D::Flush(RenderInfoClass & rinfo)
 {
+#ifdef WWDEBUG
+	static int flushCount = 0;
+	flushCount++;
+	if (flushCount <= 2000) {
+		WWDEBUG_SAY(("🔄 WW3D::Flush #%d: rinfo.Camera=%p (DX8MeshRenderer camera will be %p)",
+			flushCount, &rinfo.Camera, TheDX8MeshRenderer.Peek_Camera()));
+	}
+#endif
 	TheDX8MeshRenderer.Flush();
+
+#ifdef WWDEBUG
+	WWDEBUG_SAY(("↩️ WW3D::Flush: returned from DX8MeshRenderer::Flush (frame=%u)", WW3D::Get_Frame_Count()));
+#endif
+
 	SHD_FLUSH;
 	WW3D::Render_And_Clear_Static_Sort_Lists(rinfo);	//draws things like water
 
@@ -1081,46 +1138,106 @@ void WW3D::Flush(RenderInfoClass & rinfo)
  *=============================================================================================*/
 WW3DErrorType WW3D::End_Render(bool flip_frame)
 {
-	if (!IsInitted) {
-		return(WW3D_ERROR_OK);
+#ifdef _DEBUG
+	static int s_endRenderCount = 0;
+	s_endRenderCount++;
+	if (s_endRenderCount <= 50) {
+		WWDEBUG_SAY(("🎬 End_Render #%d: flip_frame=%d, FrameCount=%d",
+			s_endRenderCount, flip_frame, FrameCount));
 	}
+#endif
 
-	WWPROFILE("WW3D::End_Render");
+    if (!IsInitted) {
+        return(WW3D_ERROR_OK);
+    }
 
-	WWASSERT(IsRendering);
-	WWASSERT(IsInitted);
+    WWPROFILE("WW3D::End_Render");
 
-	// If sorting renderer flush isn't called from within any of the render functions
-	// the sorting arrays will overflow!
+    WWASSERT(IsRendering);
+    WWASSERT(IsInitted);
 
-	SortingRendererClass::Flush();
+		// If sorting renderer flush isn't called from within any of the render functions
+		// the sorting arrays will overflow!
 
-	IsRendering = false;
+    SortingRendererClass::Flush();
 
-	{
-		WWPROFILE("DX8Wrapper::End_Scene");
-		DX8Wrapper::End_Scene(flip_frame);
-	}
+    IsRendering = false;
 
-	FrameCount++;
+		{
+			WWPROFILE("DX8Wrapper::End_Scene");
+			// @build Ronin 01/11/2025 DX9: Direct DX8Wrapper end scene
+			DX8Wrapper::End_Scene(flip_frame);
+		}
 
-	{
-		WWPROFILE("End_Statistics");
-		Debug_Statistics::End_Statistics();
-	}
+		FrameCount++;
 
-	SNAPSHOT_SAY(("=========================================="));
-	SNAPSHOT_SAY(("========== WW3D::End_Render =============="));
-	SNAPSHOT_SAY(("==========================================\n"));
+		{
+			WWPROFILE("End_Statistics");
+			Debug_Statistics::End_Statistics();
+		}
 
-	Activate_Snapshot(false);
+		SNAPSHOT_SAY(("=========================================="));
+		SNAPSHOT_SAY(("========== WW3D::End_Render =============="));
+		SNAPSHOT_SAY(("==========================================\n"));
 
-	// (gth) I've found some cases where its not safe to rely on our "shadow" copy (of
-	// matrices for example) across multiple frames.  So even though this is slightly
-	// less "optimal", lets just reset the caches each frame.
-	DX8Wrapper::Invalidate_Cached_Render_States();
+		Activate_Snapshot(false);
 
-	return WW3D_ERROR_OK;
+		// (gth) I've found some cases where its not safe to rely on our "shadow" copy (of
+		// matrices for example) across multiple frames.  So even though this is slightly
+		// less "optimal", lets just reset the caches each frame.
+    DX8Wrapper::Invalidate_Cached_Render_States();
+
+#ifdef _DEBUG
+		static int s_endRenderWaterCheck = 0;
+		s_endRenderWaterCheck++;
+		if (s_endRenderWaterCheck <= 50) {
+			IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
+			if (pDev) {
+				// @bugfix Ronin 12/01/2026 Debug logging must not print uninitialized values
+				DWORD zEnable = 0;
+				DWORD zWrite = 0;
+
+				const HRESULT hrZEnable = pDev->GetRenderState(D3DRS_ZENABLE, &zEnable);
+				const HRESULT hrZWrite = pDev->GetRenderState(D3DRS_ZWRITEENABLE, &zWrite);
+
+				if (SUCCEEDED(hrZEnable) && SUCCEEDED(hrZWrite)) {
+					WWDEBUG_SAY(("🎬 End_Render #%d: ZEnable=%u ZWrite=%u (before final flush)",
+						s_endRenderWaterCheck, zEnable, zWrite));
+				}
+				else {
+					WWDEBUG_SAY(("🎬 End_Render #%d: GetRenderState failed hrZEnable=0x%08X hrZWrite=0x%08X",
+						s_endRenderWaterCheck, (unsigned)hrZEnable, (unsigned)hrZWrite));
+				}
+			}
+		}
+#endif
+
+#ifdef _DEBUG
+		// Track state at end of intro frames
+		if (FrameCount < 300) {
+			IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
+			if (pDev) {
+				DWORD zEnable = 0, colorWrite = 0;
+				pDev->GetRenderState(D3DRS_ZENABLE, &zEnable);
+				pDev->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
+
+				IDirect3DPixelShader9* ps = nullptr;
+				IDirect3DVertexShader9* vs = nullptr;
+				IDirect3DVertexDeclaration9* decl = nullptr;
+				pDev->GetPixelShader(&ps);
+				pDev->GetVertexShader(&vs);
+				pDev->GetVertexDeclaration(&decl);
+
+				WWDEBUG_SAY(("🎬 INTRO FRAME %lu END: ZEnable=%d ColorWrite=0x%X PS=%p VS=%p Decl=%p flip=%d",
+					FrameCount, zEnable, colorWrite, ps, vs, decl, flip_frame));
+
+				if (ps) ps->Release();
+				if (vs) vs->Release();
+				if (decl) decl->Release();
+			}
+		}
+#endif
+    return WW3D_ERROR_OK;
 }
 
 

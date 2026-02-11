@@ -41,7 +41,7 @@ target_link_libraries(z_particleeditor PRIVATE
     core_profile
     corei_libraries_source_wwvegas
     corei_libraries_source_wwvegas_wwlib
-    d3d8lib
+    d3d9
     dbghelplib
     imm32
     core_config

@@ -28,6 +28,9 @@
 // Description: Lan Game Options Menu
 ///////////////////////////////////////////////////////////////////////////////////////
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "PreRTS.h"	// This must go first in EVERY cpp file int the GameEngine
 
 
@@ -474,7 +477,8 @@ static MessageBoxReturnType cancelStartBecauseOfNoCD( void *userData )
 Bool IsFirstCDPresent(void)
 {
 #if !defined(RTS_DEBUG)
-	return TheFileSystem->areMusicFilesOnCD();
+	return TRUE;
+	//return TheFileSystem->areMusicFilesOnCD();
 #else
 	return TRUE;
 #endif
@@ -499,9 +503,10 @@ void CheckForCDAtGameStart( gameStartCallback callback )
 {
 	if (!IsFirstCDPresent())
 	{
+		return;
 		// popup a dialog asking for a CD
-		ExMessageBoxOkCancel(TheGameText->fetch("GUI:InsertCDPrompt"), TheGameText->fetch("GUI:InsertCDMessage"),
-			callback, checkCDCallback, cancelStartBecauseOfNoCD);
+		//ExMessageBoxOkCancel(TheGameText->fetch("GUI:InsertCDPrompt"), TheGameText->fetch("GUI:InsertCDMessage"),
+		//	callback, checkCDCallback, cancelStartBecauseOfNoCD);
 	}
 	else
 	{

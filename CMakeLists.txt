@@ -42,6 +42,7 @@ include(FetchContent)
 if((WIN32 OR "${CMAKE_SYSTEM}" MATCHES "Windows") AND ${CMAKE_SIZEOF_VOID_P} EQUAL 4)
     include(cmake/miles.cmake)
     include(cmake/bink.cmake)
+    include(cmake/dx9.cmake)  # Ronin 19/10/2025 Added DX9 SDK support for compatibility layer
     include(cmake/dx8.cmake)
     include(cmake/dbghelp.cmake)
 endif()
@@ -74,6 +75,17 @@ endif()
 
 if(RTS_BUILD_GENERALS)
     add_subdirectory(Generals)
+endif()
+
+# Ronin @build 02/11/2025 Add custom target to run the game from Zero Hour folder
+# Usage: cmake --build build/win32-debug --target run_zerohour
+if((WIN32 OR "${CMAKE_SYSTEM}" MATCHES "Windows") AND RTS_BUILD_ZEROHOUR)
+    add_custom_target(run_zerohour
+        COMMAND cmd /c "cd /d \"C:\\Program Files (x86)\\Steam\\steamapps\\common\\Command & Conquer Generals - Zero Hour\" && generalszh.exe -win -quickstart -xres 1280 -yres 720"
+        DEPENDS z_generals
+        COMMENT "Running Zero Hour from installation folder..."
+        VERBATIM
+    )
 endif()
 
 feature_summary(WHAT ENABLED_FEATURES DESCRIPTION "Enabled features:")

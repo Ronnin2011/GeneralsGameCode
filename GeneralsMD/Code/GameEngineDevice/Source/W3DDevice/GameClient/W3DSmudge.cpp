@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -26,6 +26,9 @@
 // Smudge System implementation
 // Author: Mark Wilczynski, June 2003
 ///////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
 
 #include "Lib/BaseType.h"
 #include "always.h"
@@ -143,7 +146,7 @@ Int copyRect(unsigned char *buf, Int bufSize, int oX, int oY, int width, int hei
 	if (!m_pDev)
 		goto error;
 
- 	m_pDev->GetRenderTarget(&surface);
+	m_pDev->GetRenderTarget(0, &surface);
 
 	if (!surface)
 		goto error;
@@ -162,17 +165,22 @@ Int copyRect(unsigned char *buf, Int bufSize, int oX, int oY, int width, int hei
 	dstPoint.x=0;
 	dstPoint.y=0;
 
- 	hr=m_pDev->CreateImageSurface(  width, height, desc.Format, &tempSurface);
+	// Ronin @build DX9: CreateImageSurface removed - use CreateOffscreenPlainSurface instead
+ 	hr=m_pDev->CreateOffscreenPlainSurface(  width, height, desc.Format, D3DPOOL_SCRATCH, &tempSurface, NULL);
 
 	if (hr != S_OK)
 		goto error;
 
- 	hr=m_pDev->CopyRects(surface,&srcRect,1,tempSurface,&dstPoint);
+	// Ronin @build DX9: CopyRects removed - use StretchRect instead
+ 	hr=m_pDev->StretchRect(surface,&srcRect,tempSurface, NULL, D3DTEXF_NONE);
 
 	if (hr != S_OK)
 		goto error;
 
  	D3DLOCKED_RECT lrect;
+
+	//unsigned int surfaceSize = 0;  // <-- Declare here, initialize later
+
 
  	hr=tempSurface->LockRect(&lrect,NULL,D3DLOCK_READONLY);
 
@@ -181,12 +189,17 @@ Int copyRect(unsigned char *buf, Int bufSize, int oX, int oY, int width, int hei
 
  	tempSurface->GetDesc(&desc);
 
-	if (desc.Size < bufSize)
-		bufSize = desc.Size;
+	// Ronin @build DX9: D3DSURFACE_DESC.Size removed in DX9 - calculate manually
+	//if (desc.Size < bufSize)
+	//	bufSize = desc.Size;
+	{
+		unsigned int surfaceSize = lrect.Pitch * desc.Height;
+		if (surfaceSize < bufSize)
+			bufSize = surfaceSize;
 
-	memcpy(buf,lrect.pBits,bufSize);
-	result = bufSize;
-
+		memcpy(buf, lrect.pBits, bufSize);
+		result = bufSize;
+	}
 	tempSurface->UnlockRect();
 
 error:
@@ -256,7 +269,7 @@ Bool W3DSmudgeManager::testHardwareSupport(void)
 
 		//draw polygons like this is very inefficient but for only 2 triangles, it's
 		//not worth bothering with index/vertex buffers.
-		pDev->SetVertexShader(D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1);
+		DX8Wrapper::BindLayoutFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1, "W3DSmudgeManager:render");
 
 		pDev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, v, sizeof(_TRANS_LIT_TEX_VERTEX));
 
@@ -452,12 +465,12 @@ void W3DSmudgeManager::render(RenderInfoClass &rinfo)
 #else
 	DX8Wrapper::Set_DX8_Texture(0,backTexture);
 	//Need these states in case texture is non-power-of-2
-	DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP);
-	DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP);
-	DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_ADDRESSW, D3DTADDRESS_CLAMP);
-	DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_MAGFILTER, D3DTEXF_LINEAR);
-	DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_MINFILTER, D3DTEXF_LINEAR);
-	DX8Wrapper::Set_DX8_Texture_Stage_State( 0, D3DTSS_MIPFILTER, D3DTEXF_NONE);
+	DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+	DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_ADDRESSW, D3DTADDRESS_CLAMP);
+	DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+	DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
 #endif
 	VertexMaterialClass *vmat=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
 	DX8Wrapper::Set_Material(vmat);

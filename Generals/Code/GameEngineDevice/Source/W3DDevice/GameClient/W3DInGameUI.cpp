@@ -27,6 +27,9 @@
 // Desct:	 In game user interface implementation for W3D
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include <stdlib.h>
 
 #include "Common/GlobalData.h"

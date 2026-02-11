@@ -32,6 +32,9 @@
 #ifndef __SCRIPTENGINE_H_
 #define __SCRIPTENGINE_H_
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "Common/GameType.h"
 #include "Common/GameMemory.h"
 #include "Common/STLTypedefs.h"

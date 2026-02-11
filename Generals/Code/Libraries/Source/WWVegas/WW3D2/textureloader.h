@@ -23,6 +23,8 @@
 #pragma once
 #endif
 
+#include <d3d9.h>  // Native DX9
+
 #include "always.h"
 #include "texture.h"
 

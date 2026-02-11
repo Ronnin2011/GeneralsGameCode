@@ -22,8 +22,8 @@
 #include "dx8wrapper.h"
 #include "vertmaterial.h"
 #include "texture.h"
-#include "d3d8.h"
-#include "d3dx8math.h"
+#include "d3d9.h"  // Changed from d3d8.h for DX9 migration
+#include <d3dx9math.h>  // Native DX9 math
 #include "statistics.h"
 
 bool SortingRendererClass::_EnableTriangleDraw=true;

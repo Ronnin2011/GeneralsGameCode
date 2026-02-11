@@ -43,6 +43,10 @@
 #ifndef DX8INDEXBUFFER_H
 #define DX8INDEXBUFFER_H
 
+// Ronin @build 25/10/2025 DX9: Include d3d9.h and create local typedef for compatibility
+#include <d3d9.h>
+typedef IDirect3DIndexBuffer9 IDirect3DIndexBuffer8;
+
 #include "always.h"
 #include "wwdebug.h"
 #include "refcount.h"
@@ -50,7 +54,6 @@
 
 class DX8Wrapper;
 class SortingRendererClass;
-struct IDirect3DIndexBuffer8;
 class DX8IndexBufferClass;
 class SortingIndexBufferClass;
 

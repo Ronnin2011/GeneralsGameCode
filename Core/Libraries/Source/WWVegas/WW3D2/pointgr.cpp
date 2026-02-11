@@ -70,6 +70,7 @@
  *   PointGroupClass::Update_Arrays -- Update all arrays used in rendering *
  *   PointGroupClass::Peek_Texture -- Peeks texture                        *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
 #include "pointgr.h"
 #include "vertmaterial.h"
 #include "ww3d.h"
@@ -86,7 +87,7 @@
 #include "rinfo.h"
 #include "camera.h"
 #include "dx8fvf.h"
-#include "d3dx8math.h"
+#include <d3dx9math.h>  // Native DX9 math
 #include "sortingrenderer.h"
 
 // Upgraded to DX8 2/2/01 HY
@@ -975,7 +976,18 @@ void PointGroupClass::Render(RenderInfoClass &rinfo)
 			}
 		}
 
-		DX8Wrapper::Set_Index_Buffer (indexbuffer, 0);
+		// Ronin @bugfix 20/11/2025: Ensure clean fixed-function pipeline for particle rendering
+		// Particles use FVF-based rendering and must clear any active shader state
+		DWORD fvf = DX8_FVF_XYZNDUV1; // Particles typically use position+normal+diffuse+1 texcoord
+		//const FVFInfoClass& fvfinfo = PointVerts.FVF_Info();
+		DX8Wrapper::BindLayoutFVF(PointVerts.FVF_Info().Get_FVF(), "PointGroupClass:Render");
+
+#ifdef _DEBUG
+		DX8Wrapper::Validate_Pipeline_State("PointGroupClass:Render");
+#endif
+
+
+		DX8Wrapper::Set_Index_Buffer (indexbuffer, 0, "PointGroupClass::Render");
 		DX8Wrapper::Set_Vertex_Buffer (PointVerts);
 
 		if ( sort )
@@ -1831,9 +1843,12 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 		DX8Wrapper::Set_Transform(D3DTS_WORLD,identity);
 		DX8Wrapper::Set_Transform(D3DTS_VIEW,identity);
 
+
 		DX8Wrapper::Set_Material(PointMaterial);
 		DX8Wrapper::Set_Shader(Shader);
 		DX8Wrapper::Set_Texture(0,Texture);
+
+
 
 		// Enable sorting if the primitives are translucent and alpha testing is not enabled.
 		const bool sort = (Shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO) && (Shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE) && (WW3D::Is_Sorting_Enabled());
@@ -1852,8 +1867,6 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 			indexbuffer = sort ? static_cast <IndexBufferClass*> (SortingTris) : static_cast <IndexBufferClass*> (Tris);
 		}
 
-
-		float nudge = 0;
 
 		current = 0;
 		while (current<vnum)
@@ -1889,7 +1902,17 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 				}
 			}
 
-			DX8Wrapper::Set_Index_Buffer (indexbuffer, 0);
+			// Ronin @bugfix 20/11/2025: Ensure clean fixed-function pipeline for particle rendering
+			// Particles use FVF-based rendering and must clear any active shader state
+			DWORD fvf = DX8_FVF_XYZNDUV1; // Particles typically use position+normal+diffuse+1 texcoord
+			//const FVFInfoClass& fvfinfo = PointVerts.FVF_Info();
+			DX8Wrapper::BindLayoutFVF(PointVerts.FVF_Info().Get_FVF(), "PointGroupClass:RenderVolumeParticle");
+
+#ifdef _DEBUG
+			DX8Wrapper::Validate_Pipeline_State("PointGroupClass:RenderVolumeParticle");
+#endif
+
+			DX8Wrapper::Set_Index_Buffer (indexbuffer, 0, "PointGroupClass::RenderVolumeParticle");
 			DX8Wrapper::Set_Vertex_Buffer (PointVerts);
 
 			/// @todo lorenzen sez: precompute these params, above
@@ -1907,7 +1930,6 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 
 
 	}
-
 
 
 

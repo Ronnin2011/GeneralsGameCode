@@ -35,6 +35,9 @@
  * 06/26/02 KM Matrix name change to avoid MAX conflicts                                       *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include <d3d9.h>  // Native DX9
+
 #include "mapper.h"
 #include "ww3d.h"
 #include "INI.H"

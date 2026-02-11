@@ -77,6 +77,8 @@
  *   WW3DAssetManager::Get_Streaming_Texture -- Gets a streaming texture.                      *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include <d3d9.h>  // Native DX9
+
 #include "assetmgr.h"
 #include <assert.h>
 
@@ -113,7 +115,7 @@
 #include <INI.H>
 #include <windows.h>
 #include <stdio.h>
-#include <d3dx8core.h>
+#include <d3dx9.h>  // Native DX9 extensions
 #include "texture.h"
 #include "wwprofile.h"
 #include "assetstatus.h"

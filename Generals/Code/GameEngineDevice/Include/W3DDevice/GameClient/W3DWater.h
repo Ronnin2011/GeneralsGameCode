@@ -29,6 +29,9 @@
 #ifndef __W3DWater_H_
 #define __W3DWater_H_
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "always.h"
 #include "rendobj.h"
 #include "w3d_file.h"

@@ -1168,7 +1168,7 @@ void SegLineRendererClass::Render
 			}
 		}
 
-		DX8Wrapper::Set_Index_Buffer(ib_access,0);
+		DX8Wrapper::Set_Index_Buffer(ib_access,0, "Segline renderer");
 		DX8Wrapper::Set_Vertex_Buffer(Verts);
 		DX8Wrapper::Set_Material(mat);
 		DX8Wrapper::Set_Texture(0,Texture);
@@ -1185,7 +1185,6 @@ void SegLineRendererClass::Render
 	}
 
 	DX8Wrapper::Set_Transform(D3DTS_VIEW,view);
-
 }
 
 

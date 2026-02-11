@@ -37,7 +37,6 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-
 #ifndef TEXTURELOADER_H
 #define TEXTURELOADER_H
 
@@ -45,11 +44,12 @@
 #pragma once
 #endif
 
+#include <d3d9.h>  // Native DX9
 #include "always.h"
 #include "texture.h"
 
 class StringClass;
-struct IDirect3DTexture8;
+
 class TextureLoadTaskClass;
 
 class TextureLoader

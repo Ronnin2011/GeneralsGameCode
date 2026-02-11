@@ -38,6 +38,8 @@
 
 //#define INDEX_BUFFER_LOG
 
+#include <d3d9.h>  // Native DX9
+
 #include "dx8indexbuffer.h"
 #include "dx8wrapper.h"
 #include "dx8caps.h"
@@ -194,7 +196,7 @@ IndexBufferClass::WriteLockClass::WriteLockClass(IndexBufferClass* index_buffer_
 		DX8_ErrorCode(static_cast<DX8IndexBufferClass*>(index_buffer)->Get_DX8_Index_Buffer()->Lock(
 			0,
 			index_buffer->Get_Index_Count()*sizeof(WORD),
-			(unsigned char**)&indices,
+			(void**)&indices,
 			flags));
 		break;
 	case BUFFER_TYPE_SORTING:
@@ -245,7 +247,7 @@ IndexBufferClass::AppendLockClass::AppendLockClass(IndexBufferClass* index_buffe
 		DX8_ErrorCode(static_cast<DX8IndexBufferClass*>(index_buffer)->index_buffer->Lock(
 			start_index*sizeof(unsigned short),
 			index_range*sizeof(unsigned short),
-			(unsigned char**)&indices,
+			(void**)&indices,
 			0));
 		break;
 	case BUFFER_TYPE_SORTING:
@@ -302,7 +304,8 @@ DX8IndexBufferClass::DX8IndexBufferClass(unsigned short index_count_,UsageType u
 		usage_flags,
 		D3DFMT_INDEX16,
 		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED,
-		&index_buffer);
+		&index_buffer,
+		NULL);  // DX9: pSharedHandle
 
 	if (SUCCEEDED(ret)) {
 		return;
@@ -324,7 +327,8 @@ DX8IndexBufferClass::DX8IndexBufferClass(unsigned short index_count_,UsageType u
 		usage_flags,
 		D3DFMT_INDEX16,
 		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED,
-		&index_buffer);
+		&index_buffer,
+		NULL);  // DX9: pSharedHandle
 
 	if (SUCCEEDED(ret)) {
 		WWDEBUG_SAY(("...Index buffer creation succesful"));
@@ -434,7 +438,7 @@ DynamicIBAccessClass::WriteLockClass::WriteLockClass(DynamicIBAccessClass* ib_ac
 			static_cast<DX8IndexBufferClass*>(DynamicIBAccess->IndexBuffer)->Get_DX8_Index_Buffer()->Lock(
 			DynamicIBAccess->IndexBufferOffset*sizeof(WORD),
 			DynamicIBAccess->Get_Index_Count()*sizeof(WORD),
-			(unsigned char**)&Indices,
+			(void**)&Indices,
 			!DynamicIBAccess->IndexBufferOffset ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE));
 		break;
 	case BUFFER_TYPE_DYNAMIC_SORTING:
@@ -538,4 +542,15 @@ void DynamicIBAccessClass::_Reset(bool frame_changed)
 unsigned short DynamicIBAccessClass::Get_Default_Index_Count(void)
 {
 	return _DynamicDX8IndexBufferSize;
+}
+
+bool DynamicIBAccessClass::Is_In_Use()
+{
+	return _DynamicDX8IndexBufferInUse;
+}
+
+// Ronin @bugfix 14/12/2025: Accessor for direct device binding workaround
+IDirect3DIndexBuffer9* DynamicIBAccessClass::Get_D3D_IB() const {
+	DX8IndexBufferClass* dxib = static_cast<DX8IndexBufferClass*>(IndexBuffer);
+	return dxib ? dxib->Get_DX8_Index_Buffer() : nullptr;
 }

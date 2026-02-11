@@ -37,9 +37,9 @@
 
 #include "texture.h"
 
-#include <d3d8.h>
+#include <d3d9.h>
 #include <stdio.h>
-#include <d3dx8core.h>
+#include <d3dx9.h>  // Native DX9 extensions
 #include "dx8wrapper.h"
 #include "TARGA.H"
 #include <nstrdup.h>
@@ -57,6 +57,33 @@
 ** Definitions of static members:
 */
 
+// Helper function for textures
+inline unsigned int CalculateSurfaceSize(const D3DSURFACE_DESC& desc) {
+	unsigned int bytesPerPixel = 4; // Default
+
+	switch (desc.Format) {
+	case D3DFMT_A8R8G8B8:
+	case D3DFMT_X8R8G8B8:
+		bytesPerPixel = 4;
+		break;
+	case D3DFMT_R5G6B5:
+	case D3DFMT_A1R5G5B5:
+	case D3DFMT_X1R5G5B5:
+		bytesPerPixel = 2;
+		break;
+	case D3DFMT_A8:
+	case D3DFMT_L8:
+		bytesPerPixel = 1;
+		break;
+		// Add other formats as needed
+	default:
+		bytesPerPixel = 4; // Safe default
+		break;
+	}
+
+	return desc.Width * desc.Height * bytesPerPixel;
+}
+
 static unsigned unused_texture_id;
 
 // ----------------------------------------------------------------------------
@@ -71,7 +98,7 @@ static int Calculate_Texture_Memory_Usage(const TextureClass* texture,int red_fa
 	for (unsigned i=red_factor;i<d3d_texture->GetLevelCount();++i) {
 		D3DSURFACE_DESC desc;
 		DX8_ErrorCode(d3d_texture->GetLevelDesc(i,&desc));
-		size+=desc.Size;
+		size+= CalculateSurfaceSize(desc);
 	}
 	return size;
 }

@@ -25,6 +25,7 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
+
 #include "streakRender.h"
 #include "ww3d.h"
 #include "rinfo.h"
@@ -1373,8 +1374,15 @@ void StreakRendererClass::RenderStreak
 		}
 
 
-		DX8Wrapper::Set_Index_Buffer(ib_access,0);
+		DX8Wrapper::Set_Index_Buffer(ib_access,0, "StreakRendererClass::RenderStreak");
 		DX8Wrapper::Set_Vertex_Buffer(Verts);
+
+		// Ronin @bugfix 20/11/2025: Ensure clean fixed-function pipeline for streak rendering
+		// Streak lines use FVF-based rendering and must clear any active shader state
+		//DWORD fvf = DX8_FVF_XYZNDUV1; // Streaks use position+normal+diffuse+1 texcoord
+		// Ronin @bugfix 02/02/2026: Updated to get FVF straight from VB
+		DX8Wrapper::BindLayoutFVF(Verts.FVF_Info().Get_FVF(),"StreakRendererClass:RenderStreak");
+
 		DX8Wrapper::Set_Texture(0,Texture);
 		DX8Wrapper::Set_Shader(shader);
 

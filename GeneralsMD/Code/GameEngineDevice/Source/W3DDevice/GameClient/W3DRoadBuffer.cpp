@@ -45,6 +45,9 @@
 //-----------------------------------------------------------------------------
 //         Includes
 //-----------------------------------------------------------------------------
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "W3DDevice/GameClient/W3DRoadBuffer.h"
 
 #include <stdio.h>
@@ -160,7 +163,7 @@ RoadType::~RoadType(void)
 void RoadType::applyTexture(void)
 {
  	W3DShaderManager::setTexture(0,m_roadTexture);
-	DX8Wrapper::Set_Index_Buffer(m_indexRoad,0);
+	DX8Wrapper::Set_Index_Buffer(m_indexRoad,0, "RoadType::applyTexture");
 	DX8Wrapper::Set_Vertex_Buffer(m_vertexRoad);
 }
 

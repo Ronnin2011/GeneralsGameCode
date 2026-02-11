@@ -9,7 +9,7 @@ target_compile_definitions(core_wwcommon INTERFACE
 target_link_libraries(core_wwcommon INTERFACE
     core_config
     core_utility
-    d3d8lib
+    d3d9
     milesstub
     stlport
 )

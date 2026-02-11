@@ -16,9 +16,12 @@
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include <d3d9.h>  // Native DX9
+
 #include "dx8fvf.h"
 #include "wwstring.h"
-#include <d3dx8core.h>
+#include <d3dx9.h>  // Native DX9 extensions
 
 static unsigned Get_FVF_Vertex_Size(unsigned FVF)
 {

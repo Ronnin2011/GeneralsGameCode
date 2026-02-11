@@ -46,6 +46,8 @@
 #ifndef WW3DFORMAT_H
 #define WW3DFORMAT_H
 
+#include <d3d9.h>  // Native DX9
+
 #include "always.h"
 #include "wwstring.h"
 

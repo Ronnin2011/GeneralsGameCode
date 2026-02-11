@@ -198,7 +198,7 @@ set(WW3D2_SRC
     texproject.cpp
     texproject.h
     #textdraw.cpp
-    #textdraw.h
+    #textdraw.h		   
     texture.cpp
     texture.h
     texturefilter.cpp
@@ -233,7 +233,9 @@ set_target_properties(g_ww3d2 PROPERTIES OUTPUT_NAME ww3d2)
 
 target_sources(g_ww3d2 PRIVATE ${WW3D2_SRC})
 
+
 target_link_libraries(g_ww3d2 PRIVATE
     corei_ww3d2
     g_wwcommon
+    d3d9  # DirectX 9 library - required for DX9Wrapper
 )

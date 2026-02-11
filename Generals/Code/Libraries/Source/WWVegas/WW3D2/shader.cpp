@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -39,6 +39,8 @@
  *   ShaderClass::Get_SS_Category -- Helper function for static sort system                    *
  *   ShaderClass::Guess_Sort_Level -- Guess the static sort level                              *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+#include <d3d9.h>  // Native DX9
 
 #include "shader.h"
 #include "w3d_file.h"
@@ -831,7 +833,8 @@ void ShaderClass::Apply()
 	if (diff&ShaderClass::MASK_NPATCHENABLE) {
 		float level=1.0f;
 		if (Get_NPatch_Enable()) level=float(WW3D::Get_NPatches_Level());
-		DX8Wrapper::Set_DX8_Render_State(D3DRS_PATCHSEGMENTS,*((DWORD*)&level));
+		// Ronin @build 27/01/2025 DX9: D3DRS_PATCHSEGMENTS removed in DX9
+		// DX8Wrapper::Set_DX8_Render_State(D3DRS_PATCHSEGMENTS,*((DWORD*)&level));
 	}
 
 	// Enable/disable alpha test

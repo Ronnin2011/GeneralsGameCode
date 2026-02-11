@@ -34,7 +34,7 @@
 #define DX8_WEBBROWSER_H
 
 #include <windows.h>
-#include "d3d8.h"
+#include "d3d9.h"
 
 // ***********************************
 // Set this to 0 to remove all embedded browser code.
@@ -49,8 +49,6 @@
 // Look in febrowserengine.h
 #define BROWSEROPTION_SCROLLBARS		0x0001
 #define BROWSEROPTION_3DBORDER		0x0002
-
-struct IDirect3DDevice8;
 
 /**
 ** DX8WebBrowser

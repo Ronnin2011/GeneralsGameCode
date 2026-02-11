@@ -33,6 +33,9 @@
 // TheSuperHackers @build xezon 24/03/2025 Prevent afxwin.h from loading d3d9types.h, colliding with our own DirectX library.
 #define _d3d9TYPES_H_
 
+// TheSuperHackers @build xezon 05/04/2025 DX8-to-DX9 compatibility - MUST be first
+#include <dx8todx9.h>
+
 #include <afxwin.h>         // MFC core and standard components
 #include <afxext.h>         // MFC extensions
 
