@@ -1320,8 +1320,8 @@ void ShroudTextureShader::reset(void)
 	DX8Wrapper::Set_DX8_Texture_Stage_State(m_stageOfSet,  D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
 
 	// Ronin @bugfix 27/12/2025: DX9 requires explicit texture transform reset
-	Matrix4x4 identity;
-	identity.Make_Identity();
+	D3DXMATRIX identity;
+	D3DXMatrixIdentity(&identity);
 	DX8Wrapper::_Set_DX8_Transform((D3DTRANSFORMSTATETYPE)(D3DTS_TEXTURE0 + m_stageOfSet), identity);
 
 }

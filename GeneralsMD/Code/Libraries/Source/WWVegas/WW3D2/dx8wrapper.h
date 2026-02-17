@@ -989,8 +989,6 @@ protected:
 	static unsigned						draw_calls;
 	static bool								CurrentDX8LightEnables[4];
 
-	static unsigned long FrameCount;
-
 	static DX8Caps*						CurrentCaps;
 
 	static D3DADAPTER_IDENTIFIER9		CurrentAdapterIdentifier;

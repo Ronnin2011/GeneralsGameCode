@@ -75,8 +75,7 @@ if(MSVC)
     )
 endif()
 
-
-
+if(MSVC)
     # Ronin @build 02/11/2025 AUTOMATIC deployment to Zero Hour folder
     # This copies exe + pdb to Zero Hour installation after every build
     set(ZEROHOUR_INSTALL_PATH "C:/Program Files (x86)/Steam/steamapps/common/Command & Conquer Generals - Zero Hour")

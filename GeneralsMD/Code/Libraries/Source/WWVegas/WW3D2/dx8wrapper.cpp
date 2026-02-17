@@ -1394,19 +1394,20 @@ void DX8Wrapper::Enumerate_Devices()
 
 						case D3DFMT_R5G6B5:
 						case D3DFMT_X1R5G5B5:		bits = 16; break;
-					}
+						}
 
-					// Some cards fail in certain modes, DX8Caps keeps list of those.
-					if (!dx8caps.Is_Valid_Display_Format(d3dmode.Width,d3dmode.Height,D3DFormat_To_WW3DFormat(d3dmode.Format))) {
-						bits=0;
-					}
+						// Some cards fail in certain modes, DX8Caps keeps list of those.
+						if (!dx8caps.Is_Valid_Display_Format(d3dmode.Width, d3dmode.Height, D3DFormat_To_WW3DFormat(d3dmode.Format))) {
+							bits = 0;
+						}
 
-					/*
-					** If we recognize the format, add it to the list
-					** TODO: should we handle more formats?  will any cards report more than 24 or 16 bit?
-					*/
-					if (bits != 0) {
-						desc.add_resolution(d3dmode.Width,d3dmode.Height,bits);
+						/*
+						** If we recognize the format, add it to the list
+						** TODO: should we handle more formats?  will any cards report more than 24 or 16 bit?
+						*/
+						if (bits != 0) {
+							desc.add_resolution(d3dmode.Width, d3dmode.Height, bits);
+						}
 					}
 				}
 			}
