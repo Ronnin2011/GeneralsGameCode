@@ -33,6 +33,11 @@
 
 #pragma once
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+#include <map>  // Ronin @bugfix 16/11/2025: Required for std::map in shader declaration storage
+
+
 #include "WW3D2/texture.h"
 enum FilterTypes CPP_11(: Int);
 enum FilterModes CPP_11(: Int);
@@ -80,6 +85,9 @@ public:
 	static void shutdown(void);	///<release resources used by shaders
 	static void updateCloud();	///<update the cloud position once every render frame.
 
+	// Ronin @bugfix 16/11/2026: Retrieve stored vertex declaration for a shader
+	static IDirect3DVertexDeclaration9* GetShaderDeclaration(void* shaderHandle);
+
 	static ChipsetType getChipset(void);	///<return current device chipset.
 	static GraphicsVenderID getCurrentVendor(void) {return m_currentVendor;}	///<return current card vendor.
 	static __int64 getCurrentDriverVersion(void) {return m_driverVersion; }	///<return current driver version.
@@ -94,7 +102,7 @@ public:
 	///Return last activated shader.
 	static ShaderTypes getCurrentShader(void) {return m_currentShader;}
 	/// Loads a .vso file and creates a vertex shader for it
-	static HRESULT LoadAndCreateD3DShader(const char* strFilePath, const DWORD* pDeclaration, DWORD Usage, Bool ShaderType, DWORD* pHandle);
+	static HRESULT LoadAndCreateD3DShader(const char* strFilePath, const D3DVERTEXELEMENT9* pDeclaration, DWORD Usage, Bool ShaderType, void** pHandle);
 
 	static Bool testMinimumRequirements(ChipsetType *videoChipType, CpuType *cpuType, Int *cpuFreq, MemValueType *numRAM, Real *intBenchIndex, Real *floatBenchIndex, Real *memBenchIndex);
 	static StaticGameLODLevel getGPUPerformanceIndex(void);
@@ -115,6 +123,11 @@ public:
 
 
 protected:
+
+	// Ronin @bugfix 16/11/2025: DX9 vertex declaration storage
+	// Maps shader handles to their required vertex declarations
+	static std::map<void*, IDirect3DVertexDeclaration9*> m_shaderDeclarations;
+
 	static TextureClass *m_Textures[8];	///textures assigned to each of the possible stages
 	static ChipsetType m_currentChipset;	///<last video card chipset that was detected.
 	static GraphicsVenderID m_currentVendor;	///<last video card vendor
@@ -187,7 +200,9 @@ protected:
 ///converts viewport to black & white.
 class ScreenBWFilter : public W3DFilterInterface
 {
-	DWORD	m_dwBWPixelShader;		///<D3D handle to pixel shader which tints texture to black & white.
+	IDirect3DPixelShader9* m_dwBWPixelShader;		///<D3D handle to pixel shader which tints texture to black & white. //Ronin @build DX9 Update
+	IDirect3DVertexDeclaration9* m_dwBWVertexDecl;  // Ronin @bugfix 03/11/2025: Store vertex declaration for device reset recreation
+
 public:
 	virtual Int init(void);			///<perform any one time initialization and validation
 	virtual Int shutdown(void);		///<release resources used by shader

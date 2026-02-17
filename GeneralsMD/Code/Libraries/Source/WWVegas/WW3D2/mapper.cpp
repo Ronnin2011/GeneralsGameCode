@@ -35,6 +35,8 @@
  * 06/26/02 KM Matrix name change to avoid MAX conflicts                                       *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include <d3d9.h>  // Native DX9
+
 #include "mapper.h"
 #include "ww3d.h"
 #include "INI.h"

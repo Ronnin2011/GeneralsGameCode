@@ -39,10 +39,12 @@
  *   FileListTextureClass::Load_Frame_Surface -- Load source texture                           *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include <d3d9.h>  // Native DX9
+
 #include "texture.h"
 
-#include <d3d8.h>
-#include <d3dx8core.h>
+#include <stdio.h>
+// Ronin 19/10/2025 Removed direct include of d3dx8core.h - not available with DX9 SDK
 #include "dx8wrapper.h"
 #include "TARGA.h"
 #include <nstrdup.h>
@@ -57,6 +59,33 @@
 #include "meshmatdesc.h"
 #include "texturethumbnail.h"
 #include "wwprofile.h"
+
+// @feature Ronin 31/10/2025: Helper function 
+inline unsigned int CalculateSurfaceSize(const D3DSURFACE_DESC& desc) {
+	unsigned int bytesPerPixel = 4; // Default
+
+	switch (desc.Format) {
+	case D3DFMT_A8R8G8B8:
+	case D3DFMT_X8R8G8B8:
+		bytesPerPixel = 4;
+		break;
+	case D3DFMT_R5G6B5:
+	case D3DFMT_A1R5G5B5:
+	case D3DFMT_X1R5G5B5:
+		bytesPerPixel = 2;
+		break;
+	case D3DFMT_A8:
+	case D3DFMT_L8:
+		bytesPerPixel = 1;
+		break;
+		// Add other formats as needed
+	default:
+		bytesPerPixel = 4; // Safe default
+		break;
+	}
+
+	return desc.Width * desc.Height * bytesPerPixel;
+}
 
 const unsigned DEFAULT_INACTIVATION_TIME=20000;
 
@@ -1037,7 +1066,8 @@ unsigned TextureClass::Get_Texture_Memory_Usage() const
 	{
 		D3DSURFACE_DESC desc;
 		DX8_ErrorCode(Peek_D3D_Texture()->GetLevelDesc(i,&desc));
-		size+=desc.Size;
+		// If you know it's always 32-bit ARGB:
+		size+= CalculateSurfaceSize(desc);
 	}
 	return size;
 }
@@ -1329,7 +1359,8 @@ unsigned ZTextureClass::Get_Texture_Memory_Usage() const
 	{
 		D3DSURFACE_DESC desc;
 		DX8_ErrorCode(Peek_D3D_Texture()->GetLevelDesc(i,&desc));
-		size+=desc.Size;
+		// If you know it's always 32-bit ARGB:
+		size+= CalculateSurfaceSize(desc);
 	}
 	return size;
 }

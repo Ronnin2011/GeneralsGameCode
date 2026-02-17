@@ -33,6 +33,9 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////////////////////////
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include <stdlib.h>
 #include <windows.h>
 
@@ -84,7 +87,7 @@
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DView.h"
-#include "d3dx8math.h"
+#include "d3dx9math.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "W3DDevice/GameClient/Module/W3DModelDraw.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"

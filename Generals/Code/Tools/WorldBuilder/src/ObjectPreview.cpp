@@ -19,6 +19,9 @@
 // ObjectPreview.cpp : implementation file
 //
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include <rinfo.h>
 #include <camera.h>
 #include <light.h>

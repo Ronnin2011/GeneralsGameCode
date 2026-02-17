@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -36,6 +36,9 @@
  *---------------------------------------------------------------------------------------------*
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
+
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include <d3d9.h>  // Native DX9
 
 #include "always.h"
 #include "dx8caps.h"
@@ -472,10 +475,10 @@ DX8Caps::DeviceTypeIntel DX8Caps::Get_Intel_Device(unsigned device_id)
 }
 
 DX8Caps::DX8Caps(
-	IDirect3D8* direct3d,
-	IDirect3DDevice8* D3DDevice,
+	IDirect3D9* direct3d,
+	IDirect3DDevice9* D3DDevice,
 	WW3DFormat display_format,
-	const D3DADAPTER_IDENTIFIER8& adapter_id)
+	const D3DADAPTER_IDENTIFIER9& adapter_id)
 	:
 	Direct3D(direct3d),
 	MaxDisplayWidth(0),
@@ -498,15 +501,17 @@ void DX8Caps::Shutdown(void)
 //
 // ----------------------------------------------------------------------------
 
-void DX8Caps::Init_Caps(IDirect3DDevice8* D3DDevice)
+void DX8Caps::Init_Caps(IDirect3DDevice9* D3DDevice)
 {
-	D3DDevice->SetRenderState(D3DRS_SOFTWAREVERTEXPROCESSING,TRUE);
+	// Ronin @build 27/10/2025 DX9: D3DRS_SOFTWAREVERTEXPROCESSING removed in DX9
+	// D3DDevice->SetRenderState(D3DRS_SOFTWAREVERTEXPROCESSING,TRUE);
 	DX8CALL(GetDeviceCaps(&swVPCaps));
 
-	if ((swVPCaps.DevCaps&D3DDEVCAPS_HWTRANSFORMANDLIGHT)==D3DDEVCAPS_HWTRANSFORMANDLIGHT) {
-		SupportTnL=true;
+	if ((swVPCaps.DevCaps & D3DDEVCAPS_HWTRANSFORMANDLIGHT) == D3DDEVCAPS_HWTRANSFORMANDLIGHT) {
+		SupportTnL = true;
 
-		D3DDevice->SetRenderState(D3DRS_SOFTWAREVERTEXPROCESSING,FALSE);
+		// Ronin @build 27/10/2025 DX9: D3DRS_SOFTWAREVERTEXPROCESSING removed in DX9
+		// D3DDevice->SetRenderState(D3DRS_SOFTWAREVERTEXPROCESSING,FALSE);
 		DX8CALL(GetDeviceCaps(&hwVPCaps));
 	} else {
 		SupportTnL=false;
@@ -518,11 +523,12 @@ void DX8Caps::Init_Caps(IDirect3DDevice8* D3DDevice)
 // Compute the caps bits
 //
 // ----------------------------------------------------------------------------
-void DX8Caps::Compute_Caps(WW3DFormat display_format, const D3DADAPTER_IDENTIFIER8& adapter_id)
+void DX8Caps::Compute_Caps(WW3DFormat display_format, const D3DADAPTER_IDENTIFIER9& adapter_id)
 {
 //	Init_Caps(D3DDevice);
 
-	const D3DCAPS8& caps=Get_DX8_Caps();
+	const D3DCAPS9& caps=Get_DX8_Caps();
+	//D3DCAPS9 const& Get_DX8_Caps() const { return Caps; }
 
 	if ((caps.DevCaps&D3DDEVCAPS_NPATCHES)==D3DDEVCAPS_NPATCHES) {
 		SupportNPatches=true;
@@ -559,7 +565,7 @@ void DX8Caps::Compute_Caps(WW3DFormat display_format, const D3DADAPTER_IDENTIFIE
 //
 // ----------------------------------------------------------------------------
 
-void DX8Caps::Check_Bumpmap_Support(const D3DCAPS8& caps)
+void DX8Caps::Check_Bumpmap_Support(const D3DCAPS9& caps)
 {
 	SupportBumpEnvmap=!!(caps.TextureOpCaps & D3DTEXOPCAPS_BUMPENVMAP);
 	SupportBumpEnvmapLuminance=!!(caps.TextureOpCaps & D3DTEXOPCAPS_BUMPENVMAPLUMINANCE);
@@ -571,7 +577,7 @@ void DX8Caps::Check_Bumpmap_Support(const D3DCAPS8& caps)
 //
 // ----------------------------------------------------------------------------
 
-void DX8Caps::Check_Texture_Compression_Support(const D3DCAPS8& caps)
+void DX8Caps::Check_Texture_Compression_Support(const D3DCAPS9& caps)
 {
 	SupportDXTC=SupportTextureFormat[WW3D_FORMAT_DXT1]|
 		SupportTextureFormat[WW3D_FORMAT_DXT2]|
@@ -580,7 +586,7 @@ void DX8Caps::Check_Texture_Compression_Support(const D3DCAPS8& caps)
 		SupportTextureFormat[WW3D_FORMAT_DXT5];
 }
 
-void DX8Caps::Check_Texture_Format_Support(WW3DFormat display_format,const D3DCAPS8& caps)
+void DX8Caps::Check_Texture_Format_Support(WW3DFormat display_format,const D3DCAPS9& caps)
 {
 	if (display_format==WW3D_FORMAT_UNKNOWN) {
 		for (unsigned i=0;i<WW3D_FORMAT_COUNT;++i) {
@@ -607,7 +613,7 @@ void DX8Caps::Check_Texture_Format_Support(WW3DFormat display_format,const D3DCA
 	}
 }
 
-void DX8Caps::Check_Render_To_Texture_Support(WW3DFormat display_format,const D3DCAPS8& caps)
+void DX8Caps::Check_Render_To_Texture_Support(WW3DFormat display_format,const D3DCAPS9& caps)
 {
 	if (display_format==WW3D_FORMAT_UNKNOWN) {
 		for (unsigned i=0;i<WW3D_FORMAT_COUNT;++i) {
@@ -638,7 +644,7 @@ void DX8Caps::Check_Render_To_Texture_Support(WW3DFormat display_format,const D3
 //! Check Depth Stencil Format Support
 /*! KJM
 */
-void DX8Caps::Check_Depth_Stencil_Support(WW3DFormat display_format, const D3DCAPS8& caps)
+void DX8Caps::Check_Depth_Stencil_Support(WW3DFormat display_format, const D3DCAPS9& caps)
 {
 	if (display_format==WW3D_FORMAT_UNKNOWN)
 	{
@@ -676,12 +682,12 @@ void DX8Caps::Check_Depth_Stencil_Support(WW3DFormat display_format, const D3DCA
 	}
 }
 
-void DX8Caps::Check_Maximum_Texture_Support(const D3DCAPS8& caps)
+void DX8Caps::Check_Maximum_Texture_Support(const D3DCAPS9& caps)
 {
 	MaxSimultaneousTextures=caps.MaxSimultaneousTextures;
 }
 
-void DX8Caps::Check_Shader_Support(const D3DCAPS8& caps)
+void DX8Caps::Check_Shader_Support(const D3DCAPS9& caps)
 {
 	VertexShaderVersion=caps.VertexShaderVersion;
 	PixelShaderVersion=caps.PixelShaderVersion;
@@ -694,7 +700,7 @@ void DX8Caps::Check_Shader_Support(const D3DCAPS8& caps)
 //
 // ----------------------------------------------------------------------------
 
-void DX8Caps::Vendor_Specific_Hacks(const D3DADAPTER_IDENTIFIER8& adapter_id)
+void DX8Caps::Vendor_Specific_Hacks(const D3DADAPTER_IDENTIFIER9& adapter_id)
 {
 	if (adapter_id.VendorId==VENDOR_ID_NVIDIA) {
 		SupportNPatches = false;	// Driver incorrectly report N-Patch support

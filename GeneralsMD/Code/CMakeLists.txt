@@ -5,6 +5,7 @@ add_library(zi_main INTERFACE)
 add_library(zi_always INTERFACE)
 add_library(zi_always_no_pch INTERFACE) # Use this for Shared Libs with MFC AFX
 
+target_link_libraries(core_wwmath PRIVATE d3dx9.lib)
 target_include_directories(zi_gameengine_include INTERFACE "GameEngine/Include")
 target_include_directories(zi_libraries_source_wwvegas INTERFACE "Libraries/Source/WWVegas")
 target_include_directories(zi_main INTERFACE "Main")

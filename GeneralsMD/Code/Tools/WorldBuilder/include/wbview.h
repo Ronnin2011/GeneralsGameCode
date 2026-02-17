@@ -18,6 +18,9 @@
 
 #pragma once
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "Lib/BaseType.h"
 #include "Tool.h"
 #include "Common/Debug.h"

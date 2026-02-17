@@ -67,3 +67,7 @@ build.ninja
 ## Python
 __pycache__/
 *.pyc
+
+## DX8 Reference and analysis
+*.dx8backup
+/docs/

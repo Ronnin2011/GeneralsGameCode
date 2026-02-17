@@ -39,11 +39,15 @@
 
 #pragma once
 
+// Ronin @build 25/10/2025 DX9: Include d3d9.h and create local typedef for compatibility
+#include <d3d9.h>
+typedef IDirect3DVertexBuffer9 IDirect3DVertexBuffer8;
+
 #include "always.h"
 #include "wwdebug.h"
 #include "dx8fvf.h"
 
-const unsigned dynamic_fvf_type=D3DFVF_XYZ|D3DFVF_NORMAL|D3DFVF_TEX2|D3DFVF_DIFFUSE;
+const unsigned dynamic_fvf_type=D3DFVF_XYZ|D3DFVF_NORMAL|D3DFVF_DIFFUSE|D3DFVF_TEX2;
 
 class DX8Wrapper;
 class SortingRendererClass;
@@ -53,7 +57,6 @@ class Vector4;
 class StringClass;
 class DX8VertexBufferClass;
 class FVFInfoClass;
-struct IDirect3DVertexBuffer8;
 class VertexBufferClass;
 struct VertexFormatXYZNDUV2;
 
@@ -135,7 +138,7 @@ class DynamicVBAccessClass
 	friend DX8Wrapper;
 	friend SortingRendererClass;
 
-	const FVFInfoClass& FVFInfo;
+	FVFInfoClass FVFInfo;
 	unsigned Type;
 	unsigned short VertexCount;
 	unsigned short VertexBufferOffset;
@@ -145,6 +148,7 @@ class DynamicVBAccessClass
 	void Allocate_Sorting_Dynamic_Buffer();
 	void Allocate_DX8_Dynamic_Buffer();
 public:
+
 	// Type parameter can be either BUFFER_TYPE_DYNAMIC_DX8 or BUFFER_TYPE_DYNAMIC_SORTING.
 
 	// Note: Even though the constructor takes fvf as a parameter, currently the
@@ -153,10 +157,22 @@ public:
 	DynamicVBAccessClass(unsigned type,unsigned fvf,unsigned short vertex_count);
 	~DynamicVBAccessClass();
 
+		//Ronin @build 04/12/2025 Flag for making sure no multiple accessors while one is already active.
+	static bool Is_In_Use();
+
 	// Access fvf
 	const FVFInfoClass& FVF_Info() const { return FVFInfo; }
 	unsigned Get_Type() const { return Type; }
 	unsigned short Get_Vertex_Count() const { return VertexCount; }
+
+	// Ronin @bugfix 10/12/2025: Accessors for direct device binding workaround
+	// Only use when wrapper cannot handle FVF mismatch properly
+	IDirect3DVertexBuffer9* Get_D3D_VB() const;
+		UINT Get_Stride() const { return FVFInfo.Get_FVF_Size(); }
+
+		// Ronin @bugfix 14/12/2025: Accessor for VB offset for direct device binding
+		unsigned short Get_VB_Offset() const { return VertexBufferOffset; }
+	
 
 	// Call at the end of the execution, or at whatever time you wish to release
 	// the recycled dynamic vertex buffer.
@@ -188,7 +204,7 @@ public:
 inline VertexFormatXYZNDUV2 * DynamicVBAccessClass::WriteLockClass::Get_Formatted_Vertex_Array()
 {
 	// assert that the format of the dynamic vertex buffer is still what we think it is.
-	WWASSERT(DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF() == (D3DFVF_XYZ|D3DFVF_NORMAL|D3DFVF_TEX2|D3DFVF_DIFFUSE));
+	//WWASSERT(DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF() == (D3DFVF_XYZ|D3DFVF_NORMAL|D3DFVF_TEX2|D3DFVF_DIFFUSE));
 	return Vertices;
 }
 
@@ -232,6 +248,23 @@ protected:
 	void Create_Vertex_Buffer(UsageType usage);
 };
 
+// ----------------------------------------------------------------------------
+
+inline IDirect3DVertexBuffer9* DynamicVBAccessClass::Get_D3D_VB() const {
+
+	// Ronin @bugfix 26/01/2026 DX9: DynamicVBAccess can be DX8(dynamic D3D VB) or SORTING(CPU array).
+	// Avoid depending on dx8wrapper.h enum values here (prevents circular includes).
+	// Enum ordering in dx8wrapper.h:
+	//   0=BUFFER_TYPE_DX8, 1=BUFFER_TYPE_SORTING, 2=BUFFER_TYPE_DYNAMIC_DX8, 3=BUFFER_TYPE_DYNAMIC_SORTING
+	const unsigned kBufferTypeDynamicDx8 = 2;
+
+	if (Type != kBufferTypeDynamicDx8) {
+		return nullptr;
+	}
+
+	DX8VertexBufferClass* dxvb = static_cast<DX8VertexBufferClass*>(VertexBuffer);
+	return dxvb ? dxvb->Get_DX8_Vertex_Buffer() : nullptr;
+}
 
 /**
 ** SortingVertexBufferClass

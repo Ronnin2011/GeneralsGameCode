@@ -51,6 +51,8 @@
  *   SkinDecalMeshClass::Process_Material_Run -- scans the mesh for material runs              *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include <d3d9.h>  // Native DX9
+
 #include "decalmsh.h"
 #include "decalsys.h"
 #include "rinfo.h"
@@ -362,6 +364,12 @@ void RigidDecalMeshClass::Render(void)
 												1 + Polys[next_poly_index-1].K - Polys[cur_poly_index].I);
 		cur_poly_index = next_poly_index;
 	}
+
+	// Ronin @bugfix 16/12/2025: CRITICAL DECAL ATLAS POP FIX
+	// Unbind decal textures after rendering to prevent leakage into subsequent passes (especially 2D UI)
+	// Without this, the decal atlas texture remains bound to stage 0 and causes black rectangles to flash
+	DX8Wrapper::Set_Texture(0, nullptr);
+	DX8Wrapper::Set_Material(nullptr);
 
 }
 
@@ -861,6 +869,10 @@ void SkinDecalMeshClass::Render(void)
 
 		cur_poly_index = next_poly_index;
 	}
+	// Ronin @bugfix 16/12/2025: CRITICAL DECAL ATLAS POP FIX
+	// Unbind decal textures after rendering to prevent leakage into subsequent passes
+	DX8Wrapper::Set_Texture(0, nullptr);
+	DX8Wrapper::Set_Material(nullptr);
 }
 
 

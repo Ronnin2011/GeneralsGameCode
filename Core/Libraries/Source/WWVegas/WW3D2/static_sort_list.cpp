@@ -44,6 +44,11 @@
 #include "rendobj.h"
 #include "dx8renderer.h"
 
+#ifdef WWDEBUG
+#include <typeinfo>  // Ronin @debug 02/02/2026: For RTTI type identification
+#endif
+
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Initialization Functions ////////////////////////////////////////////////////////////////////////
 
@@ -73,6 +78,37 @@ void DefaultStaticSortListClass::Add_To_List(RenderObjClass * robj, unsigned int
 
 void DefaultStaticSortListClass::Render_And_Clear(RenderInfoClass & rinfo)
 {
+#ifdef WWDEBUG
+	static int s_logCount = 0;
+	if (s_logCount < 1000) {
+		for (unsigned int level = MinSort; level <= MaxSort; ++level) {
+			if (!SortLists[level].Is_Empty()) {
+				RenderObjClass* first = SortLists[level].Peek_Head();
+
+				// Get identifying info
+				const char* name = first ? first->Get_Name() : "NULL";
+				int classID = first ? first->Class_ID() : -1;
+
+				// Get C++ type name via RTTI
+				const char* typeName = "NULL";
+				if (first) {
+					try {
+						typeName = typeid(*first).name();
+					}
+					catch (...) {
+						typeName = "RTTI_FAILED";
+					}
+				}
+
+				// Count items - can't iterate directly, just note it's non-empty
+				WWDEBUG_SAY(("[STATIC_SORT] Level %u: classID=%d name=%s type=%s (log #%d)",
+					level, classID, name, typeName, s_logCount));
+			}
+		}
+		++s_logCount;
+	}
+#endif
+
 	// We go from higher sort level to lower, since lower sort level means higher priority (in
 	// front), so lower sort level meshes need to be rendered later.
 	for(unsigned int sort_level = MaxSort; sort_level >= MinSort; sort_level--) {

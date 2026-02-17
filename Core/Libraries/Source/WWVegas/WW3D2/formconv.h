@@ -40,10 +40,12 @@
 #pragma once
 
 #include "ww3dformat.h"
-#include <d3d8.h>
+
+#include <d3d9.h>  // Native DX9
 
 /*
 ** This file is used for conversions between D3DFORMAT and WW3DFormat.
+** D3DFORMAT types are compatible between DX8 and DX9
 */
 
 D3DFORMAT WW3DFormat_To_D3DFormat(WW3DFormat ww3d_format);

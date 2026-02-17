@@ -41,6 +41,26 @@
 
 #pragma once
 
+// Ronin @build 26/10/2025 DX9: Ensure d3d9.h and typedefs are available
+#include <d3d9.h>
+
+// Ronin @build 26/10/2025 DX9: Guard typedefs to prevent redefinition errors
+#ifndef DX8_TO_DX9_TYPEDEFS_DEFINED
+#define DX8_TO_DX9_TYPEDEFS_DEFINED
+
+typedef IDirect3D9 IDirect3D8;
+typedef IDirect3DDevice9 IDirect3DDevice8;
+typedef IDirect3DVolume9 IDirect3DVolume8;
+typedef IDirect3DSwapChain9 IDirect3DSwapChain8;
+typedef D3DVIEWPORT9 D3DVIEWPORT8;
+typedef IDirect3DBaseTexture9 IDirect3DBaseTexture8;
+typedef IDirect3DTexture9 IDirect3DTexture8;
+typedef IDirect3DCubeTexture9 IDirect3DCubeTexture8;
+typedef IDirect3DVolumeTexture9 IDirect3DVolumeTexture8;
+typedef IDirect3DSurface9 IDirect3DSurface8;
+
+#endif // DX8_TO_DX9_TYPEDEFS_DEFINED
+
 #include "always.h"
 #include "chunkio.h"
 #include "surfaceclass.h"
@@ -48,11 +68,6 @@
 #include "wwstring.h"
 #include "vector3.h"
 #include "texturefilter.h"
-
-struct IDirect3DBaseTexture8;
-struct IDirect3DTexture8;
-struct IDirect3DCubeTexture8;
-struct IDirect3DVolumeTexture8;
 
 class DX8Wrapper;
 class TextureLoader;

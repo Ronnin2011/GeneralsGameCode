@@ -43,6 +43,9 @@
 //			  moves.
 //-----------------------------------------------------------------------------
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "Common/PerfTimer.h"
@@ -901,7 +904,7 @@ Try improving the fit to vertical surfaces like cliffs.
 			if (mod->m_activeEdgeCount >= 2 && mod->Is_Really_Visible())
 			{
 				DX8Wrapper::Set_Texture(0,mod->m_stageZeroTexture);
-				DX8Wrapper::Set_Index_Buffer_Index_Offset(trackStartIndex);
+				DX8Wrapper::Set_Base_Vertex_Index(trackStartIndex); 	// Ronin @bugfix 07/01/2026 DX9: Update terrain tracks to use Set_Base_Vertex_Index isntead of Set_Index_Buffer_Index_Offset.
 				DX8Wrapper::Draw_Triangles(	0,(mod->m_activeEdgeCount-1)*2, 0, mod->m_activeEdgeCount*2);
 
 				trackStartIndex += mod->m_activeEdgeCount*2;

@@ -38,17 +38,156 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+
+#include <d3d9.h>  // Native DX9
+
 #include "sortingrenderer.h"
 #include "dx8vertexbuffer.h"
 #include "dx8indexbuffer.h"
 #include "dx8wrapper.h"
 #include "vertmaterial.h"
 #include "texture.h"
-#include "d3d8.h"
-#include "d3dx8math.h"
+#include <d3dx9math.h>  // Native DX9 math
 #include "statistics.h"
 #include <wwprofile.h>
 #include <algorithm>
+
+
+ // Ronin @bugfix 19/01/2026 Sorting guard: reduce debug spam - only log pipeline diffs on validation failure.
+static bool Should_Log_Sorting_Guard_Failure(const char* where, unsigned* outCount = nullptr)
+{
+	// Best-effort: dedupe by pointer identity of string literals
+	struct Slot { const char* where; unsigned count; };
+	static Slot s_slots[64] = {};
+	static unsigned s_used = 0;
+
+	for (unsigned i = 0; i < s_used; ++i) {
+		if (s_slots[i].where == where) {
+			s_slots[i].count++;
+			if (outCount) *outCount = s_slots[i].count;
+			// log first few, then every 128th
+			return (s_slots[i].count <= 5) || ((s_slots[i].count % 128) == 0);
+		}
+	}
+
+	if (s_used < 64) {
+		s_slots[s_used++] = { where, 1 };
+		if (outCount) *outCount = 1;
+		return true;
+	}
+
+	// Table full: still log occasionally
+	static unsigned s_fallback = 0;
+	s_fallback++;
+	if (outCount) *outCount = s_fallback;
+	return (s_fallback <= 5) || ((s_fallback % 128) == 0);
+}
+
+ // Ronin @bugfix 2/12/2025: RAII guard for sorting renderer state isolation
+ // Ronin @bugfix Ronin 19/01/2026 Sorting guard: capture pipeline snapshot; clear wrapper tracking before reconstructing IA to avoid wrapper/device mode mismatch
+class ScopedSortingStateGuard {
+	IDirect3DDevice9* m_dev;
+
+	// IA state to restore
+	IDirect3DVertexDeclaration9* m_savedDecl = nullptr;
+	DWORD m_savedFVF = 0;
+	IDirect3DVertexBuffer9* m_savedVB = nullptr;
+	UINT m_savedVBOffset = 0;
+	UINT m_savedVBStride = 0;
+	IDirect3DIndexBuffer9* m_savedIB = nullptr;
+
+	// Transforms and viewport only (safe to restore via wrapper/device)
+	Matrix4x4 m_savedWorld;
+	Matrix4x4 m_savedView;
+	Matrix4x4 m_savedProjection;
+	D3DVIEWPORT9 m_savedViewport;
+
+#ifdef _DEBUG
+	const char* m_where;
+	PipelineStateSnapshot* m_snapshot = nullptr;
+#endif
+
+public:
+	ScopedSortingStateGuard(IDirect3DDevice9* dev, const char* where)
+		: m_dev(dev)
+#ifdef _DEBUG
+		, m_where(where)
+#endif
+	{
+		if (!m_dev) return;
+
+#ifdef _DEBUG
+		// Capture snapshot but DON'T spam log; validate only on failure in dtor.
+		m_snapshot = DX8Wrapper::Capture_Pipeline_State(where);
+#endif
+
+		// Capture IA state
+		//m_dev->GetVertexDeclaration(&m_savedDecl);
+		m_dev->GetFVF(&m_savedFVF);
+		m_dev->GetStreamSource(0, &m_savedVB, &m_savedVBOffset, &m_savedVBStride);
+		m_dev->GetIndices(&m_savedIB);
+
+		// Capture transforms
+		DX8Wrapper::Get_Transform(D3DTS_WORLD, m_savedWorld);
+		DX8Wrapper::Get_Transform(D3DTS_VIEW, m_savedView);
+		DX8Wrapper::Get_Transform(D3DTS_PROJECTION, m_savedProjection);
+
+		// Capture viewport
+		m_dev->GetViewport(&m_savedViewport);
+	}
+
+	~ScopedSortingStateGuard() {
+		if (!m_dev) return;
+
+		// CRITICAL: Clear wrapper state tracking BEFORE restoring
+		// This ensures next pass rebinds its intended layout
+		DX8Wrapper::Clear_Current_Decl();
+		DX8Wrapper::Clear_Current_FVF();
+
+		// Restore transforms and viewport via wrapper/device.
+		DX8Wrapper::Set_Transform(D3DTS_PROJECTION, m_savedProjection);
+		DX8Wrapper::Set_Transform(D3DTS_VIEW, m_savedView);
+		DX8Wrapper::Set_Transform(D3DTS_WORLD, m_savedWorld);
+		m_dev->SetViewport(&m_savedViewport);
+
+		// Restore stream0 + IB (device-side)
+		m_dev->SetStreamSource(0, m_savedVB, m_savedVBOffset, m_savedVBStride);
+		if (m_savedVB) {
+			m_savedVB->Release();
+			m_savedVB = nullptr;
+		}
+
+		m_dev->SetIndices(m_savedIB);
+		if (m_savedIB) {
+			m_savedIB->Release();
+			m_savedIB = nullptr;
+		}
+
+		// DO NOT restore FVF/Decl - let next pass set what it needs
+		// The Clear_Current_* calls above ensure clean state
+		/*
+		// Release the saved declaration reference if we have one
+		if (m_savedDecl != nullptr) {
+			m_savedDecl->Release();
+			m_savedDecl = nullptr;
+		}*/
+
+#ifdef _DEBUG
+		if (m_snapshot) {
+			const bool ok = DX8Wrapper::Validate_Pipeline_State_Restored(m_snapshot, m_where);
+			if (!ok) {
+				unsigned c = 0;
+				if (Should_Log_Sorting_Guard_Failure(m_where, &c)) {
+					WWDEBUG_SAY(("[SORTING GUARD] Pipeline restore FAILED at %s (count=%u)", m_where, c));
+				}
+			}
+			delete m_snapshot;
+			m_snapshot = nullptr;
+		}
+#endif
+	}
+};
+
 
 
 bool SortingRendererClass::_EnableTriangleDraw=true;
@@ -406,7 +545,38 @@ void SortingRendererClass::Flush_Sorting_Pool()
 {
 	if (!overlapping_node_count) return;
 
+#ifdef WWDEBUG
+	// Ronin @debug 03/02/2026: Log what state sorting flush applies (to compare with skin path)
+	static int s_sortFlushLog = 0;
+	if (s_sortFlushLog < 1000) {
+		++s_sortFlushLog;
+
+		IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+		if (dev) {
+			DWORD zEnable = 0, zWrite = 0, lighting = 0, cullMode = 0;
+			DWORD alphaBlend = 0, srcBlend = 0, dstBlend = 0;
+			dev->GetRenderState(D3DRS_ZENABLE, &zEnable);
+			dev->GetRenderState(D3DRS_ZWRITEENABLE, &zWrite);
+			dev->GetRenderState(D3DRS_LIGHTING, &lighting);
+			dev->GetRenderState(D3DRS_CULLMODE, &cullMode);
+			dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
+			dev->GetRenderState(D3DRS_SRCBLEND, &srcBlend);
+			dev->GetRenderState(D3DRS_DESTBLEND, &dstBlend);
+
+			WWDEBUG_SAY(("[SORTING-FLUSH] #%d BEFORE: Z=%u ZW=%u Light=%u Cull=%u AB=%u Src=%u Dst=%u nodeCount=%u",
+				s_sortFlushLog,
+				zEnable, zWrite, lighting, cullMode, alphaBlend, srcBlend, dstBlend,
+				overlapping_node_count));
+		}
+	}
+#endif
+
 	SNAPSHOT_SAY(("SortingSystem - Flush"));
+
+	// Ronin @bugfix 2/12/2025: State capture BEFORE flush
+#ifdef _DEBUG
+	PipelineStateSnapshot* preFlushState = CAPTURE_PIPELINE_STATE();
+#endif
 
 	// Fill dynamic index buffer with sorting index buffer vertices
 	TempIndexStruct* tis=Get_Temp_Index_Array(overlapping_polygon_count);
@@ -542,11 +712,33 @@ void SortingRendererClass::Flush_Sorting_Pool()
 	}
 
 	// Set index buffer and render!
-
-	DX8Wrapper::Set_Index_Buffer(dyn_ib_access,0); // Override with this buffer (do something to prevent need for this!)
+	DX8Wrapper::Set_Index_Buffer(dyn_ib_access,0, "SortingRendererClass::Flush_Sorting_Pool"); // Override with this buffer (do something to prevent need for this!)
 	DX8Wrapper::Set_Vertex_Buffer(dyn_vb_access); // Override with this buffer (do something to prevent need for this!)
 
+	// Ronin @bugfix 03/12/2025: Bind FVF layout before Apply
+	DX8Wrapper::BindLayoutFVF(dyn_vb_access.FVF_Info().Get_FVF(), "SortingRenderer::Flush_Sorting_Pool");
+
 	DX8Wrapper::Apply_Render_State_Changes();
+
+#ifdef WWDEBUG
+	if (s_sortFlushLog <= 1000) {
+		IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+		if (dev) {
+			DWORD zEnable = 0, zWrite = 0, lighting = 0, cullMode = 0;
+			DWORD alphaBlend = 0, srcBlend = 0, dstBlend = 0;
+			dev->GetRenderState(D3DRS_ZENABLE, &zEnable);
+			dev->GetRenderState(D3DRS_ZWRITEENABLE, &zWrite);
+			dev->GetRenderState(D3DRS_LIGHTING, &lighting);
+			dev->GetRenderState(D3DRS_CULLMODE, &cullMode);
+			dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
+			dev->GetRenderState(D3DRS_SRCBLEND, &srcBlend);
+			dev->GetRenderState(D3DRS_DESTBLEND, &dstBlend);
+
+			WWDEBUG_SAY(("[SORTING-FLUSH] AFTER Apply: Z=%u ZW=%u Light=%u Cull=%u AB=%u Src=%u Dst=%u",
+				zEnable, zWrite, lighting, cullMode, alphaBlend, srcBlend, dstBlend));
+		}
+	}
+#endif
 
 	unsigned count_to_render=1;
 	unsigned start_index=0;
@@ -600,6 +792,14 @@ void SortingRendererClass::Flush_Sorting_Pool()
 void SortingRendererClass::Flush()
 {
 	WWPROFILE("SortingRenderer::Flush");
+
+	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
+
+
+
+	ScopedSortingStateGuard stateGuard(pDev, "SortingRendererClass::Flush");
+
+
 	Matrix4x4 old_view;
 	Matrix4x4 old_world;
 	DX8Wrapper::Get_Transform(D3DTS_VIEW,old_view);
@@ -608,14 +808,69 @@ void SortingRendererClass::Flush()
 	while (SortingNodeStruct* state=sorted_list.Head()) {
 		state->Remove();
 
-		if ((state->sorting_state.index_buffer_type==BUFFER_TYPE_SORTING || state->sorting_state.index_buffer_type==BUFFER_TYPE_DYNAMIC_SORTING) &&
-			(state->sorting_state.vertex_buffer_types[0]==BUFFER_TYPE_SORTING || state->sorting_state.vertex_buffer_types[0]==BUFFER_TYPE_DYNAMIC_SORTING)) {
+		const bool is_sorting_buffers =
+			((state->sorting_state.index_buffer_type == BUFFER_TYPE_SORTING ||
+				state->sorting_state.index_buffer_type == BUFFER_TYPE_DYNAMIC_SORTING) &&
+				(state->sorting_state.vertex_buffer_types[0] == BUFFER_TYPE_SORTING ||
+					state->sorting_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_SORTING));
+
+		if (is_sorting_buffers) {
 			Insert_To_Sorting_Pool(state);
 		}
 		else {
-			DX8Wrapper::Set_Render_State(state->sorting_state);
-			DX8Wrapper::Draw_Triangles(state->start_index,state->polygon_count,state->min_vertex_index,state->vertex_count);
-			DX8Wrapper::Release_Render_State();
+			// Ronin @bugfix 06/12/2025: Guard IA for direct draw path. This prevents non-sorting nodes from polluting IA state
+			ScopedSortingStateGuard directDrawGuard(pDev, "SortingRenderer::DirectDraw");
+
+			// Vanilla: apply render state (no VB/IB), then bind VB/IB explicitly, then Apply and draw
+			Apply_Render_State(state->sorting_state);
+
+			// Bind original buffers via pointer overloads
+			DX8Wrapper::Set_Index_Buffer(
+				static_cast<IndexBufferClass*>(state->sorting_state.index_buffer),
+				state->sorting_state.index_base_offset);
+
+			DX8Wrapper::Set_Vertex_Buffer(
+				static_cast<VertexBufferClass*>(state->sorting_state.vertex_buffers[0]),
+				/*stream*/ 0);
+
+			/*
+	   // If this draw is fixed-function (common for particles/2D-style), clear decl and set FVF from VB
+     if (state->sorting_state.currentDecl == nullptr) {
+        IDirect3DDevice9* devFF = pDev;
+        devFF->SetVertexDeclaration(NULL);
+        const DWORD fvf = state->sorting_state.currentFVF; // should be set in render_state
+        devFF->SetFVF(fvf);
+			}*/
+
+		 // @bugfix Ronin 14/01/2026 Avoid direct device IA mutations; bind fixed-function layout via wrapper tracking
+		 if (state->sorting_state.currentDecl == nullptr) {
+			 DWORD fvf = state->sorting_state.currentFVF;
+
+			 // If render_state didn't carry an FVF, derive it from the bound VB (DX8 VB types only)
+			 if (fvf == 0 &&
+				 state->sorting_state.vertex_buffers[0] &&
+				 (state->sorting_state.vertex_buffer_types[0] == BUFFER_TYPE_DX8 ||
+					 state->sorting_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_DX8)) {
+
+				 DX8VertexBufferClass* vb0 = static_cast<DX8VertexBufferClass*>(state->sorting_state.vertex_buffers[0]);
+				 fvf = vb0->FVF_Info().Get_FVF();
+			 }
+
+			 // Last resort fallback (matches Apply_Render_State_Changes fallback)
+			 if (fvf == 0) {
+				 fvf = (D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1); // 0x142
+			 }
+
+			 DX8Wrapper::BindLayoutFVF(fvf, "SortingRenderer::DirectDraw");
+		 }
+
+			DX8Wrapper::Apply_Render_State_Changes();
+
+			DX8Wrapper::Draw_Triangles(state->start_index,
+				state->polygon_count,
+				state->min_vertex_index,
+				state->vertex_count);
+
 			Release_Refs(state);
 			clean_list.Add_Head(state);
 		}
@@ -626,9 +881,10 @@ void SortingRendererClass::Flush()
 	Flush_Sorting_Pool();
 	DX8Wrapper::_Enable_Triangle_Draw(old_enable);
 
-	DX8Wrapper::Set_Index_Buffer(nullptr,0);
-	DX8Wrapper::Set_Vertex_Buffer(nullptr);
-	total_sorting_vertices=0;
+	// Cleanup
+	//DX8Wrapper::Set_Index_Buffer(nullptr, 0, "SortingRendererClass::Flush (cleanup)");
+	//DX8Wrapper::Set_Vertex_Buffer(nullptr, 0);
+	total_sorting_vertices = 0;
 
 	DynamicIBAccessClass::_Reset(false);
 	DynamicVBAccessClass::_Reset(false);

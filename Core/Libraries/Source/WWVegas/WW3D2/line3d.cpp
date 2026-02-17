@@ -300,7 +300,11 @@ void Line3DClass::Render(RenderInfoClass & rinfo)
 	}
 
 	DX8Wrapper::Set_Vertex_Buffer(vb);
-	DX8Wrapper::Set_Index_Buffer(ib,0);
+	DX8Wrapper::Set_Index_Buffer(ib,0, "Line3DClass:Render");
+
+	//const FVFInfoClass& fvfinfo = vb.FVF_Info();
+	DX8Wrapper::BindLayoutFVF(vb.FVF_Info().Get_FVF(), "Line3DClass:Render");
+
 	DX8Wrapper::Draw_Triangles(0,36/3,0,8);
 }
 
@@ -511,4 +515,3 @@ int Line3DClass::Get_Num_Polys(void) const
 {
 	return 12;
 }
-

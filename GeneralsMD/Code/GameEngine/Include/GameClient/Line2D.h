@@ -27,6 +27,10 @@
 // Desc:   2D line helping stuff
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #pragma once
 
 typedef std::vector<ICoord2D> Coord2DVector;

@@ -39,6 +39,9 @@
 //#define ENABLE_CATEGORY_LOG
 //#define ENABLE_STRIPING
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include <d3d9.h>  // Native DX9
+
 #include "dx8renderer.h"
 #include "dx8wrapper.h"
 #include "dx8polygonrenderer.h"

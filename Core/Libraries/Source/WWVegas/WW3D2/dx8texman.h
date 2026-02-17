@@ -39,6 +39,8 @@
 
 #pragma once
 
+#include <d3d9.h>  // Native DX9
+
 #include "always.h"
 #include "texture.h"
 #include "dx8wrapper.h"

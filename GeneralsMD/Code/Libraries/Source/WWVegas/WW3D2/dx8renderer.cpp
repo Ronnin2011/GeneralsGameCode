@@ -40,6 +40,8 @@
 //#define ENABLE_CATEGORY_LOG
 //#define ENABLE_STRIPING
 
+#include <d3d9.h>  // Native DX9
+
 #include "dx8renderer.h"
 #include "dx8wrapper.h"
 #include "dx8polygonrenderer.h"
@@ -349,7 +351,7 @@ void DX8RigidFVFCategoryContainer::Render_Delayed_Procedural_Material_Passes(voi
 	AnyDelayedPassesToRender=false;
 
 	DX8Wrapper::Set_Vertex_Buffer(vertex_buffer);
-	DX8Wrapper::Set_Index_Buffer(index_buffer,0);
+	DX8Wrapper::Set_Index_Buffer(index_buffer, 0, "DX8RigidFVFCategoryContainer::Render_Delayed_Procedural_Material_Passes");
 
 	SNAPSHOT_SAY(("DX8RigidFVFCategoryContainer::Render_Delayed_Procedural_Material_Passes()"));
 
@@ -807,7 +809,14 @@ void DX8RigidFVFCategoryContainer::Render(void)
 
 	DX8Wrapper::Set_Vertex_Buffer(vertex_buffer);
 
-	DX8Wrapper::Set_Index_Buffer(index_buffer,0);
+	DX8Wrapper::Set_Index_Buffer(index_buffer,0, "DX8RigidFVFCategoryContainer::Render");
+
+	// Ronin @bugfix 31/01/2026 DX9: Bind FVF for rigid meshes - but only for non-billboard types.
+	// After sorting clears FVF tracking, each container must rebind its FVF.
+	// Without this, rigid meshes inherit whatever FVF was last set (e.g., skin FVF 0x252).
+	if (vertex_buffer) {
+		DX8Wrapper::BindLayoutFVF(vertex_buffer->FVF_Info().Get_FVF(), "DX8RigidFVFCategoryContainer::Render");
+	}
 
 	SNAPSHOT_SAY(("DX8RigidFVFCategoryContainer::Render()"));
 	// The Z-biasing was causing more problems than they solved.
@@ -1411,7 +1420,18 @@ void DX8SkinFVFCategoryContainer::Render(void)
 		SNAPSHOT_SAY(("Set vb: %x ib: %x",&vb.FVF_Info(),index_buffer));
 
 		DX8Wrapper::Set_Vertex_Buffer(vb);
-		DX8Wrapper::Set_Index_Buffer(index_buffer,0);
+		DX8Wrapper::Set_Index_Buffer(index_buffer,0, "DX8SkinFVFCategoryContainer::Render");
+
+		// Ronin @bugfix 09/01/2026 DX9: Force stream0 binding
+		IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
+		if (pDev && vb.Get_D3D_VB()) {
+			const UINT correctStride = vb.FVF_Info().Get_FVF_Size();
+			const UINT correctOffset = vb.Get_VB_Offset() * correctStride;  // Convert vertex offset to byte offset
+			DX8Wrapper::Force_Stream0(vb.Get_D3D_VB(), correctOffset, correctStride);
+		}
+
+		// Ronin @bugfix 30/01/2026 DX9: Explicitly bind the skin FVF layout.
+			DX8Wrapper::BindLayoutFVF(vb.FVF_Info().Get_FVF(), "DX8SkinFVFCategoryContainer::Render");
 
 		//Flush the meshes which fit in the vertex buffer, applying all texture variations
 		for (unsigned pass=0;pass<passes;++pass) {
@@ -1550,6 +1570,12 @@ unsigned DX8TextureCategoryClass::Add_Mesh(
 			stripify=false;
 		}
 #endif // ;
+
+		if (split_table.Get_Mesh_Model_Class()->Get_Flag(MeshGeometryClass::SKIN)) {
+			// Ronin @bugfix 09/01/2026 Skins: keep mesh-local indices; stripification can invalidate expected ranges
+			stripify = false;
+		}
+
 		const TriIndex* src_indices=(const TriIndex*)split_table.Get_Polygon_Array(pass);//mmc->Get_Polygon_Array();
 
 		if (stripify) {
@@ -1671,12 +1697,28 @@ unsigned DX8TextureCategoryClass::Add_Mesh(
 				}
 			}
 
-			WWASSERT((vmax-vmin)<split_table.Get_Mesh_Model_Class()->Get_Vertex_Count());
+			const unsigned meshVerts = (unsigned)split_table.Get_Mesh_Model_Class()->Get_Vertex_Count();
 
-			/*
-			** Remember the min and max vertex indices that these polygons used (for optimization)
-			*/
-			p_renderer->Set_Vertex_Index_Range(vmin,vmax-vmin+1);
+			// Ronin @bugfix 08/01/2026 Correct vertex-range validation for both skin (local indices) and rigid (offset indices)
+			if (split_table.Get_Mesh_Model_Class()->Get_Flag(MeshGeometryClass::SKIN)) {
+				// Skin IB for this container is built with vertex_offset==0 and is mesh-local.
+				WWASSERT(vertex_offset == 0);
+				WWASSERT(vmax < meshVerts);
+
+				p_renderer->Set_Vertex_Index_Range(0, meshVerts);
+			}
+			else {
+				// Rigid IB indices include vertex_offset into the container VB.
+				WWASSERT(vmax < (vertex_offset + meshVerts));
+
+				/*
+				** Remember the min and max vertex indices that these polygons used (for optimization)
+				*/
+				p_renderer->Set_Vertex_Index_Range(vmin, vmax - vmin + 1);
+
+
+			}
+
 			WWASSERT(index_count<=unsigned(split_table.Get_Polygon_Count()*3));
 		}
 	}
@@ -1694,8 +1736,8 @@ void DX8TextureCategoryClass::Render(void)
 
 		for (unsigned i=0;i<MeshMatDescClass::MAX_TEX_STAGES;++i)
 		{
-			SNAPSHOT_SAY(("Set_Texture(%d,%s)",i,Peek_Texture(i) ? Peek_Texture(i)->Get_Texture_Name().str() : "null"));
-			DX8Wrapper::Set_Texture(i,Peek_Texture(i));
+			SNAPSHOT_SAY(("Set_Texture(%d,%s)", i, Peek_Texture(i) ? Peek_Texture(i)->Get_Texture_Name().str() : "NULL"));
+			DX8Wrapper::Set_Texture(i, Peek_Texture(i));
 		}
 
 	#ifdef WWDEBUG
@@ -1718,6 +1760,12 @@ void DX8TextureCategoryClass::Render(void)
 	//theAlphaShader.Set_Depth_Mask(ShaderClass::DEPTH_WRITE_DISABLE);
 
 	DX8Wrapper::Set_Shader(theShader);
+
+	// Ronin @bugfix 01/02/2026 DX9: Force apply render state changes before drawing.
+	// Skin textures were not being applied to the device because the deferred
+	// state application was being skipped in the skin rendering path.
+	DX8Wrapper::Apply_Render_State_Changes(); //@bugfix Ronin 16/02/2026 **Requires revisit**
+
 
 	if (m_gForceMultiply && theShader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO) {
 		theShader.Set_Dst_Blend_Func(ShaderClass::DSTBLEND_SRC_COLOR);
@@ -1881,6 +1929,16 @@ void DX8TextureCategoryClass::Render(void)
 		if ((!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT)) && WW3D::Is_Sorting_Enabled()) {
 			renderer->Render_Sorted(mesh->Get_Base_Vertex_Offset(),mesh->Get_Bounding_Sphere());
 		} else {
+
+			// Ronin @bugfix 05/02/2026 DX9: Bind FVF immediately before draw for skins.
+			// In DX8, FVF was inferred from the VB. In DX9, we must explicitly set it.
+			// SegLine works because SortingRenderer::Insert_Triangles() calls BindLayoutFVF().
+			// Skins must do the same - and it must happen AFTER Set_Shader/Set_Material/Set_Texture
+			// which can reset the FVF tracking state.
+		/*	if (mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN)) {
+				DX8Wrapper::BindLayoutFVF(dynamic_fvf_type, "DX8TextureCategoryClass::Render SKIN draw");
+			}*/
+
 			//non-transparent mesh that will be rendered immediately.  Okay to adjust the shader/material
 			//if necessary
 			if (mesh->Get_Alpha_Override() != 1.0 || (mesh->Get_User_Data() && *(int *)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE))
@@ -2185,6 +2243,10 @@ void DX8MeshRendererClass::Flush(void)
 	if (!camera) return;
 	Log_Statistics_String(true);
 
+	// Ronin @bugfix 09/01/2026 DX9: Prevent 2D/other passes from clipping 3D meshes via stale scissor state
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_SCISSORTESTENABLE, FALSE);
+
+
 	/*
 	** Render the FVF categories.  Note that it is critical that skins be
 	** rendered *after* the rigid meshes.  This is caused by the fact that an object may
@@ -2211,7 +2273,7 @@ void DX8MeshRendererClass::Flush(void)
 	}
 
 	DX8Wrapper::Set_Vertex_Buffer(nullptr);
-	DX8Wrapper::Set_Index_Buffer(nullptr,0);
+	DX8Wrapper::Set_Index_Buffer(nullptr,0, "DX8MeshRendererClass::Flush (cleanup)");
 }
 
 

@@ -32,6 +32,9 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include <d3d9.h>  // Native DX9
+
 #include "render2d.h"
 #include "mutex.h"
 #include "ww3d.h"
@@ -546,8 +549,8 @@ void Render2DClass::Render(void)
 	vp.Y			= (DWORD)ScreenResolution.Top;
 	vp.Width		= (DWORD)ScreenResolution.Width ();
 	vp.Height	= (DWORD)ScreenResolution.Height ();
-	vp.MinZ		= 0;
-	vp.MaxZ		= 1;
+	vp.MinZ		= 0.0f;
+	vp.MaxZ		= 1.0f
 	DX8Wrapper::Set_Viewport(&vp);
 
 
@@ -559,7 +562,14 @@ void Render2DClass::Render(void)
 
 	DX8Wrapper::Set_World_Identity();
 	DX8Wrapper::Set_View_Identity();
-	DX8Wrapper::Set_Transform(D3DTS_PROJECTION,identity);
+
+	// Ronin @bugfix 09/11/2025 DX9: Disable depth testing/writing for 2D
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZENABLE, FALSE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZWRITEENABLE, FALSE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_LIGHTING, FALSE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_CULLMODE, D3DCULL_NONE);
+
+		DX8Wrapper::Set_Transform(D3DTS_PROJECTION,identity);
 
 	DynamicVBAccessClass vb(BUFFER_TYPE_DYNAMIC_DX8,dynamic_fvf_type,Vertices.Count());
 	{
@@ -625,6 +635,11 @@ void Render2DClass::Render(void)
 
 	DX8Wrapper::Set_Transform(D3DTS_VIEW,view);
 	DX8Wrapper::Set_Transform(D3DTS_PROJECTION,proj);
+
+	// Restore Z-buffer state
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZENABLE, TRUE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZWRITEENABLE, TRUE);
+
 	if (IsGrayScale)
 		ShaderClass::Invalidate();	//force both stages to be reset.
 

@@ -38,6 +38,10 @@
 
 #pragma once
 
+// Ronin @build 25/10/2025 DX9: Include d3d9.h and create local typedef for compatibility
+#include <d3d9.h>
+typedef IDirect3DVertexBuffer9 IDirect3DVertexBuffer8;
+
 #include "always.h"
 #include "wwdebug.h"
 #include "dx8fvf.h"
@@ -52,7 +56,6 @@ class Vector4;
 class StringClass;
 class DX8VertexBufferClass;
 class FVFInfoClass;
-struct IDirect3DVertexBuffer8;
 class VertexBufferClass;
 struct VertexFormatXYZNDUV2;
 

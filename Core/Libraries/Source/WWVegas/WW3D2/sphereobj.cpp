@@ -522,6 +522,9 @@ void SphereRenderObjClass::render_sphere()
 	DX8Wrapper::Set_Vertex_Buffer(vb);
 	DX8Wrapper::Set_Index_Buffer(ib,0);
 
+	//const FVFInfoClass& fvfinfo = vb.FVF_Info();
+	DX8Wrapper::BindLayoutFVF(vb.FVF_Info().Get_FVF(), "SphereRenderObjClass:render_sphere");
+
 	if (sort) {
 		SortingRendererClass::Insert_Triangles(Get_Bounding_Sphere(), 0, mesh.face_ct, 0, mesh.Vertex_ct);
 	} else {
@@ -1747,4 +1750,3 @@ void SphereMeshClass::Free(void)
 }
 
 // EOF - sphereobj.cpp
-

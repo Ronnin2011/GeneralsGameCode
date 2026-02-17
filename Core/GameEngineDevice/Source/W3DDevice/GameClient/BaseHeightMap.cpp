@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -46,6 +46,10 @@
 //         Includes
 //-----------------------------------------------------------------------------
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
+#include <stdio.h>
 #include <stdlib.h>
 #include <assetmgr.h>
 #include <texture.h>
@@ -54,8 +58,7 @@
 #include <coltest.h>
 #include <rinfo.h>
 #include <camera.h>
-#include <d3dx8core.h>
-
+#include <d3dx9core.h>  // Native DX9 core
 #include "Common/GlobalData.h"
 #include "Common/PerfTimer.h"
 #include "Common/Xfer.h"

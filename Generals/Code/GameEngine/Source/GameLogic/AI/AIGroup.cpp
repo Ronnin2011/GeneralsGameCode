@@ -25,6 +25,9 @@
 // AIGroup.cpp
 // Encapsulation of a simple group of AI agents
 // Author: Michael S. Booth, January 2002
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
 
 

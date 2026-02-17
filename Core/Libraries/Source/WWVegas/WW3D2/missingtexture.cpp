@@ -20,7 +20,8 @@
 #include "missingtexture.h"
 #include "texture.h"
 #include "dx8wrapper.h"
-#include <d3dx8core.h>
+#include <d3d9.h>
+#include <d3dx9.h>  // Native DX9 extensions
 
 static unsigned missing_image_width=128;
 static unsigned missing_image_height=128;
@@ -47,12 +48,15 @@ IDirect3DSurface8* MissingTexture::_Create_Missing_Surface()
 	DX8_ErrorCode(texture_surface->GetDesc(&texture_surface_desc));
 
 	IDirect3DSurface8 *surface = nullptr;
-	DX8CALL(CreateImageSurface(
+	// Ronin @build DX9: CreateImageSurface removed - use CreateOffscreenPlainSurface instead
+	DX8CALL(CreateOffscreenPlainSurface(
 		texture_surface_desc.Width,
 		texture_surface_desc.Height,
 		texture_surface_desc.Format,
-		&surface));
-	DX8CALL(CopyRects(texture_surface, nullptr, 0, surface, nullptr));
+		D3DPOOL_SYSTEMMEM,
+		&surface,
+		NULL ));
+	DX8CALL(StretchRect(texture_surface, nullptr, surface, nullptr, D3DTEXF_NONE));
 	texture_surface->Release();
 	return surface;
 }

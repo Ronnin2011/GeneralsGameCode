@@ -32,6 +32,9 @@
 //
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "always.h"
 #include "GameClient/View.h"
 #include "WW3D2/camera.h"
@@ -42,7 +45,7 @@
 #include "WW3D2/meshmdl.h"
 #include "Lib/BaseType.h"
 #include "W3DDevice/GameClient/HeightMap.h"
-#include "d3dx8math.h"
+#include "d3dx9math.h"
 #include "Common/GlobalData.h"
 #include "W3DDevice/GameClient/W3DVolumetricShadow.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
@@ -82,6 +85,7 @@ void DoShadows(RenderInfoClass & rinfo, Bool stencilPass)
 	{
 			if (TheW3DShadowManager->isShadowScene())
 				projectionCount=TheW3DProjectedShadowManager->renderShadows(rinfo);
+
 	}
 
 	if (stencilPass == TRUE && TheW3DVolumetricShadowManager)

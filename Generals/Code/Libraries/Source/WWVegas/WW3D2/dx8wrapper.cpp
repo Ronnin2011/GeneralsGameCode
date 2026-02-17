@@ -47,6 +47,31 @@
 #define WINVER 0x0500 // Required to access GetMonitorInfo in VC6.
 #endif
 
+// Ronin 19/10/2025 Include DX8->DX9 compatibility layer first
+#include <d3d9.h>  // Native DX9
+#include <d3dx9.h> // D3DX9 helper functions
+#include <stdio.h> // For sprintf in DXGetErrorString9A replacement
+
+//#include <dxerr9.h>  // Ronin @build 19/01/2026 DX9: error string helper
+// Inline replacement for DXGetErrorString9A (from legacy dxerr9.lib)
+static const char* DXGetErrorString9A(HRESULT hr)
+{
+	switch (hr) {
+	case D3D_OK: return "D3D_OK";
+	case D3DERR_DEVICELOST: return "D3DERR_DEVICELOST";
+	case D3DERR_INVALIDCALL: return "D3DERR_INVALIDCALL";
+	case D3DERR_NOTAVAILABLE: return "D3DERR_NOTAVAILABLE";
+	case D3DERR_OUTOFVIDEOMEMORY: return "D3DERR_OUTOFVIDEOMEMORY";
+	case E_OUTOFMEMORY: return "E_OUTOFMEMORY";
+	default: {
+		static char buf[32];
+		sprintf(buf, "HRESULT=0x%08X", (unsigned)hr);
+		return buf;
+	}
+	}
+}
+
+
 #include "dx8wrapper.h"
 #include "dx8webbrowser.h"
 #include "dx8fvf.h"
@@ -72,7 +97,6 @@
 #include "textureloader.h"
 #include "missingtexture.h"
 #include "thread.h"
-#include <d3dx8core.h>
 #include "pot.h"
 #include "wwprofile.h"
 #include "ffactory.h"
@@ -141,12 +165,12 @@ unsigned							DX8Wrapper::render_state_changed;
 bool								DX8Wrapper::FogEnable									= false;
 D3DCOLOR							DX8Wrapper::FogColor										= 0;
 
-IDirect3D8 *					DX8Wrapper::D3DInterface								= nullptr;
-IDirect3DDevice8 *			DX8Wrapper::D3DDevice									= nullptr;
-IDirect3DSurface8 *			DX8Wrapper::CurrentRenderTarget						= nullptr;
-IDirect3DSurface8 *			DX8Wrapper::CurrentDepthBuffer						= nullptr;
-IDirect3DSurface8 *			DX8Wrapper::DefaultRenderTarget						= nullptr;
-IDirect3DSurface8 *			DX8Wrapper::DefaultDepthBuffer						= nullptr;
+IDirect3D9*				    	DX8Wrapper::D3DInterface							= NULL;
+IDirect3DDevice9*			  DX8Wrapper::D3DDevice									= NULL;
+IDirect3DSurface8 *			DX8Wrapper::CurrentRenderTarget				= NULL;
+IDirect3DSurface8*      DX8Wrapper::CurrentDepthBuffer        = NULL; //Ronin @build 29/10/2025
+IDirect3DSurface8 *			DX8Wrapper::DefaultRenderTarget				= NULL;
+IDirect3DSurface8*      DX8Wrapper::DefaultDepthBuffer				= NULL; //Ronin @build 29/10/2025
 bool								DX8Wrapper::IsRenderToTexture							= false;
 
 unsigned							DX8Wrapper::matrix_changes								= 0;
@@ -172,7 +196,7 @@ DX8Caps*							DX8Wrapper::CurrentCaps = nullptr;
 // Hack test... this disables rendering of batches of too few polygons.
 unsigned							DX8Wrapper::DrawPolygonLowBoundLimit=0;
 
-D3DADAPTER_IDENTIFIER8		DX8Wrapper::CurrentAdapterIdentifier;
+D3DADAPTER_IDENTIFIER9		DX8Wrapper::CurrentAdapterIdentifier;
 
 unsigned long DX8Wrapper::FrameCount = 0;
 
@@ -196,7 +220,7 @@ static DynamicVectorClass<StringClass>					_RenderDeviceShortNameTable;
 static DynamicVectorClass<RenderDeviceDescClass>	_RenderDeviceDescriptionTable;
 
 
-typedef IDirect3D8* (WINAPI *Direct3DCreate8Type) (UINT SDKVersion);
+typedef IDirect3D9* (WINAPI *Direct3DCreate8Type) (UINT SDKVersion);
 Direct3DCreate8Type	Direct3DCreate8Ptr = nullptr;
 HINSTANCE D3D8Lib = nullptr;
 
@@ -212,15 +236,10 @@ DX8_Stats	 DX8Wrapper::stats;
 
 void Log_DX8_ErrorCode(unsigned res)
 {
-	char tmp[256]="";
-
-	HRESULT new_res=D3DXGetErrorStringA(
-		res,
-		tmp,
-		sizeof(tmp));
-
-	if (new_res==D3D_OK) {
-		WWDEBUG_SAY((tmp));
+	// Ronin @build 24/10/2025 DX9: D3DXGetErrorStringA removed, use DXGetErrorString9A
+	const char* errorString = DXGetErrorString9A(res);
+	if (errorString) {
+		WWDEBUG_SAY((errorString));
 	}
 
 	WWASSERT(0);
@@ -228,15 +247,10 @@ void Log_DX8_ErrorCode(unsigned res)
 
 void Non_Fatal_Log_DX8_ErrorCode(unsigned res,const char * file,int line)
 {
-	char tmp[256]="";
-
-	HRESULT new_res=D3DXGetErrorStringA(
-		res,
-		tmp,
-		sizeof(tmp));
-
-	if (new_res==D3D_OK) {
-		WWDEBUG_SAY(("DX8 Error: %s, File: %s, Line: %d",tmp,file,line));
+	// Ronin @build 24/10/2025 DX9: D3DXGetErrorStringA removed, use DXGetErrorString9A
+	const char* errorString = DXGetErrorString9A(res);
+	if (errorString) {
+		WWDEBUG_SAY(("DX8 Error: %s, File: %s, Line: %d", errorString, file, line));
 	}
 }
 
@@ -317,7 +331,7 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 
 		if (D3D8Lib == nullptr) return false;	// Return false at this point if init failed
 
-		Direct3DCreate8Ptr = (Direct3DCreate8Type) GetProcAddress(D3D8Lib, "Direct3DCreate8");
+		Direct3DCreate8Ptr = (Direct3DCreate8Type) GetProcAddress(D3D8Lib, "Direct3DCreate9");
 		if (Direct3DCreate8Ptr == nullptr) return false;
 
 		/*
@@ -418,14 +432,14 @@ inline DWORD F2DW(float f) { return *((unsigned*)&f); }
 void DX8Wrapper::Set_Default_Global_Render_States(void)
 {
 	DX8_THREAD_ASSERT();
-	const D3DCAPS8 &caps = Get_Current_Caps()->Get_DX8_Caps();
+	const D3DCAPS9 &caps = Get_Current_Caps()->Get_DX8_Caps();
 
 	Set_DX8_Render_State(D3DRS_RANGEFOGENABLE, (caps.RasterCaps & D3DPRASTERCAPS_FOGRANGE) ? TRUE : FALSE);
 	Set_DX8_Render_State(D3DRS_FOGTABLEMODE, D3DFOG_NONE);
 	Set_DX8_Render_State(D3DRS_FOGVERTEXMODE, D3DFOG_LINEAR);
 	Set_DX8_Render_State(D3DRS_SPECULARMATERIALSOURCE, D3DMCS_MATERIAL);
 	Set_DX8_Render_State(D3DRS_COLORVERTEX, TRUE);
-	Set_DX8_Render_State(D3DRS_ZBIAS,0);
+	Set_DX8_Render_State(D3DRS_DEPTHBIAS, 0);
 	Set_DX8_Texture_Stage_State(1, D3DTSS_BUMPENVLSCALE, F2DW(1.0f));
 	Set_DX8_Texture_Stage_State(1, D3DTSS_BUMPENVLOFFSET, F2DW(0.0f));
 	Set_DX8_Texture_Stage_State(0, D3DTSS_BUMPENVMAT00,F2DW(1.0f));
@@ -515,7 +529,7 @@ bool DX8Wrapper::Create_Device(void)
 {
 	WWASSERT(D3DDevice==nullptr);	// for now, once you've created a device, you're stuck with it!
 
-	D3DCAPS8 caps;
+	D3DCAPS9 caps;
 	if
 	(
 		FAILED
@@ -532,7 +546,7 @@ bool DX8Wrapper::Create_Device(void)
 		return false;
 	}
 
-	::ZeroMemory(&CurrentAdapterIdentifier, sizeof(D3DADAPTER_IDENTIFIER8));
+	::ZeroMemory(&CurrentAdapterIdentifier, sizeof(D3DADAPTER_IDENTIFIER9));
 
 	if
 	(
@@ -541,7 +555,7 @@ bool DX8Wrapper::Create_Device(void)
 			D3DInterface->GetAdapterIdentifier
 			(
 				CurRenderDevice,
-				D3DENUM_NO_WHQL_LEVEL,
+				0,  // Ronin @build 27/01/2025 DX9: D3DENUM_NO_WHQL_LEVEL removed - use 0 instead
 				&CurrentAdapterIdentifier
 			)
 			)
@@ -652,8 +666,8 @@ void DX8Wrapper::Release_Device(void)
 			DX8CALL(SetTexture(a,nullptr));
 		}
 
-		DX8CALL(SetStreamSource(0, nullptr, 0));	//release reference count on last rendered vertex buffer
-		DX8CALL(SetIndices(nullptr,0));	//release reference count on last rendered index buffer
+		DX8CALL(SetStreamSource(0, nullptr, 0, 0));	//release reference count on last rendered vertex buffer
+		DX8CALL(SetIndices(nullptr));	//release reference count on last rendered index buffer
 
 
 		/*
@@ -685,9 +699,10 @@ void DX8Wrapper::Enumerate_Devices()
 	int adapter_count = D3DInterface->GetAdapterCount();
 	for (int adapter_index=0; adapter_index<adapter_count; adapter_index++) {
 
-		D3DADAPTER_IDENTIFIER8 id;
-		::ZeroMemory(&id, sizeof(D3DADAPTER_IDENTIFIER8));
-		HRESULT res = D3DInterface->GetAdapterIdentifier(adapter_index,D3DENUM_NO_WHQL_LEVEL,&id);
+		D3DADAPTER_IDENTIFIER9 id;
+		::ZeroMemory(&id, sizeof(D3DADAPTER_IDENTIFIER9));
+		// Ronin @build 27/10/2025 DX9: D3DENUM_NO_WHQL_LEVEL removed - use 0 instead
+		HRESULT res = D3DInterface->GetAdapterIdentifier(adapter_index, 0, &id);
 
 		if (res == D3D_OK) {
 
@@ -959,7 +974,7 @@ bool DX8Wrapper::Set_Render_Device(int dev, int width, int height, int bits, int
 	_PresentParameters.EnableAutoDepthStencil = TRUE;				// Driver will attempt to match Z-buffer depth
 	_PresentParameters.Flags=0;											// We're not going to lock the backbuffer
 
-	_PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_DEFAULT;
+	_PresentParameters.PresentationInterval = D3DPRESENT_INTERVAL_DEFAULT;  // Ronin @build 27/10/2025 DX9: Renamed from FullScreen_PresentationInterval
 	_PresentParameters.FullScreen_RefreshRateInHz = D3DPRESENT_RATE_DEFAULT;
 
 	/*
@@ -1114,11 +1129,11 @@ bool DX8Wrapper::Toggle_Windowed(void)
 void DX8Wrapper::Set_Swap_Interval(int swap)
 {
 	switch (swap) {
-		case 0: _PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE; break;
-		case 1: _PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_ONE ; break;
-		case 2: _PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_TWO; break;
-		case 3: _PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_THREE; break;
-		default: _PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_ONE ; break;
+			case 0: _PresentParameters.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE; break; // Ronin @build 27/10/2025 DX9: Renamed
+			case 1: _PresentParameters.PresentationInterval = D3DPRESENT_INTERVAL_ONE; break; // Ronin @build 27/10/2025 DX9: Renamed
+			case 2: _PresentParameters.PresentationInterval = D3DPRESENT_INTERVAL_TWO; break; // Ronin @build 27/10/2025 DX9: Renamed
+			case 3: _PresentParameters.PresentationInterval = D3DPRESENT_INTERVAL_THREE; break; // Ronin @build 27/10/2025 DX9: Renamed
+			default: _PresentParameters.PresentationInterval = D3DPRESENT_INTERVAL_ONE; break; // Ronin @build 27/10/2025 DX9: Renamed
 	}
 
 	WWDEBUG_SAY(("DX8Wrapper::Set_Swap_Interval is resetting the device."));
@@ -1127,7 +1142,7 @@ void DX8Wrapper::Set_Swap_Interval(int swap)
 
 int DX8Wrapper::Get_Swap_Interval(void)
 {
-	return _PresentParameters.FullScreen_PresentationInterval;
+	return _PresentParameters.PresentationInterval; // Ronin @build 27/10/2025 DX9: Renamed
 }
 
 bool DX8Wrapper::Has_Stencil(void)
@@ -1395,8 +1410,43 @@ bool DX8Wrapper::Find_Color_Mode(D3DFORMAT colorbuffer, int resx, int resy, UINT
 	ry=(unsigned int) resy;
 
 	bool found=false;
+	// Ronin @build 28/10/2025 DX9: GetAdapterModeCount requires format parameter
+	modemax = D3DInterface->GetAdapterModeCount(D3DADAPTER_DEFAULT, colorbuffer);
 
-	modemax=D3DInterface->GetAdapterModeCount(D3DADAPTER_DEFAULT);
+	i = 0;
+
+	while (i < modemax && !found)
+	{
+		// Ronin @build 28/10/2025 DX9: EnumAdapterModes requires format parameter
+		D3DInterface->EnumAdapterModes(D3DADAPTER_DEFAULT, colorbuffer, i, &dmode);
+		if (dmode.Width == rx && dmode.Height == ry && dmode.Format == colorbuffer) {
+			WWDEBUG_SAY(("Found valid color mode.  Width = %d Height = %d Format = %d", dmode.Width, dmode.Height, dmode.Format));
+			found = true;
+		}
+		i++;
+	}
+
+	i--; // this is the first valid mode
+
+	// no match
+	if (!found) {
+		WWDEBUG_SAY(("Failed to find a valid color mode"));
+		return false;
+	}
+
+	// go to the highest refresh rate in this mode
+	bool stillok = true;
+
+	j = i;
+	while (j < modemax && stillok)
+	{
+		// Ronin @build 28/10/2025 DX9: EnumAdapterModes requires format parameter
+		D3DInterface->EnumAdapterModes(D3DADAPTER_DEFAULT, colorbuffer, j, &dmode);
+		if (dmode.Width == rx && dmode.Height == ry && dmode.Format == colorbuffer)
+			stillok = true; else stillok = false;
+		j++;
+	}
+	/*modemax = D3DInterface->GetAdapterModeCount(D3DADAPTER_DEFAULT);
 
 	i=0;
 
@@ -1433,7 +1483,7 @@ bool DX8Wrapper::Find_Color_Mode(D3DFORMAT colorbuffer, int resx, int resy, UINT
 	if (stillok==false) *mode=j-2;
 	else *mode=i;
 
-	return true;
+	return true;*/
 }
 
 // Helper function to find a Z buffer mode for the colorbuffer
@@ -1850,6 +1900,7 @@ void DX8Wrapper::Draw_Sorting_IB_VB(
 	DX8CALL(SetStreamSource(
 		0,
 		static_cast<DX8VertexBufferClass*>(dyn_vb_access.VertexBuffer)->Get_DX8_Vertex_Buffer(),
+		0,
 		dyn_vb_access.FVF_Info().Get_FVF_Size()));
 	DX8CALL(SetVertexShader(dyn_vb_access.FVF_Info().Get_FVF()));
 	DX8_RECORD_VERTEX_BUFFER_CHANGE();
@@ -1880,19 +1931,13 @@ void DX8Wrapper::Draw_Sorting_IB_VB(
 	}
 
 	DX8CALL(SetIndices(
-		static_cast<DX8IndexBufferClass*>(dyn_ib_access.IndexBuffer)->Get_DX8_Index_Buffer(),
-		dyn_vb_access.VertexBufferOffset));
+		static_cast<DX8IndexBufferClass*>(dyn_ib_access.IndexBuffer)->Get_DX8_Index_Buffer()));
+		//dyn_vb_access.VertexBufferOffset));
 	DX8_RECORD_INDEX_BUFFER_CHANGE();
 
 	DX8_RECORD_DRAW_CALLS();
-	DX8CALL(DrawIndexedPrimitive(
-		D3DPT_TRIANGLELIST,
-		0,		// start vertex
-		vertex_count,
-		dyn_ib_access.IndexBufferOffset,
-		polygon_count));
-
-	DX8_RECORD_RENDER(polygon_count,vertex_count,render_state.shader);
+	DX8CALL(DrawIndexedPrimitive(D3DPT_TRIANGLELIST, 0, 0, // start vertex
+		vertex_count, dyn_ib_access.IndexBufferOffset, polygon_count));
 }
 
 // ----------------------------------------------------------------------------
@@ -1999,12 +2044,7 @@ void DX8Wrapper::Draw(
 				}*/
 				DX8_RECORD_RENDER(polygon_count,vertex_count,render_state.shader);
 				DX8_RECORD_DRAW_CALLS();
-				DX8CALL(DrawIndexedPrimitive(
-					(D3DPRIMITIVETYPE)primitive_type,
-					min_vertex_index,
-					vertex_count,
-					start_index+render_state.iba_offset,
-					polygon_count));
+				DX8CALL(DrawIndexedPrimitive((D3DPRIMITIVETYPE)primitive_type, 0, min_vertex_index, vertex_count, start_index+render_state.iba_offset, polygon_count));
 			}
 			break;
 		case BUFFER_TYPE_SORTING:
@@ -2144,7 +2184,7 @@ void DX8Wrapper::Apply_Render_State_Changes()
 				if (render_state.LightEnable[index]) {
 #ifdef MESH_RENDER_SNAPSHOT_ENABLED
 					if ( WW3D::Is_Snapshot_Activated() ) {
-						D3DLIGHT8 * light = &(render_state.Lights[index]);
+						D3DLIGHT9 * light = &(render_state.Lights[index]);
 						static const char * _light_types[] = { "Unknown", "Point","Spot", "Directional" };
 						WWASSERT((light->Type >= 0) && (light->Type <= 3));
 
@@ -2186,9 +2226,10 @@ void DX8Wrapper::Apply_Render_State_Changes()
 				DX8CALL(SetStreamSource(
 					0,
 					static_cast<DX8VertexBufferClass*>(render_state.vertex_buffer)->Get_DX8_Vertex_Buffer(),
+					0,
 					render_state.vertex_buffer->FVF_Info().Get_FVF_Size()));
-				DX8_RECORD_VERTEX_BUFFER_CHANGE();
 				DX8CALL(SetVertexShader(render_state.vertex_buffer->FVF_Info().Get_FVF()));
+				DX8_RECORD_VERTEX_BUFFER_CHANGE();
 				break;
 			case BUFFER_TYPE_SORTING:
 			case BUFFER_TYPE_DYNAMIC_SORTING:
@@ -2197,7 +2238,7 @@ void DX8Wrapper::Apply_Render_State_Changes()
 				WWASSERT(0);
 			}
 		} else {
-			DX8CALL(SetStreamSource(0,nullptr,0));
+			DX8CALL(SetStreamSource(0,nullptr,0,0));
 			DX8_RECORD_VERTEX_BUFFER_CHANGE();
 		}
 	}
@@ -2208,8 +2249,8 @@ void DX8Wrapper::Apply_Render_State_Changes()
 			case BUFFER_TYPE_DX8:
 			case BUFFER_TYPE_DYNAMIC_DX8:
 				DX8CALL(SetIndices(
-					static_cast<DX8IndexBufferClass*>(render_state.index_buffer)->Get_DX8_Index_Buffer(),
-					render_state.index_base_offset+render_state.vba_offset));
+					static_cast<DX8IndexBufferClass*>(render_state.index_buffer)->Get_DX8_Index_Buffer()));
+					//render_state.index_base_offset+render_state.vba_offset));
 				DX8_RECORD_INDEX_BUFFER_CHANGE();
 				break;
 			case BUFFER_TYPE_SORTING:
@@ -2221,8 +2262,7 @@ void DX8Wrapper::Apply_Render_State_Changes()
 		}
 		else {
 			DX8CALL(SetIndices(
-				nullptr,
-				0));
+				nullptr));
 			DX8_RECORD_INDEX_BUFFER_CHANGE();
 		}
 	}
@@ -2690,8 +2730,7 @@ IDirect3DSurface8 * DX8Wrapper::_Create_DX8_Surface(unsigned int width, unsigned
 	// Paletted surfaces not supported!
 	WWASSERT(format!=D3DFMT_P8);
 
-	DX8CALL(CreateImageSurface(width, height, WW3DFormat_To_D3DFormat(format), &surface));
-
+	DX8CALL(CreateOffscreenPlainSurface(mode.Width, mode.Height, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &fb, NULL));
 	return surface;
 }
 
@@ -2778,7 +2817,7 @@ void DX8Wrapper::Compute_Caps(WW3DFormat display_format)
 }
 
 
-void DX8Wrapper::Set_Light(unsigned index, const D3DLIGHT8* light)
+void DX8Wrapper::Set_Light(unsigned index, const D3DLIGHT9* light)
 {
 	if (light) {
 		render_state.Lights[index]=*light;
@@ -2792,9 +2831,9 @@ void DX8Wrapper::Set_Light(unsigned index, const D3DLIGHT8* light)
 
 void DX8Wrapper::Set_Light(unsigned index,const LightClass &light)
 {
-	D3DLIGHT8 dlight;
+	D3DLIGHT9 dlight;
 	Vector3 temp;
-	memset(&dlight,0,sizeof(D3DLIGHT8));
+	memset(&dlight,0,sizeof(D3DLIGHT9));
 
 	switch (light.Get_Type())
 	{
@@ -2859,7 +2898,7 @@ void DX8Wrapper::Set_Light(unsigned index,const LightClass &light)
 		dlight.Attenuation1=(float) 1.0/a;
 	dlight.Attenuation2=0.0f;
 
-	Set_Light(index,&dlight);
+	Set_Light(l,&dlight);
 }
 
 // ----------------------------------------------------------------------------
@@ -2882,11 +2921,11 @@ void DX8Wrapper::Set_Light_Environment(LightEnvironmentClass* light_env)
 #endif
 		}
 
-		D3DLIGHT8 light;
+		D3DLIGHT9 light;
 		int l=0;
 		for (;l<light_count;++l) {
 
-			::ZeroMemory(&light, sizeof(D3DLIGHT8));
+			::ZeroMemory(&light, sizeof(D3DLIGHT9));
 
 			light.Type=D3DLIGHT_DIRECTIONAL;
 			(Vector3&)light.Diffuse=light_env->Get_Light_Diffuse(l);
@@ -2934,13 +2973,13 @@ IDirect3DSurface8 * DX8Wrapper::_Get_DX8_Front_Buffer()
 	DX8_THREAD_ASSERT();
 	D3DDISPLAYMODE mode;
 
-	DX8CALL(GetDisplayMode(&mode));
+	DX8CALL(GetDisplayMode, &mode));
 
 	IDirect3DSurface8 * fb=nullptr;
 
-	DX8CALL(CreateImageSurface(mode.Width,mode.Height,D3DFMT_A8R8G8B8,&fb));
+	DX8CALL(CreateOffscreenPlainSurface(mode.Width,mode.Height,D3DFMT_A8R8G8B8,&fb));
 
-	DX8CALL(GetFrontBuffer(fb));
+	DX8CALL(GetFrontBufferData(0, fb));
 	return fb;
 }
 
@@ -2950,7 +2989,7 @@ SurfaceClass * DX8Wrapper::_Get_DX8_Back_Buffer(unsigned int num)
 
 	IDirect3DSurface8 * bb;
 	SurfaceClass *surf=nullptr;
-	DX8CALL(GetBackBuffer(num,D3DBACKBUFFER_TYPE_MONO,&bb));
+	DX8CALL(GetBackBuffer(0, num,D3DBACKBUFFER_TYPE_MONO,&bb)); // Swapchain 0
 	if (bb)
 	{
 		surf=NEW_REF(SurfaceClass,(bb));
@@ -2959,7 +2998,27 @@ SurfaceClass * DX8Wrapper::_Get_DX8_Back_Buffer(unsigned int num)
 
 	return surf;
 }
+// @build ronin 29/10/2025 DX9: Helper function to handle FVF vertex shader setting
+void DX8Wrapper::Set_Vertex_Shader(unsigned fvf) {
+	DX8_THREAD_ASSERT();
+	if (fvf != 0) {
+		// In DX9, FVF codes are set using SetFVF, not SetVertexShader
+		DX8CALL(SetFVF(fvf));
+	}
+	else {
+		// For actual vertex shaders, we'd need proper shader management
+		DX8CALL(SetFVF(NULL));
+	}
+}
 
+// @build ronin 29/10/2025 DX9: Sampler state management (texture filtering moved from texture stage states)
+void DX8Wrapper::Set_DX8_Sampler_State(unsigned int stage, D3DSAMPLERSTATETYPE type, unsigned int value) {
+	DX8_THREAD_ASSERT();
+	if (_Get_D3D_Device8()) {
+		_Get_D3D_Device8()->SetSamplerState(stage, type, value);
+		number_of_DX8_calls++;
+	}
+}
 
 TextureClass *
 DX8Wrapper::Create_Render_Target (int width, int height, WW3DFormat format)
@@ -2984,7 +3043,7 @@ DX8Wrapper::Create_Render_Target (int width, int height, WW3DFormat format)
 	//
 	//	Note: We're going to force the width and height to be powers of two and equal
 	//
-	const D3DCAPS8& dx8caps=Get_Current_Caps()->Get_DX8_Caps();
+	const D3DCAPS9& dx8caps=Get_Current_Caps()->Get_DX8_Caps();
 	float poweroftwosize = width;
 	if (height > 0 && height < width) {
 		poweroftwosize = height;
@@ -3062,14 +3121,14 @@ void DX8Wrapper::Create_Render_Target
 	}
 	poweroftwosize = ::Find_POT (poweroftwosize);
 
-	if (poweroftwosize>dx8caps.MaxTextureWidth)
+	if (poweroftwosize>dx9caps.MaxTextureWidth)
 	{
-		poweroftwosize=dx8caps.MaxTextureWidth;
+		poweroftwosize=dx9caps.MaxTextureWidth;
 	}
 
-	if (poweroftwosize>dx8caps.MaxTextureHeight)
+	if (poweroftwosize>dx9caps.MaxTextureHeight)
 	{
-		poweroftwosize=dx8caps.MaxTextureHeight;
+		poweroftwosize=dx9caps.MaxTextureHeight;
 	}
 
 	width = height = poweroftwosize;
@@ -3112,10 +3171,10 @@ void DX8Wrapper::Set_Render_Target_With_Z
 )
 {
 	WWASSERT(texture!=nullptr);
-	IDirect3DSurface8 * d3d_surf = texture->Get_D3D_Surface_Level();
+	IDirect3DSurface9 * d3d_surf = texture->Get_D3D_Surface_Level();
 	WWASSERT(d3d_surf != nullptr);
 
-	IDirect3DSurface8* d3d_zbuf=nullptr;
+	IDirect3DSurface9* d3d_zbuf=nullptr;
 	if (ztexture!=nullptr)
 	{
 
@@ -3142,8 +3201,8 @@ DX8Wrapper::Set_Render_Target(IDirect3DSwapChain8 *swap_chain)
 	//
 	//	Get the back buffer for the swap chain
 	//
-	LPDIRECT3DSURFACE8 render_target = nullptr;
-	swap_chain->GetBackBuffer (0, D3DBACKBUFFER_TYPE_MONO, &render_target);
+	IDirect3DSurface9* render_target = nullptr;
+	swap_chain->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, & render_target);
 
 	//
 	//	Set this back buffer as the render target
@@ -3230,7 +3289,7 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 		//
 		if (DefaultRenderTarget == nullptr)
 		{
-			DX8CALL(GetRenderTarget (&DefaultRenderTarget));
+			DX8CALL(GetRenderTarget, &DefaultRenderTarget));
 		}
 
 		//
@@ -3408,17 +3467,17 @@ DX8Wrapper::Create_Additional_Swap_Chain (HWND render_window)
 	//	Configure the presentation parameters for a windowed render target
 	//
 	D3DPRESENT_PARAMETERS params				= { 0 };
-	params.BackBufferFormat						= _PresentParameters.BackBufferFormat;
-	params.BackBufferCount						= 1;
-	params.MultiSampleType						= D3DMULTISAMPLE_NONE;
-	params.SwapEffect								= D3DSWAPEFFECT_COPY_VSYNC;
-	params.hDeviceWindow							= render_window;
-	params.Windowed								= TRUE;
+	params.BackBufferFormat				  		= _PresentParameters.BackBufferFormat;
+	params.BackBufferCount				  		= 1;
+	params.MultiSampleType			  			= D3DMULTISAMPLE_NONE;
+	params.SwapEffect									  = D3DSWAPEFFECT_COPY; // Ronin @build 27/10/2025 DX9: _COPY_VSYNC removed
+	params.hDeviceWindow								= render_window;
+	params.Windowed											= TRUE;
 	params.EnableAutoDepthStencil				= TRUE;
 	params.AutoDepthStencilFormat				= _PresentParameters.AutoDepthStencilFormat;
-	params.Flags									= 0;
+	params.Flags												= 0;
 	params.FullScreen_RefreshRateInHz		= D3DPRESENT_RATE_DEFAULT;
-	params.FullScreen_PresentationInterval	= D3DPRESENT_INTERVAL_DEFAULT;
+	params.PresentationInterval				  = D3DPRESENT_INTERVAL_DEFAULT;	// Ronin @build 27/10/2025 DX9: Renamed	
 
 	//
 	//	Create the swap chain
@@ -3431,7 +3490,8 @@ DX8Wrapper::Create_Additional_Swap_Chain (HWND render_window)
 void DX8Wrapper::Flush_DX8_Resource_Manager(unsigned int bytes)
 {
 	DX8_Assert();
-	DX8CALL(ResourceManagerDiscardBytes(bytes));
+// Ronin @build 27/10/2025 DX9: Removed`r`n// 	
+//DX8CALL(ResourceManagerDiscardBytes(bytes));
 }
 
 unsigned int DX8Wrapper::Get_Free_Texture_RAM()
@@ -3482,7 +3542,7 @@ void DX8Wrapper::Set_Gamma(float gamma,float bright,float contrast,bool calibrat
 	}
 
 	if (Get_Current_Caps()->Support_Gamma())	{
-		DX8Wrapper::_Get_D3D_Device8()->SetGammaRamp(flag,&ramp);
+		DX8Wrapper::_Get_D3D_Device8()->SetGammaRamp(0, flag,&ramp); // Swapchain 0
 	} else {
 		HWND hwnd = GetDesktopWindow();
 		HDC hdc = GetDC(hwnd);
@@ -3548,16 +3608,15 @@ void DX8Wrapper::Apply_Default_State()
 	Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, FALSE);
 	Set_DX8_Render_State(D3DRS_FOGENABLE, FALSE);
 	Set_DX8_Render_State(D3DRS_SPECULARENABLE, FALSE);
-//	Set_DX8_Render_State(D3DRS_ZVISIBLE, FALSE);
+	//Set_DX8_Render_State(D3DRS_ZVISIBLE, FALSE);
 //	Set_DX8_Render_State(D3DRS_FOGCOLOR, 0);
 //	Set_DX8_Render_State(D3DRS_FOGTABLEMODE, D3DFOG_NONE);
 //	Set_DX8_Render_State(D3DRS_FOGSTART, 0);
-
-//	Set_DX8_Render_State(D3DRS_FOGEND, WWMath::Float_As_Int(1.0f));
-//	Set_DX8_Render_State(D3DRS_FOGDENSITY, WWMath::Float_As_Int(1.0f));
+//	Set_DX8_Render_State(D3DRS_FOGEND, WWMath::Float_At_Int(1.0f));
+//	Set_DX8_Render_State(D3DRS_FOGDENSITY, WWMath::Float_At_Int(1.0f));
 
 	//Set_DX8_Render_State(D3DRS_EDGEANTIALIAS, FALSE);
-	Set_DX8_Render_State(D3DRS_ZBIAS, 0);
+	Set_DX8_Render_State(D3DRS_DEPTHBIAS, 0);
 //	Set_DX8_Render_State(D3DRS_RANGEFOGENABLE, FALSE);
 	Set_DX8_Render_State(D3DRS_STENCILENABLE, FALSE);
 	Set_DX8_Render_State(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
@@ -3589,7 +3648,7 @@ void DX8Wrapper::Apply_Default_State()
 	Set_DX8_Render_State(D3DRS_EMISSIVEMATERIALSOURCE, D3DMCS_MATERIAL);
 	Set_DX8_Render_State(D3DRS_VERTEXBLEND, D3DVBF_DISABLE);*/
 	//Set_DX8_Render_State(D3DRS_CLIPPLANEENABLE, 0);
-	Set_DX8_Render_State(D3DRS_SOFTWAREVERTEXPROCESSING, FALSE);
+	//Set_DX8_Render_State(D3DRS_SOFTWAREVERTEXPROCESSING, FALSE);
 	//Set_DX8_Render_State(D3DRS_POINTSIZE, 0x3f800000);
 	//Set_DX8_Render_State(D3DRS_POINTSIZE_MIN, 0);
 	//Set_DX8_Render_State(D3DRS_POINTSPRITEENABLE, FALSE);
@@ -3667,7 +3726,7 @@ void DX8Wrapper::Apply_Default_State()
 	memset(pconst,0,sizeof(Vector4)*MAX_PIXEL_SHADER_CONSTANTS);
 	Set_Pixel_Shader_Constant(0, pconst, MAX_PIXEL_SHADER_CONSTANTS);
 
-	Set_Vertex_Shader(DX8_FVF_XYZNDUV2);
+	Set_FVF(DX8_FVF_XYZNDUV2);
 	Set_Pixel_Shader(0);
 
 	ShaderClass::Invalidate();
@@ -3679,7 +3738,8 @@ const char* DX8Wrapper::Get_DX8_Render_State_Name(D3DRENDERSTATETYPE state)
 	case D3DRS_ZENABLE                       : return "D3DRS_ZENABLE";
 	case D3DRS_FILLMODE                      : return "D3DRS_FILLMODE";
 	case D3DRS_SHADEMODE                     : return "D3DRS_SHADEMODE";
-	case D3DRS_LINEPATTERN                   : return "D3DRS_LINEPATTERN";
+	// Ronin @build 27/10/2025 DX9: D3DRS_LINEPATTERN removed in DX9 - case commented out
+	// 	case D3DRS_LINEPATTERN                   : return "D3DRS_LINEPATTERN";
 	case D3DRS_ZWRITEENABLE                  : return "D3DRS_ZWRITEENABLE";
 	case D3DRS_ALPHATESTENABLE               : return "D3DRS_ALPHATESTENABLE";
 	case D3DRS_LASTPIXEL                     : return "D3DRS_LASTPIXEL";
@@ -3693,13 +3753,15 @@ const char* DX8Wrapper::Get_DX8_Render_State_Name(D3DRENDERSTATETYPE state)
 	case D3DRS_ALPHABLENDENABLE              : return "D3DRS_ALPHABLENDENABLE";
 	case D3DRS_FOGENABLE                     : return "D3DRS_FOGENABLE";
 	case D3DRS_SPECULARENABLE                : return "D3DRS_SPECULARENABLE";
-	case D3DRS_ZVISIBLE                      : return "D3DRS_ZVISIBLE";
+	// Ronin @build 27/10/2025 DX9: D3DRS_ZVISIBLE removed in DX9 - case commented out
+	// 	case D3DRS_ZVISIBLE                      : return "D3DRS_ZVISIBLE";
 	case D3DRS_FOGCOLOR                      : return "D3DRS_FOGCOLOR";
 	case D3DRS_FOGTABLEMODE                  : return "D3DRS_FOGTABLEMODE";
 	case D3DRS_FOGSTART                      : return "D3DRS_FOGSTART";
 	case D3DRS_FOGEND                        : return "D3DRS_FOGEND";
 	case D3DRS_FOGDENSITY                    : return "D3DRS_FOGDENSITY";
-	case D3DRS_EDGEANTIALIAS                 : return "D3DRS_EDGEANTIALIAS";
+	// Ronin @build 27/10/2025 DX9: D3DRS_EDGEANTIALIAS removed in DX9 - case commented out
+	// 	case D3DRS_EDGEANTIALIAS                 : return "D3DRS_EDGEANTIALIAS";
 	case D3DRS_ZBIAS                         : return "D3DRS_ZBIAS";
 	case D3DRS_RANGEFOGENABLE                : return "D3DRS_RANGEFOGENABLE";
 	case D3DRS_STENCILENABLE                 : return "D3DRS_STENCILENABLE";
@@ -3732,26 +3794,27 @@ const char* DX8Wrapper::Get_DX8_Render_State_Name(D3DRENDERSTATETYPE state)
 	case D3DRS_EMISSIVEMATERIALSOURCE        : return "D3DRS_EMISSIVEMATERIALSOURCE";
 	case D3DRS_VERTEXBLEND                   : return "D3DRS_VERTEXBLEND";
 	case D3DRS_CLIPPLANEENABLE               : return "D3DRS_CLIPPLANEENABLE";
-	case D3DRS_SOFTWAREVERTEXPROCESSING      : return "D3DRS_SOFTWAREVERTEXPROCESSING";
+	// Ronin @build 27/10/2025 DX9: D3DRS_SOFTWAREVERTEXPROCESSING removed in DX9 - case commented out
+	// 	case D3DRS_SOFTWAREVERTEXPROCESSING      : return "D3DRS_SOFTWAREVERTEXPROCESSING";
 	case D3DRS_POINTSIZE                     : return "D3DRS_POINTSIZE";
-	case D3DRS_POINTSIZE_MIN                 : return "D3DRS_POINTSIZE_MIN";
-	case D3DRS_POINTSPRITEENABLE             : return "D3DRS_POINTSPRITEENABLE";
-	case D3DRS_POINTSCALEENABLE              : return "D3DRS_POINTSCALEENABLE";
-	case D3DRS_POINTSCALE_A                  : return "D3DRS_POINTSCALE_A";
-	case D3DRS_POINTSCALE_B                  : return "D3DRS_POINTSCALE_B";
-	case D3DRS_POINTSCALE_C                  : return "D3DRS_POINTSCALE_C";
-	case D3DRS_MULTISAMPLEANTIALIAS          : return "D3DRS_MULTISAMPLEANTIALIAS";
-	case D3DRS_MULTISAMPLEMASK               : return "D3DRS_MULTISAMPLEMASK";
-	case D3DRS_PATCHEDGESTYLE                : return "D3DRS_PATCHEDGESTYLE";
-	case D3DRS_PATCHSEGMENTS                 : return "D3DRS_PATCHSEGMENTS";
-	case D3DRS_DEBUGMONITORTOKEN             : return "D3DRS_DEBUGMONITORTOKEN";
-	case D3DRS_POINTSIZE_MAX                 : return "D3DRS_POINTSIZE_MAX";
-	case D3DRS_INDEXEDVERTEXBLENDENABLE      : return "D3DRS_INDEXEDVERTEXBLENDENABLE";
+	//case D3DRS_POINTSIZE_MIN                 : return "D3DRS_POINTSIZE_MIN";
+	//case D3DRS_POINTSPRITEENABLE             : return "D3DRS_POINTSPRITEENABLE";
+	//case D3DRS_POINTSCALEENABLE              : return "D3DRS_POINTSCALEENABLE";
+	//case D3DRS_POINTSCALE_A                  : return "D3DRS_POINTSCALE_A";
+	//case D3DRS_POINTSCALE_B                  : return "D3DRS_POINTSCALE_B";
+	//case D3DRS_POINTSCALE_C                  : return "D3DRS_POINTSCALE_C";
+	//case D3DRS_MULTISAMPLEANTIALIAS          : return "D3DRS_MULTISAMPLEANTIALIAS";
+	//case D3DRS_MULTISAMPLEMASK               : return "D3DRS_MULTISAMPLEMASK";
+	//case D3DRS_PATCHEDGESTYLE                : return "D3DPATCHEDGE_DISCRETE";
+  //case D3DRS_PATCHSEGMENTS                 : return "D3DRS_PATCHSEGMENTS";
+	//case D3DRS_DEBUGMONITORTOKEN             : return "D3DDMT_ENABLE";
+	//case D3DRS_POINTSIZE_MAX                 : return "D3DRS_POINTSIZE_MAX";
+	//case D3DRS_INDEXEDVERTEXBLENDENABLE      : return "D3DRS_INDEXEDVERTEXBLENDENABLE";
 	case D3DRS_COLORWRITEENABLE              : return "D3DRS_COLORWRITEENABLE";
 	case D3DRS_TWEENFACTOR                   : return "D3DRS_TWEENFACTOR";
-	case D3DRS_BLENDOP                       : return "D3DRS_BLENDOP";
-//	case D3DRS_POSITIONORDER                 : return "D3DRS_POSITIONORDER";
-//	case D3DRS_NORMALORDER                   : return "D3DRS_NORMALORDER";
+	case D3DRS_BLENDOP                       : return "D3DBLENDOP_ADD";
+	//case D3DRS_POSITIONORDER                 : return "D3DRS_POSITIONORDER";
+	//case D3DRS_NORMALORDER                   : return "D3DRS_NORMALORDER";
 	default											  : return "UNKNOWN";
 	}
 }
@@ -3770,19 +3833,29 @@ const char* DX8Wrapper::Get_DX8_Texture_Stage_State_Name(D3DTEXTURESTAGESTATETYP
 	case D3DTSS_BUMPENVMAT10              : return "D3DTSS_BUMPENVMAT10";
 	case D3DTSS_BUMPENVMAT11              : return "D3DTSS_BUMPENVMAT11";
 	case D3DTSS_TEXCOORDINDEX             : return "D3DTSS_TEXCOORDINDEX";
-	case D3DTSS_ADDRESSU                  : return "D3DTSS_ADDRESSU";
-	case D3DTSS_ADDRESSV                  : return "D3DTSS_ADDRESSV";
-	case D3DTSS_BORDERCOLOR               : return "D3DTSS_BORDERCOLOR";
-	case D3DTSS_MAGFILTER                 : return "D3DTSS_MAGFILTER";
-	case D3DTSS_MINFILTER                 : return "D3DTSS_MINFILTER";
-	case D3DTSS_MIPFILTER                 : return "D3DTSS_MIPFILTER";
-	case D3DTSS_MIPMAPLODBIAS             : return "D3DTSS_MIPMAPLODBIAS";
-	case D3DTSS_MAXMIPLEVEL               : return "D3DTSS_MAXMIPLEVEL";
-	case D3DTSS_MAXANISOTROPY             : return "D3DTSS_MAXANISOTROPY";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_ADDRESSU removed in DX9 - case commented out
+	// 	case D3DTSS_ADDRESSU                  : return "D3DTSS_ADDRESSU";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_ADDRESSV removed in DX9 - case commented out
+	// 	case D3DTSS_ADDRESSV                  : return "D3DTSS_ADDRESSV";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_BORDERCOLOR removed in DX9 - case commented out
+	// 	case D3DTSS_BORDERCOLOR               : return "D3DTSS_BORDERCOLOR";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MAGFILTER removed in DX9 - case commented out
+	// 	case D3DTSS_MAGFILTER                 : return "D3DTSS_MAGFILTER";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MINFILTER removed in DX9 - case commented out
+	// 	case D3DTSS_MINFILTER                 : return "D3DTSS_MINFILTER";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MIPFILTER removed in DX9 - case commented out
+	// 	case D3DTSS_MIPFILTER                 : return "D3DTSS_MIPFILTER";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MIPMAPLODBIAS removed in DX9 - case commented out
+	// 	case D3DTSS_MIPMAPLODBIAS             : return "D3DTSS_MIPMAPLODBIAS";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MAXMIPLEVEL removed in DX9 - case commented out
+	// 	case D3DTSS_MAXMIPLEVEL               : return "D3DTSS_MAXMIPLEVEL";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MAXANISOTROPY removed in DX9 - case commented out
+	// 	case D3DTSS_MAXANISOTROPY             : return "D3DTSS_MAXANISOTROPY";
 	case D3DTSS_BUMPENVLSCALE             : return "D3DTSS_BUMPENVLSCALE";
 	case D3DTSS_BUMPENVLOFFSET            : return "D3DTSS_BUMPENVLOFFSET";
 	case D3DTSS_TEXTURETRANSFORMFLAGS     : return "D3DTSS_TEXTURETRANSFORMFLAGS";
-	case D3DTSS_ADDRESSW                  : return "D3DTSS_ADDRESSW";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_ADDRESSW removed in DX9 - case commented out
+	// 	case D3DTSS_ADDRESSW                  : return "D3DTSS_ADDRESSW";
 	case D3DTSS_COLORARG0                 : return "D3DTSS_COLORARG0";
 	case D3DTSS_ALPHAARG0                 : return "D3DTSS_ALPHAARG0";
 	case D3DTSS_RESULTARG                 : return "D3DTSS_RESULTARG";
@@ -4070,8 +4143,8 @@ const char* DX8Wrapper::Get_DX8_Texture_Filter_Name(unsigned value)
 	case D3DTEXF_POINT			: return "D3DTEXF_POINT";
 	case D3DTEXF_LINEAR			: return "D3DTEXF_LINEAR";
 	case D3DTEXF_ANISOTROPIC	: return "D3DTEXF_ANISOTROPIC";
-	case D3DTEXF_FLATCUBIC		: return "D3DTEXF_FLATCUBIC";
-	case D3DTEXF_GAUSSIANCUBIC	: return "D3DTEXF_GAUSSIANCUBIC";
+	//case D3DTEXF_FLATCUBIC		: return "D3DTEXF_FLATCUBIC"; // Removed in DX9
+	//case D3DTEXF_GAUSSIANCUBIC	: return "D3DTEXF_GAUSSIANCUBIC"; // Removed in DX9
 	default					      : return "UNKNOWN";
 	}
 }
@@ -4107,7 +4180,7 @@ const char* DX8Wrapper::Get_DX8_ZBuffer_Type_Name(unsigned value)
 	case D3DZB_FALSE				: return "D3DZB_FALSE";
 	case D3DZB_TRUE				: return "D3DZB_TRUE";
 	case D3DZB_USEW				: return "D3DZB_USEW";
-	default					      : return "UNKNOWN";
+	default						  : return "UNKNOWN";
 	}
 }
 
@@ -4117,7 +4190,7 @@ const char* DX8Wrapper::Get_DX8_Fill_Mode_Name(unsigned value)
 	case D3DFILL_POINT			: return "D3DFILL_POINT";
 	case D3DFILL_WIREFRAME		: return "D3DFILL_WIREFRAME";
 	case D3DFILL_SOLID			: return "D3DFILL_SOLID";
-	default					      : return "UNKNOWN";
+	default						  : return "UNKNOWN";
 	}
 }
 

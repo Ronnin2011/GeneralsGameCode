@@ -47,13 +47,15 @@
  *   SurfaceClass::Is_Monochrome -- Checks if surface is monochrome or not                     *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include <d3d9.h>  // Native DX9
+
 #include "surfaceclass.h"
 #include "formconv.h"
 #include "dx8wrapper.h"
 #include "vector2i.h"
 #include "colorspace.h"
 #include "bound.h"
-#include <d3dx8.h>
+#include <d3dx9.h>  // Native DX9 extensions
 
 void Convert_Pixel(Vector3 &rgb, const SurfaceClass::SurfaceDescription &sd, const unsigned char * pixel)
 {

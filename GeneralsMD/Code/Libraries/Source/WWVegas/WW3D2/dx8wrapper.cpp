@@ -50,6 +50,34 @@
 #define WINVER 0x0500 // Required to access GetMonitorInfo in VC6.
 #endif
 
+// Ronin @debug 25/11/2025: Verbose FVF logging disabled by default (causes FPS < 1)
+// Uncomment to enable detailed FVF/declaration tracking for debugging
+// #define ENABLE_VERBOSE_FVF_LOGGING
+
+// Ronin 19/10/2025 Include DX8->DX9 compatibility layer first
+#include <d3d9.h>  // Native DX9
+#include <d3dx9.h> // D3DX9 helper functions
+#include <stdio.h> // For sprintf in DXGetErrorString9A replacement
+
+//#include <dxerr9.h>  // Ronin @build 19/01/2026 DX9: error string helper
+// Inline replacement for DXGetErrorString9A (from legacy dxerr9.lib)
+const char* DXGetErrorString9A(HRESULT hr)
+{
+	switch (hr) {
+	case D3D_OK: return "D3D_OK";
+	case D3DERR_DEVICELOST: return "D3DERR_DEVICELOST";
+	case D3DERR_INVALIDCALL: return "D3DERR_INVALIDCALL";
+	case D3DERR_NOTAVAILABLE: return "D3DERR_NOTAVAILABLE";
+	case D3DERR_OUTOFVIDEOMEMORY: return "D3DERR_OUTOFVIDEOMEMORY";
+	case E_OUTOFMEMORY: return "E_OUTOFMEMORY";
+	default: {
+		static char buf[32];
+		sprintf(buf, "HRESULT=0x%08X", (unsigned)hr);
+		return buf;
+	}
+	}
+}
+
 #include "dx8wrapper.h"
 #include "dx8webbrowser.h"
 #include "dx8fvf.h"
@@ -75,7 +103,7 @@
 #include "textureloader.h"
 #include "missingtexture.h"
 #include "thread.h"
-#include <d3dx8core.h>
+// Ronin 19/10/2025 Removed direct include of d3dx8core.h - not available with DX9 SDK
 #include "pot.h"
 #include "wwprofile.h"
 #include "ffactory.h"
@@ -96,6 +124,9 @@ bool DX8Wrapper_IsWindowed = true;
 
 // FPU_PRESERVE
 int DX8Wrapper_PreserveFPU = 0;
+
+// Ronin @debug 06/11/2025: Frame counter - must be declared before debug tracking code
+unsigned long DX8Wrapper::FrameCount = 0;
 
 /***********************************************************************************
 **
@@ -176,9 +207,7 @@ DX8Caps*							DX8Wrapper::CurrentCaps = nullptr;
 // Hack test... this disables rendering of batches of too few polygons.
 unsigned							DX8Wrapper::DrawPolygonLowBoundLimit=0;
 
-D3DADAPTER_IDENTIFIER8		DX8Wrapper::CurrentAdapterIdentifier;
-
-unsigned long DX8Wrapper::FrameCount = 0;
+D3DADAPTER_IDENTIFIER9		DX8Wrapper::CurrentAdapterIdentifier;
 
 bool								_DX8SingleThreaded										= false;
 
@@ -194,6 +223,21 @@ static unsigned				last_frame_texture_stage_state_changes				= 0;
 static unsigned				last_frame_number_of_DX8_calls						= 0;
 static unsigned				last_frame_draw_calls									= 0;
 
+// @feature Ronin 09/02/2026 DX9: Lightweight draw-call HUD overlay for performance measurement
+bool DX8Wrapper::DrawCallHUDEnabled = false;
+
+void DX8Wrapper::Toggle_Draw_Call_HUD()
+{
+	DrawCallHUDEnabled = !DrawCallHUDEnabled;
+	WWDEBUG_SAY(("Draw Call HUD: %s", DrawCallHUDEnabled ? "ON" : "OFF"));
+}
+
+// Ronin @bugfix 09/11/2025: Track BeginScene/EndScene pairing to prevent INVALIDCALL errors
+static bool s_inScene = false;
+
+// Ronin @feature 27/11/2025: Vertex declaration cache instance
+VertexDeclCache* DX8Wrapper::DeclCache = nullptr;
+
 static D3DDISPLAYMODE DesktopMode;
 
 static D3DPRESENT_PARAMETERS								_PresentParameters;
@@ -202,7 +246,7 @@ static DynamicVectorClass<StringClass>					_RenderDeviceShortNameTable;
 static DynamicVectorClass<RenderDeviceDescClass>	_RenderDeviceDescriptionTable;
 
 
-typedef IDirect3D8* (WINAPI *Direct3DCreate8Type) (UINT SDKVersion);
+typedef IDirect3D9* (WINAPI *Direct3DCreate8Type) (UINT SDKVersion);
 Direct3DCreate8Type	Direct3DCreate8Ptr = nullptr;
 HINSTANCE D3D8Lib = nullptr;
 
@@ -210,23 +254,328 @@ DX8_CleanupHook	 *DX8Wrapper::m_pCleanupHook=nullptr;
 #ifdef EXTENDED_STATS
 DX8_Stats	 DX8Wrapper::stats;
 #endif
+
+#ifdef _DEBUG
+static bool Is_Engine_Owned_Decl(IDirect3DVertexDeclaration9* decl)
+{
+	if (!decl) return false;
+
+	// Check VertexDeclCache allocations (if created)
+	// Note: DeclCache is a DX8Wrapper static pointer.
+	if (DX8Wrapper::DeclCache) {
+		// Today, DeclCache only recognizes a small set of FVFs, but that’s fine.
+		// If a decl pointer matches any cached entry, treat it as "ours".
+		const UINT knownFvfs[] = {
+			(D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1), // Water tracks (per VertexDeclCache::IsKnownFvf)
+		};
+
+		for (UINT fvf : knownFvfs) {
+			const DeclEntry* e = DX8Wrapper::DeclCache->GetOrCreateDecl(fvf);
+			if (e && e->decl == decl) {
+				return true;
+			}
+		}
+	}
+
+	// Add other “singletons” we create elsewhere here if needed (optional).
+	return false;
+}
+#endif
+
+
+
+// Ronin @bugfix 19/11/2025: Convert FVF code to D3D9 Vertex Declaration
+static D3DVERTEXELEMENT9* FVFToDeclaration(DWORD fvf)
+{
+	// Maximum 16 elements + D3DDECL_END()
+	static D3DVERTEXELEMENT9 decl[17];
+	int elementIndex = 0;
+	WORD offset = 0;
+
+	// Position (always present if FVF != 0)
+	if (fvf & D3DFVF_XYZ) {
+		decl[elementIndex++] = { 0, offset, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0 };
+		offset += 12; // 3 floats
+	}
+	else if (fvf & D3DFVF_XYZRHW) {
+		decl[elementIndex++] = { 0, offset, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITIONT, 0 };
+		offset += 16; // 4 floats
+	}
+
+	// Normal
+	if (fvf & D3DFVF_NORMAL) {
+		decl[elementIndex++] = { 0, offset, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL, 0 };
+		offset += 12;
+	}
+
+	// Diffuse color
+	if (fvf & D3DFVF_DIFFUSE) {
+		decl[elementIndex++] = { 0, offset, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0 };
+		offset += 4;
+	}
+
+	// Specular color
+	if (fvf & D3DFVF_SPECULAR) {
+		decl[elementIndex++] = { 0, offset, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 1 };
+		offset += 4;
+	}
+
+	// Texture coordinates
+	int texCount = (fvf & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+	for (int i = 0; i < texCount; i++) {
+		decl[elementIndex++] = { 0, offset, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, (BYTE)i };
+		offset += 8; // 2 floats per UV set
+	}
+
+	// End marker
+	decl[elementIndex] = D3DDECL_END();
+
+	return decl;
+}
+
+
+#ifdef WWDEBUG
+// @bugfix Ronin 23/01/2026 DX9: Debug draw context pointer must be stable (avoid dangling pointers).
+static thread_local char g_debugDrawContextBuf[256] = {};
+static thread_local const char* g_debugDrawContext = nullptr;
+
+void DX8Wrapper::Set_Debug_Draw_Context(const char* label)
+{
+	if (!label) {
+		g_debugDrawContextBuf[0] = '\0';
+		g_debugDrawContext = nullptr;
+		return;
+	}
+
+	strncpy_s(g_debugDrawContextBuf, sizeof(g_debugDrawContextBuf), label, _TRUNCATE);
+	g_debugDrawContext = g_debugDrawContextBuf;
+}
+
+void DX8Wrapper::Clear_Debug_Draw_Context()
+{
+	g_debugDrawContextBuf[0] = '\0';
+	g_debugDrawContext = nullptr;
+}
+
+const char* DX8Wrapper::Get_Debug_Draw_Context()
+{
+	return g_debugDrawContext;
+}
+#endif
+
+#ifdef WWDEBUG
+struct PipelineStateHistory {
+	DWORD lastFVF = 0;
+	IDirect3DVertexDeclaration9* lastDecl = nullptr;
+	const char* lastSetFVFCaller = nullptr;
+	const char* lastSetDeclCaller = nullptr;
+	bool loggedConflictOnce = false;
+};
+static PipelineStateHistory g_stateHistory;
+#endif
+
+#ifdef _DEBUG
+// @bugfix Ronin 21/01/2026 DX9: Ensure the device IB matches wrapper's expected IB immediately before DIP.
+// @refactor Ronin 08/02/2026 DX9: Stripped verbose logging; fail-only diagnostics remain.
+static void Ensure_Device_IB_Matches_Wrapper_Expected(const char* where)
+{
+	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+	if (!dev) return;
+
+	RenderStateStruct rs;
+	DX8Wrapper::Get_Render_State(rs);
+
+	// ===========
+	//  Ensure IB
+	// ===========
+	IDirect3DIndexBuffer9* expectedIB = nullptr;
+	if (rs.index_buffer &&
+		(rs.index_buffer_type == BUFFER_TYPE_DX8 || rs.index_buffer_type == BUFFER_TYPE_DYNAMIC_DX8)) {
+		auto* dx8ib = static_cast<DX8IndexBufferClass*>(const_cast<IndexBufferClass*>(rs.index_buffer));
+		expectedIB = static_cast<IDirect3DIndexBuffer9*>(dx8ib->Get_DX8_Index_Buffer());
+	}
+
+	IDirect3DIndexBuffer9* boundIB = nullptr;
+	dev->GetIndices(&boundIB);
+
+	if (boundIB != expectedIB) {
+		dev->SetIndices(expectedIB);
+		number_of_DX8_calls++;
+
+		WWDEBUG_SAY((
+			"IA ENSURE(IB) [Frame %lu] where=%s expected=%p bound=%p type=%u",
+			DX8Wrapper::FrameCount,
+			where ? where : "?",
+			expectedIB,
+			boundIB,
+			(unsigned)rs.index_buffer_type));
+	}
+
+	if (boundIB) boundIB->Release();
+
+	// ==============
+	// Ensure Stream0
+	// ==============
+	IDirect3DVertexBuffer9* expectedVB0 = nullptr;
+	UINT expectedOffset0 = 0;
+	UINT expectedStride0 = 0;
+	bool expectVBPointerMatch = true;
+
+	if (rs.vertex_buffers[0] && rs.vertex_buffer_types[0] == BUFFER_TYPE_DX8) {
+		auto* vb0 = static_cast<DX8VertexBufferClass*>(rs.vertex_buffers[0]);
+		expectedVB0 = vb0->Get_DX8_Vertex_Buffer();
+		expectedStride0 = (UINT)vb0->FVF_Info().Get_FVF_Size();
+		expectedOffset0 = 0;
+	}
+	else if (rs.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_DX8) {
+		if (rs.vba_fvf != 0) {
+			FVFInfoClass fi(rs.vba_fvf);
+			expectedStride0 = (UINT)fi.Get_FVF_Size();
+			expectVBPointerMatch = false;
+		}
+	}
+
+	IDirect3DVertexBuffer9* boundVB0 = nullptr;
+	UINT boundOff0 = 0, boundStride0 = 0;
+	dev->GetStreamSource(0, &boundVB0, &boundOff0, &boundStride0);
+
+	if (expectedStride0 != 0) {
+		const bool strideMismatch = (boundStride0 != expectedStride0);
+		const bool vbMismatch = expectVBPointerMatch && (boundVB0 != expectedVB0);
+
+		if (strideMismatch || vbMismatch) {
+			IDirect3DVertexBuffer9* vbToSet = expectVBPointerMatch ? expectedVB0 : boundVB0;
+			DX8Wrapper::Force_Stream0(vbToSet, expectedOffset0, expectedStride0);
+
+			WWDEBUG_SAY((
+				"IA ENSURE(VB0) [Frame %lu] where=%s expStr=%u boundStr=%u",
+				DX8Wrapper::FrameCount,
+				where ? where : "?",
+				(unsigned)expectedStride0,
+				(unsigned)boundStride0));
+		}
+	}
+
+	if (boundVB0) boundVB0->Release();
+
+	// ==============
+	// Ensure Texture0 for SKIN context
+	// ==============
+	const char* ctx = DX8Wrapper::Get_Debug_Draw_Context();
+	const bool isSkinCtx = (ctx != nullptr) && (strstr(ctx, "SKIN ") == ctx);
+
+	if (isSkinCtx) {
+		IDirect3DBaseTexture9* devT0 = nullptr;
+		dev->GetTexture(0, &devT0);
+
+		TextureBaseClass* expectedObj = const_cast<TextureBaseClass*>(rs.Textures[0]);
+		IDirect3DBaseTexture9* expectedT0 = expectedObj ? expectedObj->Peek_D3D_Base_Texture() : nullptr;
+
+		if (devT0 != expectedT0) {
+			if (expectedObj) {
+				expectedObj->Apply(0);
+			}
+			else {
+				TextureBaseClass::Apply_Null(0);
+			}
+		}
+
+		if (devT0) devT0->Release();
+	}
+}
+#endif // _DEBUG
+
+#ifdef _DEBUG
+
+#include <windows.h>
+#include <dbghelp.h>
+#pragma comment(lib, "Dbghelp.lib")
+
+namespace DX8WrapperLayoutBinding
+{
+	bool g_layoutBindingAllowed = false;
+
+	void Report_LayoutBindingViolation(const char* api, const char* callsite)
+	{
+		WWDEBUG_SAY(("IA LAYOUT BIND VIOLATION: API=%s callsite=%s",
+			api ? api : "(null)",
+			callsite ? callsite : "(null)"));
+	}
+}
+
+#endif
+
+
+
+#ifdef _DEBUG
+// @debug Ronin 23/01/2026 DX9: Detect "decl bound while wrapper expects FVF mode" (mode mismatch).
+// @refactor Ronin 08/02/2026 DX9: Stripped verbose logging; edge-trigger fail-only.
+static void Track_Decl_Bound_While_Wrapper_Expects_FVF(const char* where)
+{
+	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+	if (!dev) return;
+
+	// Once-per-frame to avoid spam
+	static unsigned long s_lastFrameChecked = 0;
+	if (DX8Wrapper::FrameCount == s_lastFrameChecked) return;
+	s_lastFrameChecked = DX8Wrapper::FrameCount;
+
+	RenderStateStruct rs;
+	DX8Wrapper::Get_Render_State(rs);
+
+	const bool wrapperThinksDecl = (rs.currentDecl != nullptr) || (rs.expectedDecl != nullptr);
+	const DWORD wrapperFVF = (rs.currentFVF != 0) ? rs.currentFVF : rs.expectedFVF;
+	const bool wrapperExpectsFVF = (!wrapperThinksDecl && wrapperFVF != 0);
+
+	IDirect3DVertexDeclaration9* devDecl = nullptr;
+	dev->GetVertexDeclaration(&devDecl);
+
+	const bool bad = wrapperExpectsFVF && (devDecl != nullptr);
+
+	static bool s_wasBad = false;
+	if (bad && !s_wasBad) {
+		WWDEBUG_SAY(("IA MODE MISMATCH [Frame %lu] where=%s wrapperFVF=0x%08X devDecl=%p",
+			DX8Wrapper::FrameCount,
+			where ? where : "?",
+			(unsigned)wrapperFVF,
+			devDecl));
+	}
+	s_wasBad = bad;
+
+	if (devDecl) devDecl->Release();
+}
+#endif // _DEBUG
+
+
+
 /***********************************************************************************
 **
 ** DX8Wrapper Implementation
 **
 ***********************************************************************************/
 
+
+
+// Ronin @bugfix 09/01/2026 DX9: Force stream0 binding with explicit stride (keeps wrapper tracking coherent)
+void DX8Wrapper::Force_Stream0(IDirect3DVertexBuffer9* vb, UINT offset, UINT stride)
+{
+	IDirect3DDevice9* dev = _Get_D3D_Device8();
+	if (!dev) return;
+
+	dev->SetStreamSource(0, vb, offset, stride);
+	number_of_DX8_calls++;
+
+	// Keep wrapper bookkeeping consistent (stream0 only).
+	// NOTE: render_state.vertex_buffers[] tracks engine buffers, not raw D3D vbs,
+	// so do not touch it here. This function exists specifically to avoid stale stride.
+}
+
 void Log_DX8_ErrorCode(unsigned res)
 {
-	char tmp[256]="";
-
-	HRESULT new_res=D3DXGetErrorStringA(
-		res,
-		tmp,
-		sizeof(tmp));
-
-	if (new_res==D3D_OK) {
-		WWDEBUG_SAY((tmp));
+	// Ronin @build 24/10/2025 DX9: D3DXGetErrorStringA removed, use DXGetErrorString9A
+	const char* errorString = DXGetErrorString9A(res);
+	if (errorString) {
+		WWDEBUG_SAY((errorString));
 	}
 
 	WWASSERT(0);
@@ -234,15 +583,10 @@ void Log_DX8_ErrorCode(unsigned res)
 
 void Non_Fatal_Log_DX8_ErrorCode(unsigned res,const char * file,int line)
 {
-	char tmp[256]="";
-
-	HRESULT new_res=D3DXGetErrorStringA(
-		res,
-		tmp,
-		sizeof(tmp));
-
-	if (new_res==D3D_OK) {
-		WWDEBUG_SAY(("DX8 Error: %s, File: %s, Line: %d",tmp,file,line));
+	// Ronin @build 24/10/2025 DX9: D3DXGetErrorStringA removed, use DXGetErrorString9A
+	const char* errorString = DXGetErrorString9A(res);
+	if (errorString) {
+		WWDEBUG_SAY(("DX8 Error: %s, File: %s, Line: %d", errorString, file, line));
 	}
 }
 
@@ -279,7 +623,11 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 	memset(TextureStageStates,0,sizeof(unsigned)*32*MAX_TEXTURE_STAGES);
 	memset(Vertex_Shader_Constants,0,sizeof(Vector4)*MAX_VERTEX_SHADER_CONSTANTS);
 	memset(Pixel_Shader_Constants,0,sizeof(Vector4)*MAX_PIXEL_SHADER_CONSTANTS);
-	memset(&render_state,0,sizeof(RenderStateStruct));
+
+	// @bugfix Ronin 15/01/2026 DX9: Do not memset RenderStateStruct (non-POD; has ctor/dtor and ref-counted members)
+	// memset(&render_state,0,sizeof(RenderStateStruct));
+	render_state = RenderStateStruct();
+
 	memset(Shadow_Map,0,sizeof(ZTextureClass*)*MAX_SHADOW_MAPS);
 
 	/*
@@ -319,11 +667,11 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 	Invalidate_Cached_Render_States();
 
 	if (!lite) {
-		D3D8Lib = LoadLibrary("D3D8.DLL");
+		D3D8Lib = LoadLibrary("D3D9.DLL");
 
 		if (D3D8Lib == nullptr) return false;	// Return false at this point if init failed
 
-		Direct3DCreate8Ptr = (Direct3DCreate8Type) GetProcAddress(D3D8Lib, "Direct3DCreate8");
+		Direct3DCreate8Ptr = (Direct3DCreate8Type) GetProcAddress(D3D8Lib, "Direct3DCreate9");
 		if (Direct3DCreate8Ptr == nullptr) return false;
 
 		/*
@@ -338,6 +686,8 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 			D3DInterface = Direct3DCreate8Ptr(D3D_SDK_VERSION);		// TODO: handle failure cases...
 		}
 		if (D3DInterface == nullptr) {
+			WWDEBUG_SAY(("ERROR: Direct3DCreate9 returned NULL! D3D_SDK_VERSION=%d", D3D_SDK_VERSION));
+			WWDEBUG_SAY(("Check: 1) Is DirectX 9 runtime installed? 2) Graphics driver issue?"));
 			return(false);
 		}
 		IsInitted = true;
@@ -419,29 +769,226 @@ void DX8Wrapper::Do_Onetime_Device_Dependent_Inits(void)
 	TextureLoader::Init();
 
 	Set_Default_Global_Render_States();
+
+	Init_Decl_Cache(D3DDevice);
+}
+
+// Ronin @feature 27/11/2025: Initialize vertex declaration cache
+void DX8Wrapper::Init_Decl_Cache(IDirect3DDevice9* device)
+{
+	if (!device) {
+		WWDEBUG_SAY(("Init_Decl_Cache: NULL device!"));
+		return;
+	}
+
+	if (DeclCache) {
+		WWDEBUG_SAY(("DeclCache already initialized!"));
+		return;
+	}
+
+	DeclCache = new VertexDeclCache(device);
+	WWDEBUG_SAY(("Vertex declaration cache initialized"));
 }
 
 inline DWORD F2DW(float f) { return *((unsigned*)&f); }
 void DX8Wrapper::Set_Default_Global_Render_States(void)
 {
 	DX8_THREAD_ASSERT();
-	const D3DCAPS8 &caps = Get_Current_Caps()->Get_DX8_Caps();
+	const D3DCAPS9& caps = Get_Current_Caps()->Get_DX8_Caps();
 
-	Set_DX8_Render_State(D3DRS_RANGEFOGENABLE, (caps.RasterCaps & D3DPRASTERCAPS_FOGRANGE) ? TRUE : FALSE);
+	// ========== DEPTH/STENCIL STATES ==========
+	Set_DX8_Render_State(D3DRS_ZENABLE, TRUE);
+	Set_DX8_Render_State(D3DRS_ZWRITEENABLE, TRUE);
+	Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+
+	Set_DX8_Render_State(D3DRS_DEPTHBIAS, 0);
+	Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, 0);
+
+	// ========== ALPHA BLENDING STATES ==========
+	Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, FALSE);
+	Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_ONE);
+	Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_ZERO);
+	Set_DX8_Render_State(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+
+	Set_DX8_Render_State(D3DRS_ALPHATESTENABLE, FALSE);
+	Set_DX8_Render_State(D3DRS_ALPHAREF, 0);
+	Set_DX8_Render_State(D3DRS_ALPHAFUNC, D3DCMP_LESSEQUAL);
+
+	// ========== CULLING/SHADING ==========
+	Set_DX8_Render_State(D3DRS_CULLMODE, D3DCULL_CW);
+	Set_DX8_Render_State(D3DRS_SHADEMODE, D3DSHADE_GOURAUD);
+	Set_DX8_Render_State(D3DRS_DITHERENABLE, FALSE);
+
+	// ========== LIGHTING ==========
+	Set_DX8_Render_State(D3DRS_LIGHTING, FALSE);
+	Set_DX8_Render_State(D3DRS_COLORVERTEX, TRUE);
+	Set_DX8_Render_State(D3DRS_SPECULARENABLE, FALSE);
+	Set_DX8_Render_State(D3DRS_SPECULARMATERIALSOURCE, D3DMCS_MATERIAL);
+
+	// ========== FOG ==========
+	Set_DX8_Render_State(D3DRS_FOGENABLE, FALSE);
+	Set_DX8_Render_State(D3DRS_RANGEFOGENABLE,
+		(caps.RasterCaps & D3DPRASTERCAPS_FOGRANGE) ? TRUE : FALSE);
 	Set_DX8_Render_State(D3DRS_FOGTABLEMODE, D3DFOG_NONE);
 	Set_DX8_Render_State(D3DRS_FOGVERTEXMODE, D3DFOG_LINEAR);
-	Set_DX8_Render_State(D3DRS_SPECULARMATERIALSOURCE, D3DMCS_MATERIAL);
-	Set_DX8_Render_State(D3DRS_COLORVERTEX, TRUE);
-	Set_DX8_Render_State(D3DRS_ZBIAS,0);
-	Set_DX8_Texture_Stage_State(1, D3DTSS_BUMPENVLSCALE, F2DW(1.0f));
-	Set_DX8_Texture_Stage_State(1, D3DTSS_BUMPENVLOFFSET, F2DW(0.0f));
-	Set_DX8_Texture_Stage_State(0, D3DTSS_BUMPENVMAT00,F2DW(1.0f));
-	Set_DX8_Texture_Stage_State(0, D3DTSS_BUMPENVMAT01,F2DW(0.0f));
-	Set_DX8_Texture_Stage_State(0, D3DTSS_BUMPENVMAT10,F2DW(0.0f));
-	Set_DX8_Texture_Stage_State(0, D3DTSS_BUMPENVMAT11,F2DW(1.0f));
+
+	// ========== STENCIL ==========
+	Set_DX8_Render_State(D3DRS_STENCILENABLE, FALSE);
+	Set_DX8_Render_State(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
+	Set_DX8_Render_State(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
+	Set_DX8_Render_State(D3DRS_STENCILPASS, D3DSTENCILOP_KEEP);
+	Set_DX8_Render_State(D3DRS_STENCILFUNC, D3DCMP_ALWAYS);
+	Set_DX8_Render_State(D3DRS_STENCILREF, 0);
+	Set_DX8_Render_State(D3DRS_STENCILMASK, 0xffffffff);
+	Set_DX8_Render_State(D3DRS_STENCILWRITEMASK, 0xffffffff);
+
+	// ========== MISC STATES ==========
+	Set_DX8_Render_State(D3DRS_TEXTUREFACTOR, 0);
+	Set_DX8_Render_State(D3DRS_CLIPPING, TRUE);
+	Set_DX8_Render_State(D3DRS_COLORWRITEENABLE, 0x0000000f);
+
+	// ========== BUMP MAPPING (Only needed if bump mapping is used) ==========
+		 // Ronin @refactor 13/11/2025: Moved to shader-specific setup, not global defaults
+
+	//Set_DX8_Texture_Stage_State(1, D3DTSS_BUMPENVLSCALE, F2DW(1.0f));
+	//Set_DX8_Texture_Stage_State(1, D3DTSS_BUMPENVLOFFSET, F2DW(0.0f));
+	//Set_DX8_Texture_Stage_State(0, D3DTSS_BUMPENVMAT00, F2DW(1.0f));
+	//Set_DX8_Texture_Stage_State(0, D3DTSS_BUMPENVMAT01, F2DW(0.0f));
+	//Set_DX8_Texture_Stage_State(0, D3DTSS_BUMPENVMAT10, F2DW(0.0f));
+  //Set_DX8_Texture_Stage_State(0, D3DTSS_BUMPENVMAT11, F2DW(1.0f));
+
+	// ========== CRITICAL: PIXEL SHADER CLEANUP ==========
+	// Ronin @bugfix 07/11/2025: DX9 requires explicit pixel shader NULL
+	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
+	if (pDev) {
+		pDev->SetPixelShader(NULL);
+		pDev->SetVertexShader(NULL);       // Clear vertex shader
+		//pDev->SetVertexDeclaration(NULL);  // Clear vertex declaration
+		number_of_DX8_calls += 2;          // ← CHANGE FROM ++ to += 2
+	}
+
+	// ========== CRITICAL: FIXED-FUNCTION TEXTURE STAGE SETUP ==========
+	// Ronin @bugfix 07/11/2025: DX9 needs explicit fixed-function config
+	int maxStages = CurrentCaps->Get_Max_Textures_Per_Pass();
+
+	// Stage 0: Standard modulate with vertex color
+	Set_DX8_Texture_Stage_State(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+
+	Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+
+	Set_DX8_Texture_Stage_State(0, D3DTSS_TEXCOORDINDEX, 0);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+
+	// Stages 1+: Disable
+	for (int i = 1; i < maxStages; i++) {
+		Set_DX8_Texture_Stage_State(i, D3DTSS_COLOROP, D3DTOP_DISABLE);
+		Set_DX8_Texture_Stage_State(i, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+		Set_DX8_Texture_Stage_State(i, D3DTSS_TEXCOORDINDEX, i);
+		Set_DX8_Texture_Stage_State(i, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+	}
+
+	// ========== CRITICAL: SAMPLER STATE DEFAULTS ==========
+	// Ronin @bugfix 07/11/2025: DX9 sampler states need explicit setup
+	for (int i = 0; i < maxStages; i++) {
+		Set_DX8_Sampler_State(i, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+		Set_DX8_Sampler_State(i, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+		Set_DX8_Sampler_State(i, D3DSAMP_BORDERCOLOR, 0);
+
+		Set_DX8_Sampler_State(i, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		Set_DX8_Sampler_State(i, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		Set_DX8_Sampler_State(i, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+		Set_DX8_Sampler_State(i, D3DSAMP_MAXANISOTROPY, 1);
+	}
+
+#ifdef _DEBUG
+	//WWDEBUG_SAY(("Render state reset complete (PS=NULL, Stages configured, Samplers set)"));
+#endif
 
 //	Set_DX8_Render_State(D3DRS_CULLMODE, D3DCULL_CW);
 	// Set dither mode here?
+}
+
+//**********************************************************************************************
+//! Resets render states between rendering passes to prevent state leakage
+// Ronin @build 07/11/2025: DX9 requires explicit state reset between passes
+void DX8Wrapper::Reset_Pass_Render_States()
+{
+	DX8_THREAD_ASSERT();
+
+	// ========== ALPHA BLENDING ==========
+	Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, FALSE);
+	Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_ONE);
+	Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_ZERO);
+
+	// ========== ALPHA TESTING ==========
+	Set_DX8_Render_State(D3DRS_ALPHATESTENABLE, FALSE);
+	Set_DX8_Render_State(D3DRS_ALPHAREF, 0);
+	Set_DX8_Render_State(D3DRS_ALPHAFUNC, D3DCMP_GREATER);
+
+	// Ronin @bugfix 17/01/2026: Keep pass reset consistent with global defaults (avoids subtle foliage/alpha-test diffs)
+	Set_DX8_Render_State(D3DRS_ALPHAFUNC, D3DCMP_LESSEQUAL);
+
+	// ========== DEPTH/STENCIL ==========
+	Set_DX8_Render_State(D3DRS_ZENABLE, TRUE);
+	Set_DX8_Render_State(D3DRS_ZWRITEENABLE, TRUE);
+	Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+
+	Set_DX8_Render_State(D3DRS_DEPTHBIAS, 0);
+	Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, 0);
+
+	Set_DX8_Render_State(D3DRS_STENCILENABLE, FALSE);
+	Set_DX8_Render_State(D3DRS_STENCILFUNC, D3DCMP_ALWAYS);
+
+	// ========== CULLING ==========
+	Set_DX8_Render_State(D3DRS_CULLMODE, D3DCULL_CW);
+
+	// ========== PIXEL SHADER CLEANUP ==========
+	// Ronin @bugfix 07/11/2025: DX9 requires explicit NULL
+	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
+	if (pDev) {
+		pDev->SetPixelShader(NULL);
+		number_of_DX8_calls++;
+	}
+
+	// ========== TEXTURE STAGE RESET ==========
+		// Ronin @bugfix 16/12/2025: Clear all texture stages between passes
+	int maxStages = CurrentCaps->Get_Max_Textures_Per_Pass();
+	for (int i = 0; i < maxStages; i++) {
+		Set_DX8_Texture(i, NULL);
+	}
+
+	// Stage 0: Standard modulate
+	Set_DX8_Texture_Stage_State(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+
+	// Ronin @bugfix 13/11/2025: Reset texture coordinate selection
+	Set_DX8_Texture_Stage_State(0, D3DTSS_TEXCOORDINDEX, 0);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+
+	// Stages 1+: Disable
+	for (int i = 1; i < maxStages; i++) {
+		Set_DX8_Texture_Stage_State(i, D3DTSS_COLOROP, D3DTOP_DISABLE);
+		Set_DX8_Texture_Stage_State(i, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+	}
+
+	// ========== SAMPLER STATE RESET ==========
+	// Ronin @bugfix 07/11/2025: DX9 sampler states must be reset
+	for (int i = 0; i < maxStages; i++) {
+		Set_DX8_Sampler_State(i, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+		Set_DX8_Sampler_State(i, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+	}
+
+#ifdef _DEBUG
+	//WWDEBUG_SAY(("Pass render state reset complete"));
+#endif
 }
 
 //MW: I added this for 'Generals'.
@@ -449,7 +996,7 @@ bool DX8Wrapper::Validate_Device(void)
 {	DWORD numPasses=0;
 	HRESULT hRes;
 
-	hRes=_Get_D3D_Device8()->ValidateDevice(&numPasses);
+	hRes= DX8Wrapper::_Get_D3D_Device8()->ValidateDevice(&numPasses);
 
 	return (hRes == D3D_OK);
 }
@@ -470,12 +1017,26 @@ void DX8Wrapper::Invalidate_Cached_Render_States(void)
 		}
 		//Need to explicitly set texture to null, otherwise app will not be able to
 		//set it to null because of redundant state checker. MW
-		if (_Get_D3D_Device8())
-			_Get_D3D_Device8()->SetTexture(a,nullptr);
+		if (DX8Wrapper::_Get_D3D_Device8())
+			DX8Wrapper::_Get_D3D_Device8()->SetTexture(a,nullptr);
 		if (Textures[a] != nullptr) {
 			Textures[a]->Release();
 		}
 		Textures[a]=nullptr;
+	}
+
+	// Ronin @bugfix 06/11/2025: DX9 requires explicit pixel shader cleanup during state invalidation
+	IDirect3DDevice9* pDev = _Get_D3D_Device8();
+	if (pDev) {
+		pDev->SetPixelShader(NULL);
+		pDev->SetVertexShader(NULL);
+		number_of_DX8_calls += 2;
+
+		// Update wrapper tracking to match device state
+		render_state.currentVS = nullptr;
+		render_state.currentPS = nullptr;
+
+		//DX8Wrapper::Set_World_Identity();
 	}
 
 	ShaderClass::Invalidate();
@@ -520,12 +1081,21 @@ void DX8Wrapper::Do_Onetime_Device_Dependent_Shutdowns(void)
 
 }
 
+// Ronin @feature 27/11/2025: Cleanup vertex declaration cache
+void DX8Wrapper::Shutdown_Decl_Cache()
+{
+	if (DeclCache) {
+		delete DeclCache;
+		DeclCache = nullptr;
+		WWDEBUG_SAY(("Vertex declaration cache destroyed"));
+	}
+}
 
 bool DX8Wrapper::Create_Device(void)
 {
 	WWASSERT(D3DDevice==nullptr);	// for now, once you've created a device, you're stuck with it!
 
-	D3DCAPS8 caps;
+	D3DCAPS9 caps;
 	if
 	(
 		FAILED
@@ -542,7 +1112,7 @@ bool DX8Wrapper::Create_Device(void)
 		return false;
 	}
 
-	::ZeroMemory(&CurrentAdapterIdentifier, sizeof(D3DADAPTER_IDENTIFIER8));
+	::ZeroMemory(&CurrentAdapterIdentifier, sizeof(D3DADAPTER_IDENTIFIER9));
 
 	if
 	(
@@ -551,7 +1121,7 @@ bool DX8Wrapper::Create_Device(void)
 			D3DInterface->GetAdapterIdentifier
 			(
 				CurRenderDevice,
-				D3DENUM_NO_WHQL_LEVEL,
+				0,  // Ronin @build 27/10/2025 DX9: D3DENUM_NO_WHQL_LEVEL removed - use 0 instead 
 				&CurrentAdapterIdentifier
 			)
 			)
@@ -562,8 +1132,23 @@ bool DX8Wrapper::Create_Device(void)
 
 #ifndef _XBOX
 
-	Vertex_Processing_Behavior=(caps.DevCaps&D3DDEVCAPS_HWTRANSFORMANDLIGHT) ?
+// Ronin @bugfix 09/11/2025: DX9 should prefer hardware vertex processing for performance
+// Use MIXED for compatibility, or HARDWARE for max performance
+
+// Ronin @bugfix 19/12/2025: Use MIXED vertex processing for compatibility
+// Pure device mode could break GetRenderState() queries needed for debugging
+// and may cause state corruption issues during intro cinematics
+// Ronin @bugfix 16/02/2026: **Needs urgent revisit**
+	Vertex_Processing_Behavior = (caps.DevCaps & D3DDEVCAPS_HWTRANSFORMANDLIGHT) ?
 		D3DCREATE_MIXED_VERTEXPROCESSING : D3DCREATE_SOFTWARE_VERTEXPROCESSING;
+
+	// NOTE: D3DCREATE_PUREDEVICE disabled - causes GetRenderState() to return garbage
+	// and prevents proper state debugging. Re-enable only for final Release builds.
+	// if (caps.DevCaps & D3DDEVCAPS_PUREDEVICE) {
+	//     Vertex_Processing_Behavior |= D3DCREATE_PUREDEVICE;
+	//     WWDEBUG_SAY(("Using D3DCREATE_PUREDEVICE for maximum performance"));
+	// }
+
 
 	// enable this when all 'get' dx calls are removed KJM
 	/*if (caps.DevCaps&D3DDEVCAPS_PUREDEVICE)
@@ -708,8 +1293,8 @@ void DX8Wrapper::Release_Device(void)
 			DX8CALL(SetTexture(a,nullptr));
 		}
 
-		DX8CALL(SetStreamSource(0, nullptr, 0));	//release reference count on last rendered vertex buffer
-		DX8CALL(SetIndices(nullptr,0));	//release reference count on last rendered index buffer
+		DX8CALL(SetStreamSource(0, nullptr, 0, 0));	//release reference count on last rendered vertex buffer
+		DX8CALL(SetIndices(nullptr));	//release reference count on last rendered index buffer
 
 
 		/*
@@ -722,6 +1307,8 @@ void DX8Wrapper::Release_Device(void)
 		}
 		if (render_state.index_buffer) render_state.index_buffer->Release_Engine_Ref();
 		REF_PTR_RELEASE(render_state.index_buffer);
+
+		Shutdown_Decl_Cache();
 
 		/*
 		** Shutdown all subsystems
@@ -744,9 +1331,10 @@ void DX8Wrapper::Enumerate_Devices()
 	int adapter_count = D3DInterface->GetAdapterCount();
 	for (int adapter_index=0; adapter_index<adapter_count; adapter_index++) {
 
-		D3DADAPTER_IDENTIFIER8 id;
-		::ZeroMemory(&id, sizeof(D3DADAPTER_IDENTIFIER8));
-		HRESULT res = D3DInterface->GetAdapterIdentifier(adapter_index,D3DENUM_NO_WHQL_LEVEL,&id);
+		D3DADAPTER_IDENTIFIER9 id;
+		::ZeroMemory(&id, sizeof(D3DADAPTER_IDENTIFIER9));
+		// Ronin @build 27/10/2025 DX9: D3DENUM_NO_WHQL_LEVEL removed - use 0 instead
+		HRESULT res = D3DInterface->GetAdapterIdentifier(adapter_index, 0, &id);
 
 		if (res == D3D_OK) {
 
@@ -768,24 +1356,38 @@ void DX8Wrapper::Enumerate_Devices()
 			desc.set_driver_version(buf);
 
 			D3DInterface->GetDeviceCaps(adapter_index,WW3D_DEVTYPE,&desc.Caps);
-			D3DInterface->GetAdapterIdentifier(adapter_index,D3DENUM_NO_WHQL_LEVEL,&desc.AdapterIdentifier);
-
+           		// Ronin @build 28/10/2025 DX9: D3DENUM_NO_WHQL_LEVEL removed - use 0 instead
+			D3DInterface->GetAdapterIdentifier(adapter_index, 0, &desc.AdapterIdentifier);
 			DX8Caps dx8caps(D3DInterface,desc.Caps,WW3D_FORMAT_UNKNOWN,desc.AdapterIdentifier);
 
 			/*
 			** Enumerate the resolutions
 			*/
 			desc.reset_resolution_list();
-			int mode_count = D3DInterface->GetAdapterModeCount(adapter_index);
-			for (int mode_index=0; mode_index<mode_count; mode_index++) {
-				D3DDISPLAYMODE d3dmode;
-				::ZeroMemory(&d3dmode, sizeof(D3DDISPLAYMODE));
-				HRESULT res = D3DInterface->EnumAdapterModes(adapter_index,mode_index,&d3dmode);
+			// Ronin @build 28/10/2025 DX9: GetAdapterModeCount now requires D3DFORMAT parameter
+			// We enumerate all common display formats
+			D3DFORMAT display_formats[] = {
+				D3DFMT_X8R8G8B8,  // 32-bit
+				D3DFMT_A8R8G8B8,  // 32-bit with alpha
+				D3DFMT_R5G6B5,    // 16-bit
+				D3DFMT_X1R5G5B5   // 16-bit
+			};
 
-				if (res == D3D_OK) {
-					int bits = 0;
-					switch (d3dmode.Format)
-					{
+			for (int fmt_idx = 0; fmt_idx < 4; fmt_idx++) {
+				D3DFORMAT current_format = display_formats[fmt_idx];
+				int mode_count = D3DInterface->GetAdapterModeCount(adapter_index, current_format);
+
+				for (int mode_index = 0; mode_index < mode_count; mode_index++) {
+					D3DDISPLAYMODE d3dmode;
+					::ZeroMemory(&d3dmode, sizeof(D3DDISPLAYMODE));
+
+					//HRESULT res = D3DInterface->EnumAdapterModes(adapter_index, display_formats[fmt], mode_index, &d3dmode);
+					HRESULT res = D3DInterface->EnumAdapterModes(adapter_index, current_format, mode_index, &d3dmode);
+
+					if (res == D3D_OK) {
+						int bits = 0;
+						switch (d3dmode.Format)
+						{
 						case D3DFMT_R8G8B8:
 						case D3DFMT_A8R8G8B8:
 						case D3DFMT_X8R8G8B8:		bits = 32; break;
@@ -1027,14 +1629,15 @@ bool DX8Wrapper::Set_Render_Device(int dev, int width, int height, int bits, int
 
 	_PresentParameters.MultiSampleType = D3DMULTISAMPLE_NONE;
 	//I changed this to discard all the time (even when full-screen) since that the most efficient. 07-16-03 MW:
-	_PresentParameters.SwapEffect = D3DSWAPEFFECT_DISCARD;//IsWindowed ? D3DSWAPEFFECT_DISCARD : D3DSWAPEFFECT_FLIP;		// Shouldn't this be D3DSWAPEFFECT_FLIP?
+	_PresentParameters.SwapEffect = IsWindowed ? D3DSWAPEFFECT_COPY : D3DSWAPEFFECT_DISCARD;
 	_PresentParameters.hDeviceWindow = _Hwnd;
 	_PresentParameters.Windowed = IsWindowed;
 
 	_PresentParameters.EnableAutoDepthStencil = TRUE;				// Driver will attempt to match Z-buffer depth
 	_PresentParameters.Flags=0;											// We're not going to lock the backbuffer
 
-	_PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_DEFAULT;
+	_PresentParameters.PresentationInterval = IsWindowed ?
+		D3DPRESENT_INTERVAL_IMMEDIATE : D3DPRESENT_INTERVAL_ONE;  // Ronin @build 27/10/2025 DX9: Renamed from FullScreen_PresentationInterval
 	_PresentParameters.FullScreen_RefreshRateInHz = D3DPRESENT_RATE_DEFAULT;
 
 	/*
@@ -1130,6 +1733,21 @@ bool DX8Wrapper::Set_Render_Device(int dev, int width, int height, int bits, int
 
 	WWDEBUG_SAY(("Reset/Create_Device done, reset_device=%d, restore_assets=%d", reset_device, restore_assets));
 
+// Ronin @debug 09/11/2025-08/02/2016 Refactored: Check if device starts in a clean state
+#ifdef _DEBUG
+	if (D3DDevice) {
+		HRESULT testBegin = _Get_D3D_Device8()->BeginScene();
+		if (SUCCEEDED(testBegin)) {
+			_Get_D3D_Device8()->EndScene();
+			s_inScene = false;
+		}
+		else if (testBegin == D3DERR_INVALIDCALL) {
+			WWDEBUG_SAY(("Device already in scene after creation!"));
+			s_inScene = true;
+		}
+	}
+#endif
+
 	return ret;
 }
 
@@ -1189,11 +1807,11 @@ bool DX8Wrapper::Toggle_Windowed(void)
 void DX8Wrapper::Set_Swap_Interval(int swap)
 {
 	switch (swap) {
-		case 0: _PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE; break;
-		case 1: _PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_ONE ; break;
-		case 2: _PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_TWO; break;
-		case 3: _PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_THREE; break;
-		default: _PresentParameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_ONE ; break;
+	case 0: _PresentParameters.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE; break; // Ronin @build 27/10/2025 DX9: Renamed
+	case 1: _PresentParameters.PresentationInterval = D3DPRESENT_INTERVAL_ONE; break; // Ronin @build 27/10/2025 DX9: Renamed
+	case 2: _PresentParameters.PresentationInterval = D3DPRESENT_INTERVAL_TWO; break; // Ronin @build 27/10/2025 DX9: Renamed
+	case 3: _PresentParameters.PresentationInterval = D3DPRESENT_INTERVAL_THREE; break; // Ronin @build 27/10/2025 DX9: Renamed
+	default: _PresentParameters.PresentationInterval = D3DPRESENT_INTERVAL_ONE; break; // Ronin @build 27/10/2025 DX9: Renamed
 	}
 
 	WWDEBUG_SAY(("DX8Wrapper::Set_Swap_Interval is resetting the device."));
@@ -1202,7 +1820,7 @@ void DX8Wrapper::Set_Swap_Interval(int swap)
 
 int DX8Wrapper::Get_Swap_Interval(void)
 {
-	return _PresentParameters.FullScreen_PresentationInterval;
+	return _PresentParameters.PresentationInterval; // Ronin @build 27/10/2025 DX9: Renamed
 }
 
 bool DX8Wrapper::Has_Stencil(void)
@@ -1525,8 +2143,52 @@ bool DX8Wrapper::Find_Color_Mode(D3DFORMAT colorbuffer, int resx, int resy, UINT
 	ry=(unsigned int) resy;
 
 	bool found=false;
+	// Ronin @build 28/10/2025 DX9: GetAdapterModeCount requires format parameter
+	modemax = D3DInterface->GetAdapterModeCount(D3DADAPTER_DEFAULT, colorbuffer);
 
-	modemax=D3DInterface->GetAdapterModeCount(D3DADAPTER_DEFAULT);
+	i = 0;
+
+	while (i < modemax && !found)
+	{
+		// Ronin @build 28/10/2025 DX9: EnumAdapterModes requires format parameter
+		D3DInterface->EnumAdapterModes(D3DADAPTER_DEFAULT, colorbuffer, i, &dmode);
+		if (dmode.Width == rx && dmode.Height == ry && dmode.Format == colorbuffer) {
+			WWDEBUG_SAY(("Found valid color mode.  Width = %d Height = %d Format = %d", dmode.Width, dmode.Height, dmode.Format));
+			found = true;
+		}
+		i++;
+	}
+
+	i--; // this is the first valid mode
+
+	// no match
+	if (!found) {
+		WWDEBUG_SAY(("Failed to find a valid color mode"));
+		return false;
+	}
+
+	// go to the highest refresh rate in this mode
+	bool stillok = true;
+
+	j = i;
+	while (j < modemax && stillok)
+	{
+		// Ronin @build 28/10/2025 DX9: EnumAdapterModes requires format parameter
+		D3DInterface->EnumAdapterModes(D3DADAPTER_DEFAULT, colorbuffer, j, &dmode);
+		if (dmode.Width == rx && dmode.Height == ry && dmode.Format == colorbuffer)
+			stillok = true;
+
+		else
+			stillok = false;
+		j++;
+	}
+
+	if (stillok == false) *mode = j - 2;
+	else *mode = i;
+
+	return true;
+
+	/*modemax = D3DInterface->GetAdapterModeCount(D3DADAPTER_DEFAULT);
 
 	i=0;
 
@@ -1559,11 +2221,7 @@ bool DX8Wrapper::Find_Color_Mode(D3DFORMAT colorbuffer, int resx, int resy, UINT
 			stillok=true; else stillok=false;
 		j++;
 	}
-
-	if (stillok==false) *mode=j-2;
-	else *mode=i;
-
-	return true;
+*/
 }
 
 // Helper function to find a Z buffer mode for the colorbuffer
@@ -1713,60 +2371,144 @@ void DX8_Assert()
 void DX8Wrapper::Begin_Scene(void)
 {
 	DX8_THREAD_ASSERT();
+		
+	// Ronin @bugfix 09/11/2025: Handle already-active scene gracefully
+	HRESULT hr = _Get_D3D_Device8()->BeginScene();
+
+	if (SUCCEEDED(hr)) {
+		// Successfully started a new scene
+		s_inScene = true;
+		number_of_DX8_calls++;
+
+/*#ifdef _DEBUG
+		// VERIFY: State is clean after our cleanup
+		UINT postClearStride = 0;
+		UINT postClearOffset = 0;  // ← FIXED
+		IDirect3DVertexBuffer9* postClearVB = nullptr;
+
+		pDev->GetStreamSource(0, &postClearVB, &postClearOffset, &postClearStride);
+
+		if (postClearStride != 0 || postClearVB != nullptr) {
+			WWDEBUG_SAY(("Begin_Scene: Stride STILL %u after clearing! VB=%p",
+				postClearStride, postClearVB));
+		}
+		else {
+			WWDEBUG_SAY(("Begin_Scene: Clean state (stride=0, VB=null)"));
+		}
+
+		if (postClearVB) postClearVB->Release();
+#endif*/
+
 
 #if ENABLE_EMBEDDED_BROWSER
 	DX8WebBrowser::Update();
 #endif
+		return;
+	}
 
-	DX8CALL(BeginScene());
+	// Handle error cases
+	if (hr == D3DERR_INVALIDCALL) {
+		s_inScene = true;  // Mark that we're in a scene
+		number_of_DX8_calls++;
+		return;
+	}
 
-	DX8WebBrowser::Update();
+	// Other error - keep this one for actual errors
+	WWDEBUG_SAY(("BeginScene FAILED: 0x%08X (%s)", hr, DXGetErrorString9A(hr)));
+	number_of_DX8_calls++;
 }
 
 void DX8Wrapper::End_Scene(bool flip_frames)
 {
 	DX8_THREAD_ASSERT();
-	DX8CALL(EndScene());
+
+	// Ronin @bugfix 09/11/2025: Reset scene tracking on successful EndScene
+	HRESULT hr = _Get_D3D_Device8()->EndScene();
+	number_of_DX8_calls++;
+
+	if (SUCCEEDED(hr)) {
+		s_inScene = false;
+	}
+	else {
+		// Keep error logging
+		WWDEBUG_SAY(("EndScene FAILED: 0x%08X (%s)", hr, DXGetErrorString9A(hr)));
+		// Force reset the flag anyway
+		s_inScene = false;
+	}
 
 	DX8WebBrowser::Render(0);
 
 	if (flip_frames) {
 		DX8_Assert();
 		HRESULT hr;
-		{
-			WWPROFILE("DX8Device::Present()");
-			hr=_Get_D3D_Device8()->Present(nullptr, nullptr, nullptr, nullptr);
-		}
 
-		number_of_DX8_calls++;
+		// Ronin @bugfix 09/11/2025: Enhanced device lost recovery
+		// Check device state BEFORE Present to avoid errors
+		HRESULT deviceState = _Get_D3D_Device8()->TestCooperativeLevel();
+		// WWDEBUG_SAY(("Device state before Present: 0x%08X", deviceState));
 
-		if (SUCCEEDED(hr)) {
-#ifdef EXTENDED_STATS
-			if (stats.m_sleepTime) {
-				::Sleep(stats.m_sleepTime);
+		if (deviceState == D3D_OK) {
+			// Device is OK, safe to Present
+			// WWDEBUG_SAY(("Device OK, calling Present()..."));
+			{
+				WWPROFILE("DX8Device::Present()");
+				hr = _Get_D3D_Device8()->Present(NULL, NULL, NULL, NULL);
 			}
-#endif
-			IsDeviceLost=false;
-			FrameCount++;
-		}
-		else {
-			IsDeviceLost=true;
-		}
+			number_of_DX8_calls++;
 
-		// If the device was lost we need to check for cooperative level and possibly reset the device
-		if (hr==D3DERR_DEVICELOST) {
-			hr=_Get_D3D_Device8()->TestCooperativeLevel();
-			if (hr==D3DERR_DEVICENOTRESET) {
-				WWDEBUG_SAY(("DX8Wrapper::End_Scene is resetting the device."));
-				Reset_Device();
+			if (SUCCEEDED(hr)) {
+#ifdef EXTENDED_STATS
+				if (stats.m_sleepTime) {
+					::Sleep(stats.m_sleepTime);
+				}
+#endif
+				IsDeviceLost = false;
+				FrameCount++;
+			}
+			else if (hr == D3DERR_DEVICELOST) {
+				// Device was just lost
+				WWDEBUG_SAY(("DEVICE LOST during Present!"));
+				IsDeviceLost = true;
 			}
 			else {
-				// Sleep it not active
-				ThreadClass::Sleep_Ms(200);
+				WWDEBUG_SAY(("Present FAILED: 0x%08X (%s)", hr, DXGetErrorString9A(hr)));
 			}
 		}
+		else if (deviceState == D3DERR_DEVICELOST) {
+			// Device is lost, wait for it to become available
+			WWDEBUG_SAY(("Device lost, waiting..."));
+			IsDeviceLost = true;
+			ThreadClass::Sleep_Ms(100);  // Don't spin too fast
+			hr = D3DERR_DEVICELOST;
+		}
+		else if (deviceState == D3DERR_DEVICENOTRESET) {
+			// Device is ready to be reset
+			WWDEBUG_SAY(("Device ready for reset, attempting recovery..."));
+
+			// Ronin @bugfix 09/11/2025: Proper asset preservation during reset
+			if (Reset_Device(true)) {  // true = restore assets
+				WWDEBUG_SAY(("Device reset successful!"));
+				IsDeviceLost = false;
+
+				// Force complete state reinitialization
+				Invalidate_Cached_Render_States();
+				Set_Default_Global_Render_States();
+
+				// Notify subsystems to recreate resources
+				if (m_pCleanupHook) {
+					m_pCleanupHook->ReAcquireResources();
+				}
+			}
+			else {
+				WWDEBUG_SAY(("Device reset FAILED!"));
+				ThreadClass::Sleep_Ms(500);  // Wait longer before retry
+			}
+			hr = deviceState;
+		}
 		else {
-			DX8_ErrorCode(hr);
+			// Unknown device state
+			WWDEBUG_SAY(("Unknown device state: 0x%08X", deviceState));
+			hr = deviceState;
 		}
 	}
 
@@ -1916,6 +2658,9 @@ void DX8Wrapper::Set_Vertex_Buffer(const VertexBufferClass* vb, unsigned stream)
 
 void DX8Wrapper::Set_Index_Buffer(const IndexBufferClass* ib,unsigned short index_base_offset)
 {
+	// @debug Ronin 10/01/2026 Add optional caller tag to index buffer binding for tracking IB rebinds
+	Set_Index_Buffer(ib, index_base_offset, "UNKNOWN(Set_Index_Buffer)");
+	/*
 	render_state.iba_offset=0;
 	if (render_state.index_buffer) {
 		render_state.index_buffer->Release_Engine_Ref();
@@ -1929,7 +2674,24 @@ void DX8Wrapper::Set_Index_Buffer(const IndexBufferClass* ib,unsigned short inde
 	else {
 		render_state.index_buffer_type=BUFFER_TYPE_INVALID;
 	}
-	render_state_changed|=INDEX_BUFFER_CHANGED;
+	render_state_changed|=INDEX_BUFFER_CHANGED;*/
+}
+void DX8Wrapper::Set_Index_Buffer(const IndexBufferClass* ib, unsigned short index_base_offset, const char* callerTag)
+{
+	render_state.iba_offset = 0;
+	if (render_state.index_buffer) {
+		render_state.index_buffer->Release_Engine_Ref();
+	}
+	REF_PTR_SET(render_state.index_buffer, const_cast<IndexBufferClass*>(ib));
+	render_state.index_base_offset = index_base_offset;
+	if (ib) {
+		ib->Add_Engine_Ref();
+		render_state.index_buffer_type = ib->Type();
+	}
+	else {
+		render_state.index_buffer_type = BUFFER_TYPE_INVALID;
+	}
+	render_state_changed |= INDEX_BUFFER_CHANGED;
 }
 
 // ----------------------------------------------------------------------------
@@ -1950,6 +2712,30 @@ void DX8Wrapper::Set_Vertex_Buffer(const DynamicVBAccessClass& vba_)
 	render_state.vertex_buffer_types[0]=vba.Get_Type();
 	render_state.vba_offset=vba.VertexBufferOffset;
 	render_state.vba_count=vba.Get_Vertex_Count();
+
+	// Ronin @bugfix 14/01/2026 DX9: Track dynamic VB FVF so Apply() IA verification can compute expected stride (prevents false expectedStride=0)
+	render_state.vba_fvf = vba.FVF_Info().Get_FVF();
+
+	// Ronin @bugfix 26/01/2026 DX9: Also track the underlying D3D VB for deterministic Apply() binding.
+	if (render_state.vba_d3d_vb) {
+			render_state.vba_d3d_vb->Release();
+			render_state.vba_d3d_vb = nullptr;
+	}
+	// Only BUFFER_TYPE_DYNAMIC_DX8 has a real D3D VB. Sorting is CPU-side.
+	if (render_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_DX8) {
+			render_state.vba_d3d_vb = vba.Get_D3D_VB();
+		if (render_state.vba_d3d_vb) {
+				render_state.vba_d3d_vb->AddRef();
+		}
+	}
+
+	// Ronin @debug 23/01/2026: publish expected layout for IA ENSURE
+	render_state.expectedFVF = render_state.vba_fvf;
+	if (render_state.expectedDecl) {
+		render_state.expectedDecl->Release();
+		render_state.expectedDecl = nullptr;
+	}
+
 	REF_PTR_SET(render_state.vertex_buffers[0],vba.VertexBuffer);
 	render_state.vertex_buffers[0]->Add_Engine_Ref();
 	render_state_changed|=VERTEX_BUFFER_CHANGED;
@@ -1964,6 +2750,10 @@ void DX8Wrapper::Set_Vertex_Buffer(const DynamicVBAccessClass& vba_)
 
 void DX8Wrapper::Set_Index_Buffer(const DynamicIBAccessClass& iba_,unsigned short index_base_offset)
 {
+
+	// @debug Ronin 10/01/2026 Add optional caller tag to index buffer binding for tracking IB rebinds
+	Set_Index_Buffer(iba_, index_base_offset, "UNKNOWN(Set_Index_Buffer dyn)");
+	/*
 	if (render_state.index_buffer) render_state.index_buffer->Release_Engine_Ref();
 
 	DynamicIBAccessClass& iba=const_cast<DynamicIBAccessClass&>(iba_);
@@ -1972,7 +2762,20 @@ void DX8Wrapper::Set_Index_Buffer(const DynamicIBAccessClass& iba_,unsigned shor
 	render_state.iba_offset=iba.IndexBufferOffset;
 	REF_PTR_SET(render_state.index_buffer,iba.IndexBuffer);
 	render_state.index_buffer->Add_Engine_Ref();
-	render_state_changed|=INDEX_BUFFER_CHANGED;
+	render_state_changed|=INDEX_BUFFER_CHANGED;*/
+}
+
+void DX8Wrapper::Set_Index_Buffer(const DynamicIBAccessClass& iba_, unsigned short index_base_offset, const char* callerTag)
+{
+	if (render_state.index_buffer) render_state.index_buffer->Release_Engine_Ref();
+
+	DynamicIBAccessClass& iba = const_cast<DynamicIBAccessClass&>(iba_);
+	render_state.index_base_offset = index_base_offset;
+	render_state.index_buffer_type = iba.Get_Type();
+	render_state.iba_offset = iba.IndexBufferOffset;
+	REF_PTR_SET(render_state.index_buffer, iba.IndexBuffer);
+	render_state.index_buffer->Add_Engine_Ref();
+	render_state_changed |= INDEX_BUFFER_CHANGED;
 }
 
 // ----------------------------------------------------------------------------
@@ -2008,14 +2811,18 @@ void DX8Wrapper::Draw_Sorting_IB_VB(
 		}
 	}
 
+	// Ronin @build 04/12/2025 DX9: SetStreamSource now requires stride parameter
 	DX8CALL(SetStreamSource(
 		0,
 		static_cast<DX8VertexBufferClass*>(dyn_vb_access.VertexBuffer)->Get_DX8_Vertex_Buffer(),
+		0,  // Offset (DX9 addition)
 		dyn_vb_access.FVF_Info().Get_FVF_Size()));
-	// If using FVF format VB, set the FVF as vertex shader (may not be needed here KM)
-	unsigned fvf=dyn_vb_access.FVF_Info().Get_FVF();
-	if (fvf!=0) {
-		DX8CALL(SetVertexShader(fvf));
+
+	// If using FVF format VB, set the FVF
+	// Ronin @build 04/12/2025 DX9: SetVertexShader(fvf) -> SetFVF(fvf)
+	unsigned fvf = dyn_vb_access.FVF_Info().Get_FVF();
+	if (fvf != 0) {
+		Set_FVF(fvf);  // Use wrapper function, NOT direct device call
 	}
 	DX8_RECORD_VERTEX_BUFFER_CHANGE();
 
@@ -2027,14 +2834,13 @@ void DX8Wrapper::Draw_Sorting_IB_VB(
 	default: WWASSERT(0); break; // Unsupported primitive type
 	}
 
-	// Fill dynamic index buffer with sorting index buffer vertices
-	DynamicIBAccessClass dyn_ib_access(BUFFER_TYPE_DYNAMIC_DX8,index_count);
+	// Fill dynamic index buffer
+	DynamicIBAccessClass dyn_ib_access(BUFFER_TYPE_DYNAMIC_DX8, index_count);
 	{
 		DynamicIBAccessClass::WriteLockClass lock(&dyn_ib_access);
-		unsigned short* dest=lock.Get_Index_Array();
-		unsigned short* src=nullptr;
-		src=static_cast<SortingIndexBufferClass*>(render_state.index_buffer)->index_buffer;
-		src+=render_state.iba_offset+start_index;
+		unsigned short* dest = lock.Get_Index_Array();
+		unsigned short* src = static_cast<SortingIndexBufferClass*>(render_state.index_buffer)->index_buffer;
+		src += render_state.iba_offset + start_index;
 
 		for (unsigned short i=0;i<index_count;++i) {
 			unsigned short index=*src++;
@@ -2044,20 +2850,47 @@ void DX8Wrapper::Draw_Sorting_IB_VB(
 		}
 	}
 
+	// Ronin @build 04/12/2025 DX9: SetIndices no longer takes base vertex index
 	DX8CALL(SetIndices(
-		static_cast<DX8IndexBufferClass*>(dyn_ib_access.IndexBuffer)->Get_DX8_Index_Buffer(),
-		dyn_vb_access.VertexBufferOffset));
+		static_cast<DX8IndexBufferClass*>(dyn_ib_access.IndexBuffer)->Get_DX8_Index_Buffer()));
 	DX8_RECORD_INDEX_BUFFER_CHANGE();
 
 	DX8_RECORD_DRAW_CALLS();
-	DX8CALL(DrawIndexedPrimitive(
-		D3DPT_TRIANGLELIST,
-		0,		// start vertex
-		vertex_count,
-		dyn_ib_access.IndexBufferOffset,
-		polygon_count));
 
-	DX8_RECORD_RENDER(polygon_count,vertex_count,render_state.shader);
+	// Ronin @build 04/12/2025 DX9: DrawIndexedPrimitive signature changed
+	const int baseVertex = (int)dyn_vb_access.VertexBufferOffset;
+	const unsigned drawStartIndex = (unsigned)dyn_ib_access.IndexBufferOffset;
+
+#ifdef WWDEBUG
+	//Ensure_Device_IB_Matches_Wrapper_Expected("DX8Wrapper::Draw_Sorting_IB_VB");
+#endif
+
+	HRESULT hr = D3DDevice->DrawIndexedPrimitive(
+		D3DPT_TRIANGLELIST,
+		baseVertex,
+		0,           // MinVertexIndex
+		vertex_count,
+		(unsigned short)drawStartIndex,
+		polygon_count);
+
+	number_of_DX8_calls++;
+
+#ifdef WWDEBUG
+	// @debug Ronin 13/01/2026 Sorting DIP result + conditional diagnostics
+	if (FAILED(hr)) {
+		WWDEBUG_SAY((
+			"[DIP][SORTING][FAIL] hr=0x%08X (%s) prim=%u start=%u primCount=%u baseV=%d vCount=%u",
+			(unsigned)hr,
+			DXGetErrorString9A(hr),
+			(unsigned)primitive_type,
+			(unsigned)drawStartIndex,
+			(unsigned)polygon_count,
+			(int)baseVertex,
+			(unsigned)vertex_count));
+	}
+#endif
+
+	DX8_RECORD_RENDER(polygon_count, vertex_count, render_state.shader);
 }
 
 // ----------------------------------------------------------------------------
@@ -2164,12 +2997,24 @@ void DX8Wrapper::Draw(
 				}*/
 				DX8_RECORD_RENDER(polygon_count,vertex_count,render_state.shader);
 				DX8_RECORD_DRAW_CALLS();
-				DX8CALL(DrawIndexedPrimitive(
+
+				const unsigned drawStartIndex = start_index + render_state.iba_offset;
+				const int baseVertex = (int)render_state.index_base_offset;
+
+#ifdef WWDEBUG
+				//Ensure_Device_IB_Matches_Wrapper_Expected("DX8Wrapper::Draw");
+#endif
+
+				HRESULT hr = D3DDevice->DrawIndexedPrimitive(
 					(D3DPRIMITIVETYPE)primitive_type,
+					baseVertex,
 					min_vertex_index,
 					vertex_count,
-					start_index+render_state.iba_offset,
-					polygon_count));
+					drawStartIndex,
+					polygon_count);
+
+				number_of_DX8_calls++; // mirror DX8CALL behavior (keeps stats sane) || Ronin @feauture 16/02/2026: **Revisit required**
+
 			}
 			break;
 		case BUFFER_TYPE_SORTING:
@@ -2264,141 +3109,225 @@ void DX8Wrapper::Apply_Render_State_Changes()
 {
 	SNAPSHOT_SAY(("DX8Wrapper::Apply_Render_State_Changes()"));
 
-	if (!render_state_changed) return;
-	if (render_state_changed&SHADER_CHANGED) {
-		SNAPSHOT_SAY(("DX8 - apply shader"));
-		render_state.shader.Apply();
-	}
+    if (!render_state_changed) return;
 
-	unsigned mask=TEXTURE0_CHANGED;
-	int i=0;
-	for (;i<CurrentCaps->Get_Max_Textures_Per_Pass();++i,mask<<=1)
-	{
-		if (render_state_changed&mask)
-		{
-			SNAPSHOT_SAY(("DX8 - apply texture %d (%s)",i,render_state.Textures[i] ? render_state.Textures[i]->Get_Full_Path().str() : "null"));
-
-			if (render_state.Textures[i])
-			{
-				render_state.Textures[i]->Apply(i);
-			}
-			else
-			{
-				TextureBaseClass::Apply_Null(i);
-			}
-		}
-	}
-
-	if (render_state_changed&MATERIAL_CHANGED)
-	{
-		SNAPSHOT_SAY(("DX8 - apply material"));
-		VertexMaterialClass* material=const_cast<VertexMaterialClass*>(render_state.material);
-		if (material)
-		{
-			material->Apply();
-		}
-		else VertexMaterialClass::Apply_Null();
-	}
-
-	if (render_state_changed&LIGHTS_CHANGED)
-	{
-		unsigned mask=LIGHT0_CHANGED;
-		for (unsigned index=0;index<4;++index,mask<<=1) {
-			if (render_state_changed&mask) {
-				SNAPSHOT_SAY(("DX8 - apply light %d",index));
-				if (render_state.LightEnable[index]) {
-#ifdef MESH_RENDER_SNAPSHOT_ENABLED
-					if ( WW3D::Is_Snapshot_Activated() ) {
-						D3DLIGHT8 * light = &(render_state.Lights[index]);
-						static const char * _light_types[] = { "Unknown", "Point","Spot", "Directional" };
-						WWASSERT((light->Type >= 0) && (light->Type <= 3));
-
-						SNAPSHOT_SAY((" type = %s amb = %4.2f,%4.2f,%4.2f  diff = %4.2f,%4.2f,%4.2f spec = %4.2f, %4.2f, %4.2f",
-							_light_types[light->Type],
-							light->Ambient.r,light->Ambient.g,light->Ambient.b,
-							light->Diffuse.r,light->Diffuse.g,light->Diffuse.b,
-							light->Specular.r,light->Specular.g,light->Specular.b ));
-						SNAPSHOT_SAY((" pos = %f, %f, %f  dir = %f, %f, %f",
-							light->Position.x, light->Position.y, light->Position.z,
-							light->Direction.x, light->Direction.y, light->Direction.z ));
-					}
+#ifdef _DEBUG
+		Track_Decl_Bound_While_Wrapper_Expects_FVF("Apply_Render_State_Changes");
 #endif
 
-					Set_DX8_Light(index,&render_state.Lights[index]);
+    // === SHADER ===
+    if (render_state_changed & SHADER_CHANGED) {
+        SNAPSHOT_SAY(("DX8 - apply shader"));
+        render_state.shader.Apply();
+    }
+
+    // === TEXTURES ===
+    unsigned mask = TEXTURE0_CHANGED;
+    for (int i = 0; i < CurrentCaps->Get_Max_Textures_Per_Pass(); ++i, mask <<= 1) {
+        if (render_state_changed & mask) {
+            SNAPSHOT_SAY(("DX8 - apply texture %d", i));
+            if (render_state.Textures[i]) {
+                render_state.Textures[i]->Apply(i);
+            } else {
+                TextureBaseClass::Apply_Null(i);
+            }
+        }
+    }
+
+    // === MATERIAL ===
+    if (render_state_changed & MATERIAL_CHANGED) {
+        SNAPSHOT_SAY(("DX8 - apply material"));
+        VertexMaterialClass* material = const_cast<VertexMaterialClass*>(render_state.material);
+        if (material) material->Apply();
+        else VertexMaterialClass::Apply_Null();
+    }
+
+    // === LIGHTS ===
+    if (render_state_changed & LIGHTS_CHANGED) {
+        unsigned lmask = LIGHT0_CHANGED;
+        for (unsigned index = 0; index < 4; ++index, lmask <<= 1) {
+            if (render_state_changed & lmask) {
+                SNAPSHOT_SAY(("DX8 - apply light %d", index));
+                if (render_state.LightEnable[index]) {
+                    Set_DX8_Light(index, &render_state.Lights[index]);
+                } else {
+                    Set_DX8_Light(index, nullptr);
+                }
+            }
+        }
+    }
+
+    // === TRANSFORMS ===
+    if (render_state_changed & WORLD_CHANGED) {
+        SNAPSHOT_SAY(("DX8 - apply world matrix"));
+        _Set_DX8_Transform(D3DTS_WORLD, render_state.world);
+    }
+    if (render_state_changed & VIEW_CHANGED) {
+        SNAPSHOT_SAY(("DX8 - apply view matrix"));
+        _Set_DX8_Transform(D3DTS_VIEW, render_state.view);
+    }
+
+		if (render_state_changed & VERTEX_BUFFER_CHANGED) {
+			SNAPSHOT_SAY(("DX8 - apply vb change"));
+
+			IDirect3DDevice9* dev = _Get_D3D_Device8();
+			WWASSERT(dev);
+
+#ifdef _DEBUG
+			ALLOW_LAYOUT_BINDING();
+#endif
+
+			// Ronin @bugfix 05/12/2025: Decide intended layout ONCE before binding streams
+			// Honor explicitly set currentDecl/currentFVF instead of deriving from VB
+			const bool useDecl = (render_state.currentDecl != nullptr);
+
+			// Programmable path
+			if (useDecl) {
+#ifdef _DEBUG
+				ASSERT_LAYOUT_BINDING_ALLOWED_API("Apply_Render_State_Changes::SetVertexDeclaration");
+#endif
+				// Programmable: bind decl only
+				DX8CALL(SetVertexDeclaration(render_state.currentDecl));
+				// Explicitly clear FVF to prevent conflicts
+
+#ifdef _DEBUG
+				ASSERT_LAYOUT_BINDING_ALLOWED_API("Apply_Render_State_Changes::SetFVF");
+#endif
+				DX8CALL(SetFVF(0));
+			}
+			else {
+#ifdef _DEBUG
+				ASSERT_LAYOUT_BINDING_ALLOWED();
+#endif
+				// Fixed-function: ensure decl is NULL, then set FVF
+				DX8CALL(SetVertexDeclaration(nullptr));
+				render_state.currentDecl = nullptr;  // Clear wrapper tracking too
+
+				DWORD fvf = render_state.currentFVF;
+
+
+				if (fvf == 0) {
+					if (render_state.vertex_buffers[0] &&
+						(render_state.vertex_buffer_types[0] == BUFFER_TYPE_DX8)) {
+						DX8VertexBufferClass* vb0 = static_cast<DX8VertexBufferClass*>(render_state.vertex_buffers[0]);
+						fvf = vb0->FVF_Info().Get_FVF();
+					}
+				}
+				// Ronin @bugfix 17/01/2026: Prefer dynamic VB FVF over unsafe 2D fallback when layout is unknown
+				if (fvf == 0) {
+					if ((render_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_DX8 ||
+						render_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_SORTING) &&
+						render_state.vba_fvf != 0) {
+						fvf = render_state.vba_fvf;
+					}
+				}
+
+				// CRITICAL FIX: Never call SetFVF(0)!
+				if (fvf != 0) {
+#ifdef _DEBUG
+					ASSERT_LAYOUT_BINDING_ALLOWED();
+#endif
+					Set_Vertex_Shader(fvf);
+					//DX8CALL(SetFVF(fvf));
 				}
 				else {
-					Set_DX8_Light(index,nullptr);
-					SNAPSHOT_SAY((" clearing light to NULL"));
+					// @bugfix Ronin 17/01/2026: Do not guess a layout here (FVF=0x142 fallback can corrupt IA tracking)
+					WWDEBUG_SAY(("Apply: No FVF available; leaving device FVF untouched. owner=%s",
+						render_state.layoutOwner ? render_state.layoutOwner : "(null)"));
 				}
 			}
-		}
-	}
 
-	if (render_state_changed&WORLD_CHANGED) {
-		SNAPSHOT_SAY(("DX8 - apply world matrix"));
-		_Set_DX8_Transform(D3DTS_WORLD,render_state.world);
-	}
-	if (render_state_changed&VIEW_CHANGED) {
-		SNAPSHOT_SAY(("DX8 - apply view matrix"));
-		_Set_DX8_Transform(D3DTS_VIEW,render_state.view);
-	}
-	if (render_state_changed&VERTEX_BUFFER_CHANGED) {
-		SNAPSHOT_SAY(("DX8 - apply vb change"));
-		for (i=0;i<MAX_VERTEX_STREAMS;++i) {
-			if (render_state.vertex_buffers[i]) {
-				switch (render_state.vertex_buffer_types[i]) {//->Type()) {
-				case BUFFER_TYPE_DX8:
-				case BUFFER_TYPE_DYNAMIC_DX8:
-					DX8CALL(SetStreamSource(
-						i,
-						static_cast<DX8VertexBufferClass*>(render_state.vertex_buffers[i])->Get_DX8_Vertex_Buffer(),
-						render_state.vertex_buffers[i]->FVF_Info().Get_FVF_Size()));
+
+			// Bind streams with correct stride (layout already decided above)
+			for (int s = 0; s < MAX_VERTEX_STREAMS; ++s) {
+
+				if (!render_state.vertex_buffers[s]) {
+					DX8CALL(SetStreamSource(s, nullptr, 0, 0));
 					DX8_RECORD_VERTEX_BUFFER_CHANGE();
-					{
-						// If the VB format is FVF, set the FVF as a vertex shader
-						unsigned fvf=render_state.vertex_buffers[i]->FVF_Info().Get_FVF();
-						if (fvf!=0) {
-							Set_Vertex_Shader(fvf);
-						}
+					continue;
+				}
+
+				switch (render_state.vertex_buffer_types[s]) {
+
+				case BUFFER_TYPE_DX8:
+				{
+					DX8VertexBufferClass* vb = static_cast<DX8VertexBufferClass*>(render_state.vertex_buffers[s]);
+					const UINT stride = vb->FVF_Info().Get_FVF_Size();
+					DX8CALL(SetStreamSource(s, vb->Get_DX8_Vertex_Buffer(), 0, stride));
+					WWASSERT(stride != 0);
+					DX8_RECORD_VERTEX_BUFFER_CHANGE();
+					break;
+				}
+
+				case BUFFER_TYPE_DYNAMIC_DX8:
+				{
+					// Ronin @bugfix 26/01/2026 DX9: Bind dynamic stream from stored D3D VB pointer (no RTTI, no unsafe casts).
+					if (render_state.vba_fvf != 0 && render_state.vba_d3d_vb != nullptr) {
+
+						FVFInfoClass fi(render_state.vba_fvf);
+						const UINT expectedStride = (UINT)fi.Get_FVF_Size();
+						WWASSERT(expectedStride != 0);
+						const UINT offsetInBytes = (UINT)render_state.vba_offset * expectedStride;
+						DX8CALL(SetStreamSource(s, render_state.vba_d3d_vb, offsetInBytes, expectedStride));
+						DX8_RECORD_VERTEX_BUFFER_CHANGE();
+					}
+					else {
+						WWDEBUG_SAY(("Apply: Dynamic VB missing vba_fvf or vba_d3d_vb (fvf=0x%08X vb=%p) owner=%s",
+							(unsigned)render_state.vba_fvf,
+							render_state.vba_d3d_vb,
+							render_state.layoutOwner ? render_state.layoutOwner : "(null)"));
 					}
 					break;
-				case BUFFER_TYPE_SORTING:
-				case BUFFER_TYPE_DYNAMIC_SORTING:
-					break;
-				default:
-					WWASSERT(0);
 				}
-			} else {
-				DX8CALL(SetStreamSource(i,nullptr,0));
-				DX8_RECORD_VERTEX_BUFFER_CHANGE();
+				}
 			}
+#ifdef _DEBUG
+			// @refactor Ronin 08/02/2026 DX9: Streamlined IA verify - fail-only.
+			{
+				IDirect3DVertexBuffer9* devVB0 = nullptr;
+				UINT devOff0 = 0, devStride0 = 0;
+				dev->GetStreamSource(0, &devVB0, &devOff0, &devStride0);
+
+				UINT expectedStride0 = 0;
+				if (render_state.vertex_buffers[0]) {
+					if (render_state.vertex_buffer_types[0] == BUFFER_TYPE_DX8) {
+						expectedStride0 = static_cast<DX8VertexBufferClass*>(render_state.vertex_buffers[0])->FVF_Info().Get_FVF_Size();
+					}
+					else if (render_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_DX8 && render_state.vba_fvf != 0) {
+						FVFInfoClass fi(render_state.vba_fvf);
+						expectedStride0 = fi.Get_FVF_Size();
+					}
+				}
+
+				if (expectedStride0 != 0 && devStride0 != expectedStride0) {
+					WWDEBUG_SAY(("IA VERIFY: Stream0 stride mismatch expected=%u device=%u type=%u owner=%s",
+						(unsigned)expectedStride0, (unsigned)devStride0,
+						(unsigned)render_state.vertex_buffer_types[0],
+						render_state.layoutOwner ? render_state.layoutOwner : "(null)"));
+					WWASSERT(0 && "Stream0 stride mismatch after Apply_Render_State_Changes()");
+				}
+
+				if (devVB0) devVB0->Release();
+			}
+#endif
 		}
-	}
-	if (render_state_changed&INDEX_BUFFER_CHANGED) {
+
+		// === INDEX BUFFER ===
+		if (render_state_changed & INDEX_BUFFER_CHANGED) {
 		SNAPSHOT_SAY(("DX8 - apply ib change"));
-		if (render_state.index_buffer) {
-			switch (render_state.index_buffer_type) {//->Type()) {
-			case BUFFER_TYPE_DX8:
-			case BUFFER_TYPE_DYNAMIC_DX8:
-				DX8CALL(SetIndices(
-					static_cast<DX8IndexBufferClass*>(render_state.index_buffer)->Get_DX8_Index_Buffer(),
-					render_state.index_base_offset+render_state.vba_offset));
+		if (render_state.index_buffer &&
+				(render_state.index_buffer_type == BUFFER_TYPE_DX8 ||
+					render_state.index_buffer_type == BUFFER_TYPE_DYNAMIC_DX8)) {
+
+				DX8IndexBufferClass* ib = static_cast<DX8IndexBufferClass*>(render_state.index_buffer);
+				DX8CALL(SetIndices(ib->Get_DX8_Index_Buffer()));
 				DX8_RECORD_INDEX_BUFFER_CHANGE();
-				break;
-			case BUFFER_TYPE_SORTING:
-			case BUFFER_TYPE_DYNAMIC_SORTING:
-				break;
-			default:
-				WWASSERT(0);
+			}
+			else {
+				DX8CALL(SetIndices(nullptr));
+				DX8_RECORD_INDEX_BUFFER_CHANGE();
 			}
 		}
-		else {
-			DX8CALL(SetIndices(
-				nullptr,
-				0));
-			DX8_RECORD_INDEX_BUFFER_CHANGE();
-		}
-	}
 
 	render_state_changed&=((unsigned)WORLD_IDENTITY|(unsigned)VIEW_IDENTITY);
 
@@ -2633,7 +3562,7 @@ IDirect3DTexture8 * DX8Wrapper::_Create_DX8_ZTexture
 		zfmt,
 		pool,
 		&texture
-	);
+	, NULL);
 
 	if (ret==D3DERR_NOTAVAILABLE)
 	{
@@ -2660,7 +3589,7 @@ IDirect3DTexture8 * DX8Wrapper::_Create_DX8_ZTexture
 			zfmt,
 			pool,
 			&texture
-		);
+		, NULL);
 
 		if (SUCCEEDED(ret))
 		{
@@ -2915,7 +3844,7 @@ IDirect3DSurface8 * DX8Wrapper::_Create_DX8_Surface(unsigned int width, unsigned
 	// Paletted surfaces not supported!
 	WWASSERT(format!=D3DFMT_P8);
 
-	DX8CALL(CreateImageSurface(width, height, WW3DFormat_To_D3DFormat(format), &surface));
+	DX8CALL(CreateOffscreenPlainSurface(width, height, WW3DFormat_To_D3DFormat(format), D3DPOOL_SYSTEMMEM, &surface, NULL));
 
 	return surface;
 }
@@ -3003,7 +3932,7 @@ void DX8Wrapper::Compute_Caps(WW3DFormat display_format)
 }
 
 
-void DX8Wrapper::Set_Light(unsigned index, const D3DLIGHT8* light)
+void DX8Wrapper::Set_Light(unsigned index, const D3DLIGHT9* light)
 {
 	if (light) {
 		render_state.Lights[index]=*light;
@@ -3017,9 +3946,9 @@ void DX8Wrapper::Set_Light(unsigned index, const D3DLIGHT8* light)
 
 void DX8Wrapper::Set_Light(unsigned index,const LightClass &light)
 {
-	D3DLIGHT8 dlight;
+	D3DLIGHT9 dlight;
 	Vector3 temp;
-	memset(&dlight,0,sizeof(D3DLIGHT8));
+	memset(&dlight,0,sizeof(D3DLIGHT9));
 
 	switch (light.Get_Type())
 	{
@@ -3112,11 +4041,11 @@ void DX8Wrapper::Set_Light_Environment(LightEnvironmentClass* light_env)
 #endif
 		}
 
-		D3DLIGHT8 light;
+		D3DLIGHT9 light;
 		int l=0;
 		for (;l<light_count;++l) {
 
-			::ZeroMemory(&light, sizeof(D3DLIGHT8));
+			::ZeroMemory(&light, sizeof(D3DLIGHT9));
 
 			light.Type=D3DLIGHT_DIRECTIONAL;
 			(Vector3&)light.Diffuse=light_env->Get_Light_Diffuse(l);
@@ -3177,13 +4106,13 @@ IDirect3DSurface8 * DX8Wrapper::_Get_DX8_Front_Buffer()
 	DX8_THREAD_ASSERT();
 	D3DDISPLAYMODE mode;
 
-	DX8CALL(GetDisplayMode(&mode));
+	DX8CALL(GetDisplayMode(D3DADAPTER_DEFAULT, &mode));
 
 	IDirect3DSurface8 * fb=nullptr;
 
-	DX8CALL(CreateImageSurface(mode.Width,mode.Height,D3DFMT_A8R8G8B8,&fb));
+	DX8CALL(CreateOffscreenPlainSurface(mode.Width, mode.Height, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM, &fb, NULL));
 
-	DX8CALL(GetFrontBuffer(fb));
+	DX8CALL(GetFrontBufferData(0, fb));
 	return fb;
 }
 
@@ -3193,7 +4122,7 @@ SurfaceClass * DX8Wrapper::_Get_DX8_Back_Buffer(unsigned int num)
 
 	IDirect3DSurface8 * bb;
 	SurfaceClass *surf=nullptr;
-	DX8CALL(GetBackBuffer(num,D3DBACKBUFFER_TYPE_MONO,&bb));
+	DX8CALL(GetBackBuffer(0, num,D3DBACKBUFFER_TYPE_MONO,&bb)); // Swapchain 0
 	if (bb)
 	{
 		surf=NEW_REF(SurfaceClass,(bb));
@@ -3202,6 +4131,20 @@ SurfaceClass * DX8Wrapper::_Get_DX8_Back_Buffer(unsigned int num)
 
 	return surf;
 }
+
+  // @build Ronin 29/10/2025 DX9: Sampler state management (texture filtering moved from texture stage states)
+	// DX9 moved these states from SetTextureStageState to SetSamplerState:
+	// D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER,
+	// D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MAXANISOTROPY
+
+/*void DX8Wrapper::Set_DX8_Sampler_State(unsigned int stage, D3DSAMPLERSTATETYPE type, unsigned int value)
+{
+	DX8_THREAD_ASSERT();
+	if (_Get_D3D_Device8()) {
+		_Get_D3D_Device8()->SetSamplerState(stage, type, value);
+		number_of_DX8_calls++;
+	}
+}*/
 
 
 TextureClass *
@@ -3214,7 +4157,8 @@ DX8Wrapper::Create_Render_Target (int width, int height, WW3DFormat format)
 	// Use the current display format if format isn't specified
 	if (format==WW3D_FORMAT_UNKNOWN) {
 		D3DDISPLAYMODE mode;
-		DX8CALL(GetDisplayMode(&mode));
+		// Ronin @build 28/10/2025 DX9: GetDisplayMode requires adapter index
+		DX8CALL(GetDisplayMode(D3DADAPTER_DEFAULT, &mode));
 		format=D3DFormat_To_WW3DFormat(mode.Format);
 	}
 
@@ -3227,7 +4171,7 @@ DX8Wrapper::Create_Render_Target (int width, int height, WW3DFormat format)
 	//
 	//	Note: We're going to force the width and height to be powers of two and equal
 	//
-	const D3DCAPS8& dx8caps=Get_Current_Caps()->Get_DX8_Caps();
+	const D3DCAPS9& dx8caps=Get_Current_Caps()->Get_DX8_Caps();
 	float poweroftwosize = width;
 	if (height > 0 && height < width) {
 		poweroftwosize = height;
@@ -3283,9 +4227,10 @@ void DX8Wrapper::Create_Render_Target
 		*target=nullptr;
 		*depth_buffer=nullptr;
 		return;
-/*		D3DDISPLAYMODE mode;
-		DX8CALL(GetDisplayMode(&mode));
-		format=D3DFormat_To_WW3DFormat(mode.Format);*/
+		D3DDISPLAYMODE mode;
+		// Ronin @build 28/10/2025 DX9: GetDisplayMode requires adapter index
+		DX8CALL(GetDisplayMode(D3DADAPTER_DEFAULT, &mode));
+		format=D3DFormat_To_WW3DFormat(mode.Format);
 	}
 
 	// If render target format isn't supported return null
@@ -3297,7 +4242,7 @@ void DX8Wrapper::Create_Render_Target
 	}
 
 	//	Note: We're going to force the width and height to be powers of two and equal
-	const D3DCAPS8& dx8caps=Get_Current_Caps()->Get_DX8_Caps();
+	const D3DCAPS9& dx8caps=Get_Current_Caps()->Get_DX8_Caps();
 	float poweroftwosize = width;
 	if (height > 0 && height < width)
 	{
@@ -3385,8 +4330,9 @@ DX8Wrapper::Set_Render_Target(IDirect3DSwapChain8 *swap_chain)
 	//
 	//	Get the back buffer for the swap chain
 	//
-	LPDIRECT3DSURFACE8 render_target = nullptr;
-	swap_chain->GetBackBuffer (0, D3DBACKBUFFER_TYPE_MONO, &render_target);
+	IDirect3DSurface9* render_target = nullptr;
+swap_chain->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &render_target);
+
 
 	//
 	//	Set this back buffer as the render target
@@ -3394,11 +4340,11 @@ DX8Wrapper::Set_Render_Target(IDirect3DSwapChain8 *swap_chain)
 	Set_Render_Target (render_target, true);
 
 	//
-	//	Release our hold on the back buffer
+  	//	Release our hold on the "current" render target
 	//
-	if (render_target != nullptr) {
-		render_target->Release ();
-		render_target = nullptr;
+	if (CurrentRenderTarget != nullptr) {
+		CurrentRenderTarget->Release();
+		CurrentRenderTarget = nullptr;
 	}
 
 	IsRenderToTexture = false;
@@ -3429,7 +4375,11 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 		//
 		if (DefaultRenderTarget != nullptr)
 		{
-			DX8CALL(SetRenderTarget (DefaultRenderTarget, DefaultDepthBuffer));
+			//DX8CALL(SetRenderTarget (DefaultRenderTarget, DefaultDepthBuffer));
+			DX8CALL(SetRenderTarget(0, DefaultRenderTarget));
+			if (DefaultDepthBuffer) {
+				DX8CALL(SetDepthStencilSurface(DefaultDepthBuffer));
+			}
 			DefaultRenderTarget->Release ();
 			DefaultRenderTarget = nullptr;
 			if (DefaultDepthBuffer)
@@ -3440,7 +4390,7 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 		}
 
 		//
-		//	Release our hold on the "current" render target
+		//	Release our hold on the old "current" render target
 		//
 		if (CurrentRenderTarget != nullptr)
 		{
@@ -3473,7 +4423,8 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 		//
 		if (DefaultRenderTarget == nullptr)
 		{
-			DX8CALL(GetRenderTarget (&DefaultRenderTarget));
+			// Ronin @build 28/10/2025 DX9: GetRenderTarget signature changed
+			DX8CALL(GetRenderTarget(0, &DefaultRenderTarget));
 		}
 
 		//
@@ -3504,12 +4455,18 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 			//	Switch render targets
 			//
 			if (use_default_depth_buffer)
-			{
-				DX8CALL(SetRenderTarget (CurrentRenderTarget, DefaultDepthBuffer));
+			{				
+				// DX8CALL(SetRenderTarget (CurrentRenderTarget, DefaultDepthBuffer));
+				DX8CALL(SetRenderTarget(0, CurrentRenderTarget));
+				if (DefaultDepthBuffer) {
+					DX8CALL(SetDepthStencilSurface(DefaultDepthBuffer));
+				}
 			}
 			else
 			{
-				DX8CALL(SetRenderTarget (CurrentRenderTarget, nullptr));
+				//DX8CALL(SetRenderTarget (CurrentRenderTarget, NULL));
+				DX8CALL(SetRenderTarget(0, CurrentRenderTarget));
+				DX8CALL(SetDepthStencilSurface(NULL));
 			}
 		}
 	}
@@ -3558,7 +4515,11 @@ void DX8Wrapper::Set_Render_Target
 		//
 		if (DefaultRenderTarget != nullptr)
 		{
-			DX8CALL(SetRenderTarget (DefaultRenderTarget, DefaultDepthBuffer));
+			//DX8CALL(SetRenderTarget (DefaultRenderTarget, DefaultDepthBuffer));
+			DX8CALL(SetRenderTarget(0, DefaultRenderTarget));
+			if (DefaultDepthBuffer) {
+				DX8CALL(SetDepthStencilSurface(DefaultDepthBuffer));
+			}
 			DefaultRenderTarget->Release ();
 			DefaultRenderTarget = nullptr;
 			if (DefaultDepthBuffer)
@@ -3601,7 +4562,8 @@ void DX8Wrapper::Set_Render_Target
 		//
 		if (DefaultRenderTarget == nullptr)
 		{
-			DX8CALL(GetRenderTarget (&DefaultRenderTarget));
+			// Ronin @build 28/10/2025 DX9: GetRenderTarget signature changed
+			DX8CALL(GetRenderTarget(0, &DefaultRenderTarget));
 		}
 
 		//
@@ -3633,7 +4595,11 @@ void DX8Wrapper::Set_Render_Target
 			//
 			//	Switch render targets
 			//
-			DX8CALL(SetRenderTarget (CurrentRenderTarget, CurrentDepthBuffer));
+			//DX8CALL(SetRenderTarget (CurrentRenderTarget, CurrentDepthBuffer));
+			DX8CALL(SetRenderTarget(0, CurrentRenderTarget));
+			if (CurrentDepthBuffer) {
+				DX8CALL(SetDepthStencilSurface(CurrentDepthBuffer));
+			}
 		}
 	}
 
@@ -3650,18 +4616,18 @@ DX8Wrapper::Create_Additional_Swap_Chain (HWND render_window)
 	//
 	//	Configure the presentation parameters for a windowed render target
 	//
-	D3DPRESENT_PARAMETERS params				= { 0 };
+	D3DPRESENT_PARAMETERS params			= { 0 };
 	params.BackBufferFormat						= _PresentParameters.BackBufferFormat;
 	params.BackBufferCount						= 1;
 	params.MultiSampleType						= D3DMULTISAMPLE_NONE;
-	params.SwapEffect								= D3DSWAPEFFECT_COPY_VSYNC;
+	params.SwapEffect									= D3DSWAPEFFECT_COPY; // Ronin @build 27/10/2025 DX9: _COPY_VSYNC removed
 	params.hDeviceWindow							= render_window;
-	params.Windowed								= TRUE;
-	params.EnableAutoDepthStencil				= TRUE;
-	params.AutoDepthStencilFormat				= _PresentParameters.AutoDepthStencilFormat;
-	params.Flags									= 0;
-	params.FullScreen_RefreshRateInHz		= D3DPRESENT_RATE_DEFAULT;
-	params.FullScreen_PresentationInterval	= D3DPRESENT_INTERVAL_DEFAULT;
+	params.Windowed										= TRUE;
+	params.EnableAutoDepthStencil			= TRUE;
+	params.AutoDepthStencilFormat			= _PresentParameters.AutoDepthStencilFormat;
+	params.Flags											= 0;
+	params.FullScreen_RefreshRateInHz	= D3DPRESENT_RATE_DEFAULT;
+	params.PresentationInterval				= D3DPRESENT_INTERVAL_DEFAULT; // Ronin @build 27/10/2025 DX9: Renamed
 
 	//
 	//	Create the swap chain
@@ -3674,7 +4640,7 @@ DX8Wrapper::Create_Additional_Swap_Chain (HWND render_window)
 void DX8Wrapper::Flush_DX8_Resource_Manager(unsigned int bytes)
 {
 	DX8_Assert();
-	DX8CALL(ResourceManagerDiscardBytes(bytes));
+	DX8CALL(EvictManagedResources());  // Closest equivalent to ResourceManagerDiscardBytes
 }
 
 unsigned int DX8Wrapper::Get_Free_Texture_RAM()
@@ -3725,7 +4691,7 @@ void DX8Wrapper::Set_Gamma(float gamma,float bright,float contrast,bool calibrat
 	}
 
 	if (Get_Current_Caps()->Support_Gamma())	{
-		DX8Wrapper::_Get_D3D_Device8()->SetGammaRamp(flag,&ramp);
+		DX8Wrapper::_Get_D3D_Device8()->SetGammaRamp(0, flag,&ramp); // Swapchain 0
 	} else {
 		HWND hwnd = GetDesktopWindow();
 		HDC hdc = GetDC(hwnd);
@@ -3800,7 +4766,7 @@ void DX8Wrapper::Apply_Default_State()
 //	Set_DX8_Render_State(D3DRS_FOGDENSITY, WWMath::Float_As_Int(1.0f));
 
 	//Set_DX8_Render_State(D3DRS_EDGEANTIALIAS, FALSE);
-	Set_DX8_Render_State(D3DRS_ZBIAS, 0);
+	Set_DX8_Render_State(D3DRS_DEPTHBIAS, 0);
 //	Set_DX8_Render_State(D3DRS_RANGEFOGENABLE, FALSE);
 	Set_DX8_Render_State(D3DRS_STENCILENABLE, FALSE);
 	Set_DX8_Render_State(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
@@ -3832,7 +4798,7 @@ void DX8Wrapper::Apply_Default_State()
 	Set_DX8_Render_State(D3DRS_EMISSIVEMATERIALSOURCE, D3DMCS_MATERIAL);
 	Set_DX8_Render_State(D3DRS_VERTEXBLEND, D3DVBF_DISABLE);*/
 	//Set_DX8_Render_State(D3DRS_CLIPPLANEENABLE, 0);
-	Set_DX8_Render_State(D3DRS_SOFTWAREVERTEXPROCESSING, FALSE);
+	//Set_DX8_Render_State(D3DRS_SOFTWAREVERTEXPROCESSING, FALSE);
 	//Set_DX8_Render_State(D3DRS_POINTSIZE, 0x3f800000);
 	//Set_DX8_Render_State(D3DRS_POINTSIZE_MIN, 0);
 	//Set_DX8_Render_State(D3DRS_POINTSPRITEENABLE, FALSE);
@@ -3854,44 +4820,54 @@ void DX8Wrapper::Apply_Default_State()
 	//Set_DX8_Render_State(D3DRS_NORMALORDER, D3DORDER_LINEAR);
 
 	// disable TSS stages
-	int i;
-	for (i=0; i<CurrentCaps->Get_Max_Textures_Per_Pass(); i++)
-	{
-		Set_DX8_Texture_Stage_State(i, D3DTSS_COLOROP, D3DTOP_DISABLE);
-		Set_DX8_Texture_Stage_State(i, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-		Set_DX8_Texture_Stage_State(i, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
+	// 
+// Ronin @bugfix 13/11/2025: DX9 fixed-function pipeline requires Stage 0 ENABLED
+// Original code disabled ALL stages (including 0), breaking texture rendering.
+// Stage 0 must have MODULATE blending for textured primitives to appear.
+	
+	// Configure Stage 0 for standard fixed-function texturing
+	Set_DX8_Texture_Stage_State(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
 
-		Set_DX8_Texture_Stage_State(i, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
-		Set_DX8_Texture_Stage_State(i, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
-		Set_DX8_Texture_Stage_State(i, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
 
-		/*Set_DX8_Texture_Stage_State(i, D3DTSS_BUMPENVMAT00, 0);
-		Set_DX8_Texture_Stage_State(i, D3DTSS_BUMPENVMAT01, 0);
-		Set_DX8_Texture_Stage_State(i, D3DTSS_BUMPENVMAT10, 0);
-		Set_DX8_Texture_Stage_State(i, D3DTSS_BUMPENVMAT11, 0);
-		Set_DX8_Texture_Stage_State(i, D3DTSS_BUMPENVLSCALE, 0);
-		Set_DX8_Texture_Stage_State(i, D3DTSS_BUMPENVLOFFSET, 0);*/
+	Set_DX8_Texture_Stage_State(0, D3DTSS_TEXCOORDINDEX, 0);
+	Set_DX8_Texture_Stage_State(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
 
-		Set_DX8_Texture_Stage_State(i, D3DTSS_TEXCOORDINDEX, i);
+	Set_DX8_Sampler_State(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+	Set_DX8_Sampler_State(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+	Set_DX8_Sampler_State(0, D3DSAMP_BORDERCOLOR, 0);
+	Set_DX8_Sampler_State(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	Set_DX8_Sampler_State(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+	Set_DX8_Sampler_State(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+	Set_DX8_Sampler_State(0, D3DSAMP_MAXANISOTROPY, 1);
 
+		Set_Texture(0, nullptr);
 
-		Set_DX8_Texture_Stage_State(i, D3DTSS_ADDRESSU, D3DTADDRESS_WRAP);
-		Set_DX8_Texture_Stage_State(i, D3DTSS_ADDRESSV, D3DTADDRESS_WRAP);
-		Set_DX8_Texture_Stage_State(i, D3DTSS_BORDERCOLOR, 0);
-//		Set_DX8_Texture_Stage_State(i, D3DTSS_MAGFILTER, D3DTEXF_LINEAR);
-//		Set_DX8_Texture_Stage_State(i, D3DTSS_MINFILTER, D3DTEXF_LINEAR);
-//		Set_DX8_Texture_Stage_State(i, D3DTSS_MIPFILTER, D3DTEXF_LINEAR);
-//		Set_DX8_Texture_Stage_State(i, D3DTSS_MIPMAPLODBIAS, 0);
-//		Set_DX8_Texture_Stage_State(i, D3DTSS_MAXMIPLEVEL, 0);
-//		Set_DX8_Texture_Stage_State(i, D3DTSS_MAXANISOTROPY, 1);
-		//Set_DX8_Texture_Stage_State(i, D3DTSS_ADDRESSW, D3DTADDRESS_WRAP);
-		//Set_DX8_Texture_Stage_State(i, D3DTSS_COLORARG0, D3DTA_CURRENT);
-		//Set_DX8_Texture_Stage_State(i, D3DTSS_ALPHAARG0, D3DTA_CURRENT);
-		//Set_DX8_Texture_Stage_State(i, D3DTSS_RESULTARG, D3DTA_CURRENT);
+		// Disable all other stages (1+)
+		int i;
+		for (i = 1; i < CurrentCaps->Get_Max_Textures_Per_Pass(); i++)
+		{
+			Set_DX8_Texture_Stage_State(i, D3DTSS_COLOROP, D3DTOP_DISABLE);
+			Set_DX8_Texture_Stage_State(i, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
 
-		Set_DX8_Texture_Stage_State(i, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
-		Set_Texture(i,nullptr);
-	}
+			Set_DX8_Texture_Stage_State(i, D3DTSS_TEXCOORDINDEX, i);
+			Set_DX8_Texture_Stage_State(i, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+
+			Set_DX8_Sampler_State(i, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+			Set_DX8_Sampler_State(i, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+			Set_DX8_Sampler_State(i, D3DSAMP_BORDERCOLOR, 0);
+			Set_DX8_Sampler_State(i, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+			Set_DX8_Sampler_State(i, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+			Set_DX8_Sampler_State(i, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+			Set_DX8_Sampler_State(i, D3DSAMP_MAXANISOTROPY, 1);
+
+			Set_Texture(i, nullptr);
+		}
+	
 
 //	DX8Wrapper::Set_Material(nullptr);
 	VertexMaterialClass::Apply_Null();
@@ -3910,7 +4886,7 @@ void DX8Wrapper::Apply_Default_State()
 	memset(pconst,0,sizeof(Vector4)*MAX_PIXEL_SHADER_CONSTANTS);
 	Set_Pixel_Shader_Constant(0, pconst, MAX_PIXEL_SHADER_CONSTANTS);
 
-	Set_Vertex_Shader(DX8_FVF_XYZNDUV2);
+	BindLayoutFVF(DX8_FVF_XYZNDUV2, "Apply_default_State");
 	Set_Pixel_Shader(0);
 
 	ShaderClass::Invalidate();
@@ -3922,7 +4898,8 @@ const char* DX8Wrapper::Get_DX8_Render_State_Name(D3DRENDERSTATETYPE state)
 	case D3DRS_ZENABLE                       : return "D3DRS_ZENABLE";
 	case D3DRS_FILLMODE                      : return "D3DRS_FILLMODE";
 	case D3DRS_SHADEMODE                     : return "D3DRS_SHADEMODE";
-	case D3DRS_LINEPATTERN                   : return "D3DRS_LINEPATTERN";
+	// Ronin @build 27/10/2025 DX9: D3DRS_LINEPATTERN removed in DX9 - case commented out
+	// 	case D3DRS_LINEPATTERN                   : return "D3DRS_LINEPATTERN";
 	case D3DRS_ZWRITEENABLE                  : return "D3DRS_ZWRITEENABLE";
 	case D3DRS_ALPHATESTENABLE               : return "D3DRS_ALPHATESTENABLE";
 	case D3DRS_LASTPIXEL                     : return "D3DRS_LASTPIXEL";
@@ -3936,14 +4913,16 @@ const char* DX8Wrapper::Get_DX8_Render_State_Name(D3DRENDERSTATETYPE state)
 	case D3DRS_ALPHABLENDENABLE              : return "D3DRS_ALPHABLENDENABLE";
 	case D3DRS_FOGENABLE                     : return "D3DRS_FOGENABLE";
 	case D3DRS_SPECULARENABLE                : return "D3DRS_SPECULARENABLE";
-	case D3DRS_ZVISIBLE                      : return "D3DRS_ZVISIBLE";
+	// Ronin @build 27/10/2025 DX9: D3DRS_ZVISIBLE removed in DX9 - case commented out
+	// 	case D3DRS_ZVISIBLE                      : return "D3DRS_ZVISIBLE";
 	case D3DRS_FOGCOLOR                      : return "D3DRS_FOGCOLOR";
 	case D3DRS_FOGTABLEMODE                  : return "D3DRS_FOGTABLEMODE";
 	case D3DRS_FOGSTART                      : return "D3DRS_FOGSTART";
 	case D3DRS_FOGEND                        : return "D3DRS_FOGEND";
 	case D3DRS_FOGDENSITY                    : return "D3DRS_FOGDENSITY";
-	case D3DRS_EDGEANTIALIAS                 : return "D3DRS_EDGEANTIALIAS";
-	case D3DRS_ZBIAS                         : return "D3DRS_ZBIAS";
+	// Ronin @build 27/10/2025 DX9: D3DRS_EDGEANTIALIAS removed in DX9 - case commented out
+	// 	case D3DRS_EDGEANTIALIAS                 : return "D3DRS_EDGEANTIALIAS";
+	case D3DRS_DEPTHBIAS                     : return "D3DRS_DEPTHBIAS";
 	case D3DRS_RANGEFOGENABLE                : return "D3DRS_RANGEFOGENABLE";
 	case D3DRS_STENCILENABLE                 : return "D3DRS_STENCILENABLE";
 	case D3DRS_STENCILFAIL                   : return "D3DRS_STENCILFAIL";
@@ -3975,7 +4954,8 @@ const char* DX8Wrapper::Get_DX8_Render_State_Name(D3DRENDERSTATETYPE state)
 	case D3DRS_EMISSIVEMATERIALSOURCE        : return "D3DRS_EMISSIVEMATERIALSOURCE";
 	case D3DRS_VERTEXBLEND                   : return "D3DRS_VERTEXBLEND";
 	case D3DRS_CLIPPLANEENABLE               : return "D3DRS_CLIPPLANEENABLE";
-	case D3DRS_SOFTWAREVERTEXPROCESSING      : return "D3DRS_SOFTWAREVERTEXPROCESSING";
+	// Ronin @build 27/10/2025 DX9: D3DRS_SOFTWAREVERTEXPROCESSING removed in DX9 - case commented out
+	// 	case D3DRS_SOFTWAREVERTEXPROCESSING      : return "D3DRS_SOFTWAREVERTEXPROCESSING";
 	case D3DRS_POINTSIZE                     : return "D3DRS_POINTSIZE";
 	case D3DRS_POINTSIZE_MIN                 : return "D3DRS_POINTSIZE_MIN";
 	case D3DRS_POINTSPRITEENABLE             : return "D3DRS_POINTSPRITEENABLE";
@@ -3986,7 +4966,8 @@ const char* DX8Wrapper::Get_DX8_Render_State_Name(D3DRENDERSTATETYPE state)
 	case D3DRS_MULTISAMPLEANTIALIAS          : return "D3DRS_MULTISAMPLEANTIALIAS";
 	case D3DRS_MULTISAMPLEMASK               : return "D3DRS_MULTISAMPLEMASK";
 	case D3DRS_PATCHEDGESTYLE                : return "D3DRS_PATCHEDGESTYLE";
-	case D3DRS_PATCHSEGMENTS                 : return "D3DRS_PATCHSEGMENTS";
+	// Ronin @build 27/10/2025 DX9: D3DRS_PATCHSEGMENTS removed in DX9 - case commented out
+	// 	case D3DRS_PATCHSEGMENTS                 : return "D3DRS_PATCHSEGMENTS";
 	case D3DRS_DEBUGMONITORTOKEN             : return "D3DRS_DEBUGMONITORTOKEN";
 	case D3DRS_POINTSIZE_MAX                 : return "D3DRS_POINTSIZE_MAX";
 	case D3DRS_INDEXEDVERTEXBLENDENABLE      : return "D3DRS_INDEXEDVERTEXBLENDENABLE";
@@ -4013,19 +4994,29 @@ const char* DX8Wrapper::Get_DX8_Texture_Stage_State_Name(D3DTEXTURESTAGESTATETYP
 	case D3DTSS_BUMPENVMAT10              : return "D3DTSS_BUMPENVMAT10";
 	case D3DTSS_BUMPENVMAT11              : return "D3DTSS_BUMPENVMAT11";
 	case D3DTSS_TEXCOORDINDEX             : return "D3DTSS_TEXCOORDINDEX";
-	case D3DTSS_ADDRESSU                  : return "D3DTSS_ADDRESSU";
-	case D3DTSS_ADDRESSV                  : return "D3DTSS_ADDRESSV";
-	case D3DTSS_BORDERCOLOR               : return "D3DTSS_BORDERCOLOR";
-	case D3DTSS_MAGFILTER                 : return "D3DTSS_MAGFILTER";
-	case D3DTSS_MINFILTER                 : return "D3DTSS_MINFILTER";
-	case D3DTSS_MIPFILTER                 : return "D3DTSS_MIPFILTER";
-	case D3DTSS_MIPMAPLODBIAS             : return "D3DTSS_MIPMAPLODBIAS";
-	case D3DTSS_MAXMIPLEVEL               : return "D3DTSS_MAXMIPLEVEL";
-	case D3DTSS_MAXANISOTROPY             : return "D3DTSS_MAXANISOTROPY";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_ADDRESSU removed in DX9 - case commented out
+	// 	case D3DTSS_ADDRESSU                  : return "D3DTSS_ADDRESSU";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_ADDRESSV removed in DX9 - case commented out
+	// 	case D3DTSS_ADDRESSV                  : return "D3DTSS_ADDRESSV";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_BORDERCOLOR removed in DX9 - case commented out
+	// 	case D3DTSS_BORDERCOLOR               : return "D3DTSS_BORDERCOLOR";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MAGFILTER removed in DX9 - case commented out
+	// 	case D3DTSS_MAGFILTER                 : return "D3DTSS_MAGFILTER";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MINFILTER removed in DX9 - case commented out
+	// 	case D3DTSS_MINFILTER                 : return "D3DTSS_MINFILTER";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MIPFILTER removed in DX9 - case commented out
+	// 	case D3DTSS_MIPFILTER                 : return "D3DTSS_MIPFILTER";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MIPMAPLODBIAS removed in DX9 - case commented out
+	// 	case D3DTSS_MIPMAPLODBIAS             : return "D3DTSS_MIPMAPLODBIAS";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MAXMIPLEVEL removed in DX9 - case commented out
+	// 	case D3DTSS_MAXMIPLEVEL               : return "D3DTSS_MAXMIPLEVEL";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MAXANISOTROPY removed in DX9 - case commented out
+	// 	case D3DTSS_MAXANISOTROPY             : return "D3DTSS_MAXANISOTROPY";
 	case D3DTSS_BUMPENVLSCALE             : return "D3DTSS_BUMPENVLSCALE";
 	case D3DTSS_BUMPENVLOFFSET            : return "D3DTSS_BUMPENVLOFFSET";
 	case D3DTSS_TEXTURETRANSFORMFLAGS     : return "D3DTSS_TEXTURETRANSFORMFLAGS";
-	case D3DTSS_ADDRESSW                  : return "D3DTSS_ADDRESSW";
+	// Ronin @build 27/10/2025 DX9: D3DTSS_ADDRESSW removed in DX9 - case commented out
+	// 	case D3DTSS_ADDRESSW                  : return "D3DTSS_ADDRESSW";
 	case D3DTSS_COLORARG0                 : return "D3DTSS_COLORARG0";
 	case D3DTSS_ALPHAARG0                 : return "D3DTSS_ALPHAARG0";
 	case D3DTSS_RESULTARG                 : return "D3DTSS_RESULTARG";
@@ -4048,7 +5039,8 @@ void DX8Wrapper::Get_DX8_Render_State_Value_Name(StringClass& name, D3DRENDERSTA
 		name=Get_DX8_Shade_Mode_Name(value);
 		break;
 
-	case D3DRS_LINEPATTERN:
+	// Ronin @build 27/10/2025 DX9: D3DRS_LINEPATTERN removed in DX9 - case commented out
+	// 	case D3DRS_LINEPATTERN:
 	case D3DRS_FOGCOLOR:
 	case D3DRS_ALPHAREF:
 	case D3DRS_STENCILMASK:
@@ -4069,13 +5061,15 @@ void DX8Wrapper::Get_DX8_Render_State_Value_Name(StringClass& name, D3DRENDERSTA
 	case D3DRS_SPECULARENABLE:
 	case D3DRS_STENCILENABLE:
 	case D3DRS_RANGEFOGENABLE:
-	case D3DRS_EDGEANTIALIAS:
+	// Ronin @build 27/10/2025 DX9: D3DRS_EDGEANTIALIAS removed in DX9 - case commented out
+	// 	case D3DRS_EDGEANTIALIAS:
 	case D3DRS_CLIPPING:
 	case D3DRS_LIGHTING:
 	case D3DRS_COLORVERTEX:
 	case D3DRS_LOCALVIEWER:
 	case D3DRS_NORMALIZENORMALS:
-	case D3DRS_SOFTWAREVERTEXPROCESSING:
+	// Ronin @build 27/10/2025 DX9: D3DRS_SOFTWAREVERTEXPROCESSING removed in DX9 - case commented out
+	// 	case D3DRS_SOFTWAREVERTEXPROCESSING:
 	case D3DRS_POINTSPRITEENABLE:
 	case D3DRS_POINTSCALEENABLE:
 	case D3DRS_MULTISAMPLEANTIALIAS:
@@ -4098,7 +5092,8 @@ void DX8Wrapper::Get_DX8_Render_State_Value_Name(StringClass& name, D3DRENDERSTA
 		name=Get_DX8_Cmp_Func_Name(value);
 		break;
 
-	case D3DRS_ZVISIBLE:
+	// Ronin @build 27/10/2025 DX9: D3DRS_ZVISIBLE removed in DX9 - case commented out
+	// 	case D3DRS_ZVISIBLE:
 		name="NOTSUPPORTED";
 		break;
 
@@ -4115,13 +5110,14 @@ void DX8Wrapper::Get_DX8_Render_State_Value_Name(StringClass& name, D3DRENDERSTA
 	case D3DRS_POINTSCALE_A:
 	case D3DRS_POINTSCALE_B:
 	case D3DRS_POINTSCALE_C:
-	case D3DRS_PATCHSEGMENTS:
+	// Ronin @build 27/10/2025 DX9: D3DRS_PATCHSEGMENTS removed in DX9 - case commented out
+	// 	case D3DRS_PATCHSEGMENTS:
 	case D3DRS_POINTSIZE_MAX:
 	case D3DRS_TWEENFACTOR:
 		name.Format("%f",*(float*)&value);
 		break;
 
-	case D3DRS_ZBIAS:
+	case D3DRS_DEPTHBIAS:
 	case D3DRS_STENCILREF:
 		name.Format("%d",value);
 		break;
@@ -4199,15 +5195,21 @@ void DX8Wrapper::Get_DX8_Texture_Stage_State_Value_Name(StringClass& name, D3DTE
 		name=Get_DX8_Texture_Arg_Name(value);
 		break;
 
-	case D3DTSS_ADDRESSU:
-	case D3DTSS_ADDRESSV:
-	case D3DTSS_ADDRESSW:
+	// Ronin @build 27/10/2025 DX9: D3DTSS_ADDRESSU removed in DX9 - case commented out
+	// 	case D3DTSS_ADDRESSU:
+	// Ronin @build 27/10/2025 DX9: D3DTSS_ADDRESSV removed in DX9 - case commented out
+	// 	case D3DTSS_ADDRESSV:
+	// Ronin @build 27/10/2025 DX9: D3DTSS_ADDRESSW removed in DX9 - case commented out
+	// 	case D3DTSS_ADDRESSW:
 		name=Get_DX8_Texture_Address_Name(value);
 		break;
 
-	case D3DTSS_MAGFILTER:
-	case D3DTSS_MINFILTER:
-	case D3DTSS_MIPFILTER:
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MAGFILTER removed in DX9 - case commented out
+	// 	case D3DTSS_MAGFILTER:
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MINFILTER removed in DX9 - case commented out
+	// 	case D3DTSS_MINFILTER:
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MIPFILTER removed in DX9 - case commented out
+	// 	case D3DTSS_MIPFILTER:
 		name=Get_DX8_Texture_Filter_Name(value);
 		break;
 
@@ -4216,7 +5218,8 @@ void DX8Wrapper::Get_DX8_Texture_Stage_State_Value_Name(StringClass& name, D3DTE
 		break;
 
 	// Floating point values
-	case D3DTSS_MIPMAPLODBIAS:
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MIPMAPLODBIAS removed in DX9 - case commented out
+	// 	case D3DTSS_MIPMAPLODBIAS:
 	case D3DTSS_BUMPENVMAT00:
 	case D3DTSS_BUMPENVMAT01:
 	case D3DTSS_BUMPENVMAT10:
@@ -4242,12 +5245,15 @@ void DX8Wrapper::Get_DX8_Texture_Stage_State_Value_Name(StringClass& name, D3DTE
 		break;
 
 	// Integer value
-	case D3DTSS_MAXMIPLEVEL:
-	case D3DTSS_MAXANISOTROPY:
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MAXMIPLEVEL removed in DX9 - case commented out
+	// 	case D3DTSS_MAXMIPLEVEL:
+	// Ronin @build 27/10/2025 DX9: D3DTSS_MAXANISOTROPY removed in DX9 - case commented out
+	// 	case D3DTSS_MAXANISOTROPY:
 		name.Format("%d",value);
 		break;
 	// Hex values
-	case D3DTSS_BORDERCOLOR:
+	// Ronin @build 27/10/2025 DX9: D3DTSS_BORDERCOLOR removed in DX9 - case commented out
+	// 	case D3DTSS_BORDERCOLOR:
 		name.Format("0x%x",value);
 		break;
 
@@ -4313,8 +5319,8 @@ const char* DX8Wrapper::Get_DX8_Texture_Filter_Name(unsigned value)
 	case D3DTEXF_POINT			: return "D3DTEXF_POINT";
 	case D3DTEXF_LINEAR			: return "D3DTEXF_LINEAR";
 	case D3DTEXF_ANISOTROPIC	: return "D3DTEXF_ANISOTROPIC";
-	case D3DTEXF_FLATCUBIC		: return "D3DTEXF_FLATCUBIC";
-	case D3DTEXF_GAUSSIANCUBIC	: return "D3DTEXF_GAUSSIANCUBIC";
+	//case D3DTEXF_FLATCUBIC		: return "D3DTEXF_FLATCUBIC"; // Removed in DX9
+	//case D3DTEXF_GAUSSIANCUBIC	: return "D3DTEXF_GAUSSIANCUBIC"; // Removed in DX9
 	default					      : return "UNKNOWN";
 	}
 }
@@ -4507,3 +5513,502 @@ WW3DFormat	DX8Wrapper::getBackBufferFormat( void )
 {
 	return D3DFormat_To_WW3DFormat( _PresentParameters.BackBufferFormat );
 }
+
+/**
+ * Debug helper to validate current pipeline state
+ */
+
+#ifdef WWDEBUG
+bool DX8Wrapper::Validate_Pipeline_State(const char* callerName)
+{
+	IDirect3DDevice9* pDev = _Get_D3D_Device8();
+	if (!pDev) return false;
+
+	// Keep early boot noise out (matches your old behavior)
+	if (FrameCount < 43) {
+		return true;
+	}
+
+	static int totalCalls = 0;
+	totalCalls++;
+
+	DWORD fvf = 0;
+	IDirect3DVertexDeclaration9* decl = nullptr;
+	pDev->GetFVF(&fvf);
+	pDev->GetVertexDeclaration(&decl);
+
+	const bool deviceDeclActive = (decl != nullptr);
+	const bool deviceFVFActive = (fvf != 0);
+
+	// What WRAPPER thinks
+	const bool wrapperThinksDecl = (render_state.currentDecl != nullptr);
+	const bool wrapperThinksFVF = (!wrapperThinksDecl && render_state.currentFVF != 0);
+
+	const bool declIsEngineOwned = (deviceDeclActive && DeclCache) ? DeclCache->OwnsDecl(decl) : false;
+
+	const bool suspiciousEngineDeclInFVFMode =
+		(deviceDeclActive && wrapperThinksFVF && declIsEngineOwned);
+
+	const bool wrapperDeviceDisagreeOnMode =
+		(wrapperThinksDecl != deviceDeclActive);
+
+	const bool bothReportedActive = (deviceDeclActive && deviceFVFActive);
+
+	// =========================
+	// NEW: per-callsite aggregation + edge-trigger logging
+	// =========================
+	enum IssueBits : unsigned
+	{
+		ISSUE_NONE = 0,
+		ISSUE_ENGINE_DECL_IN_FVF_MODE = 1u << 0,
+		ISSUE_WRAPPER_DEVICE_MODE_MISMATCH = 1u << 1
+	};
+
+	const unsigned issuesNow =
+		(suspiciousEngineDeclInFVFMode ? ISSUE_ENGINE_DECL_IN_FVF_MODE : 0u) |
+		(wrapperDeviceDisagreeOnMode ? ISSUE_WRAPPER_DEVICE_MODE_MISMATCH : 0u);
+
+	struct Slot {
+		const char* caller = nullptr;       // pointer-identity key (string literal expected)
+		unsigned long lastFrame = 0;        // last frame we saw this slot updated
+		unsigned total = 0;                 // total issue hits for this caller
+		unsigned mismatchTotal = 0;         // total WRAPPER_DEVICE_LAYOUT_MODE_MISMATCH hits
+		unsigned engineDeclTotal = 0;       // total ENGINE_DECL_PRESENT... hits
+		unsigned lastIssues = ISSUE_NONE;   // previous issues bitmask (edge trigger)
+	};
+
+	static Slot s_slots[128] = {};
+	static unsigned s_used = 0;
+
+	Slot* slot = nullptr;
+	for (unsigned i = 0; i < s_used; ++i) {
+		if (s_slots[i].caller == callerName) { slot = &s_slots[i]; break; }
+	}
+	if (!slot) {
+		if (s_used < 128) {
+			s_slots[s_used].caller = callerName;
+			slot = &s_slots[s_used++];
+		}
+		else {
+			// Fallback: bucket 0 if table is full
+			slot = &s_slots[0];
+		}
+	}
+
+	// Reset per-frame "seen" bookkeeping if desired (currently not needed beyond lastFrame)
+	slot->lastFrame = FrameCount;
+
+	if (issuesNow != ISSUE_NONE) {
+		++slot->total;
+		if (issuesNow & ISSUE_WRAPPER_DEVICE_MODE_MISMATCH) ++slot->mismatchTotal;
+		if (issuesNow & ISSUE_ENGINE_DECL_IN_FVF_MODE) ++slot->engineDeclTotal;
+	}
+
+	const unsigned entered = (issuesNow & ~slot->lastIssues); // edge-trigger per issue-bit
+	slot->lastIssues = issuesNow;
+
+	// Log policy:
+	// - log on edge-trigger entering mismatch (per caller)
+	// - plus a heartbeat every 256 hits for that caller (per issue type)
+	const bool enteredModeMismatch = (entered & ISSUE_WRAPPER_DEVICE_MODE_MISMATCH) != 0u;
+	const bool enteredEngineDecl = (entered & ISSUE_ENGINE_DECL_IN_FVF_MODE) != 0u;
+
+	const bool heartbeatModeMismatch =
+		(issuesNow & ISSUE_WRAPPER_DEVICE_MODE_MISMATCH) && ((slot->mismatchTotal % 256u) == 0u);
+	const bool heartbeatEngineDecl =
+		(issuesNow & ISSUE_ENGINE_DECL_IN_FVF_MODE) && ((slot->engineDeclTotal % 256u) == 0u);
+
+	const bool shouldLog = enteredModeMismatch || enteredEngineDecl || heartbeatModeMismatch || heartbeatEngineDecl;
+
+	if (shouldLog) {
+		const int wrapperDeclSet = wrapperThinksDecl ? 1 : 0;
+		const int deviceDeclSet = deviceDeclActive ? 1 : 0;
+
+		const char* wrapperMode =
+			wrapperThinksDecl ? "DECL" :
+			(wrapperThinksFVF ? "FVF" : "NONE");
+
+		const char* deviceMode =
+			deviceDeclActive ? "DECL" :
+			(deviceFVFActive ? "FVF" : "NONE");
+
+		WWDEBUG_SAY(("🚨 [Frame %lu] Pipeline Issue (per-caller agg):", FrameCount));
+		WWDEBUG_SAY(("   Caller: %s", callerName ? callerName : "Unknown"));
+		WWDEBUG_SAY(("   Device:  FVF=0x%08X Decl=%p (deviceDeclSet=%d declOwned=%d bothActive=%d mode=%s)",
+			(unsigned)fvf, decl, deviceDeclSet, declIsEngineOwned ? 1 : 0, bothReportedActive ? 1 : 0, deviceMode));
+		WWDEBUG_SAY(("   Wrapper: currentFVF=0x%08X currentDecl=%p (wrapperDeclSet=%d mode=%s owner=%s)",
+			(unsigned)render_state.currentFVF,
+			render_state.currentDecl,
+			wrapperDeclSet,
+			wrapperMode,
+			render_state.layoutOwner ? render_state.layoutOwner : "Unknown/null decl owner"));
+
+		if (issuesNow & ISSUE_ENGINE_DECL_IN_FVF_MODE) {
+			WWDEBUG_SAY(("   ⚠️ Type: ENGINE_DECL_PRESENT_WHILE_WRAPPER_IN_FVF_MODE (count=%u)", slot->engineDeclTotal));
+		}
+		if (issuesNow & ISSUE_WRAPPER_DEVICE_MODE_MISMATCH) {
+			WWDEBUG_SAY(("   ⚠️ Type: WRAPPER_DEVICE_LAYOUT_MODE_MISMATCH (count=%u) (wrapperDeclSet=%d deviceDeclSet=%d wrapperMode=%s deviceMode=%s)",
+				slot->mismatchTotal, wrapperDeclSet, deviceDeclSet, wrapperMode, deviceMode));
+		}
+	}
+	// =========================
+
+	// Update history (store a ref)
+	g_stateHistory.lastFVF = fvf;
+	if (g_stateHistory.lastDecl) g_stateHistory.lastDecl->Release();
+	g_stateHistory.lastDecl = decl;
+	if (decl) decl->AddRef();
+
+	// Keep caller tracking meaningful: record based on *effective* mode
+	if (deviceDeclActive) g_stateHistory.lastSetDeclCaller = callerName;
+	else if (deviceFVFActive) g_stateHistory.lastSetFVFCaller = callerName;
+
+	// Release local ref
+	if (decl) decl->Release();
+
+	return true;
+}
+#endif
+
+void DX8Wrapper::Set_Vertex_Declaration(IDirect3DVertexDeclaration9* decl)
+{
+	DX8_THREAD_ASSERT();
+
+#ifdef _DEBUG
+	ASSERT_LAYOUT_BINDING_ALLOWED();
+#endif
+
+	IDirect3DDevice9* pDev = _Get_D3D_Device8();
+	if (!pDev) return;
+
+	// Ronin @bugfix 08/12/2025: When binding a non-null decl, clear FVF residue first
+	if (decl != nullptr) {
+		DWORD currentFVF = 0;
+		pDev->GetFVF(&currentFVF);
+		if (currentFVF != 0) {
+			pDev->SetFVF(0);
+			number_of_DX8_calls++;
+#ifdef _DEBUG
+			WWDEBUG_SAY(("Wrapper: cleared FVF=0x%08X before binding decl=%p", currentFVF, decl));
+#endif
+		}
+	}
+
+	HRESULT hr = pDev->SetVertexDeclaration(decl);
+	if (FAILED(hr)) {
+		WWDEBUG_SAY(("SetVertexDeclaration(%p) failed: 0x%08X", decl, hr));
+		return;
+	}
+	number_of_DX8_calls++;
+
+	// Track state
+	render_state.currentDecl = decl;
+	render_state.currentFVF = 0;
+	render_state_changed |= VERTEX_BUFFER_CHANGED;
+
+	// @bugfix Ronin 23/01/2026 DX9: Publish expected layout for DIP-time ENSURE
+	render_state.expectedFVF = 0;
+	if (render_state.expectedDecl) {
+		render_state.expectedDecl->Release();
+		render_state.expectedDecl = nullptr;
+	}
+	render_state.expectedDecl = decl;
+	if (render_state.expectedDecl) {
+		render_state.expectedDecl->AddRef();
+	}
+}
+
+void DX8Wrapper::BindLayoutFVF(DWORD fvf, const char* owner) {
+#ifdef _DEBUG
+	ALLOW_LAYOUT_BINDING();
+#endif
+	// Ronin @bugfix 13/01/2026 DX9: Make BindLayoutFVF production-safe (no stream tampering, wrapper-coherent)
+	if (fvf == 0) {
+		WWDEBUG_SAY(("BindLayoutFVF(%s): invalid FVF=0, ignoring", owner ? owner : "?"));
+		return;
+	}
+
+	IDirect3DDevice9* pDev = _Get_D3D_Device8();
+	if (!pDev) return;
+
+	// Ronin @bugfix 20/01/2026 DX9: Treat FVF=0 as an explicit "clear fixed-function layout" request.
+	// Guards may legitimately restore an "unknown/none" layout early in startup.
+	if (fvf == 0) {
+		pDev->SetVertexShader(nullptr);
+		pDev->SetVertexDeclaration(nullptr);
+		pDev->SetFVF(0);
+		number_of_DX8_calls += 3;
+
+		render_state.currentFVF = 0;
+		render_state.currentDecl = nullptr;
+		render_state.layoutOwner = owner ? owner : "BindLayoutFVF(clear)";
+
+		render_state_changed |= VERTEX_BUFFER_CHANGED;
+		return;
+	}
+
+	// Fixed-function input layout only:
+	// - clear VS + decl
+	// - set FVF
+	// Pixel shader is intentionally preserved (river/trapezoid use PS with FVF pipeline).
+	// 
+	// IMPORTANT:
+	// Do NOT modify stream bindings here (SetStreamSource).
+	// Stream binding + stride must remain authored by DX8Wrapper::Set_Vertex_Buffer()
+	// and applied by Apply_Render_State_Changes() to keep wrapper/device coherent.
+
+
+	pDev->SetVertexShader(nullptr);
+	pDev->SetVertexDeclaration(nullptr);
+	number_of_DX8_calls += 2;
+
+	HRESULT hr = pDev->SetFVF(fvf);
+	number_of_DX8_calls++;
+
+#ifdef WWDEBUG
+	if (FAILED(hr)) {
+		WWDEBUG_SAY(("BindLayoutFVF(owner=%s): SetFVF(0x%08X) failed hr=0x%08X", owner ? owner : "?", fvf, hr));
+	}
+#endif
+
+	// Track wrapper state (authoritative for Apply_Render_State_Changes()).
+	render_state.currentFVF = fvf;
+	render_state.currentDecl = nullptr;
+	render_state.layoutOwner = owner;
+
+	// Force a re-apply so stream 0 stride/VB is guaranteed to be re-bound correctly.
+	//render_state_changed |= VERTEX_BUFFER_CHANGED;
+}
+
+void DX8Wrapper::BindLayoutDecl(IDirect3DVertexDeclaration9* decl, const char* owner) {
+
+#ifdef _DEBUG
+	ASSERT_LAYOUT_BINDING_ALLOWED_API("SetVertexDeclaration");
+#endif
+
+	// Idempotency
+	if (render_state.currentDecl == decl && render_state.currentFVF == 0) return;
+
+	IDirect3DDevice9* pDev = _Get_D3D_Device8();
+	if (!pDev) {
+		WWDEBUG_SAY(("BindLayoutDecl: No device available"));
+		return;
+	}
+
+	// Bind declaration (DX9 ignores FVF when decl is active; GetFVF may remain non-zero)
+	HRESULT hr = pDev->SetVertexDeclaration(decl);
+	if (FAILED(hr)) {
+		WWDEBUG_SAY(("BindLayoutDecl: SetVertexDeclaration(%p) failed: 0x%08X", decl, hr));
+		return;
+	}
+
+	// Track
+	render_state.currentDecl = decl;
+	render_state.currentFVF = 0;
+	render_state.layoutOwner = owner;
+
+#ifdef _DEBUG
+	DWORD deviceFVF = 0;
+	IDirect3DVertexDeclaration9* deviceDecl = nullptr;
+	pDev->GetFVF(&deviceFVF);
+	pDev->GetVertexDeclaration(&deviceDecl);
+
+	// In DX9, deviceFVF may be non-zero here; that’s fine (ignored under decl)
+	if (deviceDecl != decl) {
+		WWDEBUG_SAY(("BindLayoutDecl: Device decl=%p (expected %p)", deviceDecl, decl));
+	}
+	if (deviceDecl) deviceDecl->Release();
+#endif
+}
+
+
+#ifdef _DEBUG
+
+PipelineStateSnapshot* DX8Wrapper::Capture_Pipeline_State(const char* location) {
+	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();  
+	if (!pDev) return nullptr;
+
+	PipelineStateSnapshot* snapshot = new PipelineStateSnapshot();
+	snapshot->captureLocation = location;
+
+	// Capture FVF and declaration
+	pDev->GetFVF(&snapshot->fvf);
+	pDev->GetVertexDeclaration(&snapshot->decl);
+
+	// Capture all stream sources
+	for (int i = 0; i < 4; i++) {
+		pDev->GetStreamSource(i, &snapshot->streams[i].buffer,
+			&snapshot->streams[i].offset,
+			&snapshot->streams[i].stride);
+	}
+
+	// Capture index buffer
+	pDev->GetIndices(&snapshot->indexBuffer);
+
+	// Capture transforms - ✅ FIXED
+	DX8Wrapper::Get_Transform(D3DTS_WORLD, snapshot->worldTransform);
+	DX8Wrapper::Get_Transform(D3DTS_VIEW, snapshot->viewTransform);
+	DX8Wrapper::Get_Transform(D3DTS_PROJECTION, snapshot->projectionTransform);
+
+	// Capture viewport
+	pDev->GetViewport(&snapshot->viewport);
+
+	//@performance Ronin 21/01/2026 DX9: Capture is intentionally silent; logging is done only on validation failure.
+  //WWDEBUG_SAY(("📸 [CAPTURED] Pipeline State at %s:", location));
+	//WWDEBUG_SAY(("   FVF: 0x%08X, Decl: %p", snapshot->fvf, snapshot->decl));
+	//WWDEBUG_SAY(("   Stream[0]: VB=%p, Offset=%u, Stride=%u",
+	//snapshot->streams[0].buffer, snapshot->streams[0].offset, snapshot->streams[0].stride));
+	//WWDEBUG_SAY(("   IB: %p", snapshot->indexBuffer));
+
+	return snapshot;
+}
+
+// @bugfix Ronin 20/01/2026 Pipeline validation: make restored-state logging fail-only to reduce debug spam.
+static bool Should_Log_Pipeline_Validation_Failure(const char* where, unsigned* outCount = nullptr)
+{
+	// Best-effort dedupe by pointer identity of string literals.
+	struct Slot { const char* where; unsigned count; };
+	static Slot s_slots[128] = {};
+	static unsigned s_used = 0;
+
+	for (unsigned i = 0; i < s_used; ++i) {
+		if (s_slots[i].where == where) {
+			s_slots[i].count++;
+			if (outCount) *outCount = s_slots[i].count;
+			// log first few, then every 128th
+			return (s_slots[i].count <= 5) || ((s_slots[i].count % 128) == 0);
+		}
+	}
+
+	if (s_used < 128) {
+		s_slots[s_used++] = { where, 1 };
+		if (outCount) *outCount = 1;
+		return true;
+	}
+
+	static unsigned s_fallback = 0;
+	s_fallback++;
+	if (outCount) *outCount = s_fallback;
+	return (s_fallback <= 5) || ((s_fallback % 128) == 0);
+}
+
+bool DX8Wrapper::Validate_Pipeline_State_Restored(PipelineStateSnapshot* snapshot, const char* location)
+{
+#ifdef _DEBUG
+	if (!snapshot || !D3DDevice) {
+		return true;
+	}
+
+	// Capture "after" but DO NOT print it here (print only on failure).
+	PipelineStateSnapshot* after = Capture_Pipeline_State(location);
+	if (!after) {
+		return true;
+	}
+
+	// @bugfix Ronin 20/01/2026 DX9: PipelineStateSnapshot has no Matches(); do explicit comparison here.
+	bool ok = true;
+
+	if (snapshot->fvf != after->fvf) ok = false;
+	if (snapshot->decl != after->decl) ok = false;
+	if (snapshot->indexBuffer != after->indexBuffer) ok = false;
+
+	// Compare first 4 streams (PipelineStateSnapshot::streams[4])
+	for (int i = 0; i < 4 && ok; ++i) {
+		if (snapshot->streams[i].buffer != after->streams[i].buffer) ok = false;
+		if (snapshot->streams[i].offset != after->streams[i].offset) ok = false;
+		if (snapshot->streams[i].stride != after->streams[i].stride) ok = false;
+	}
+
+	// Compare viewport (cheap and useful)
+	if (ok) {
+		const D3DVIEWPORT9& a = snapshot->viewport;
+		const D3DVIEWPORT9& b = after->viewport;
+		if (a.X != b.X || a.Y != b.Y || a.Width != b.Width || a.Height != b.Height ||
+			a.MinZ != b.MinZ || a.MaxZ != b.MaxZ) {
+			ok = false;
+		}
+	}
+
+	// Compare transforms (Matrix4x4 should be trivially comparable by memory here)
+	if (ok) {
+		if (memcmp(&snapshot->worldTransform, &after->worldTransform, sizeof(Matrix4x4)) != 0) ok = false;
+		if (memcmp(&snapshot->viewTransform, &after->viewTransform, sizeof(Matrix4x4)) != 0) ok = false;
+		if (memcmp(&snapshot->projectionTransform, &after->projectionTransform, sizeof(Matrix4x4)) != 0) ok = false;
+	}
+
+	if (!ok) {
+		unsigned count = 0;
+		if (Should_Log_Pipeline_Validation_Failure(location, &count)) {
+			WWDEBUG_SAY(("🚫 [VALIDATION FAILED] Pipeline State NOT Restored at %s (count=%u)", location, count));
+			Log_Pipeline_State_Diff(snapshot, after);
+		}
+	}
+
+	delete after;
+	return ok;
+#else
+	(void)snapshot;
+	(void)location;
+	return true;
+#endif
+}
+
+void DX8Wrapper::Log_Pipeline_State_Diff(const PipelineStateSnapshot* before, const PipelineStateSnapshot* after)
+{
+	if (!before || !after) {
+		WWDEBUG_SAY(("Log_Pipeline_State_Diff: before=%p after=%p", before, after));
+		return;
+	}
+
+	WWDEBUG_SAY(("=== PIPELINE STATE DIFF ==="));
+	WWDEBUG_SAY(("  before: %s", before->captureLocation ? before->captureLocation : "(null)"));
+	WWDEBUG_SAY(("  after : %s", after->captureLocation ? after->captureLocation : "(null)"));
+
+	if (before->fvf != after->fvf) {
+		WWDEBUG_SAY(("  FVF: 0x%08X -> 0x%08X", (unsigned)before->fvf, (unsigned)after->fvf));
+	}
+	if (before->decl != after->decl) {
+		WWDEBUG_SAY(("  Decl: %p -> %p", before->decl, after->decl));
+	}
+
+	if (before->indexBuffer != after->indexBuffer) {
+		WWDEBUG_SAY(("  IB: %p -> %p", before->indexBuffer, after->indexBuffer));
+	}
+
+	for (int i = 0; i < 4; ++i) {
+		const auto& a = before->streams[i];
+		const auto& b = after->streams[i];
+
+		if (a.buffer != b.buffer || a.offset != b.offset || a.stride != b.stride) {
+			WWDEBUG_SAY((
+				"  Stream[%d]: VB=%p off=%u stride=%u  ->  VB=%p off=%u stride=%u",
+				i,
+				a.buffer, (unsigned)a.offset, (unsigned)a.stride,
+				b.buffer, (unsigned)b.offset, (unsigned)b.stride));
+		}
+	}
+
+	{
+		const D3DVIEWPORT9& a = before->viewport;
+		const D3DVIEWPORT9& b = after->viewport;
+		if (a.X != b.X || a.Y != b.Y || a.Width != b.Width || a.Height != b.Height ||
+			a.MinZ != b.MinZ || a.MaxZ != b.MaxZ) {
+			WWDEBUG_SAY((
+				"  Viewport: (%u,%u %ux%u z=%f..%f) -> (%u,%u %ux%u z=%f..%f)",
+				(unsigned)a.X, (unsigned)a.Y, (unsigned)a.Width, (unsigned)a.Height, a.MinZ, a.MaxZ,
+				(unsigned)b.X, (unsigned)b.Y, (unsigned)b.Width, (unsigned)b.Height, b.MinZ, b.MaxZ));
+		}
+	}
+
+	if (memcmp(&before->worldTransform, &after->worldTransform, sizeof(Matrix4x4)) != 0) {
+		WWDEBUG_SAY(("  World transform changed"));
+	}
+	if (memcmp(&before->viewTransform, &after->viewTransform, sizeof(Matrix4x4)) != 0) {
+		WWDEBUG_SAY(("  View transform changed"));
+	}
+	if (memcmp(&before->projectionTransform, &after->projectionTransform, sizeof(Matrix4x4)) != 0) {
+		WWDEBUG_SAY(("  Projection transform changed"));
+	}
+}
+
+#endif // _DEBUG

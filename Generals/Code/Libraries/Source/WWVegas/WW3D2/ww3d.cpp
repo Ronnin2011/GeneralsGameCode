@@ -81,6 +81,9 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
+
+#include <d3d9.h>  // Native DX9
+
 #include "ww3d.h"
 #include "rinfo.h"
 #include "assetmgr.h"

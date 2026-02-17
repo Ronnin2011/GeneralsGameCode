@@ -41,9 +41,33 @@
 
 #pragma once
 
+// Ronin 19/10/2025 DX8-to-DX9 compatibility layer must be included before always.h to block DX8 headers.
+#include <d3d9.h>  // Native DX9
+#include <d3dx9.h> // Ronin @bugfix 02/11/2025 DX9: Required for D3DXLoadSurfaceFromSurface
+
+// Ronin @build 26/10/2025 DX9: Guard typedefs to prevent redefinition errors
+#ifndef DX8_TO_DX9_TYPEDEFS_DEFINED
+#define DX8_TO_DX9_TYPEDEFS_DEFINED
+
+typedef IDirect3D9 IDirect3D8;
+typedef IDirect3DDevice9 IDirect3DDevice8;
+typedef IDirect3DVolume9 IDirect3DVolume8;
+typedef IDirect3DSwapChain9 IDirect3DSwapChain8;
+typedef D3DVIEWPORT9 D3DVIEWPORT8;
+typedef IDirect3DBaseTexture9 IDirect3DBaseTexture8;
+typedef IDirect3DTexture9 IDirect3DTexture8;
+typedef IDirect3DCubeTexture9 IDirect3DCubeTexture8;
+typedef IDirect3DVolumeTexture9 IDirect3DVolumeTexture8;
+typedef IDirect3DSurface9 IDirect3DSurface8;
+
+#endif // DX8_TO_DX9_TYPEDEFS_DEFINED
+
+// Ronin @build 25/10/2025 DX9: Removed render states - map to DX9 equivalents
+#define D3DRS_ZBIAS D3DRS_DEPTHBIAS
+#define D3DFMT_W11V11U10 D3DFMT_UNKNOWN
+
 #include "always.h"
 #include "dllist.h"
-#include "d3d8.h"
 #include "matrix4.h"
 #include "statistics.h"
 #include "wwstring.h"
@@ -58,15 +82,135 @@
 #include "dx8indexbuffer.h"
 #include "vertmaterial.h"
 
+// Ronin @feature 26/11/2025: Vertex declaration test system
+#include "VertexDeclCache.h"
+#include "WaterTracksDecl.h"
+
+// Ronin @feature 2/12/2025: Layout binding enforcement
+#ifdef _DEBUG
+// @bugfix Ronin 18/01/2026: Use one shared flag for ASSERT/ALLOW (previously each macro had its own static).
+namespace DX8WrapperLayoutBinding
+{
+	extern bool g_layoutBindingAllowed;
+
+	// @debug Ronin 18/01/2026: Prints useful state when raw layout binds are attempted without authorization.
+	void Report_LayoutBindingViolation(const char* api, const char* callsite);
+}
+
+// @debug Ronin 18/01/2026 DX9: Utility to format callsite
+#ifndef DX8WRAP_STRINGIFY2
+#define DX8WRAP_STRINGIFY2(x) #x
+#define DX8WRAP_STRINGIFY(x) DX8WRAP_STRINGIFY2(x)
+#endif
+
+#define ASSERT_LAYOUT_BINDING_ALLOWED_API(apiName) \
+	do { \
+		if (!DX8WrapperLayoutBinding::g_layoutBindingAllowed) { \
+			DX8WrapperLayoutBinding::Report_LayoutBindingViolation( \
+				(apiName), __FILE__ ":" DX8WRAP_STRINGIFY(__LINE__)); \
+			WWASSERT(0 && "Direct IA layout binding forbidden; use BindLayoutFVF/BindLayoutDecl"); \
+		} \
+	} while (0)
+
+// Back-compat for existing callsites that don't specify API name
+#define ASSERT_LAYOUT_BINDING_ALLOWED() ASSERT_LAYOUT_BINDING_ALLOWED_API("UnknownLayoutBind")
+
+// @bugfix Ronin 18/01/2026: Scoped permission. Cannot accidentally remain enabled.
+#define ALLOW_LAYOUT_BINDING() \
+	struct ScopedLayoutAccess { \
+		ScopedLayoutAccess() { DX8WrapperLayoutBinding::g_layoutBindingAllowed = true; } \
+		~ScopedLayoutAccess() { DX8WrapperLayoutBinding::g_layoutBindingAllowed = false; } \
+	} __layoutAccess
+
+#else
+
+#define ASSERT_LAYOUT_BINDING_ALLOWED_API(apiName) do {} while (0)
+#define ASSERT_LAYOUT_BINDING_ALLOWED() do {} while (0)
+#define ALLOW_LAYOUT_BINDING() do {} while (0)
+
+
+#endif
+
+// Call-site tracking macros
+#ifndef STRINGIFY
+#define STRINGIFY_HELPER(x) #x
+#define STRINGIFY(x) STRINGIFY_HELPER(x)
+#endif
+
+#define BIND_LAYOUT_FVF(fvf) \
+    DX8Wrapper::BindLayoutFVF(fvf, __FILE__ ":" STRINGIFY(__LINE__))
+
+#define BIND_LAYOUT_DECL(decl) \
+    DX8Wrapper::BindLayoutDecl(decl, __FILE__ ":" STRINGIFY(__LINE__))
+
+
+// Ronin @feature 28/11/2025: Call-site tracking macros
+// Expands to BindLayoutFVF(fvf, "File.cpp:123") for ownership tracking
+#ifndef STRINGIFY
+#define STRINGIFY_HELPER(x) #x
+#define STRINGIFY(x) STRINGIFY_HELPER(x)
+#endif
+
+#define BIND_LAYOUT_FVF(fvf) \
+    DX8Wrapper::BindLayoutFVF(fvf, __FILE__ ":" STRINGIFY(__LINE__))
+
+#define BIND_LAYOUT_DECL(decl) \
+    DX8Wrapper::BindLayoutDecl(decl, __FILE__ ":" STRINGIFY(__LINE__))
+
+// Ronin @feature 27/11/2025: Pipeline state capture for debugging state pollution
+#ifdef _DEBUG
+struct PipelineStateSnapshot {
+	DWORD fvf;
+	IDirect3DVertexDeclaration9* decl;
+
+	struct StreamBinding {
+		IDirect3DVertexBuffer9* buffer;
+		UINT offset;
+		UINT stride;
+	} streams[4];  // MAX_VERTEX_STREAMS
+
+	IDirect3DIndexBuffer9* indexBuffer;
+
+	Matrix4x4 worldTransform;
+	Matrix4x4 viewTransform;
+	Matrix4x4 projectionTransform;
+
+	D3DVIEWPORT9 viewport;
+
+	const char* captureLocation;
+
+	PipelineStateSnapshot() : fvf(0), decl(nullptr), indexBuffer(nullptr), captureLocation("unknown") {
+		memset(streams, 0, sizeof(streams));
+	}
+
+	~PipelineStateSnapshot() {
+		if (decl) decl->Release();
+		if (indexBuffer) indexBuffer->Release();
+		for (int i = 0; i < 4; i++) {
+			if (streams[i].buffer) streams[i].buffer->Release();
+		}
+	}
+};
+
+// Macro for capturing pipeline state with call-site tracking
+#define CAPTURE_PIPELINE_STATE() \
+    DX8Wrapper::Capture_Pipeline_State(__FILE__ ":" STRINGIFY(__LINE__))
+
+// Macro for validating pipeline state was restored
+#define VALIDATE_PIPELINE_RESTORED(snapshot) \
+    DX8Wrapper::Validate_Pipeline_State_Restored(snapshot, __FILE__ ":" STRINGIFY(__LINE__))
+
+#endif // _DEBUG
+
 /*
 ** Registry value names
 */
 #define	VALUE_NAME_RENDER_DEVICE_NAME					"RenderDeviceName"
 #define	VALUE_NAME_RENDER_DEVICE_WIDTH				"RenderDeviceWidth"
 #define	VALUE_NAME_RENDER_DEVICE_HEIGHT				"RenderDeviceHeight"
-#define	VALUE_NAME_RENDER_DEVICE_DEPTH				"RenderDeviceDepth"
+#define	VALUE_NAME_RENDER_DEVICE_DEPTH				"RenderDeviceBitDepth"
 #define	VALUE_NAME_RENDER_DEVICE_WINDOWED			"RenderDeviceWindowed"
-#define	VALUE_NAME_RENDER_DEVICE_TEXTURE_DEPTH		"RenderDeviceTextureDepth"
+#define	VALUE_NAME_RENDER_DEVICE_TEXTURE_DEPTH		"RenderDeviceTextureBitDepth"
 
 const unsigned MAX_TEXTURE_STAGES=8;
 const unsigned MAX_VERTEX_STREAMS=2;
@@ -113,6 +257,9 @@ class DX8Caps;
 extern unsigned number_of_DX8_calls;
 extern bool _DX8SingleThreaded;
 
+// Ronin @build 02/11/2025 DX9: Forward declare DXGetErrorString9A for enhanced error reporting
+const char* DXGetErrorString9A(HRESULT hr);
+
 void DX8_Assert();
 void Log_DX8_ErrorCode(unsigned res);
 
@@ -123,9 +270,51 @@ WWINLINE void DX8_ErrorCode(unsigned res)
 }
 
 #ifdef WWDEBUG
-#define DX8CALL_HRES(x,res) DX8_Assert(); res = DX8Wrapper::_Get_D3D_Device8()->x; DX8_ErrorCode(res); number_of_DX8_calls++;
-#define DX8CALL(x) DX8_Assert(); DX8_ErrorCode(DX8Wrapper::_Get_D3D_Device8()->x); number_of_DX8_calls++;
-#define DX8CALL_D3D(x) DX8_Assert(); DX8_ErrorCode(DX8Wrapper::_Get_D3D8()->x); number_of_DX8_calls++;
+#define DX8CALL_HRES(x,res) \
+	{ \
+		DX8_Assert(); \
+		res = DX8Wrapper::_Get_D3D_Device8()->x; \
+		number_of_DX8_calls++; \
+		if (FAILED(res)) { \
+			WWDEBUG_SAY(("DX8CALL_HRES FAILED: %s returned 0x%08X (%s) at %s:%d", \
+				#x, res, DXGetErrorString9A(res), __FILE__, __LINE__)); \
+			if (res == D3DERR_INVALIDCALL) { \
+				WWDEBUG_SAY(("  D3DERR_INVALIDCALL DETECTED!")); \
+			} \
+		} \
+		DX8_ErrorCode(res); \
+	}
+
+#define DX8CALL(x) \
+	{ \
+		DX8_Assert(); \
+		HRESULT __hr = DX8Wrapper::_Get_D3D_Device8()->x; \
+		number_of_DX8_calls++; \
+		if (FAILED(__hr)) { \
+			WWDEBUG_SAY(("DX8CALL FAILED: %s returned 0x%08X (%s) at %s:%d", \
+				#x, __hr, DXGetErrorString9A(__hr), __FILE__, __LINE__)); \
+			if (__hr == D3DERR_INVALIDCALL) { \
+				WWDEBUG_SAY(("  D3DERR_INVALIDCALL DETECTED!")); \
+			} \
+		} \
+		DX8_ErrorCode(__hr); \
+	}
+
+#define DX8CALL_D3D(x) \
+	{ \
+		DX8_Assert(); \
+		HRESULT __hr = DX8Wrapper::_Get_D3D8()->x; \
+		number_of_DX8_calls++; \
+		if (FAILED(__hr)) { \
+			WWDEBUG_SAY(("DX8CALL_D3D FAILED: %s returned 0x%08X (%s) at %s:%d", \
+				#x, __hr, DXGetErrorString9A(__hr), __FILE__, __LINE__)); \
+			if (__hr == D3DERR_INVALIDCALL) { \
+				WWDEBUG_SAY(("  D3DERR_INVALIDCALL DETECTED!")); \
+			} \
+		} \
+		DX8_ErrorCode(__hr); \
+	}
+
 #define DX8_THREAD_ASSERT() if (_DX8SingleThreaded) { WWASSERT_PRINT(DX8Wrapper::_Get_Main_Thread_ID()==ThreadClass::_Get_Current_Thread_ID(),"DX8Wrapper::DX8 calls must be called from the main thread!"); }
 #else
 #define DX8CALL_HRES(x,res) res = DX8Wrapper::_Get_D3D_Device8()->x; number_of_DX8_calls++;
@@ -176,7 +365,7 @@ struct RenderStateStruct
 	ShaderClass shader;
 	VertexMaterialClass* material;
 	TextureBaseClass * Textures[MAX_TEXTURE_STAGES];
-	D3DLIGHT8 Lights[4];
+	D3DLIGHT9 Lights[4];
 	bool LightEnable[4];
   //unsigned lightsHash;
 	D3DMATRIX world;
@@ -189,6 +378,28 @@ struct RenderStateStruct
 	VertexBufferClass* vertex_buffers[MAX_VERTEX_STREAMS];
 	IndexBufferClass* index_buffer;
 	unsigned short index_base_offset;
+
+	// Ronin @bugfix 15/01/2026 DX9: Track DynamicVBAccess FVF for correct stride verification
+	DWORD vba_fvf;
+
+	// Ronin @bugfix 26/01/2026 DX9: Track the actual D3D VB used by DynamicVBAccess.
+// Without this, Apply() cannot reliably bind Stream0 for BUFFER_TYPE_DYNAMIC_DX8 (RTTI/unsafe casts break rendering).
+	IDirect3DVertexBuffer9* vba_d3d_vb = nullptr;
+
+
+	// Ronin @build 29/11/2025 DX9: Enhanced layout tracking
+	DWORD currentFVF = 0; // Track active FVF code (0 = none)
+	IDirect3DVertexDeclaration9* currentDecl = nullptr; // Track active declaration (NULL = none)
+	const char* layoutOwner = "none";
+
+	// Ronin @bugfix 01/12/2025: DX9 layout tracking for JIT binding
+	IDirect3DVertexShader9* currentVS;
+	IDirect3DPixelShader9* currentPS;
+
+	// @debug Ronin 23/01/2026 DX9: Expected IA layout at DIP time (used for ENSURE).
+	DWORD expectedFVF = 0;
+	IDirect3DVertexDeclaration9* expectedDecl = nullptr;
+
 
 	RenderStateStruct();
 	~RenderStateStruct();
@@ -245,9 +456,95 @@ class DX8Wrapper
 		unsigned short vertex_count=0);
 
 public:
+
+	// @feature Ronin 09/02/2026 DX9: Lightweight draw-call HUD overlay for performance measurement
+	static bool DrawCallHUDEnabled;
+	static void Toggle_Draw_Call_HUD();
+
+#ifdef WWDEBUG
+	// @debug Ronin 18/01/2026 DX9: Allow draw-site to tag subsequent DIP logs with a human-readable label
+	static void Set_Debug_Draw_Context(const char* label);
+	static void Clear_Debug_Draw_Context();
+	static const char* Get_Debug_Draw_Context();
+#endif
+
+	// Ronin @debug 10/01/2026 Add optional caller tag to index buffer binding for tracking IB rebinds
+	static void Set_Index_Buffer(const IndexBufferClass* ib, unsigned short index_base_offset, const char* callerTag);
+	static void Set_Index_Buffer(const DynamicIBAccessClass& iba, unsigned short index_base_offset, const char* callerTag);
+
+
+	// Ronin @bugfix 09/01/2026 DX9: Force stream0 binding with explicit stride (keeps wrapper tracking coherent)
+	static void Force_Stream0(IDirect3DVertexBuffer9* vb, UINT offset, UINT stride);
+
+	// Ronin @feature 05/12/2025: Public accessors for render state clearing
+	// Ronin @bugfix 12/01/2026: Clearing tracked layout must force a re-apply to keep device/wrapper coherent
+	static void Clear_Current_Decl()
+	{
+		render_state.currentDecl = nullptr;
+		render_state_changed |= VERTEX_BUFFER_CHANGED;
+	}
+
+	static void Clear_Current_FVF()
+	{
+		render_state.currentFVF = 0;
+		render_state_changed |= VERTEX_BUFFER_CHANGED;
+	}
+
+	// Ronin @feature 05/01/2026: Public getters for debugging state pollution
+	static IDirect3DVertexDeclaration9* Get_Current_Decl() { return render_state.currentDecl; }
+	static DWORD Get_Current_FVF() { return render_state.currentFVF; }
+
+	// Ronin @feature 27/11/2025: Vertex declaration cache for water tracks
+	static VertexDeclCache* DeclCache;
+
+	static void Init_Decl_Cache(IDirect3DDevice9* device);
+	static void Shutdown_Decl_Cache();
+
+	// Ronin @feature 27/11/2025: Central layout binding functions
+	// These are the ONLY allowed places to call SetFVF/SetVertexDeclaration
+	// Use BIND_LAYOUT_FVF(fvf) and BIND_LAYOUT_DECL(decl) macros for call-site tracking
+	static void BindLayoutFVF(DWORD fvf, const char* owner);
+	static void BindLayoutDecl(IDirect3DVertexDeclaration9* decl, const char* owner);
+
+	// Ronin @feature 10/11/2025: DX9 shader/FVF management helpers
+
+	/**
+	 * Safely switches to fixed-function pipeline
+	 * Clears all shaders and sets FVF
+	 */
+	static void Switch_To_Fixed_Function_Pipeline(DWORD fvf);
+
+	/**
+	 * Safely switches to programmable pipeline
+	 * Clears FVF before setting shaders
+	 */
+	static void Switch_To_Programmable_Pipeline(
+		IDirect3DVertexShader9* vs = nullptr,
+		IDirect3DPixelShader9* ps = nullptr,
+		IDirect3DVertexDeclaration9* customDecl = nullptr
+	);
+	/**
+	 * Debug helper to validate current pipeline state
+	 */
+	static bool Validate_Pipeline_State(const char* callerName = "Unknown"); 
+
+	/**
+	 * Helper to set vertex declaration with state tracking
+	 */
+	static void Set_Vertex_Declaration(IDirect3DVertexDeclaration9* decl);
+
+	// Add to DX8Wrapper class public section:
+#ifdef _DEBUG
+	static PipelineStateSnapshot* Capture_Pipeline_State(const char* location);
+	static bool Validate_Pipeline_State_Restored(PipelineStateSnapshot* snapshot, const char* location);
+	static void Log_Pipeline_State_Diff(const PipelineStateSnapshot* before, const PipelineStateSnapshot* after);
+#endif
+
 #ifdef EXTENDED_STATS
 	static DX8_Stats stats;
 #endif
+
+	static unsigned long FrameCount;
 
 	static bool Init(void * hwnd, bool lite = false);
 	static void Shutdown(void);
@@ -285,11 +582,14 @@ public:
 	static void Set_Index_Buffer(const DynamicIBAccessClass& iba,unsigned short index_base_offset);
 	static void Set_Index_Buffer_Index_Offset(unsigned offset);
 
+	// Ronin @Build 07/01/2026 DX9: Introduce BaseVertexIndex
+	static void Set_Base_Vertex_Index(unsigned offset);
+
 	static void Get_Render_State(RenderStateStruct& state);
 	static void Set_Render_State(const RenderStateStruct& state);
 	static void Release_Render_State();
 
-	static void Set_DX8_Material(const D3DMATERIAL8* mat);
+	static void Set_DX8_Material(const D3DMATERIAL9* mat);
 
 	static void Set_Gamma(float gamma,float bright,float contrast,bool calibrate=true,bool uselimit=true);
 
@@ -311,16 +611,24 @@ public:
 	static void _Set_DX8_Transform(D3DTRANSFORMSTATETYPE transform, const D3DMATRIX& m);
 	static void _Get_DX8_Transform(D3DTRANSFORMSTATETYPE transform, D3DMATRIX& m);
 
-	static void Set_DX8_Light(int index,D3DLIGHT8* light);
+	static void Set_DX8_Light(int index,D3DLIGHT9* light);
 	static void Set_DX8_Render_State(D3DRENDERSTATETYPE state, unsigned value);
 	static void Set_DX8_Clip_Plane(DWORD Index, CONST float* pPlane);
 	static void Set_DX8_Texture_Stage_State(unsigned stage, D3DTEXTURESTAGESTATETYPE state, unsigned value);
+
+
+	// @build Ronin 29/10/2025 DX9: 
+	static void Set_DX8_Sampler_State(unsigned stage, D3DSAMPLERSTATETYPE state, unsigned value);
+	static void Reset_Pass_Render_States();
+
+	static void Set_FVF(unsigned fvf);
+
 	static void Set_DX8_Texture(unsigned int stage, IDirect3DBaseTexture8* texture);
 	static void Set_Light_Environment(LightEnvironmentClass* light_env);
 	static LightEnvironmentClass* Get_Light_Environment() { return Light_Environment; }
 	static void Set_Fog(bool enable, const Vector3 &color, float start, float end);
 
-	static WWINLINE const D3DLIGHT8& Peek_Light(unsigned index);
+	static WWINLINE const D3DLIGHT9& Peek_Light(unsigned index);
 	static WWINLINE bool Is_Light_Enabled(unsigned index);
 
 	static bool Validate_Device(void);
@@ -331,7 +639,7 @@ public:
 	static void Get_Shader(ShaderClass& shader);
 	static void Set_Texture(unsigned stage,TextureBaseClass* texture);
 	static void Set_Material(const VertexMaterialClass* material);
-	static void Set_Light(unsigned index,const D3DLIGHT8* light);
+	static void Set_Light(unsigned index,const D3DLIGHT9* light);
 	static void Set_Light(unsigned index,const LightClass &light);
 
 	static void Apply_Render_State_Changes();	// Apply deferred render state changes (will be called automatically by Draw...)
@@ -418,7 +726,7 @@ public:
 	static unsigned int Get_Free_Texture_RAM();
 
 	static unsigned _Get_Main_Thread_ID() { return _MainThreadID; }
-	static const D3DADAPTER_IDENTIFIER8& Get_Current_Adapter_Identifier() { return CurrentAdapterIdentifier; }
+	static const D3DADAPTER_IDENTIFIER9& Get_Current_Adapter_Identifier() { return CurrentAdapterIdentifier; }
 
 	/*
 	** Statistics
@@ -520,8 +828,9 @@ public:
 
 
 
-	static IDirect3DDevice8* _Get_D3D_Device8() { return D3DDevice; }
-	static IDirect3D8* _Get_D3D8() { return D3DInterface; }
+	static IDirect3DDevice9* _Get_D3D_Device8() { return D3DDevice; }
+	static IDirect3D9* _Get_D3D8() { return D3DInterface; }
+
 	/// Returns the display format - added by TR for video playback - not part of W3D
 	static WW3DFormat	getBackBufferFormat( void );
 	static bool Reset_Device(bool reload_assets=true);
@@ -684,10 +993,10 @@ protected:
 
 	static DX8Caps*						CurrentCaps;
 
-	static D3DADAPTER_IDENTIFIER8		CurrentAdapterIdentifier;
+	static D3DADAPTER_IDENTIFIER9		CurrentAdapterIdentifier;
 
-	static IDirect3D8 *					D3DInterface;			//d3d8;
-	static IDirect3DDevice8 *			D3DDevice;				//d3ddevice8;
+	static IDirect3D9*					D3DInterface;			//d3d8;
+	static IDirect3DDevice9*			D3DDevice;				//d3ddevice8;
 
 	static IDirect3DSurface8 *			CurrentRenderTarget;
 	static IDirect3DSurface8 *			CurrentDepthBuffer;
@@ -709,6 +1018,10 @@ protected:
 	friend class DX8VertexBufferClass;
 };
 
+inline DWORD FloatToDword(float f) {
+	return *reinterpret_cast<DWORD*>(&f);
+}
+
 // shader system updates KJM v
 WWINLINE void DX8Wrapper::Set_Vertex_Shader(DWORD vertex_shader)
 {
@@ -718,7 +1031,29 @@ WWINLINE void DX8Wrapper::Set_Vertex_Shader(DWORD vertex_shader)
 #endif
 
 	Vertex_Shader=vertex_shader;
-	DX8CALL(SetVertexShader(Vertex_Shader));
+
+	// DEBUG: Log what's being passed
+#ifdef _DEBUG
+	//WWDEBUG_SAY(("Set_Vertex_Shader called with: 0x%08X", vertex_shader));
+#endif
+
+	// Ronin @build 27/10/2025 DX9: Cast DWORD (FVF code or shader handle) to IDirect3DVertexShader9*
+	// DX9 accepts both FVF codes and programmable shader pointers in the same parameter
+	//DX8CALL(SetVertexShader((IDirect3DVertexShader9*)(DWORD_PTR)Vertex_Shader));
+
+	IDirect3DDevice9* pDev = _Get_D3D_Device8();
+	if (!pDev) return;
+
+	if (vertex_shader == 0)
+	{
+		// DX8: SetVertexShader(0) = disable shader, revert to fixed-function
+		// DX9: Just disable the programmable shader, don't touch FVF
+		pDev->SetVertexShader(nullptr);
+		return;
+	}
+
+	// Assume it's an FVF code
+	pDev->SetFVF(vertex_shader);
 }
 
 WWINLINE void DX8Wrapper::Set_Pixel_Shader(DWORD pixel_shader)
@@ -727,9 +1062,12 @@ WWINLINE void DX8Wrapper::Set_Pixel_Shader(DWORD pixel_shader)
 	if (Pixel_Shader==pixel_shader) return;
 
 	Pixel_Shader=pixel_shader;
-	DX8CALL(SetPixelShader(Pixel_Shader));
+	// Ronin @build 27/10/2025 DX9: Cast DWORD handle to IDirect3DPixelShader9*
+	// DX9 treats NULL or small values as "no shader", otherwise uses as shader pointer
+	DX8CALL(SetPixelShader((IDirect3DPixelShader9*)(DWORD_PTR)Pixel_Shader));
 }
 
+// Ronin @build 24/10/2025 DX9: SetVertexShaderConstant -> SetVertexShaderConstantF
 WWINLINE void DX8Wrapper::Set_Vertex_Shader_Constant(int reg, const void* data, int count)
 {
 	int memsize=sizeof(Vector4)*count;
@@ -738,9 +1076,10 @@ WWINLINE void DX8Wrapper::Set_Vertex_Shader_Constant(int reg, const void* data, 
 	if (memcmp(data, &Vertex_Shader_Constants[reg],memsize)==0) return;
 
 	memcpy(&Vertex_Shader_Constants[reg],data,memsize);
-	DX8CALL(SetVertexShaderConstant(reg,data,count));
+	DX8CALL(SetVertexShaderConstantF(reg,(const float*)data,count));
 }
 
+// Ronin @build 24/10/2025 DX9: SetPixelShaderConstant -> SetPixelShaderConstantF
 WWINLINE void DX8Wrapper::Set_Pixel_Shader_Constant(int reg, const void* data, int count)
 {
 	int memsize=sizeof(Vector4)*count;
@@ -749,7 +1088,7 @@ WWINLINE void DX8Wrapper::Set_Pixel_Shader_Constant(int reg, const void* data, i
 	if (memcmp(data, &Pixel_Shader_Constants[reg],memsize)==0) return;
 
 	memcpy(&Pixel_Shader_Constants[reg],data,memsize);
-	DX8CALL(SetPixelShaderConstant(reg,data,count));
+	DX8CALL(SetPixelShaderConstantF(reg,(const float*)data,count));
 }
 // shader system updates KJM ^
 
@@ -784,8 +1123,20 @@ WWINLINE void DX8Wrapper::_Get_DX8_Transform(D3DTRANSFORMSTATETYPE transform, D3
 
 WWINLINE void DX8Wrapper::Set_Index_Buffer_Index_Offset(unsigned offset)
 {
-	if (render_state.index_base_offset==offset) return;
-	render_state.index_base_offset=offset;
+	// @bugfix Ronin 06/01/2026 DX9: Keep BaseVertexIndex separate from index-buffer index offset.
+	// In DX9, BaseVertexIndex is the 2nd parameter to DrawIndexedPrimitive.
+	// Index offset should affect StartIndex, which we implement via `render_state.iba_offset`.
+	if (render_state.iba_offset == (unsigned short)offset) return;
+
+	render_state.iba_offset = (unsigned short)offset;
+	render_state_changed |= INDEX_BUFFER_CHANGED;
+}
+
+WWINLINE void DX8Wrapper::Set_Base_Vertex_Index(unsigned offset)
+{
+	// Ronin @Build 07/01/2026 DX9: Terrain tracks need BaseVertexIndex to select correct slice in packed VB.
+	if (render_state.index_base_offset == (unsigned short)offset) return;
+	render_state.index_base_offset = (unsigned short)offset;
 	render_state_changed|=INDEX_BUFFER_CHANGED;
 }
 
@@ -827,7 +1178,7 @@ WWINLINE void DX8Wrapper::Set_Ambient(const Vector3& color)
 //
 // ----------------------------------------------------------------------------
 
-WWINLINE void DX8Wrapper::Set_DX8_Material(const D3DMATERIAL8* mat)
+WWINLINE void DX8Wrapper::Set_DX8_Material(const D3DMATERIAL9* mat)
 {
 	DX8_RECORD_MATERIAL_CHANGE();
 	WWASSERT(mat);
@@ -835,7 +1186,7 @@ WWINLINE void DX8Wrapper::Set_DX8_Material(const D3DMATERIAL8* mat)
 	DX8CALL(SetMaterial(mat));
 }
 
-WWINLINE void DX8Wrapper::Set_DX8_Light(int index, D3DLIGHT8* light)
+WWINLINE void DX8Wrapper::Set_DX8_Light(int index, D3DLIGHT9* light)
 {
 	if (light) {
 		DX8_RECORD_LIGHT_CHANGE();
@@ -855,7 +1206,17 @@ WWINLINE void DX8Wrapper::Set_DX8_Light(int index, D3DLIGHT8* light)
 WWINLINE void DX8Wrapper::Set_DX8_Render_State(D3DRENDERSTATETYPE state, unsigned value)
 {
 	// Can't monitor state changes because setShader call to GERD may change the states!
-	if (RenderStates[state]==value) return;
+		// Ronin @bugfix 08/11/2025: DX9 cache comparison broken - bypass cache temporarily
+	// TODO: Investigate why cache comparison fails in DX9
+	// Can't monitor state changes because setShader call to GERD may change the states!
+	// if (RenderStates[state]==value) return;  // DISABLED - cache check broken in DX9
+
+	 // Ronin @debug - Confirm cache bypass is active
+	static bool first_call = true;
+	if (first_call) {
+		WWDEBUG_SAY(("CACHE BYPASS ACTIVE - Set_DX8_Render_State modified!"));
+		first_call = false;
+	}
 
 #ifdef MESH_RENDER_SNAPSHOT_ENABLED
 	if (WW3D::Is_Snapshot_Activated()) {
@@ -884,8 +1245,11 @@ WWINLINE void DX8Wrapper::Set_DX8_Texture_Stage_State(unsigned stage, D3DTEXTURE
   		return;
   	}
 
-	// Can't monitor state changes because setShader call to GERD may change the states!
-	if (TextureStageStates[stage][(unsigned int)state]==value) return;
+		// Ronin @bugfix 08/11/2025: DX9 cache comparison broken - bypass cache temporarily
+		// TODO: Investigate why cache comparison fails in DX9
+		// Can't monitor state changes because setShader call to GERD may change the states!
+		// if (TextureStageStates[stage][(unsigned int)state]==value) return;  // DISABLED - cache check broken in DX9
+
 #ifdef MESH_RENDER_SNAPSHOT_ENABLED
 	if (WW3D::Is_Snapshot_Activated()) {
 		StringClass value_name(0,true);
@@ -900,6 +1264,118 @@ WWINLINE void DX8Wrapper::Set_DX8_Texture_Stage_State(unsigned stage, D3DTEXTURE
 	TextureStageStates[stage][(unsigned int)state]=value;
 	DX8CALL(SetTextureStageState( stage, state, value ));
 	DX8_RECORD_TEXTURE_STAGE_STATE_CHANGE();
+}
+
+
+WWINLINE void DX8Wrapper::Set_DX8_Sampler_State(unsigned stage, D3DSAMPLERSTATETYPE state, unsigned value)
+{
+	if (stage >= MAX_TEXTURE_STAGES)
+	{
+		DX8CALL(SetSamplerState(stage, state, value));
+		DX8_RECORD_TEXTURE_STAGE_STATE_CHANGE();
+		return;
+	}
+
+	// Ronin @bugfix 08/11/2025: DX9 cache comparison broken - bypass cache temporarily
+	// TODO: Investigate why cache comparison fails in DX9
+	// Can't monitor state changes because setShader call to GERD may change the states!
+	// if (TextureStageStates[stage][(unsigned int)state] == value) return;  // DISABLED - cache check broken in DX9
+
+	TextureStageStates[stage][(unsigned int)state] = value;
+
+#ifdef MESH_RENDER_SNAPSHOT_ENABLED
+	if (WW3D::Is_Snapshot_Activated()) {
+		// @bugfix Ronin 07/11/2025 DX9: Sampler states use different enums than texture stage states
+		// Simplified logging since we don't have dedicated sampler state name functions yet
+		SNAPSHOT_SAY(("DX8 - SetSamplerState(stage: %d, state: %d, value: %d)",
+			stage, (int)state, value));
+	}
+
+#endif
+
+	DX8CALL(SetSamplerState( stage, state, value ));
+	DX8_RECORD_TEXTURE_STAGE_STATE_CHANGE();
+}
+
+
+
+WWINLINE void DX8Wrapper::Set_FVF(unsigned fvf)
+{
+	// Ronin @bugfix 05/12/2025: Fixed pipeline switching per Microsoft DX9 docs
+
+	DX8_THREAD_ASSERT();
+
+#ifdef _DEBUG
+	ASSERT_LAYOUT_BINDING_ALLOWED_API("SetFVF");
+#endif
+
+	IDirect3DDevice9* pDev = _Get_D3D_Device8();
+	if (!pDev || fvf == 0) return;
+
+	// Ronin @bugfix 08/12/2025: Testing "Clear vertex declaration before setting FVF"
+	// FVF and explicit declarations are mutually exclusive per Microsoft DX9 docs
+	IDirect3DVertexDeclaration9* currentDecl = nullptr;
+	pDev->GetVertexDeclaration(&currentDecl);
+	if (currentDecl) {
+		pDev->SetVertexDeclaration(nullptr);
+		currentDecl->Release();
+		number_of_DX8_calls++;
+#ifdef _DEBUG
+		WWDEBUG_SAY(("Wrapper: cleared decl=%p before setting FVF=0x%08X", currentDecl, fvf));
+#endif
+	}
+
+
+	// Step 1: Clear vertex shader when switching to fixed-function pipeline
+	// Per Microsoft: "call SetVertexShader(NULL)" before SetFVF
+	IDirect3DVertexShader9* currentVS = nullptr;
+	pDev->GetVertexShader(&currentVS);
+	if (currentVS) {
+		pDev->SetVertexShader(nullptr);
+		currentVS->Release();
+		number_of_DX8_calls++;
+	}
+
+	/*
+	// Step 2: Clear pixel shader as well for complete fixed-function switch
+	IDirect3DPixelShader9* currentPS = nullptr;
+	pDev->GetPixelShader(&currentPS);
+	if (currentPS) {
+		pDev->SetPixelShader(nullptr);
+		currentPS->Release();
+		number_of_DX8_calls++;
+	}*/
+
+	// Step 4: Now set the FVF
+	HRESULT hr = pDev->SetFVF(fvf);
+	if (FAILED(hr)) {
+		WWDEBUG_SAY(("❌ SetFVF(0x%08X) FAILED: 0x%08X", fvf, hr));
+		return;
+	}
+	number_of_DX8_calls++;
+
+	// Update tracking
+	render_state.currentFVF = fvf;
+	render_state.currentDecl = nullptr;
+	render_state.currentVS = nullptr;
+	//render_state.currentPS = nullptr;
+	render_state_changed |= VERTEX_BUFFER_CHANGED;
+
+#ifdef _DEBUG
+	// Verify it was actually set
+	DWORD actualFVF = 0;
+	pDev->GetFVF(&actualFVF);
+	if (actualFVF != fvf) {
+		WWDEBUG_SAY(("❌ Set_FVF MISMATCH: Expected 0x%08X, Got 0x%08X", fvf, actualFVF));
+	}
+	else {
+		static unsigned long lastLogFrame = 0;
+		if (FrameCount != lastLogFrame) {
+			lastLogFrame = FrameCount;
+			WWDEBUG_SAY(("✅ Set_FVF: 0x%08X (verified, VS/Decl cleared)", fvf));
+		}
+	}
+#endif
 }
 
 WWINLINE void DX8Wrapper::Set_DX8_Texture(unsigned int stage, IDirect3DBaseTexture8* texture)
@@ -920,20 +1396,94 @@ WWINLINE void DX8Wrapper::Set_DX8_Texture(unsigned int stage, IDirect3DBaseTextu
 	DX8_RECORD_TEXTURE_CHANGE();
 }
 
+// Ronin @bugfix 25/01/2026 DX9: CopyRects removed in DX9, use StretchRect or UpdateSurface
 WWINLINE void DX8Wrapper::_Copy_DX8_Rects(
-  IDirect3DSurface8* pSourceSurface,
-  CONST RECT* pSourceRectsArray,
-  UINT cRects,
-  IDirect3DSurface8* pDestinationSurface,
-  CONST POINT* pDestPointsArray
+	IDirect3DSurface8* pSourceSurface,
+	CONST RECT* pSourceRectsArray,
+	UINT cRects,
+	IDirect3DSurface8* pDestinationSurface,
+	CONST POINT* pDestPointsArray
 )
 {
-	DX8CALL(CopyRects(
-  pSourceSurface,
-  pSourceRectsArray,
-  cRects,
-  pDestinationSurface,
-  pDestPointsArray));
+	// DX9 removed CopyRects - use StretchRect for compatible surfaces or UpdateSurface for system->default
+	if (!pSourceSurface || !pDestinationSurface) {
+		return; // Nothing to do
+	}
+
+	// Get surface descriptions to determine compatibility
+	D3DSURFACE_DESC srcDesc, dstDesc;
+	pSourceSurface->GetDesc(&srcDesc);
+	pDestinationSurface->GetDesc(&dstDesc);
+
+	// If formats don't match or surfaces are in incompatible pools, use D3DXLoadSurfaceFromSurface
+	bool needsConversion = (srcDesc.Format != dstDesc.Format) ||
+	        (srcDesc.Pool == D3DPOOL_SYSTEMMEM && dstDesc.Pool == D3DPOOL_DEFAULT) ||
+	           (srcDesc.Usage & D3DUSAGE_RENDERTARGET) != (dstDesc.Usage & D3DUSAGE_RENDERTARGET);
+
+	if (cRects > 0 && pSourceRectsArray && pDestPointsArray) {
+		// Copy each rect individually
+		for (UINT i = 0; i < cRects; i++) {
+			RECT destRect;
+			destRect.left = pDestPointsArray[i].x;
+			destRect.top = pDestPointsArray[i].y;
+			destRect.right = destRect.left + (pSourceRectsArray[i].right - pSourceRectsArray[i].left);
+			destRect.bottom = destRect.top + (pSourceRectsArray[i].bottom - pSourceRectsArray[i].top);
+
+			if (needsConversion) {
+				// Use D3DXLoadSurfaceFromSurface for format conversion or incompatible surfaces
+				HRESULT hr = D3DXLoadSurfaceFromSurface(
+					pDestinationSurface, NULL, &destRect,
+					pSourceSurface, NULL, &pSourceRectsArray[i],
+					D3DX_FILTER_NONE, 0);
+				if (FAILED(hr)) {
+					// Log but don't crash - this is non-critical for texture loading
+					WWDEBUG_SAY(("D3DXLoadSurfaceFromSurface failed: 0x%08X", hr));
+				}
+			} else {
+				// Try StretchRect for compatible surfaces
+				HRESULT hr = DX8Wrapper::_Get_D3D_Device8()->StretchRect(
+					pSourceSurface, &pSourceRectsArray[i],
+					pDestinationSurface, &destRect,
+					D3DTEXF_NONE);
+				if (FAILED(hr)) {
+					// Fallback to D3DXLoadSurfaceFromSurface
+					hr = D3DXLoadSurfaceFromSurface(
+						pDestinationSurface, NULL, &destRect,
+						pSourceSurface, NULL, &pSourceRectsArray[i],
+						D3DX_FILTER_NONE, 0);
+					if (FAILED(hr)) {
+						WWDEBUG_SAY(("Both StretchRect and D3DXLoadSurfaceFromSurface failed: 0x%08X", hr));
+					}
+				}
+			}
+		}
+	} else if (cRects == 0 || (!pSourceRectsArray && !pDestPointsArray)) {
+		// Full surface copy
+		if (needsConversion) {
+			HRESULT hr = D3DXLoadSurfaceFromSurface(
+				pDestinationSurface, NULL, NULL,
+				pSourceSurface, NULL, NULL,
+				D3DX_FILTER_NONE, 0);
+			if (FAILED(hr)) {
+				WWDEBUG_SAY(("D3DXLoadSurfaceFromSurface (full) failed: 0x%08X", hr));
+			}
+		} else {
+			HRESULT hr = DX8Wrapper::_Get_D3D_Device8()->StretchRect(
+				pSourceSurface, NULL,
+				pDestinationSurface, NULL,
+				D3DTEXF_NONE);
+			if (FAILED(hr)) {
+				// Fallback to D3DXLoadSurfaceFromSurface
+				hr = D3DXLoadSurfaceFromSurface(
+					pDestinationSurface, NULL, NULL,
+					pSourceSurface, NULL, NULL,
+					D3DX_FILTER_NONE, 0);
+				if (FAILED(hr)) {
+					WWDEBUG_SAY(("Both StretchRect and D3DXLoadSurfaceFromSurface (full) failed: 0x%08X", hr));
+				}
+			}
+		}
+	}
 }
 
 WWINLINE Vector4 DX8Wrapper::Convert_Color(unsigned color)
@@ -1159,10 +1709,15 @@ WWINLINE void DX8Wrapper::Get_Shader(ShaderClass& shader)
 
 WWINLINE void DX8Wrapper::Set_Texture(unsigned stage,TextureBaseClass* texture)
 {
-	WWASSERT(stage<(unsigned int)CurrentCaps->Get_Max_Textures_Per_Pass());
-	if (texture==render_state.Textures[stage]) return;
-	REF_PTR_SET(render_state.Textures[stage],texture);
-	render_state_changed|=(TEXTURE0_CHANGED<<stage);
+	WWASSERT(stage < (unsigned int)CurrentCaps->Get_Max_Textures_Per_Pass());
+
+	// Check if texture is changing
+	if (texture == render_state.Textures[stage]) return;
+
+	// Update render state (deferred binding)
+	REF_PTR_SET(render_state.Textures[stage], texture);
+	render_state_changed |= (TEXTURE0_CHANGED << stage);
+
 }
 
 WWINLINE void DX8Wrapper::Set_Material(const VertexMaterialClass* material)
@@ -1312,7 +1867,7 @@ WWINLINE void DX8Wrapper::Get_Transform(D3DTRANSFORMSTATETYPE transform, Matrix4
 	}
 }
 
-WWINLINE const D3DLIGHT8& DX8Wrapper::Peek_Light(unsigned index)
+WWINLINE const D3DLIGHT9& DX8Wrapper::Peek_Light(unsigned index)
 {
 	return render_state.Lights[index];
 }
@@ -1386,7 +1941,15 @@ WWINLINE void DX8Wrapper::Release_Render_State()
 WWINLINE RenderStateStruct::RenderStateStruct()
 	:
 	material(0),
-	index_buffer(0)
+	index_buffer(0),
+	vba_fvf(0), // Ronin @bugfix 15/01/2026 DX9: Initialize DynamicVBAccess FVF tracking
+	vba_d3d_vb(nullptr), // Ronin @bugfix 26/01/2026 DX9: Initialize dynamic D3D VB tracking.
+	expectedFVF(0),
+	expectedDecl(nullptr),
+	currentVS(nullptr),
+	currentPS(nullptr), 
+	currentFVF(0), 
+	currentDecl(nullptr)
 {
 	unsigned i;
 	for (i=0;i<MAX_VERTEX_STREAMS;++i) vertex_buffers[i]=0;
@@ -1406,6 +1969,15 @@ WWINLINE RenderStateStruct::~RenderStateStruct()
 	for (i=0;i<MAX_TEXTURE_STAGES;++i)
 	{
 		REF_PTR_RELEASE(Textures[i]);
+	}
+
+	if (expectedDecl) expectedDecl->Release();
+	expectedDecl = nullptr;
+
+	// Ronin @bugfix 26/01/2026 DX9: Release dynamic D3D VB tracking.
+	if (vba_d3d_vb) {
+		vba_d3d_vb->Release();
+		vba_d3d_vb = nullptr;
 	}
 }
 
@@ -1455,7 +2027,7 @@ WWINLINE RenderStateStruct& RenderStateStruct::operator= (const RenderStateStruc
 		}
 
 
-    //lightsHash = flimby((char*)(&Lights[0]), sizeof(D3DLIGHT8)-1 );
+    //lightsHash = flimby((char*)(&Lights[0]), sizeof(D3DLIGHT9)-1 );
 
 	}
 
@@ -1470,6 +2042,29 @@ WWINLINE RenderStateStruct& RenderStateStruct::operator= (const RenderStateStruc
 	vba_count=src.vba_count;
 	iba_offset=src.iba_offset;
 	index_base_offset=src.index_base_offset;
+
+	// Ronin @bugfix 15/01/2026 DX9: Carry DynamicVBAccess FVF tracking through state copies
+	vba_fvf = src.vba_fvf;
+
+	currentFVF = src.currentFVF;  
+	currentDecl = src.currentDecl;
+
+	// Copy expected layout (with AddRef)
+	expectedFVF = src.expectedFVF;
+	if (expectedDecl) expectedDecl->Release();
+	expectedDecl = src.expectedDecl;
+	if (expectedDecl) expectedDecl->AddRef();
+
+	// Ronin @bugfix 26/01/2026 DX9: Copy dynamic D3D VB tracking safely.
+	if (vba_d3d_vb) {
+		vba_d3d_vb->Release();
+		vba_d3d_vb = nullptr;
+	}
+	vba_d3d_vb = src.vba_d3d_vb;
+	if (vba_d3d_vb) {
+		vba_d3d_vb->AddRef();
+	}
+
 
 	return *this;
 }

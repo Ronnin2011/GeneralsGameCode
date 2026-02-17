@@ -253,4 +253,5 @@ target_link_libraries(g_ww3d2 PRIVATE
     corei_ww3d2
     g_wwcommon
     gi_always
+    d3d9  # DirectX 9 library
 )

@@ -251,6 +251,9 @@ void DynamicMeshModel::Render(RenderInfoClass & rinfo)
 	DX8Wrapper::Set_Vertex_Buffer(dynamic_vb);
 	DX8Wrapper::Set_Index_Buffer(dynamic_ib,0);
 
+	//const FVFInfoClass& fvfinfo = dynamic_vb.FVF_Info();
+	DX8Wrapper::BindLayoutFVF(dynamic_vb.FVF_Info().Get_FVF(), "DynamicMeshModel:Render");
+
 	/*
 	** Draw dynamesh, one pass at a time
 	*/
@@ -827,5 +830,4 @@ void DynamicScreenMeshClass::Reset( void )
 	Reset_Flags();
 	Reset_Mesh_Counters();
 }
-
 

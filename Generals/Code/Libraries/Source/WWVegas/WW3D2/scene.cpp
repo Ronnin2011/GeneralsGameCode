@@ -57,6 +57,8 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 
+#include <d3d9.h>  // Native DX9
+
 #include "scene.h"
 #include "plane.h"
 #include "camera.h"

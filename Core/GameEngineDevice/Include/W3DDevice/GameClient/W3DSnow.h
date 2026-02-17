@@ -22,10 +22,15 @@
 
 #include "GameClient/Snow.h"
 
+#include <d3d9.h>
+// Ronin @build 27/10/2025 DX9: Add guarded typedef for compatibility
+#ifndef IDirect3DVertexBuffer8
+typedef IDirect3DVertexBuffer9 IDirect3DVertexBuffer8;
+#endif
+
 class DX8IndexBufferClass;
 class RenderInfoClass;
 class TextureClass;
-struct IDirect3DVertexBuffer8;
 
 class W3DSnowManager : public SnowManager
 {

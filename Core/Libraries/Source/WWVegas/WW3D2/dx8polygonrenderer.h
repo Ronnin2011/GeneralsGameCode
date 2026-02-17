@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -37,6 +37,7 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #pragma once
+
 
 #include "always.h"
 #include "meshmdl.h"
@@ -112,9 +113,9 @@ inline void DX8PolygonRendererClass::Render(/*const Matrix3D & tm,*/int base_ver
 {
 //	DX8Wrapper::Set_Transform(D3DTS_WORLD,tm);
 //	SNAPSHOT_SAY(("Set_Transform"));
-	SNAPSHOT_SAY(("Set_Index_Buffer_Index_Offset(%d)",base_vertex_offset));
+	SNAPSHOT_SAY(("Set_Base_Vertex_Index(%d)",base_vertex_offset));
 
-	DX8Wrapper::Set_Index_Buffer_Index_Offset(base_vertex_offset);
+	DX8Wrapper::Set_Base_Vertex_Index(base_vertex_offset);
 	if (strip) {
 		SNAPSHOT_SAY(("Draw_Strip(%d,%d,%d,%d)",index_offset,index_count-2,min_vertex_index,vertex_index_range));
 		DX8Wrapper::Draw_Strip(
@@ -138,10 +139,10 @@ inline void DX8PolygonRendererClass::Render_Sorted(/*const Matrix3D & tm,*/int b
 	WWASSERT(!strip);	// Strips can't be sorted for now
 //	DX8Wrapper::Set_Transform(D3DTS_WORLD,tm);
 //	SNAPSHOT_SAY(("Set_Transform"));
-	SNAPSHOT_SAY(("Set_Index_Buffer_Index_Offset(%d)",base_vertex_offset));
+	SNAPSHOT_SAY(("Set_Base_Vertex_Index(%d)",base_vertex_offset));
 	SNAPSHOT_SAY(("Insert_Sorting_Triangles(%d,%d,%d,%d)",index_offset,index_count-2,min_vertex_index,vertex_index_range));
 
-	DX8Wrapper::Set_Index_Buffer_Index_Offset(base_vertex_offset);
+	DX8Wrapper::Set_Base_Vertex_Index(base_vertex_offset);
 	SortingRendererClass::Insert_Triangles(
 		bounding_sphere,
 		index_offset,

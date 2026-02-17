@@ -36,6 +36,8 @@
 
 #pragma once
 
+#include <d3d9.h>  // Native DX9
+
 #include "always.h"
 
 #include "vector3.h"

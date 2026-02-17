@@ -225,7 +225,7 @@ target_link_libraries(corei_gameenginedevice_private INTERFACE
 target_link_libraries(corei_gameenginedevice_public INTERFACE
     binkstub
     corei_gameengine_public
-    d3d8lib
+    d3d9
     milesstub
 )
 

@@ -216,6 +216,8 @@ set(WW3D2_SRC
     vertmaterial.h
     #visrasterizer.cpp
     #visrasterizer.h
+    # Ronin @feature 26/01/2026: Vertex declaration cache
+    VertexDeclCache.cpp
     #w3d_dep.cpp
     #w3d_dep.h
     w3d_file.h
@@ -258,4 +260,5 @@ target_link_libraries(z_ww3d2 PRIVATE
     corei_ww3d2
     z_wwcommon
     zi_always
+    d3d9  # DirectX 9 library - required for DX9 migration
 )

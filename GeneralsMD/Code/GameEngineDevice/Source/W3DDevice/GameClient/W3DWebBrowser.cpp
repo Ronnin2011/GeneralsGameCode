@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -25,6 +25,9 @@
 ////// W3DWebBrowser.cpp ///////////////
 // July 2002 Bryan Cleveland
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "W3DDevice/GameClient/W3DWebBrowser.h"
 #include "WW3D2/texture.h"
 #include "WW3D2/textureloader.h"
@@ -32,7 +35,7 @@
 #include "GameClient/Image.h"
 #include "GameClient/GameWindow.h"
 #include "vector2i.h"
-#include <d3dx8.h>
+#include <d3dx9.h>  // Native DX9 extensions
 #include "WW3D2/dx8wrapper.h"
 #include "WW3D2/dx8webbrowser.h"
 

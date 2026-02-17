@@ -28,6 +28,9 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "Common/GameMemory.h"
 #include "WW3D2/dx8wrapper.h"
 #include "WW3D2/rendobj.h"

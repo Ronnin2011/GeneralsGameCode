@@ -245,6 +245,7 @@ endif()
 
 target_link_libraries(corei_ww3d2 INTERFACE
     core_browserengine
+    d3d9  # DirectX 9 library for DX9Wrapper
     core_wwlib
     core_wwmath
 )

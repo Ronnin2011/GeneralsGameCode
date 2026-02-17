@@ -38,6 +38,8 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
+#include <d3d9.h>  // Native DX9
+
 #include "textureloader.h"
 #include "mutex.h"
 #include "thread.h"
@@ -52,7 +54,7 @@
 #include "dx8caps.h"
 #include "missingtexture.h"
 #include "TARGA.h"
-#include <d3dx8tex.h>
+#include <d3dx9tex.h>  // Native DX9 textures
 #include "wwmemlog.h"
 #include "formconv.h"
 #include "texturethumbnail.h"
@@ -358,7 +360,7 @@ void TextureLoader::Validate_Texture_Size
 	unsigned& depth
 )
 {
-	const D3DCAPS8& dx8caps=DX8Wrapper::Get_Current_Caps()->Get_DX8_Caps();
+	const D3DCAPS9& dx8caps=DX8Wrapper::Get_Current_Caps()->Get_DX8_Caps();
 
 	unsigned poweroftwowidth = 1;
 	while (poweroftwowidth < width)

@@ -1708,6 +1708,8 @@ AGAIN:
 #if defined(RTS_DEBUG)
 				|| TheGlobalData->m_benchmarkTimer > 0
 #endif
+				// @feature Ronin 10/02/2026 DX9: Also gather stats when draw call HUD is enabled
+				|| DX8Wrapper::DrawCallHUDEnabled
 			)
 	{
 		gatherDebugStats();
@@ -1915,6 +1917,36 @@ AGAIN:
 					// draw the current debug display
 					drawCurrentDebugDisplay();
 				}
+	#ifdef _DEBUG
+				// @feature Ronin 09/02/2026 DX9: Draw in-world performance HUD independently of debug display
+				if (DX8Wrapper::DrawCallHUDEnabled)
+				{
+					if (m_displayStrings[0] != NULL)
+					{
+						Int x = 3, y = 3;
+
+						// @tweak Ronin 10/02/2026 DX9: Offset HUD down by one line to avoid overlapping the FPS/timer counters
+						Int w0, h0;
+						m_displayStrings[0]->getSize(&w0, &h0);
+						if (h0 > 0)
+							y += h0;
+						else
+							y += 13; // fallback: FixedSys 8pt font height
+
+						Color textColor = GameMakeColor(0, 255, 0, 255);
+						Color dropColor = GameMakeColor(0, 0, 0, 255);
+
+						// Draw all stats lines (already populated by gatherDebugStats)
+						Int w, h;
+						for (int i = 0; i < DisplayStringCount; i++)
+						{
+							m_displayStrings[i]->draw(x, y, textColor, dropColor);
+							m_displayStrings[i]->getSize(&w, &h);
+							y += h;
+						}
+					}
+				}
+	#endif
 
 #if defined(RTS_DEBUG)
 				if (TheGlobalData->m_benchmarkTimer > 0)
@@ -1959,6 +1991,16 @@ AGAIN:
 	if (DX8Wrapper::stats.m_disableOverhead) {
 		goto AGAIN;
 	}
+#endif
+#ifdef _DEBUG
+	// --- backtick key edge detection (toggle HUD) ---
+	static bool s_prevGraveDown = false;
+	const SHORT state = GetAsyncKeyState(VK_OEM_3);
+	const bool nowDown = (state & 0x8000) != 0;
+	if (nowDown && !s_prevGraveDown) {
+		DX8Wrapper::Toggle_Draw_Call_HUD();
+	}
+	s_prevGraveDown = nowDown;
 #endif
 }
 
@@ -2149,6 +2191,10 @@ void W3DDisplay::drawLine( Int startX, Int startY,
 	/// @todo we need to consider the efficiency of the 2D renderer
 	m_2DRender->Reset();
 	m_2DRender->Enable_Texturing( FALSE );
+
+	// Ronin @bugfix 18/12/2025: Clear stale (ATLAS PROBLEM) texture when texturing disabled
+	m_2DRender->Set_Texture((TextureClass*)nullptr);
+
 	m_2DRender->Add_Line( Vector2( startX, startY ), Vector2( endX, endY ),
 												lineWidth, lineColor );
 	m_2DRender->Render();
@@ -2167,6 +2213,11 @@ void W3DDisplay::drawLine( Int startX, Int startY,
 	/// @todo we need to consider the efficiency of the 2D renderer
 	m_2DRender->Reset();
 	m_2DRender->Enable_Texturing( FALSE );
+
+	// Ronin @bugfix 18/12/2025: Clear stale (ATLAS PROBLEM) texture when texturing disabled
+	m_2DRender->Set_Texture((TextureClass*)nullptr);
+
+	m_2DRender->Render();
 	m_2DRender->Add_Line( Vector2( startX, startY ), Vector2( endX, endY ),
 												lineWidth, lineColor1, lineColor2 );
 	m_2DRender->Render();
@@ -2216,6 +2267,9 @@ void W3DDisplay::drawOpenRect( Int startX, Int startY, Int width, Int height,
 		m_2DRender->Reset();
 		m_2DRender->Enable_Texturing( FALSE );
 
+		// Ronin @bugfix 25/12/2025: Clear stale (ATLAS PROBLEM) texture when texturing disabled
+		m_2DRender->Set_Texture((TextureClass*)nullptr);
+
 		m_2DRender->Add_Outline( RectClass( startX, startY,
 																				startX + width, startY + height ),
 														 lineWidth, lineColor );
@@ -2235,9 +2289,15 @@ void W3DDisplay::drawFillRect( Int startX, Int startY, Int width, Int height,
 	/// @todo we need to consider the efficiency of the 2D renderer
 	m_2DRender->Reset();
 	m_2DRender->Enable_Texturing( FALSE );
-	m_2DRender->Add_Rect( RectClass( startX, startY,
-																	 startX + width, startY + height ),
-												0, 0, color );
+
+	// Ronin @bugfix 18/12/2025: Clear texture when texturing is disabled
+	// The persistent m_2DRender may have a stale texture from previous drawImage() calls.
+	// Direct draw code checks Texture != nullptr, so we must clear it explicitly.
+	m_2DRender->Set_Texture((TextureClass*)nullptr);
+
+	m_2DRender->Add_Rect(RectClass(startX, startY,
+		startX + width, startY + height),
+		0, 0, color);
 
 	// render it now!
 	m_2DRender->Render();
@@ -2252,6 +2312,9 @@ void W3DDisplay::drawRectClock(Int startX, Int startY, Int width, Int height, In
 
 	m_2DRender->Reset();
 	m_2DRender->Enable_Texturing( FALSE );
+
+	// Ronin @bugfix 27/12/2025: Clear stale (ATLAS PROBLEM) texture 
+	m_2DRender->Set_Texture((TextureClass*)nullptr);
 
 // The rectangles are numberd as follows
 //(x,y)	|---------|
@@ -2416,6 +2479,9 @@ void W3DDisplay::drawRemainingRectClock(Int startX, Int startY, Int width, Int h
 
 	m_2DRender->Reset();
 	m_2DRender->Enable_Texturing( FALSE );
+
+	// Ronin @bugfix 27/12/2025: Clear stale (ATLAS PROBLEM) texture
+	m_2DRender->Set_Texture((TextureClass*)nullptr);
 
 // The rectangles are numbered as follows
 //(x,y)	|---------|

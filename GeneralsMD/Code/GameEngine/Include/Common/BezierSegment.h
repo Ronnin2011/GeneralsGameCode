@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -29,7 +29,10 @@
 
 #pragma once
 
-#include <d3dx8math.h>
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
+#include <d3dx9math.h>  // Native DX9 math
 #include "Common/STLTypedefs.h"
 
 #define USUAL_TOLERANCE 1.0f

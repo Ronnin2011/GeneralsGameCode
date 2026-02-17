@@ -27,6 +27,9 @@
 // Desc:      Code to support rendering of shrouded units/terrain.
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
+#include "dx8todx9.h"
+
 #include "Lib/BaseType.h"
 #include "camera.h"
 #include "simplevec.h"

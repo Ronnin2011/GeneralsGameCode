@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -980,6 +980,13 @@ void ParticleBufferClass::Render_Particles(RenderInfoClass & rinfo)
 
 	PointGroup->Set_Arrays(Position[pingpong], Diffuse, apt, Size, Orientation, Frame, active_point_count);
 	Update_Bounding_Box();
+
+	// Ronin @bugfix 16/11/2025: Validate pipeline state before particle rendering
+#ifdef _DEBUG
+	//WWDEBUG_SAY(("🎨 Validating particle render pipeline (PointGroup)"));
+	//DX8Wrapper::Validate_Pipeline_State();
+#endif
+
 	PointGroup->Render(rinfo);
 }
 
@@ -1077,6 +1084,11 @@ void ParticleBufferClass::Render_Line(RenderInfoClass & rinfo)
 
 			// render from start, excluding end
 			if (end - start > 1) {
+				// Ronin @bugfix 16/11/2025: Validate pipeline state before line particle rendering
+#ifdef _DEBUG
+				//WWDEBUG_SAY(("Validating line particle pipeline (LineRenderer)"));
+				//DX8Wrapper::Validate_Pipeline_State();
+#endif
 				LineRenderer->Render(rinfo,
 											Transform,
 											end - start,
@@ -1171,6 +1183,13 @@ void ParticleBufferClass::Render_Line_Group(RenderInfoClass & rinfo)
 
 	LineGroup->Set_Arrays(Position[pingpong], TailPosition,Diffuse,TailDiffuse, apt, Size, UCoord, active_point_count);
 	Update_Bounding_Box();
+
+	// Ronin @bugfix 16/11/2025: Validate pipeline state before line group rendering
+#ifdef _DEBUG
+	//WWDEBUG_SAY(("Validating line group pipeline (LineGroup)"));
+	//DX8Wrapper::Validate_Pipeline_State();
+#endif
+
 	LineGroup->Render(rinfo);
 }
 
