@@ -65,7 +65,6 @@
 
 #include "Common/MultiplayerSettings.h"
 #include "GameClient/GameText.h"
-#include "GameClient/CDCheck.h"
 #include "GameClient/ExtendedMessageBox.h"
 #include "GameClient/MessageBox.h"
 #include "GameNetwork/GameInfo.h"
@@ -462,50 +461,6 @@ void reallyDoStart( void )
 	}
 }
 
-static MessageBoxReturnType cancelStartBecauseOfNoCD( void *userData )
-{
-	buttonPushed = FALSE;
-	return MB_RETURN_CLOSE;
-}
-
-Bool IsFirstCDPresent(void)
-{
-#if !defined(RTS_DEBUG)
-	return TheFileSystem->areMusicFilesOnCD();
-#else
-	return TRUE;
-#endif
-}
-
-static MessageBoxReturnType checkCDCallback( void *userData )
-{
-	if (!IsFirstCDPresent())
-	{
-		return (IsFirstCDPresent())?MB_RETURN_CLOSE:MB_RETURN_KEEPOPEN;
-	}
-	else
-	{
-		gameStartCallback callback = (gameStartCallback)userData;
-		if (callback)
-			callback();
-		return MB_RETURN_CLOSE;
-	}
-}
-
-void CheckForCDAtGameStart( gameStartCallback callback )
-{
-	if (!IsFirstCDPresent())
-	{
-		// popup a dialog asking for a CD
-		ExMessageBoxOkCancel(TheGameText->fetch("GUI:InsertCDPrompt"), TheGameText->fetch("GUI:InsertCDMessage"),
-			(void*)callback, checkCDCallback, cancelStartBecauseOfNoCD);
-	}
-	else
-	{
-		callback();
-	}
-}
-
 Bool sandboxOk = FALSE;
 static void startPressed(void)
 {
@@ -542,7 +497,7 @@ static void startPressed(void)
 
 	if(isReady)
 	{
-		CheckForCDAtGameStart( reallyDoStart );
+		reallyDoStart();
 	}
 
 }
