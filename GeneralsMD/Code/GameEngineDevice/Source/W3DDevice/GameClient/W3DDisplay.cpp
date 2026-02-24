@@ -99,6 +99,7 @@ static void drawFramerateBar(void);
 #include "WW3D2/meshmatdesc.h"
 #include "WW3D2/meshmdl.h"
 #include "WW3D2/rddesc.h"
+#include "WW3D2/dx8instancing.h"
 #include "TARGA.h"
 
 #include "GameLogic/ScriptEngine.h"		// For TheScriptEngine - jkmcd
@@ -1015,22 +1016,30 @@ void W3DDisplay::gatherDebugStats( void )
 		double cumuFPS = (numFrames > 0 && cumuTime > 0.0) ? (numFrames / cumuTime) : 0.0;
 		double skinPolysPerFrame = Debug_Statistics::Get_DX8_Skin_Polygons();
 
+		// Ronin @feature 18/02/2026 DX9: Instancing statistics for draw call HUD
+		unsigned instDraws = TheDX8InstanceManager.Get_Last_Frame_Instanced_Draw_Calls();
+		unsigned instMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Meshes();
+
 		Int LOD = TheGlobalData->m_terrainLOD;
 		//unibuffer.format( L"FPS: %.2f, %.2fms mapLOD=%d [cumu FPS=%.2f] draws: %.2f sort: %.2f", fps, ms, LOD, cumuFPS, drawsPerFrame,sortPolysPerFrame);
 		if (TheGlobalData->m_useFpsLimit)
-				unibuffer.format( L"%.2f/%d FPS, ", fps, TheFramePacer->getFramesPerSecondLimit());
+			unibuffer.format(L"%.2f/%d FPS, ", fps, TheFramePacer->getFramesPerSecondLimit());
 		else
-				unibuffer.format( L"%.2f FPS, ", fps);
+			unibuffer.format(L"%.2f FPS, ", fps);
 
-		unibuffer2.format( L"%.2fms [cumuFPS=%.2f] draws: %d skins: %d sortP: %d skinP: %d LOD %d", ms, cumuFPS, (Int)drawsPerFrame,(Int)skinDrawsPerFrame,(Int)sortPolysPerFrame, (Int)skinPolysPerFrame, LOD);
+		unibuffer2.format(L"%.2fms [cumuFPS=%.2f] draws: %d skins: %d sortP: %d skinP: %d LOD %d inst: %u/%u", ms, cumuFPS, (Int)drawsPerFrame, (Int)skinDrawsPerFrame, (Int)sortPolysPerFrame, (Int)skinPolysPerFrame, LOD, instDraws, instMeshes);
 		unibuffer.concat(unibuffer2);
 #else
+		// Ronin @feature 18/02/2026 DX9: Instancing statistics for draw call HUD
+		unsigned instDraws = TheDX8InstanceManager.Get_Last_Frame_Instanced_Draw_Calls();
+		unsigned instMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Meshes();
+
 		//Int LOD = TheGlobalData->m_terrainLOD;
 		//unibuffer.format( L"FPS: %.2f, %.2fms mapLOD=%d draws: %.2f sort %.2f", fps, ms, LOD, drawsPerFrame,sortPolysPerFrame);
-		unibuffer.format( L"FPS: %.2f, %.2fms draws: %.2f skins: %.2f sort %.2f", fps, ms, drawsPerFrame,skinDrawsPerFrame,sortPolysPerFrame);
+		unibuffer.format(L"FPS: %.2f, %.2fms draws: %.2f skins: %.2f sort %.2f inst: %u/%u", fps, ms, drawsPerFrame, skinDrawsPerFrame, sortPolysPerFrame, instDraws, instMeshes);
 		if (TheGlobalData->m_useFpsLimit)
 		{
-			unibuffer2.format(L", FPSLock %d",TheGlobalData->m_framesPerSecondLimit);
+			unibuffer2.format(L", FPSLock %d", TheGlobalData->m_framesPerSecondLimit);
 			unibuffer.concat(unibuffer2);
 		}
 #endif

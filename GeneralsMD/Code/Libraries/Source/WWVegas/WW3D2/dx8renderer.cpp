@@ -62,6 +62,7 @@
 #include "camera.h"
 #include "stripoptimizer.h"
 #include "meshgeometry.h"
+#include "dx8instancing.h"
 
 /*
 ** Global Instance of the DX8MeshRender
@@ -177,6 +178,46 @@ DEFINE_AUTO_POOL(MatPassTaskClass, 256);
 
 
 // ----------------------------------------------------------------------------
+
+// Ronin @feature 23/02/2026 DX9: Check if two polygon renderers reference the same geometry
+// in the shared VB/IB. This enables instancing across different MeshModelClass instances that
+// were registered into the same FVF container (and thus share the same VB/IB ranges).
+static bool Polygon_Renderers_Are_Equivalent(DX8PolygonRendererClass* a, DX8PolygonRendererClass* b)
+{
+	return (a == b) ||
+		(a->Get_Vertex_Offset() == b->Get_Vertex_Offset() &&
+			a->Get_Index_Offset() == b->Get_Index_Offset() &&
+			a->Get_Index_Count() == b->Get_Index_Count() &&
+			a->Get_Min_Vertex_Index() == b->Get_Min_Vertex_Index() &&
+			a->Get_Vertex_Index_Range() == b->Get_Vertex_Index_Range() &&
+			a->Is_Strip() == b->Is_Strip());
+}
+
+// Ronin @feature 23/02/2026 DX9: Reuse VB/IB slots for cloned MeshModels that share geometry
+// When Make_Unique() clones a MeshModelClass, the Poly and Vertex ShareBuffers are ref-counted
+// shares pointing to identical data. Detect this and create polygon renderers that reference
+// the existing VB/IB offsets instead of duplicating vertices/indices.
+static MeshModelClass* Find_Registered_Mesh_Sharing_Geometry(MeshModelClass* mmc)
+{
+	// Walk the registered mesh list looking for a model that shares the same
+	// underlying Poly and Vertex ShareBuffer pointers (ref-counted identity).
+	MultiListIterator<MeshModelClass> it(&_RegisteredMeshList);
+	while (!it.Is_Done()) {
+		MeshModelClass* existing = it.Peek_Obj();
+		if (existing != mmc &&
+			existing->Get_Polygon_Count() == mmc->Get_Polygon_Count() &&
+			existing->Get_Vertex_Count() == mmc->Get_Vertex_Count() &&
+			existing->Get_Polygon_Array() == mmc->Get_Polygon_Array() &&  // Same ShareBuffer
+			existing->Get_Vertex_Array() == mmc->Get_Vertex_Array() &&    // Same ShareBuffer
+			existing->Get_Pass_Count() == mmc->Get_Pass_Count() &&
+			existing->Has_Polygon_Renderers())
+		{
+			return existing;
+		}
+		it.Next();
+	}
+	return nullptr;
+}
 
 
 inline static bool Equal_Material(const VertexMaterialClass* mat1,const VertexMaterialClass* mat2)
@@ -1500,8 +1541,6 @@ void DX8SkinFVFCategoryContainer::Add_Visible_Skin(MeshClass * mesh)
 }
 
 
-// ----------------------------------------------------------------------------
-
 void DX8SkinFVFCategoryContainer::Reset()
 {
 	clearVisibleSkinList();
@@ -1761,12 +1800,6 @@ void DX8TextureCategoryClass::Render(void)
 
 	DX8Wrapper::Set_Shader(theShader);
 
-	// Ronin @bugfix 01/02/2026 DX9: Force apply render state changes before drawing.
-	// Skin textures were not being applied to the device because the deferred
-	// state application was being skipped in the skin rendering path.
-	DX8Wrapper::Apply_Render_State_Changes(); //@bugfix Ronin 16/02/2026 **Requires revisit**
-
-
 	if (m_gForceMultiply && theShader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO) {
 		theShader.Set_Dst_Blend_Func(ShaderClass::DSTBLEND_SRC_COLOR);
 		theShader.Set_Src_Blend_Func(ShaderClass::SRCBLEND_ZERO);
@@ -1776,6 +1809,208 @@ void DX8TextureCategoryClass::Render(void)
 		//REF_PTR_RELEASE(material);
 		DX8Wrapper::Apply_Render_State_Changes();
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND,D3DBLEND_DESTCOLOR);
+	}
+
+	// Ronin @feature 19/02/2026 DX9: Hardware instancing pre-pass for rigid mesh batching.
+	// Before the per-mesh rendering loop, scan the render task list for eligible instances
+	// that share the same polygon renderer. If we find >= 2, collect their world transforms
+	// and issue a single instanced DrawIndexedPrimitive, then remove them from the task list.
+	// Non-eligible meshes (skins, sorted, billboard, alpha override, scaled, strips, overflow)
+	// fall through to the original per-mesh rendering path below.
+
+	// Ronin @feature 23/02/2026 DX9: Multi-renderer instancing pre-pass for rigid mesh batching.
+	// Loop over ALL unique polygon renderers in the render task list, batching each group of >= 2
+	// eligible instances into a single instanced DrawIndexedPrimitive call. Previous implementation
+	// only batched the single most common renderer, leaving all other sub-mesh types (wheels,
+	// turrets, etc.) to fall through to per-mesh rendering.
+
+		// Ronin @feature 23/02/2026 DX9: Multi-renderer instancing pre-pass for rigid mesh batching.
+	// Loop over ALL unique polygon renderers in the render task list, batching each group of >= 2
+	// eligible instances into a single instanced DrawIndexedPrimitive call.
+	// Ronin @bugfix 23/02/2026 DX9: Match polygon renderers by geometric equivalence (same IB/VB
+	// range) rather than pointer identity, so meshes from different MeshModelClass instances that
+	// share the same container VB/IB can be batched together.
+
+	if (TheDX8InstanceManager.Is_Enabled() && render_task_head != nullptr) {
+
+		bool found_batch = true;
+		while (found_batch) {
+			found_batch = false;
+
+			// Scan for the most common eligible polygon renderer among remaining tasks.
+			DX8PolygonRendererClass* best_renderer = nullptr;
+			unsigned best_count = 0;
+
+			PolyRenderTaskClass* scan = render_task_head;
+			while (scan != nullptr) {
+				DX8PolygonRendererClass* candidate = scan->Peek_Polygon_Renderer();
+				MeshClass* mesh = scan->Peek_Mesh();
+
+				// Quick eligibility pre-check
+				if (mesh->Get_Base_Vertex_Offset() != VERTEX_BUFFER_OVERFLOW &&
+					!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) &&
+					!candidate->Is_Strip())
+				{
+					unsigned count = 0;
+					PolyRenderTaskClass* inner = render_task_head;
+					while (inner != nullptr && count < DX8InstanceManagerClass::MAX_INSTANCES_PER_DRAW) {
+						if (Polygon_Renderers_Are_Equivalent(inner->Peek_Polygon_Renderer(), candidate)) {
+							MeshClass* m = inner->Peek_Mesh();
+							if (m->Get_Base_Vertex_Offset() != VERTEX_BUFFER_OVERFLOW &&
+								!m->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) &&
+								!(!!m->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) &&
+								!m->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED) &&
+								!m->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
+								m->Get_Alpha_Override() == 1.0f &&
+								!(m->Get_User_Data() && *(int*)m->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE) &&
+								m->Get_ObjectScale() == 1.0f)
+							{
+								count++;
+							}
+						}
+						inner = inner->Get_Next_Visible();
+					}
+
+					if (count > best_count) {
+						best_count = count;
+						best_renderer = candidate;
+					}
+				}
+
+				scan = scan->Get_Next_Visible();
+			}
+
+			// If we found >= 2 eligible instances, collect and draw them instanced.
+			if (best_count < 2 || best_renderer == nullptr)
+				break;
+
+			// Found a batchable group — collect transforms and splice them out.
+			found_batch = true;
+			TheDX8InstanceManager.Reset_Collection();
+
+			// Ronin @bugfix 23/02/2026 DX9: Count how many tasks we had BEFORE splicing
+			unsigned pre_splice_count = 0;
+			{
+				PolyRenderTaskClass* dbg = render_task_head;
+				while (dbg) { pre_splice_count++; dbg = dbg->Get_Next_Visible(); }
+			}
+
+			PolyRenderTaskClass* prt_i = render_task_head;
+			PolyRenderTaskClass* last_prt_i = nullptr;
+
+			while (prt_i != nullptr) {
+				PolyRenderTaskClass* next_prt_i = prt_i->Get_Next_Visible();
+				MeshClass* mesh = prt_i->Peek_Mesh();
+				DX8PolygonRendererClass* renderer = prt_i->Peek_Polygon_Renderer();
+
+				bool eligible = (renderer == best_renderer) &&
+					mesh->Get_Base_Vertex_Offset() != VERTEX_BUFFER_OVERFLOW &&
+					!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) &&
+					!(!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) &&
+					!mesh->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED) &&
+					!mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
+					mesh->Get_Alpha_Override() == 1.0f &&
+					!(mesh->Get_User_Data() && *(int*)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE) &&
+					mesh->Get_ObjectScale() == 1.0f;
+
+				if (eligible) {
+					const Matrix3D& tm = mesh->Get_Transform();
+					TheDX8InstanceManager.Add_Instance_Transform(
+						(const float*)&tm[0],
+						(const float*)&tm[1],
+						(const float*)&tm[2]);
+
+					// Apply lighting from the first collected instance
+					if (TheDX8InstanceManager.Get_Collected_Count() == 1) {
+						LightEnvironmentClass* lenv = mesh->Get_Lighting_Environment();
+						if (lenv != nullptr) {
+							DX8Wrapper::Set_Light_Environment(lenv);
+						}
+						DX8Wrapper::Apply_Render_State_Changes();
+					}
+
+					// Remove this task from the linked list
+					if (last_prt_i == nullptr) {
+						render_task_head = next_prt_i;
+					}
+					else {
+						last_prt_i->Set_Next_Visible(next_prt_i);
+					}
+					delete prt_i;
+				}
+				else {
+					last_prt_i = prt_i;
+				}
+
+				prt_i = next_prt_i;
+			}
+
+			// Ronin @bugfix 23/02/2026 DX9: Count how many tasks remain AFTER splicing
+			unsigned post_splice_count = 0;
+			{
+				PolyRenderTaskClass* dbg = render_task_head;
+				while (dbg) { post_splice_count++; dbg = dbg->Get_Next_Visible(); }
+			}
+
+			unsigned collected = TheDX8InstanceManager.Get_Collected_Count();
+			WWDEBUG_SAY(("INST BATCH: best_count=%u collected=%u pre=%u post=%u removed=%u renderer=%p",
+				best_count, collected, pre_splice_count, post_splice_count,
+				pre_splice_count - post_splice_count, best_renderer));
+
+			// Issue the instanced draw call for this renderer group
+			if (collected >= 2) {
+
+				TheDX8InstanceManager.Draw_Instanced(best_renderer, container->Get_FVF());
+
+				// Restore DX8Wrapper-tracked state after instanced draw
+				DX8Wrapper::BindLayoutFVF(container->Get_FVF(), "DX8TextureCategoryClass::Render post-instancing restore");
+
+				for (unsigned ri = 0; ri < MeshMatDescClass::MAX_TEX_STAGES; ++ri) {
+					DX8Wrapper::Set_Texture(ri, Peek_Texture(ri));
+				}
+				DX8Wrapper::Set_Material((VertexMaterialClass*)Peek_Material());
+				DX8Wrapper::Set_Shader(theShader);
+				DX8Wrapper::Apply_Render_State_Changes();
+			}
+		}
+		// Ronin @bugfix 24/02/2026 DX9: Diagnostic to identify why remaining tasks aren't eligible for instancing
+#ifdef WWDEBUG
+		if (TheDX8InstanceManager.Is_Enabled() && render_task_head != nullptr) {
+			unsigned total_tasks = 0;
+			unsigned strip_tasks = 0;
+			unsigned skin_tasks = 0;
+			unsigned sort_tasks = 0;
+			unsigned aligned_tasks = 0;
+			unsigned alpha_tasks = 0;
+			unsigned scale_tasks = 0;
+			unsigned overflow_tasks = 0;
+			unsigned userdata_tasks = 0;
+			unsigned singleton_eligible = 0;
+
+			// First pass: count rejection reasons
+			PolyRenderTaskClass* dbg = render_task_head;
+			while (dbg) {
+				total_tasks++;
+				DX8PolygonRendererClass* r = dbg->Peek_Polygon_Renderer();
+				MeshClass* m = dbg->Peek_Mesh();
+				if (m->Get_Base_Vertex_Offset() == VERTEX_BUFFER_OVERFLOW) { overflow_tasks++; }
+				else if (m->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN)) { skin_tasks++; }
+				else if (r->Is_Strip()) { strip_tasks++; }
+				else if (!!m->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) { sort_tasks++; }
+				else if (m->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED) || m->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED)) { aligned_tasks++; }
+				else if (m->Get_Alpha_Override() != 1.0f) { alpha_tasks++; }
+				else if (m->Get_User_Data() && *(int*)m->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE) { userdata_tasks++; }
+				else if (m->Get_ObjectScale() != 1.0f) { scale_tasks++; }
+				else { singleton_eligible++; }
+				dbg = dbg->Get_Next_Visible();
+			}
+
+			if (total_tasks > 0) {
+				WWDEBUG_SAY(("INST FILTER: total=%u strip=%u skin=%u sort=%u aligned=%u alpha=%u userdata=%u scale=%u overflow=%u singleton=%u",
+					total_tasks, strip_tasks, skin_tasks, sort_tasks, aligned_tasks, alpha_tasks, userdata_tasks, scale_tasks, overflow_tasks, singleton_eligible));
+			}
+		}
+#endif
 	}
 
 
@@ -1915,7 +2150,6 @@ void DX8TextureCategoryClass::Render(void)
 			DX8Wrapper::Set_Transform(D3DTS_WORLD,*world_transform);
 		}
 
-
 //--------------------------------------------------------------------
 		if (mesh->Get_ObjectScale() != 1.0f)
 			DX8Wrapper::Set_DX8_Render_State(D3DRS_NORMALIZENORMALS, TRUE);
@@ -1929,15 +2163,6 @@ void DX8TextureCategoryClass::Render(void)
 		if ((!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT)) && WW3D::Is_Sorting_Enabled()) {
 			renderer->Render_Sorted(mesh->Get_Base_Vertex_Offset(),mesh->Get_Bounding_Sphere());
 		} else {
-
-			// Ronin @bugfix 05/02/2026 DX9: Bind FVF immediately before draw for skins.
-			// In DX8, FVF was inferred from the VB. In DX9, we must explicitly set it.
-			// SegLine works because SortingRenderer::Insert_Triangles() calls BindLayoutFVF().
-			// Skins must do the same - and it must happen AFTER Set_Shader/Set_Material/Set_Texture
-			// which can reset the FVF tracking state.
-		/*	if (mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN)) {
-				DX8Wrapper::BindLayoutFVF(dynamic_fvf_type, "DX8TextureCategoryClass::Render SKIN draw");
-			}*/
 
 			//non-transparent mesh that will be rendered immediately.  Okay to adjust the shader/material
 			//if necessary
@@ -2161,6 +2386,27 @@ void DX8MeshRendererClass::Register_Mesh_Type(MeshModelClass* mmc)
 		*/
 		if (!_RegisteredMeshList.Contains(mmc)) {
 
+			// Ronin @feature 23/02/2026 DX9: Check for an already-registered mesh that shares
+			// the same geometry buffers (same Poly/Vertex ShareBuffer pointers). If found,
+			// clone its polygon renderers to reuse the same VB/IB offsets.
+			MeshModelClass* donor = Find_Registered_Mesh_Sharing_Geometry(mmc);
+			if (donor != nullptr) {
+				// Clone polygon renderers from the donor — they reference the same VB/IB ranges
+				DX8PolygonRendererListIterator pr_it(&donor->PolygonRendererList);
+				while (!pr_it.Is_Done()) {
+					DX8PolygonRendererClass* src_pr = pr_it.Peek_Obj();
+					DX8PolygonRendererClass* new_pr = W3DNEW DX8PolygonRendererClass(*src_pr, mmc);
+					// Add to the same texture category so it shares the VB/IB
+					src_pr->Get_Texture_Category()->Add_Polygon_Renderer(new_pr, src_pr);
+					pr_it.Next();
+				}
+
+				if (!mmc->PolygonRendererList.Is_Empty()) {
+					_RegisteredMeshList.Add_Tail(mmc);
+				}
+				return;
+			}
+
 			unsigned fvf=DX8FVFCategoryContainer::Define_FVF(mmc,enable_lighting);
 
 			/*
@@ -2349,9 +2595,6 @@ void DX8MeshRendererClass::Invalidate( bool shutdown)
 
 	texture_category_container_lists_rigid.Delete_All();
 }
-
-
-
 
 
 

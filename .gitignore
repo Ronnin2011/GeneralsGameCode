@@ -71,3 +71,4 @@ __pycache__/
 ## DX8 Reference and analysis
 *.dx8backup
 /docs/
+/DX8Reference/

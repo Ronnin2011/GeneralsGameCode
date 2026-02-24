@@ -457,6 +457,17 @@ class DX8Wrapper
 
 public:
 
+	// Ronin @bugfix 19/02/2026 DX9: Dirty VB/IB change flags without clearing the tracked pointers.
+	// Used after instanced drawing so Apply_Render_State_Changes re-binds the container's buffers.
+	static void Invalidate_Vertex_Buffer_State()
+	{
+		render_state_changed |= VERTEX_BUFFER_CHANGED | INDEX_BUFFER_CHANGED;
+	}
+
+	// Ronin @bugfix 19/02/2026 DX9: Re-apply wrapper's tracked VB/IB/FVF to the device
+	// Used after instanced drawing to restore IA state for subsequent non-instanced draws
+	static void Restore_IA_State_From_Wrapper();
+
 	// @feature Ronin 09/02/2026 DX9: Lightweight draw-call HUD overlay for performance measurement
 	static bool DrawCallHUDEnabled;
 	static void Toggle_Draw_Call_HUD();

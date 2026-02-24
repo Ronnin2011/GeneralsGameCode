@@ -80,6 +80,9 @@ if(MSVC)
     # This copies exe + pdb to Zero Hour installation after every build
     set(ZEROHOUR_INSTALL_PATH "C:/Program Files (x86)/Steam/steamapps/common/Command & Conquer Generals - Zero Hour")
     
+    # Ronin @build 18/02/2026 Path to the compiled instancing vertex shader
+    set(SHADER_SOURCE_DIR "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/Shaders")
+
     add_custom_command(TARGET z_generals POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E echo "Deploying to Zero Hour installation..."
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -88,7 +91,14 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
    $<TARGET_FILE_DIR:z_generals>/generalszh.pdb
         "${ZEROHOUR_INSTALL_PATH}/generalszh.pdb"
+        # Ronin @build 18/02/2026 Deploy instancing vertex shader to shaders subfolder
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${ZEROHOUR_INSTALL_PATH}/shaders"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/RigidInstance.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/RigidInstance.vso"
         COMMENT "Auto-deploying to Zero Hour installation folder"
+
     )
     
     # Ronin @build 02/11/2025 Set debugging working directory for Visual Studio

@@ -84,6 +84,7 @@ const char* DXGetErrorString9A(HRESULT hr)
 #include "dx8vertexbuffer.h"
 #include "dx8indexbuffer.h"
 #include "dx8renderer.h"
+#include "dx8instancing.h"
 #include "ww3d.h"
 #include "camera.h"
 #include "wwstring.h"
@@ -546,8 +547,6 @@ static void Track_Decl_Bound_While_Wrapper_Expects_FVF(const char* where)
 }
 #endif // _DEBUG
 
-
-
 /***********************************************************************************
 **
 ** DX8Wrapper Implementation
@@ -771,6 +770,9 @@ void DX8Wrapper::Do_Onetime_Device_Dependent_Inits(void)
 	Set_Default_Global_Render_States();
 
 	Init_Decl_Cache(D3DDevice);
+
+	// Ronin @feature 18/02/2026 DX9: Initialize hardware instancing after device and mesh renderer are ready.
+	TheDX8InstanceManager.Init();
 }
 
 // Ronin @feature 27/11/2025: Initialize vertex declaration cache
@@ -1005,28 +1007,37 @@ void DX8Wrapper::Invalidate_Cached_Render_States(void)
 {
 	render_state_changed=0;
 
-	int a;
-	for (a=0;a<sizeof(RenderStates)/sizeof(unsigned);++a) {
-		RenderStates[a]=0x12345678;
-	}
-	for (a=0;a<MAX_TEXTURE_STAGES;++a)
+	// Ronin @performance 19/02/2026 DX9: Invalidate render state and TSS caches in bulk.
+	// The sentinel value 0x12345678 ensures no cached comparison will match a real D3D value.
 	{
-		for (int b=0; b<32;b++)
-		{
-			TextureStageStates[a][b]=0x12345678;
+		unsigned* rs = RenderStates;
+		const int rsCount = sizeof(RenderStates) / sizeof(unsigned);
+		for (int a = 0; a < rsCount; ++a) {
+			rs[a] = 0x12345678;
 		}
-		//Need to explicitly set texture to null, otherwise app will not be able to
-		//set it to null because of redundant state checker. MW
-		if (DX8Wrapper::_Get_D3D_Device8())
-			DX8Wrapper::_Get_D3D_Device8()->SetTexture(a,nullptr);
+	}
+
+	IDirect3DDevice9* pDev = _Get_D3D_Device8();
+
+	for (int a = 0; a < MAX_TEXTURE_STAGES; ++a)
+	{
+		for (int b = 0; b < 32; b++) {
+			TextureStageStates[a][b] = 0x12345678;
+		}
+
+		// Ronin @performance 19/02/2026 DX9: Always null the device texture to ensure clean slate,
+		// but only Release() the wrapper's ref if one exists.
+		if (pDev) {
+			pDev->SetTexture(a, nullptr);
+		}
 		if (Textures[a] != nullptr) {
 			Textures[a]->Release();
+			Textures[a] = nullptr;
 		}
-		Textures[a]=nullptr;
 	}
 
 	// Ronin @bugfix 06/11/2025: DX9 requires explicit pixel shader cleanup during state invalidation
-	IDirect3DDevice9* pDev = _Get_D3D_Device8();
+	//IDirect3DDevice9* pDev = _Get_D3D_Device8();
 	if (pDev) {
 		pDev->SetPixelShader(NULL);
 		pDev->SetVertexShader(NULL);
@@ -1035,8 +1046,6 @@ void DX8Wrapper::Invalidate_Cached_Render_States(void)
 		// Update wrapper tracking to match device state
 		render_state.currentVS = nullptr;
 		render_state.currentPS = nullptr;
-
-		//DX8Wrapper::Set_World_Identity();
 	}
 
 	ShaderClass::Invalidate();
@@ -1063,8 +1072,10 @@ void DX8Wrapper::Do_Onetime_Device_Dependent_Shutdowns(void)
 	REF_PTR_RELEASE(render_state.material);
 	for (i=0;i<CurrentCaps->Get_Max_Textures_Per_Pass();++i) REF_PTR_RELEASE(render_state.Textures[i]);
 
+	// Ronin @feature 18/02/2026 DX9: Shutdown hardware instancing before releasing device resources.
+	TheDX8InstanceManager.Shutdown();
 
-	TextureLoader::Deinit();
+		TextureLoader::Deinit();
 	SortingRendererClass::Deinit();
 	DynamicVBAccessClass::_Deinit();
 	DynamicIBAccessClass::_Deinit();
@@ -2335,6 +2346,9 @@ void DX8Wrapper::Begin_Statistics()
 	texture_stage_state_changes =0;
 	number_of_DX8_calls=0;
 	draw_calls=0;
+
+	// Ronin @feature 18/02/2026 DX9: Reset instancing frame statistics
+	TheDX8InstanceManager.Begin_Frame_Statistics();
 }
 
 void DX8Wrapper::End_Statistics()
@@ -2349,6 +2363,9 @@ void DX8Wrapper::End_Statistics()
 	last_frame_texture_stage_state_changes = texture_stage_state_changes;
 	last_frame_number_of_DX8_calls=number_of_DX8_calls;
 	last_frame_draw_calls=draw_calls;
+
+	// Ronin @feature 18/02/2026 DX9: Capture instancing frame statistics
+	TheDX8InstanceManager.End_Frame_Statistics();
 }
 
 unsigned DX8Wrapper::Get_Last_Frame_Matrix_Changes()			{ return last_frame_matrix_changes; }
