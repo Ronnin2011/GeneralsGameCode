@@ -266,7 +266,6 @@ GameTextManager::GameTextManager()
 		m_buffer2[i] = 0;
 		m_buffer3[i] = 0;
 	}
-	//
 }
 
 //============================================================================
@@ -1038,7 +1037,7 @@ Bool GameTextManager::parseStringFile( const char *filename )
 		{
 			if ( stricmp ( m_stringInfo[i].label.str(), m_buffer ) == 0)
 			{
-				DEBUG_ASSERTCRASH ( FALSE, ("String label '%s' multiply defined!", m_buffer ));
+				DEBUG_CRASH ( ("String label '%s' multiply defined!", m_buffer ));
 			}
 		}
 
@@ -1056,7 +1055,7 @@ Bool GameTextManager::parseStringFile( const char *filename )
 		{
 			if (!readLine ( m_buffer, sizeof(m_buffer)-1, file ))
 			{
-				DEBUG_ASSERTCRASH (FALSE, ("Unexpected end of string file"));
+				DEBUG_CRASH (("Unexpected end of string file"));
 				ok = FALSE;
 				goto quit;
 			}
@@ -1074,7 +1073,7 @@ Bool GameTextManager::parseStringFile( const char *filename )
 				if ( readString )
 				{
 					// only one string per label allows
-						DEBUG_ASSERTCRASH ( FALSE, ("String label '%s' has more than one string defined!", m_stringInfo[listCount].label.str()));
+						DEBUG_CRASH ( ("String label '%s' has more than one string defined!", m_stringInfo[listCount].label.str()));
 				}
 				else
 				{
@@ -1169,7 +1168,7 @@ Bool GameTextManager::parseMapStringFile( const char *filename )
 		{
 			if ( stricmp ( m_mapStringInfo[i].label.str(), m_buffer ) == 0)
 			{
-				DEBUG_ASSERTCRASH ( FALSE, ("String label '%s' multiply defined!", m_buffer ));
+				DEBUG_CRASH ( ("String label '%s' multiply defined!", m_buffer ));
 			}
 		}
 
@@ -1187,7 +1186,7 @@ Bool GameTextManager::parseMapStringFile( const char *filename )
 		{
 			if (!readLine ( m_buffer, sizeof(m_buffer)-1, file ))
 			{
-				DEBUG_ASSERTCRASH (FALSE, ("Unexpected end of string file"));
+				DEBUG_CRASH (("Unexpected end of string file"));
 				ok = FALSE;
 				goto quit;
 			}
@@ -1205,7 +1204,7 @@ Bool GameTextManager::parseMapStringFile( const char *filename )
 				if ( readString )
 				{
 					// only one string per label allowed
-						DEBUG_ASSERTCRASH ( FALSE, ("String label '%s' has more than one string defined!", m_stringInfo[listCount].label.str()));
+						DEBUG_CRASH ( ("String label '%s' has more than one string defined!", m_stringInfo[listCount].label.str()));
 				}
 				else
 				{
@@ -1459,4 +1458,3 @@ static int __cdecl compareLUT ( const void *i1,  const void*i2)
 
 	return stricmp( lut1->label->str(), lut2->label->str());
 }
-

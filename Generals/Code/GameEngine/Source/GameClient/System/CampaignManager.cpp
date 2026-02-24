@@ -171,7 +171,7 @@ Mission *Campaign::getMission( AsciiString missionName )
 			return mission;
 		++it;
 	}
-	DEBUG_ASSERTCRASH(FALSE, ("getMission couldn't find %s", missionName.str()));
+	DEBUG_CRASH(("getMission couldn't find %s", missionName.str()));
 	return nullptr;
 }
 
@@ -199,7 +199,7 @@ Mission *Campaign::getNextMission( Mission *current)
 			return mission;
 		++it;
 	}
-//	DEBUG_ASSERTCRASH(FALSE, ("GetNextMission couldn't find %s", current->m_nextMission.str()));
+//	DEBUG_CRASH(("GetNextMission couldn't find %s", current->m_nextMission.str()));
 	return nullptr;
 }
 
@@ -362,9 +362,9 @@ void CampaignManager::parseMissionPart( INI* ini, void *instance, void *store, c
 			{ "UnitNames0",				INI::parseAsciiString,				nullptr, offsetof( Mission, m_unitNames[0] ) },
 			{ "UnitNames1",				INI::parseAsciiString,				nullptr, offsetof( Mission, m_unitNames[1] ) },
 			{ "UnitNames2",				INI::parseAsciiString,				nullptr, offsetof( Mission, m_unitNames[2] ) },
+			{ "GeneralName",			INI::parseAsciiString,			nullptr, offsetof( Mission, m_generalName)	},
 			{ "LocationNameLabel",INI::parseAsciiString,				nullptr, offsetof( Mission, m_locationNameLabel ) },
 			{ "VoiceLength",			INI::parseInt ,								nullptr, offsetof( Mission, m_voiceLength ) },
-
 
 			{ nullptr,							nullptr,											nullptr, 0 }
 		};

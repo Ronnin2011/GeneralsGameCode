@@ -116,8 +116,8 @@ int nShadowVertsInBuf=0;	//model vetices in vertex buffer
 int nShadowStartBatchVertex=0;
 int nShadowIndicesInBuf=0;	//model vetices in vertex buffer
 int nShadowStartBatchIndex=0;
-int SHADOW_VERTEX_SIZE=4096;
-int SHADOW_INDEX_SIZE=8192;
+int SHADOW_VERTEX_SIZE= 16384;
+int SHADOW_INDEX_SIZE= 32768;
 
 //Rough bounding box around visible portion of the terrain
 //useful for quick culling
@@ -1297,7 +1297,7 @@ void W3DVolumetricShadow::getRenderCost(RenderCost & rc) const
 		}
 	}
 
-	rc.addShadowDrawCalls(drawCount*2);
+	rc.addShadowDrawCalls(drawCount);  // Ronin @performance DD/MM/YYYY DX9 two-sided stencil: single pass
 }
 #endif
 
@@ -3517,10 +3517,26 @@ void W3DVolumetricShadowManager::renderShadows( Bool forceStencilFill )
 			m_pDev->SetRenderState( D3DRS_STENCILFUNC,     D3DCMP_GREATEREQUAL );	//in this mode, multiple bits indicate occluded player pixels.
 		m_pDev->SetRenderState( D3DRS_STENCILREF,      0x80808080 );			//isolate MSB, it's used to indicate pixels containing potential occluders.
 		m_pDev->SetRenderState( D3DRS_STENCILMASK,     TheW3DShadowManager->getStencilShadowMask());	//isolate upper bits containing PotentialOccluderBit|PlayerColorBits
-		m_pDev->SetRenderState( D3DRS_STENCILWRITEMASK,0xffffffff );
-		m_pDev->SetRenderState( D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP );
-		m_pDev->SetRenderState( D3DRS_STENCILFAIL,  D3DSTENCILOP_KEEP );
-		m_pDev->SetRenderState( D3DRS_STENCILPASS,  D3DSTENCILOP_INCR );
+
+		// Ronin @bugfix 23/02/2026 DX9: Restrict stencil writes to shadow bits only.
+		// The upper bit(s) are reserved for occluder marking. With wrapping INCR/DECR,
+		// unbalanced volumes (airborne units clipping terrain) can corrupt the occluder
+		// bit, causing the stencil test in renderStencilShadows to fail on those pixels.
+		m_pDev->SetRenderState(D3DRS_STENCILWRITEMASK, ~TheW3DShadowManager->getStencilShadowMask());
+		// Ronin @performance 23/02/2026 DX9 two-sided stencil: render both faces in one pass
+		m_pDev->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, TRUE);
+		// CW (front) faces: decrement
+		m_pDev->SetRenderState(D3DRS_STENCILZFAIL, D3DSTENCILOP_KEEP);
+		m_pDev->SetRenderState(D3DRS_STENCILFAIL, D3DSTENCILOP_KEEP);
+		m_pDev->SetRenderState(D3DRS_STENCILPASS, D3DSTENCILOP_DECR);
+		// CCW (back) faces: increment
+		if (TheW3DShadowManager->getStencilShadowMask() == 0x80808080)
+			m_pDev->SetRenderState(D3DRS_CCW_STENCILFUNC, D3DCMP_NOTEQUAL);
+		else
+			m_pDev->SetRenderState(D3DRS_CCW_STENCILFUNC, D3DCMP_GREATEREQUAL);
+		m_pDev->SetRenderState(D3DRS_CCW_STENCILZFAIL, D3DSTENCILOP_KEEP);
+		m_pDev->SetRenderState(D3DRS_CCW_STENCILFAIL, D3DSTENCILOP_KEEP);
+		m_pDev->SetRenderState(D3DRS_CCW_STENCILPASS, D3DSTENCILOP_INCR);
 
 		// Ronin @debug 15/12/2025: Log FVF being set for shadow volumes
 		/*
@@ -3530,8 +3546,8 @@ void W3DVolumetricShadowManager::renderShadows( Bool forceStencilFill )
 
 		m_pDev->SetFVF(SHADOW_DYNAMIC_VOLUME_FVF);
 
-		m_pDev->SetRenderState(D3DRS_CULLMODE,D3DCULL_CW);
-//		m_pDev->SetRenderState(D3DRS_ZBIAS,1);	///@todo: See if this helps or makes things worse.
+		m_pDev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+		//		m_pDev->SetRenderState(D3DRS_ZBIAS,1);	///@todo: See if this helps or makes things worse.
 		//m_pDev->SetRenderState(D3DRS_FILLMODE,D3DFILL_WIREFRAME);
 
 		//m_pDev->SetFVF(SHADOW_DYNAMIC_VOLUME_FVF);
@@ -3580,36 +3596,7 @@ void W3DVolumetricShadowManager::renderShadows( Bool forceStencilFill )
 			}
 		}
 
-		// change the stencil op to decrement
-		m_pDev->SetRenderState( D3DRS_STENCILPASS,  D3DSTENCILOP_DECRSAT);
-
-		//
-		// invert normals of shadow volumes so we can decrement in the
-		// stencil buffer and render
-		//
-
-		m_pDev->SetRenderState(D3DRS_CULLMODE,D3DCULL_CCW);
-
-		for (nextVb=TheW3DBufferManager->getNextVertexBuffer(nullptr,W3DBufferManager::VBM_FVF_XYZ);nextVb != nullptr; nextVb=TheW3DBufferManager->getNextVertexBuffer(nextVb,W3DBufferManager::VBM_FVF_XYZ))
-		{
-			nextTask=(W3DVolumetricShadowRenderTask *)nextVb->m_renderTaskList;
-			while (nextTask)
-			{
-				nextTask->m_parentShadow->RenderVolume(nextTask->m_meshIndex,nextTask->m_lightIndex);
-				nextTask=(W3DVolumetricShadowRenderTask *)nextTask->m_nextTask;
-			}
-		}
-
-		DX8Wrapper::BindLayoutFVF(SHADOW_DYNAMIC_VOLUME_FVF,"W3DVolumetricShadowManager:renderShadows: dynamic shadow volumes");
-
-		//flush any dynamic shadow volumes
-		shadowDynamicTask=m_dynamicShadowVolumesToRender;
-		while (shadowDynamicTask)
-		{	//dynamic shadow columns don't need to wait in queue since they
-			//all use the same vertex buffer.  Flush them ASAP.
-			shadowDynamicTask->m_parentShadow->RenderVolume(shadowDynamicTask->m_meshIndex,shadowDynamicTask->m_lightIndex);
-			shadowDynamicTask=(W3DVolumetricShadowRenderTask *)shadowDynamicTask->m_nextTask;
-		}
+		// Ronin @performance 23/02/2026 DX9 two-sided stencil: Deleted the entire second pass
 
 		//Reset all render tasks for next frame.
 		for (nextVb=TheW3DBufferManager->getNextVertexBuffer(nullptr,W3DBufferManager::VBM_FVF_XYZ);nextVb != nullptr; nextVb=TheW3DBufferManager->getNextVertexBuffer(nextVb,W3DBufferManager::VBM_FVF_XYZ))
@@ -3617,7 +3604,8 @@ void W3DVolumetricShadowManager::renderShadows( Bool forceStencilFill )
 			nextVb->m_renderTaskList=nullptr;
 		}
 
-		m_pDev->SetRenderState(D3DRS_CULLMODE,D3DCULL_CW);
+		m_pDev->SetRenderState(D3DRS_TWOSIDEDSTENCILMODE, FALSE);
+		m_pDev->SetRenderState(D3DRS_CULLMODE, D3DCULL_CW);
 //		m_pDev->SetRenderState(D3DRS_ZBIAS,0);	///@todo: See if this helps or makes things worse.
 		//m_pDev->SetRenderState(D3DRS_FILLMODE,D3DFILL_SOLID);
 
