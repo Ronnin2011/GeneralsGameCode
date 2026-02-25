@@ -103,7 +103,7 @@ void DoShadows(RenderInfoClass & rinfo, Bool stencilPass)
 
 }
 
-W3DShadowManager::W3DShadowManager( void )
+W3DShadowManager::W3DShadowManager()
 {
 	DEBUG_ASSERTCRASH(TheW3DVolumetricShadowManager == nullptr && TheW3DProjectedShadowManager == nullptr,
 		("Creating new shadow managers without deleting old ones"));
@@ -122,7 +122,7 @@ W3DShadowManager::W3DShadowManager( void )
 	TheProjectedShadowManager = TheW3DProjectedShadowManager = NEW W3DProjectedShadowManager;
 }
 
-W3DShadowManager::~W3DShadowManager( void )
+W3DShadowManager::~W3DShadowManager()
 {
 	delete TheW3DVolumetricShadowManager;
 	TheW3DVolumetricShadowManager = nullptr;
@@ -132,7 +132,7 @@ W3DShadowManager::~W3DShadowManager( void )
 
 /** Do one-time initilalization of shadow systems that need to be
 active for full duration of game*/
-Bool W3DShadowManager::init( void )
+Bool W3DShadowManager::init()
 {
 	Bool result=TRUE;
 
@@ -152,7 +152,7 @@ Bool W3DShadowManager::init( void )
 
 /** Do per-map reset.  This frees up shadows from all objects since
 they may not exist on the next map*/
-void W3DShadowManager::Reset( void )
+void W3DShadowManager::Reset()
 {
 
 	if (TheW3DVolumetricShadowManager)
@@ -173,7 +173,7 @@ Bool W3DShadowManager::ReAcquireResources()
 	return result;
 }
 
-void W3DShadowManager::ReleaseResources(void)
+void W3DShadowManager::ReleaseResources()
 {
 	if (TheW3DVolumetricShadowManager)
 		TheW3DVolumetricShadowManager->ReleaseResources();
@@ -211,7 +211,7 @@ void W3DShadowManager::removeShadow(Shadow *shadow)
 	shadow->release();
 }
 
-void W3DShadowManager::removeAllShadows(void)
+void W3DShadowManager::removeAllShadows()
 {
 	if (TheW3DVolumetricShadowManager)
 		TheW3DVolumetricShadowManager->removeAllShadows();
@@ -220,7 +220,7 @@ void W3DShadowManager::removeAllShadows(void)
 }
 
 /**Force update of all shadows even when light source and object have not moved*/
-void W3DShadowManager::invalidateCachedLightPositions(void)
+void W3DShadowManager::invalidateCachedLightPositions()
 {
 	if (TheW3DVolumetricShadowManager)
 		TheW3DVolumetricShadowManager->invalidateCachedLightPositions();

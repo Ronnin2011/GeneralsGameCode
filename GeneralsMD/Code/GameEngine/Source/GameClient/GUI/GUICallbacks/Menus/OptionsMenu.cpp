@@ -220,7 +220,7 @@ WindowLayout *OptionsLayout = nullptr;
 
 static OptionPreferences *pref = nullptr;
 
-static void setDefaults( void )
+static void setDefaults()
 {
 	constexpr const Bool ModifyDisplaySettings = FALSE;
 
@@ -376,7 +376,7 @@ static void setDefaults( void )
 	}
 }
 
-static void saveOptions( void )
+static void saveOptions()
 {
 	Int index;
 	Int val;

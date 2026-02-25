@@ -991,7 +991,7 @@ void DynamicVBAccessClass::_Reset(bool frame_changed)
 
 }
 
-unsigned short DynamicVBAccessClass::Get_Default_Vertex_Count(void)
+unsigned short DynamicVBAccessClass::Get_Default_Vertex_Count()
 {
 	// Ronin @bugfix 12/12/2025: Return constant since pool sizes can vary dynamically
 	return DEFAULT_VB_SIZE;

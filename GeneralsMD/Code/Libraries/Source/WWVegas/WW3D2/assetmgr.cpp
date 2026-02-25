@@ -139,9 +139,9 @@ static NullPrototypeClass _NullPrototype;
 class RObjIterator : public RenderObjIterator
 {
 public:
-	virtual bool					Is_Done(void);
-	virtual const char *			Current_Item_Name(void);
-	virtual int						Current_Item_Class_ID(void);
+	virtual bool					Is_Done();
+	virtual const char *			Current_Item_Name();
+	virtual int						Current_Item_Class_ID();
 protected:
 	friend class WW3DAssetManager;
 };
@@ -154,12 +154,12 @@ protected:
 class HAnimIterator : public AssetIterator
 {
 public:
-	HAnimIterator(void) : Iterator( WW3DAssetManager::Get_Instance()->HAnimManager ) { };
+	HAnimIterator() : Iterator( WW3DAssetManager::Get_Instance()->HAnimManager ) { };
 
-	virtual void			First(void) { Iterator.First(); }
-	virtual void			Next(void)	{ Iterator.Next(); }
-	virtual bool			Is_Done(void) { return Iterator.Is_Done(); }
-	virtual const char *	Current_Item_Name(void) { return Iterator.Get_Current_Anim()->Get_Name(); }
+	virtual void			First() { Iterator.First(); }
+	virtual void			Next()	{ Iterator.Next(); }
+	virtual bool			Is_Done() { return Iterator.Is_Done(); }
+	virtual const char *	Current_Item_Name() { return Iterator.Get_Current_Anim()->Get_Name(); }
 
 protected:
 	HAnimManagerIterator	Iterator;
@@ -169,8 +169,8 @@ protected:
 class HTreeIterator : public AssetIterator
 {
 public:
-	virtual bool					Is_Done(void);
-	virtual const char *			Current_Item_Name(void);
+	virtual bool					Is_Done();
+	virtual const char *			Current_Item_Name();
 protected:
 	friend class WW3DAssetManager;
 };
@@ -179,14 +179,14 @@ class Font3DDataIterator : public AssetIterator
 {
 public:
 
-	virtual void					First(void) { Node = WW3DAssetManager::Get_Instance()->Font3DDatas.Head(); }
-	virtual void					Next(void)	{ Node = Node->Next(); }
-	virtual bool					Is_Done(void) { return Node==nullptr; }
-	virtual const char *			Current_Item_Name(void) { return Node->Data()->Name; }
+	virtual void					First() { Node = WW3DAssetManager::Get_Instance()->Font3DDatas.Head(); }
+	virtual void					Next()	{ Node = Node->Next(); }
+	virtual bool					Is_Done() { return Node==nullptr; }
+	virtual const char *			Current_Item_Name() { return Node->Data()->Name; }
 
 protected:
 
-	Font3DDataIterator(void)	{ Node = WW3DAssetManager::Get_Instance()->Font3DDatas.Head(); }
+	Font3DDataIterator()	{ Node = WW3DAssetManager::Get_Instance()->Font3DDatas.Head(); }
 	SLNode<Font3DDataClass> *		Node;
 	friend class WW3DAssetManager;
 };
@@ -204,7 +204,7 @@ protected:
  *   12/21/97   GTH : Created.                                                                 *
  *   05/10/1999 SKB : Add TextureCache                                                         *
  *=============================================================================================*/
-WW3DAssetManager::WW3DAssetManager(void) :
+WW3DAssetManager::WW3DAssetManager() :
 	PrototypeLoaders		(PROTOLOADERS_VECTOR_SIZE),
 	Prototypes				(PROTOTYPES_VECTOR_SIZE),
 
@@ -255,7 +255,7 @@ WW3DAssetManager::WW3DAssetManager(void) :
  * HISTORY:                                                                                    *
  *   12/21/97   GTH : Created.                                                                 *
  *=============================================================================================*/
-WW3DAssetManager::~WW3DAssetManager(void)
+WW3DAssetManager::~WW3DAssetManager()
 {
 	delete MetalManager;
 
@@ -425,7 +425,7 @@ void WW3DAssetManager::Log_Texture_Statistics()
  * HISTORY:                                                                                    *
  *   12/21/97   GTH : Created.                                                                 *
  *=============================================================================================*/
-void WW3DAssetManager::Free(void)
+void WW3DAssetManager::Free()
 {
 	Free_Assets();
 }
@@ -444,7 +444,7 @@ void WW3DAssetManager::Free(void)
  *   12/21/97   GTH : Created.                                                                 *
  *   05/10/1999 SKB : Close down texture cache file.                                           *
  *=============================================================================================*/
-void WW3DAssetManager::Free_Assets(void)
+void WW3DAssetManager::Free_Assets()
 {
 	WWPROFILE( "WW3DAssetManager::Free_Assets" );
 
@@ -490,7 +490,7 @@ void WW3DAssetManager::Free_Assets(void)
  * HISTORY:                                                                                    *
  *   02/18/99   EHC : Created.                                                                 *
  *=============================================================================================*/
-void WW3DAssetManager::Release_Unused_Assets(void)
+void WW3DAssetManager::Release_Unused_Assets()
 {
 	// release all references to objects that have only one reference on them
 	// and remove them from our lists.
@@ -868,7 +868,7 @@ bool WW3DAssetManager::Render_Obj_Exists(const char * name)
  * HISTORY:                                                                                    *
  *   12/21/97   GTH : Created.                                                                 *
  *=============================================================================================*/
-RenderObjIterator * WW3DAssetManager::Create_Render_Obj_Iterator(void)
+RenderObjIterator * WW3DAssetManager::Create_Render_Obj_Iterator()
 {
 	return W3DNEW RObjIterator();
 }
@@ -908,7 +908,7 @@ void WW3DAssetManager::Release_Render_Obj_Iterator(RenderObjIterator * it)
  * HISTORY:                                                                                    *
  *   12/21/97   GTH : Created.                                                                 *
  *=============================================================================================*/
-AssetIterator * WW3DAssetManager::Create_HAnim_Iterator(void)
+AssetIterator * WW3DAssetManager::Create_HAnim_Iterator()
 {
 	return W3DNEW HAnimIterator();
 }
@@ -926,7 +926,7 @@ AssetIterator * WW3DAssetManager::Create_HAnim_Iterator(void)
  * HISTORY:                                                                                    *
  *   3/11/98    GTH : Created.                                                                 *
  *=============================================================================================*/
-AssetIterator * WW3DAssetManager::Create_HTree_Iterator(void)
+AssetIterator * WW3DAssetManager::Create_HTree_Iterator()
 {
 	return W3DNEW HTreeIterator();
 }
@@ -947,7 +947,7 @@ AssetIterator * WW3DAssetManager::Create_HTree_Iterator(void)
  * HISTORY:                                                                                    *
  *   1/6/98     GTH : Created.                                                                 *
  *=============================================================================================*/
-AssetIterator * WW3DAssetManager::Create_Font3DData_Iterator(void)
+AssetIterator * WW3DAssetManager::Create_Font3DData_Iterator()
 {
 	return W3DNEW Font3DDataIterator();
 }
@@ -1146,7 +1146,7 @@ TextureClass * WW3DAssetManager::Get_Texture
  * HISTORY:                                                                                    *
  *   3/10/98    GTH : Created.                                                                 *
  *=============================================================================================*/
-void WW3DAssetManager::Release_All_Textures(void)
+void WW3DAssetManager::Release_All_Textures()
 {
 	/*
 	** for each texture in the list, get it and release ref it
@@ -1175,7 +1175,7 @@ void WW3DAssetManager::Release_All_Textures(void)
  * HISTORY:                                                                                    *
  *   2/18/99    EHC : Created.                                                                 *
  *=============================================================================================*/
-void WW3DAssetManager::Release_Unused_Textures(void)
+void WW3DAssetManager::Release_Unused_Textures()
 {
 	/*
 	** for each texture in the list, get it, check it's refcount, and and release ref it if the
@@ -1229,7 +1229,7 @@ void WW3DAssetManager::Release_Texture(TextureClass *tex)
 	tex->Release_Ref();
 }
 
-void WW3DAssetManager::Log_All_Textures(void)
+void WW3DAssetManager::Log_All_Textures()
 {
 	Log_Texture_Statistics();
 
@@ -1401,7 +1401,7 @@ void WW3DAssetManager::Remove_Font3DData(Font3DDataClass * font)
  * HISTORY:                                                                                    *
  *   1/6/98     GTH : Created.                                                                 *
  *=============================================================================================*/
-void	WW3DAssetManager::Release_All_Font3DDatas( void )
+void	WW3DAssetManager::Release_All_Font3DDatas()
 {
 	// for each mat in the list, get it and release ref it
 	Font3DDataClass *head;
@@ -1422,7 +1422,7 @@ void	WW3DAssetManager::Release_All_Font3DDatas( void )
  * HISTORY:                                                                                    *
  *   1/6/98     GTH : Created.                                                                 *
  *=============================================================================================*/
-void	WW3DAssetManager::Release_Unused_Font3DDatas( void )
+void	WW3DAssetManager::Release_Unused_Font3DDatas()
 {
 	/*
 	** for each font data in the list, get it, check it's refcount, and and release ref it if the
@@ -1489,7 +1489,7 @@ FontCharsClass *	WW3DAssetManager::Get_FontChars( const char * name, int point_s
  * HISTORY:                                                                                    *
  *   6/1/01     BMG : Created.                                                                 *
  *=============================================================================================*/
-void	WW3DAssetManager::Release_All_FontChars( void )
+void	WW3DAssetManager::Release_All_FontChars()
 {
 	// for each fontchars in the list, get it and release ref it
 	while ( FontCharsList.Count() ) {
@@ -1698,12 +1698,12 @@ PrototypeClass * WW3DAssetManager::Find_Prototype(const char * name)
 ** to implement iterators which can walk through your datastructures.
 */
 
-bool RObjIterator::Is_Done(void)
+bool RObjIterator::Is_Done()
 {
 	return !(Index < WW3DAssetManager::Get_Instance()->Prototypes.Count());
 }
 
-const char * RObjIterator::Current_Item_Name(void)
+const char * RObjIterator::Current_Item_Name()
 {
 	if (Index < WW3DAssetManager::Get_Instance()->Prototypes.Count()) {
 		return WW3DAssetManager::Get_Instance()->Prototypes[Index]->Get_Name();
@@ -1712,7 +1712,7 @@ const char * RObjIterator::Current_Item_Name(void)
 	}
 }
 
-int RObjIterator::Current_Item_Class_ID(void)
+int RObjIterator::Current_Item_Class_ID()
 {
 	if (Index < WW3DAssetManager::Get_Instance()->Prototypes.Count()) {
 		return WW3DAssetManager::Get_Instance()->Prototypes[Index]->Get_Class_ID();
@@ -1721,12 +1721,12 @@ int RObjIterator::Current_Item_Class_ID(void)
 	}
 }
 
-bool HTreeIterator::Is_Done(void)
+bool HTreeIterator::Is_Done()
 {
 	return !(Index < WW3DAssetManager::Get_Instance()->HTreeManager.Num_Trees());
 }
 
-const char * HTreeIterator::Current_Item_Name(void)
+const char * HTreeIterator::Current_Item_Name()
 {
 	return WW3DAssetManager::Get_Instance()->HTreeManager.Get_Tree(Index)->Get_Name();
 }

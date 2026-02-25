@@ -58,7 +58,7 @@
 // and the LineUCoord determines the U coordinate of the texture to use
 // the V coordinate is always 0 at the flat end of the tetrahedron
 // and 1 at the apex
-LineGroupClass::LineGroupClass(void) :
+LineGroupClass::LineGroupClass() :
 	StartLineLoc(nullptr),
 	EndLineLoc(nullptr),
 	LineDiffuse(nullptr),
@@ -79,7 +79,7 @@ LineGroupClass::LineGroupClass(void) :
 {
 }
 
-LineGroupClass::~LineGroupClass(void)
+LineGroupClass::~LineGroupClass()
 {
 	REF_PTR_RELEASE(StartLineLoc);
 	REF_PTR_RELEASE(EndLineLoc);
@@ -135,7 +135,7 @@ void LineGroupClass::Set_Line_Size(float size)
 	DefaultLineSize = size;
 }
 
-float LineGroupClass::Get_Line_Size(void)
+float LineGroupClass::Get_Line_Size()
 {
 	return DefaultLineSize;
 }
@@ -145,7 +145,7 @@ void LineGroupClass::Set_Line_Color(const Vector3 &color)
 	DefaultLineColor = color;
 }
 
-Vector3 LineGroupClass::Get_Line_Color(void)
+Vector3 LineGroupClass::Get_Line_Color()
 {
 	return DefaultLineColor;
 }
@@ -155,7 +155,7 @@ void LineGroupClass::Set_Tail_Diffuse(const Vector4 &tdiffuse)
 	DefaultTailDiffuse = tdiffuse;
 }
 
-Vector4 LineGroupClass::Get_Tail_Diffuse(void)
+Vector4 LineGroupClass::Get_Tail_Diffuse()
 {
 	return DefaultTailDiffuse;
 }
@@ -165,7 +165,7 @@ void LineGroupClass::Set_Line_Alpha(float alpha)
 	DefaultLineAlpha = alpha;
 }
 
-float LineGroupClass::Get_Line_Alpha(void)
+float LineGroupClass::Get_Line_Alpha()
 {
 	return DefaultLineAlpha;
 }
@@ -175,7 +175,7 @@ void LineGroupClass::Set_Line_UCoord(float ucoord)
 	DefaultLineUCoord = ucoord;
 }
 
-float LineGroupClass::Get_Line_UCoord(void)
+float LineGroupClass::Get_Line_UCoord()
 {
 	return DefaultLineUCoord;
 }
@@ -197,13 +197,13 @@ void LineGroupClass::Set_Texture(TextureClass* texture)
 	REF_PTR_SET(Texture,texture);
 }
 
-TextureClass * LineGroupClass::Get_Texture(void)
+TextureClass * LineGroupClass::Get_Texture()
 {
 	if (Texture) Texture->Add_Ref();
 	return Texture;
 }
 
-TextureClass * LineGroupClass::Peek_Texture(void)
+TextureClass * LineGroupClass::Peek_Texture()
 {
 	return Texture;
 }
@@ -213,7 +213,7 @@ void LineGroupClass::Set_Shader(const ShaderClass &shader)
 	Shader = shader;
 }
 
-ShaderClass LineGroupClass::Get_Shader(void)
+ShaderClass LineGroupClass::Get_Shader()
 {
 	return Shader;
 }
@@ -223,7 +223,7 @@ void LineGroupClass::Set_Line_Mode(LineModeType linemode)
 	LineMode = linemode;
 }
 
-LineGroupClass::LineModeType LineGroupClass::Get_Line_Mode(void)
+LineGroupClass::LineModeType LineGroupClass::Get_Line_Mode()
 {
 	return LineMode;
 }
@@ -490,7 +490,7 @@ void	LineGroupClass::Render(RenderInfoClass &rinfo)
 	DX8Wrapper::Set_Transform(D3DTS_VIEW, view);
 }
 
-int LineGroupClass::Get_Polygon_Count(void)
+int LineGroupClass::Get_Polygon_Count()
 {
 	switch (LineMode) {
 		case TETRAHEDRON:

@@ -58,7 +58,7 @@ Int W3DBufferManager::getDX8Format(VBM_FVF_TYPES format)
 	return FVFTypeIndexList[format];
 }
 
-W3DBufferManager::W3DBufferManager(void)
+W3DBufferManager::W3DBufferManager()
 {
 	m_numEmptySlotsAllocated=0;
 	m_numEmptyVertexBuffersAllocated=0;
@@ -77,13 +77,13 @@ W3DBufferManager::W3DBufferManager(void)
 		m_W3DIndexBufferSlots[j]=nullptr;
 }
 
-W3DBufferManager::~W3DBufferManager(void)
+W3DBufferManager::~W3DBufferManager()
 {
 	freeAllSlots();
 	freeAllBuffers();
 }
 
-void W3DBufferManager::freeAllSlots(void)
+void W3DBufferManager::freeAllSlots()
 {
 	Int i,j;
 
@@ -132,7 +132,7 @@ void W3DBufferManager::freeAllSlots(void)
 	DEBUG_ASSERTCRASH(m_numEmptyIndexSlotsAllocated==0, ("Failed to free all empty index buffer slots"));
 }
 
-void W3DBufferManager::freeAllBuffers(void)
+void W3DBufferManager::freeAllBuffers()
 {
 	Int i;
 
@@ -164,7 +164,7 @@ void W3DBufferManager::freeAllBuffers(void)
 	DEBUG_ASSERTCRASH(m_numEmptyIndexBuffersAllocated==0, ("Failed to free all empty index buffers"));
 }
 
-void W3DBufferManager::ReleaseResources(void)
+void W3DBufferManager::ReleaseResources()
 {
 	for (Int i=0; i<MAX_FVF; i++)
 	{
@@ -184,7 +184,7 @@ void W3DBufferManager::ReleaseResources(void)
 	}
 }
 
-Bool W3DBufferManager::ReAcquireResources(void)
+Bool W3DBufferManager::ReAcquireResources()
 {
 	for (Int i=0; i<MAX_FVF; i++)
 	{

@@ -127,7 +127,7 @@ inline Int IABS(Int x) {	if (x>=0) return x; return -x;};
 //=============================================================================
 /** Frees the w3d resources used to draw the terrain. */
 //=============================================================================
-void HeightMapRenderObjClass::freeIndexVertexBuffers(void)
+void HeightMapRenderObjClass::freeIndexVertexBuffers()
 {
 	REF_PTR_RELEASE(m_indexBuffer);
 
@@ -149,7 +149,7 @@ void HeightMapRenderObjClass::freeIndexVertexBuffers(void)
 //=============================================================================
 /** Frees the w3d resources used to draw the terrain. */
 //=============================================================================
-Int HeightMapRenderObjClass::freeMapResources(void)
+Int HeightMapRenderObjClass::freeMapResources()
 {
 	BaseHeightMapRenderObjClass::freeMapResources();
 	freeIndexVertexBuffers();
@@ -1031,7 +1031,7 @@ Int HeightMapRenderObjClass::updateBlock(Int x0, Int y0, Int x1, Int y1,  WorldH
 //=============================================================================
 /** Destructor. Releases w3d assets. */
 //=============================================================================
-HeightMapRenderObjClass::~HeightMapRenderObjClass(void)
+HeightMapRenderObjClass::~HeightMapRenderObjClass()
 {
 	freeMapResources();
 
@@ -1044,7 +1044,7 @@ HeightMapRenderObjClass::~HeightMapRenderObjClass(void)
 //=============================================================================
 /** Constructor. Mostly nulls out the member variables. */
 //=============================================================================
-HeightMapRenderObjClass::HeightMapRenderObjClass(void):
+HeightMapRenderObjClass::HeightMapRenderObjClass():
 m_extraBlendTilePositions(nullptr),
 m_numExtraBlendTiles(0),
 m_numVisibleExtraBlendTiles(0),
@@ -1144,7 +1144,7 @@ void HeightMapRenderObjClass::adjustTerrainLOD(Int adj)
 //=============================================================================
 /** Releases all w3d assets, to prepare for Reset device call. */
 //=============================================================================
-void HeightMapRenderObjClass::ReleaseResources(void)
+void HeightMapRenderObjClass::ReleaseResources()
 {
 	BaseHeightMapRenderObjClass::ReleaseResources();
 }
@@ -1154,7 +1154,7 @@ void HeightMapRenderObjClass::ReleaseResources(void)
 //=============================================================================
 /** Reallocates all W3D assets after a reset.. */
 //=============================================================================
-void HeightMapRenderObjClass::ReAcquireResources(void)
+void HeightMapRenderObjClass::ReAcquireResources()
 {
 	BaseHeightMapRenderObjClass::ReAcquireResources();
 }
@@ -1164,7 +1164,7 @@ void HeightMapRenderObjClass::ReAcquireResources(void)
 //=============================================================================
 /** Updates the macro noise/lightmap texture (pass 3) */
 //=============================================================================
-void HeightMapRenderObjClass::reset(void)
+void HeightMapRenderObjClass::reset()
 {
 	BaseHeightMapRenderObjClass::reset();
 }
@@ -1354,7 +1354,7 @@ Int HeightMapRenderObjClass::initHeightData(Int x, Int y, WorldHeightMap *pMap, 
 // TheSuperHackers @bugfix xezon 15/12/2025 Now draws the dynamic lights
 // properly on the entirety of the drawable map region.
 //=============================================================================
-void HeightMapRenderObjClass::On_Frame_Update(void)
+void HeightMapRenderObjClass::On_Frame_Update()
 {
 	BaseHeightMapRenderObjClass::On_Frame_Update();
 	Int i,j,k;
@@ -1539,7 +1539,7 @@ void HeightMapRenderObjClass::On_Frame_Update(void)
 //=============================================================================
 /** Notification that all lighting needs to be recalculated. */
 //=============================================================================
-void HeightMapRenderObjClass::staticLightingChanged( void )
+void HeightMapRenderObjClass::staticLightingChanged()
 {
 	BaseHeightMapRenderObjClass::staticLightingChanged();
 }
@@ -2175,7 +2175,7 @@ void HeightMapRenderObjClass::renderTerrainPass(CameraClass *pCamera)
 //=============================================================================
 /** Renders an additional terrain pass including only those tiles which have more than 2 textures
 blended together.  Used primarily for corner cases where 3 different textures meet.*/
-void HeightMapRenderObjClass::renderExtraBlendTiles(void)
+void HeightMapRenderObjClass::renderExtraBlendTiles()
 {
 	Int vertexCount = 0;
 	Int indexCount = 0;

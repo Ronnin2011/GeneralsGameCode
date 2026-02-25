@@ -150,7 +150,7 @@ inline Int IABS(Int x) {	if (x>=0) return x; return -x;};
 //=============================================================================
 /** Frees the w3d resources used to draw the terrain. */
 //=============================================================================
-Int BaseHeightMapRenderObjClass::freeMapResources(void)
+Int BaseHeightMapRenderObjClass::freeMapResources()
 {
 #ifdef DO_SCORCH
 	freeScorchBuffers();
@@ -172,7 +172,7 @@ Int BaseHeightMapRenderObjClass::freeMapResources(void)
 //=============================================================================
 /** Draws the scorch marks. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::drawScorches(void)
+void BaseHeightMapRenderObjClass::drawScorches()
 {
 
 	updateScorches();
@@ -200,7 +200,7 @@ void BaseHeightMapRenderObjClass::drawScorches(void)
 //=============================================================================
 /** Destructor. Releases w3d assets. */
 //=============================================================================
-BaseHeightMapRenderObjClass::~BaseHeightMapRenderObjClass(void)
+BaseHeightMapRenderObjClass::~BaseHeightMapRenderObjClass()
 {
 	freeMapResources();
 
@@ -239,7 +239,7 @@ BaseHeightMapRenderObjClass::~BaseHeightMapRenderObjClass(void)
 //=============================================================================
 /** Constructor. Mostly nulls out the member variables. */
 //=============================================================================
-BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass(void)
+BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass()
 {
 	m_x=0;
 	m_y=0;
@@ -388,7 +388,7 @@ void BaseHeightMapRenderObjClass::adjustTerrainLOD(Int adj)
 //=============================================================================
 /** Releases all w3d assets, to prepare for Reset device call. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::ReleaseResources(void)
+void BaseHeightMapRenderObjClass::ReleaseResources()
 {
 	if (m_treeBuffer) {
 		m_treeBuffer->freeTreeBuffers();
@@ -440,7 +440,7 @@ void BaseHeightMapRenderObjClass::ReleaseResources(void)
 //=============================================================================
 /** Reallocates all W3D assets after a reset.. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::ReAcquireResources(void)
+void BaseHeightMapRenderObjClass::ReAcquireResources()
 {
 	W3DShaderManager::init();	//reaquire resources which may be needed by custom shaders
 
@@ -630,7 +630,7 @@ void BaseHeightMapRenderObjClass::updateMacroTexture(AsciiString textureName)
 //=============================================================================
 /** Updates the macro noise/lightmap texture (pass 3) */
 //=============================================================================
-void BaseHeightMapRenderObjClass::reset(void)
+void BaseHeightMapRenderObjClass::reset()
 {
 	if (m_treeBuffer) {
 		m_treeBuffer->clearAllTrees();
@@ -1419,7 +1419,7 @@ Bool BaseHeightMapRenderObjClass::getMaximumVisibleBox(const FrustumClass &frust
 //=============================================================================
 /** returns the class id, so the scene can tell what kind of render object it has. */
 //=============================================================================
-Int BaseHeightMapRenderObjClass::Class_ID(void) const
+Int BaseHeightMapRenderObjClass::Class_ID() const
 {
 	return RenderObjClass::CLASSID_TILEMAP;
 }
@@ -1429,7 +1429,7 @@ Int BaseHeightMapRenderObjClass::Class_ID(void) const
 //=============================================================================
 /** Not used, but required virtual method. */
 //=============================================================================
-RenderObjClass *	 BaseHeightMapRenderObjClass::Clone(void) const
+RenderObjClass *	 BaseHeightMapRenderObjClass::Clone() const
 {
 	assert(false);
 	return nullptr;
@@ -1470,7 +1470,7 @@ void BaseHeightMapRenderObjClass::worldBuilderUpdateBridgeTowers( W3DAssetManage
 
 }
 
-void BaseHeightMapRenderObjClass::setShoreLineDetail(void)
+void BaseHeightMapRenderObjClass::setShoreLineDetail()
 {
 	if (!m_map)
 		return;
@@ -1486,7 +1486,7 @@ void BaseHeightMapRenderObjClass::setShoreLineDetail(void)
 used by the world builder since it modifies the terrain too frequently.  The function also assumes that updateShoreLineTiles()
 was previously called and inserted the tiles in the correctly sorted order.
 WARNING!!! Current version assumes we always sort the entire map!  So don't set parameters to partial updates! */
-void BaseHeightMapRenderObjClass::recordShoreLineSortInfos(void)
+void BaseHeightMapRenderObjClass::recordShoreLineSortInfos()
 {
 	if (TheGlobalData->m_isWorldBuilder || !m_shoreLineTilePositions || !m_map)
 		return;	//we must be in the builder so don't sort.
@@ -1730,7 +1730,7 @@ void BaseHeightMapRenderObjClass::updateViewImpassableAreas(Bool partial, Int mi
 /** Generate a lookup table which can be used to generate an
 alpha value from a given set of uv coordinates.  Currently used
 for smoothing water/terrain border*/
-void BaseHeightMapRenderObjClass::initDestAlphaLUT(void)
+void BaseHeightMapRenderObjClass::initDestAlphaLUT()
 {
 	if (!m_destAlphaTexture)
 		return;
@@ -1867,7 +1867,7 @@ Int BaseHeightMapRenderObjClass::initHeightData(Int x, Int y, WorldHeightMap *pM
 //=============================================================================
 /** Frees the vertex buffers for scorches.*/
 //=============================================================================
-void BaseHeightMapRenderObjClass::freeScorchBuffers(void)
+void BaseHeightMapRenderObjClass::freeScorchBuffers()
 {
 	REF_PTR_RELEASE(m_vertexScorch);
 	REF_PTR_RELEASE(m_indexScorch);
@@ -1879,7 +1879,7 @@ void BaseHeightMapRenderObjClass::freeScorchBuffers(void)
 //=============================================================================
 /** Allocates the vertex buffer and texture for scorches.*/
 //=============================================================================
-void BaseHeightMapRenderObjClass::allocateScorchBuffers(void)
+void BaseHeightMapRenderObjClass::allocateScorchBuffers()
 {
 	m_vertexScorch=NEW_REF(DX8VertexBufferClass,(DX8_FVF_XYZDUV1,MAX_SCORCH_VERTEX,DX8VertexBufferClass::USAGE_DEFAULT));
 	m_indexScorch=NEW_REF(DX8IndexBufferClass,(MAX_SCORCH_INDEX));
@@ -1902,7 +1902,7 @@ void BaseHeightMapRenderObjClass::allocateScorchBuffers(void)
 //=============================================================================
 /** Builds the vertex buffer data for drawing the scorches.*/
 //=============================================================================
-void BaseHeightMapRenderObjClass::updateScorches(void)
+void BaseHeightMapRenderObjClass::updateScorches()
 {
 	if (m_scorchesInBuffer > 1) {
 		return;
@@ -2028,7 +2028,7 @@ void BaseHeightMapRenderObjClass::updateScorches(void)
 //=============================================================================
 /** Removes all scorches. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::clearAllScorches(void)
+void BaseHeightMapRenderObjClass::clearAllScorches()
 {
 #ifdef DO_SCORCH
 	m_numScorches=0;
@@ -2151,7 +2151,7 @@ Int BaseHeightMapRenderObjClass::getStaticDiffuse(Int x, Int y)
 //=============================================================================
 /** Updates the diffuse color values in the vertices as affected by the dynamic lights.*/
 //=============================================================================
-void BaseHeightMapRenderObjClass::On_Frame_Update(void)
+void BaseHeightMapRenderObjClass::On_Frame_Update()
 {
 
 }
@@ -2276,7 +2276,7 @@ void BaseHeightMapRenderObjClass::removeAllProps()
 //=============================================================================
 /** Notifies that the local shroud changed.*/
 //=============================================================================
-void BaseHeightMapRenderObjClass::notifyShroudChanged(void)
+void BaseHeightMapRenderObjClass::notifyShroudChanged()
 {
 	if (m_propBuffer) {
 		m_propBuffer->notifyShroudChanged();
@@ -2356,7 +2356,7 @@ void BaseHeightMapRenderObjClass::removeTerrainBibDrawable(DrawableID id)
 //=============================================================================
 /** Notification that all lighting needs to be recalculated. */
 //=============================================================================
-void BaseHeightMapRenderObjClass::staticLightingChanged( void )
+void BaseHeightMapRenderObjClass::staticLightingChanged()
 {
 	// Cause the terrain to get updated with new lighting.
 	m_needFullUpdate = true;
@@ -3005,7 +3005,7 @@ void BaseHeightMapRenderObjClass::xfer( Xfer *xfer )
 // ------------------------------------------------------------------------------------------------
 /** Load post process */
 // ------------------------------------------------------------------------------------------------
-void BaseHeightMapRenderObjClass::loadPostProcess( void )
+void BaseHeightMapRenderObjClass::loadPostProcess()
 {
 	// empty. jba [8/11/2003]
 }

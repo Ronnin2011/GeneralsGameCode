@@ -122,7 +122,7 @@ waveInfo waveTypeInfo[WaveTypeMax]=
 //=============================================================================
 /** Destructor. Releases w3d assets. */
 //=============================================================================
-WaterTracksObj::~WaterTracksObj(void)
+WaterTracksObj::~WaterTracksObj()
 {
 	freeWaterTracksResources();
 }
@@ -132,7 +132,7 @@ WaterTracksObj::~WaterTracksObj(void)
 //=============================================================================
 /** Constructor. Just nulls out some variables. */
 //=============================================================================
-WaterTracksObj::WaterTracksObj(void)
+WaterTracksObj::WaterTracksObj()
 {
 	m_stageZeroTexture=nullptr;
 	m_bound=false;
@@ -164,7 +164,7 @@ void WaterTracksObj::Get_Obj_Space_Bounding_Box(AABoxClass & box) const
 //=============================================================================
 /** Free any W3D resources associated with this object */
 //=============================================================================
-Int WaterTracksObj::freeWaterTracksResources(void)
+Int WaterTracksObj::freeWaterTracksResources()
 {
 	REF_PTR_RELEASE(m_stageZeroTexture);
 	return 0;
@@ -681,7 +681,7 @@ WaterTracksRenderSystem::WaterTracksRenderSystem()
 //=============================================================================
 /** Destructor.  Free all pre-allocated track laying render objects*/
 //=============================================================================
-WaterTracksRenderSystem::~WaterTracksRenderSystem( void )
+WaterTracksRenderSystem::~WaterTracksRenderSystem()
 {
 
 	// free all data
@@ -696,7 +696,7 @@ WaterTracksRenderSystem::~WaterTracksRenderSystem( void )
 //=============================================================================
 /** (Re)allocates all W3D assets after a reset.. */
 //=============================================================================
-void WaterTracksRenderSystem::ReAcquireResources(void)
+void WaterTracksRenderSystem::ReAcquireResources()
 {
 	Int i,j,k;
 //	const Int numModules=16;	///@todo: Get a value out of gdf
@@ -746,7 +746,7 @@ void WaterTracksRenderSystem::ReAcquireResources(void)
 //=============================================================================
 /** (Re)allocates all W3D assets after a reset.. */
 //=============================================================================
-void WaterTracksRenderSystem::ReleaseResources(void)
+void WaterTracksRenderSystem::ReleaseResources()
 {
 	REF_PTR_RELEASE(m_indexBuffer);
 	REF_PTR_RELEASE(m_vertexBuffer);
@@ -759,7 +759,7 @@ void WaterTracksRenderSystem::ReleaseResources(void)
 //=============================================================================
 /**  initialize the system, allocate all the render objects we will need */
 //=============================================================================
-void WaterTracksRenderSystem::init(void)
+void WaterTracksRenderSystem::init()
 {
 	const Int numModules=2000;	///@todo: Get a value out of gdf
 	Int i;
@@ -812,7 +812,7 @@ void WaterTracksRenderSystem::init(void)
 
 }
 
-void WaterTracksRenderSystem::reset(void)
+void WaterTracksRenderSystem::reset()
 {
 	WaterTracksObj *nextMod,*mod;
 
@@ -838,7 +838,7 @@ void WaterTracksRenderSystem::reset(void)
 //=============================================================================
 /** Shutdown and free all memory for this system */
 //=============================================================================
-void WaterTracksRenderSystem::shutdown( void )
+void WaterTracksRenderSystem::shutdown()
 {
 	WaterTracksObj *nextMod,*mod;
 
@@ -904,8 +904,8 @@ void WaterTracksRenderSystem::update()
 }
 
 
-void TestWaterUpdate(void);
-void setFPMode( void );
+void TestWaterUpdate();
+void setFPMode();
 
 // Ronin @bugfix 06/11/2025: F2DW macro needed for depth bias conversion
 static inline DWORD F2DW(FLOAT f) { return *((DWORD*)&f); }
@@ -1197,7 +1197,7 @@ WaterTracksObj *WaterTracksRenderSystem::findTrack(Vector2 &start, Vector2 &end,
 	}
 	return nullptr;
 }
-void WaterTracksRenderSystem::saveTracks(void)
+void WaterTracksRenderSystem::saveTracks()
 {
 
 	if (!TheTerrainLogic)
@@ -1240,7 +1240,7 @@ void WaterTracksRenderSystem::saveTracks(void)
 	}
 }
 
-void WaterTracksRenderSystem::loadTracks(void)
+void WaterTracksRenderSystem::loadTracks()
 {
 
 	if (!TheTerrainLogic)
@@ -1346,7 +1346,7 @@ extern HWND ApplicationHWnd;
 //TODO: Fix editor so it actually draws the wave segment instead of line while editing
 //Could freeze all the water while editing?  Or keep setting elapsed time on current segment.
 //Have to make it so seamless merge of segments at final position.
-void TestWaterUpdate(void)
+void TestWaterUpdate()
 {
 	static Int doInit=1;
 	static WaterTracksObj *track=nullptr,*track2=nullptr;

@@ -141,7 +141,7 @@ TextureBaseClass::TextureBaseClass
 //! Base texture class destructor
 /*! KJM
 */
-TextureBaseClass::~TextureBaseClass(void)
+TextureBaseClass::~TextureBaseClass()
 {
 	delete TextureLoadTask;
 	TextureLoadTask=nullptr;
@@ -357,7 +357,7 @@ void TextureBaseClass::Set_Texture_Name(const char * name)
 //! Get priority
 /*!
 */
-unsigned int TextureBaseClass::Get_Priority(void)
+unsigned int TextureBaseClass::Get_Priority()
 {
 	if (!D3DTexture)
 	{

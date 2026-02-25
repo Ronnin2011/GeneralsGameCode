@@ -55,7 +55,7 @@
 
 
 
-StreakRendererClass::StreakRendererClass(void) :
+StreakRendererClass::StreakRendererClass() :
 		Texture(nullptr),
 		Shader(ShaderClass::_PresetAdditiveSpriteShader),
 		Width(0.0f),
@@ -116,7 +116,7 @@ StreakRendererClass & StreakRendererClass::operator = (const StreakRendererClass
 	return *this;
 }
 
-StreakRendererClass::~StreakRendererClass(void)
+StreakRendererClass::~StreakRendererClass()
 {
 	REF_PTR_RELEASE(Texture);
 	delete [] m_vertexBuffer;
@@ -158,7 +158,7 @@ void StreakRendererClass::Set_Texture(TextureClass *texture)
 	REF_PTR_SET(Texture,texture);
 }
 
-TextureClass * StreakRendererClass::Get_Texture(void) const
+TextureClass * StreakRendererClass::Get_Texture() const
 {
 	if (Texture != nullptr) {
 		Texture->Add_Ref();
@@ -182,7 +182,7 @@ TextureClass * StreakRendererClass::Get_Texture(void) const
 //	TextureTileFactor = factor;
 //}
 
-// void StreakRendererClass::Reset_Line(void)
+// void StreakRendererClass::Reset_Line()
 // {
 	// LastUsedSyncTime = WW3D::Get_Sync_Time();
 	// CurrentUVOffset.Set(0.0f,0.0f);
@@ -306,10 +306,10 @@ void StreakRendererClass::RenderStreak
 	const Matrix3D & transform,
 	unsigned int num_points,
 	Vector3 * points,
-	Vector4 * colors,								/////////////// DIFFERENT FROM RENDER( )
-	float * widths,									/////////////// DIFFERENT FROM RENDER( )
+	Vector4 * colors,								/////////////// DIFFERENT FROM RENDER()
+	float * widths,									/////////////// DIFFERENT FROM RENDER()
 	const SphereClass & obj_sphere,
-	unsigned int *personalities			/////////////// DIFFERENT FROM RENDER( )
+	unsigned int *personalities			/////////////// DIFFERENT FROM RENDER()
 )
 {
 	Matrix4x4 view;

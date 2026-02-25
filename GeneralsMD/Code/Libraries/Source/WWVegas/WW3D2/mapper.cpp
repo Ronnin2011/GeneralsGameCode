@@ -150,7 +150,7 @@ LinearOffsetTextureMapperClass::LinearOffsetTextureMapperClass(const LinearOffse
 	CurrentUVOffset = StartingUVOffset;	// Reset a mapper as it is created
 }
 
-void LinearOffsetTextureMapperClass::Reset(void)
+void LinearOffsetTextureMapperClass::Reset()
 {
 	Set_Current_UV_Offset(Vector2(0.0f, 0.0f));
 	LastUsedSyncTime = WW3D::Get_Sync_Time();
@@ -239,7 +239,7 @@ void GridTextureMapperClass::Apply(int uv_array_index)
 	DX8Wrapper::Set_DX8_Texture_Stage_State(Stage, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_COUNT2);
 }
 
-void GridTextureMapperClass::Reset(void)
+void GridTextureMapperClass::Reset()
 {
 	Remainder = 0;
 	if (Sign >= 0) {
@@ -298,7 +298,7 @@ void GridTextureMapperClass::initialize(float fps, unsigned int gridwidth_log2)
 	Remainder = 0;
 }
 
-void GridTextureMapperClass::update_temporal_state(void)
+void GridTextureMapperClass::update_temporal_state()
 {
 	unsigned int now = WW3D::Get_Sync_Time();
 	unsigned int delta = now - LastUsedSyncTime;
@@ -356,7 +356,7 @@ RotateTextureMapperClass::RotateTextureMapperClass(const RotateTextureMapperClas
 {
 }
 
-void RotateTextureMapperClass::Reset(void)
+void RotateTextureMapperClass::Reset()
 {
 	CurrentAngle = 0.0f;
 	LastUsedSyncTime = WW3D::Get_Sync_Time();
@@ -420,7 +420,7 @@ SineLinearOffsetTextureMapperClass::SineLinearOffsetTextureMapperClass(const Sin
 {
 }
 
-void SineLinearOffsetTextureMapperClass::Reset(void)
+void SineLinearOffsetTextureMapperClass::Reset()
 {
 	CurrentAngle = 0.0f;
 	LastUsedSyncTime = WW3D::Get_Sync_Time();
@@ -487,7 +487,7 @@ StepLinearOffsetTextureMapperClass::StepLinearOffsetTextureMapperClass(const Ste
 {
 }
 
-void StepLinearOffsetTextureMapperClass::Reset(void)
+void StepLinearOffsetTextureMapperClass::Reset()
 {
 	LastUsedSyncTime = WW3D::Get_Sync_Time();
 	CurrentStep.Set(0.0f,0.0f);
@@ -570,7 +570,7 @@ ZigZagLinearOffsetTextureMapperClass::ZigZagLinearOffsetTextureMapperClass(const
 {
 }
 
-void ZigZagLinearOffsetTextureMapperClass::Reset(void)
+void ZigZagLinearOffsetTextureMapperClass::Reset()
 {
 	LastUsedSyncTime = WW3D::Get_Sync_Time();
 	Remainder=0;
@@ -720,7 +720,7 @@ void EdgeMapperClass::Apply(int uv_array_index)
 
 }
 
-void EdgeMapperClass::Reset(void)
+void EdgeMapperClass::Reset()
 {
 	LastUsedSyncTime = WW3D::Get_Sync_Time();
 	VOffset = 0.0f;
@@ -976,14 +976,14 @@ RandomTextureMapperClass::RandomTextureMapperClass(const RandomTextureMapperClas
 	randomize();
 }
 
-void RandomTextureMapperClass::randomize(void)
+void RandomTextureMapperClass::randomize()
 {
 	CurrentAngle=2*WWMATH_PI*rand4.Get_Float();
 	Center.U=rand4.Get_Float();
 	Center.V=rand4.Get_Float();
 }
 
-void RandomTextureMapperClass::Reset(void)
+void RandomTextureMapperClass::Reset()
 {
 	LastUsedSyncTime = WW3D::Get_Sync_Time();
 	Remainder=0;

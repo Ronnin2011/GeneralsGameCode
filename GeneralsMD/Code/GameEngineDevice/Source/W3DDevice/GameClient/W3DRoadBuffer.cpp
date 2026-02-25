@@ -132,7 +132,7 @@ static Bool s_dynamic = false;
 //=============================================================================
 /** Nulls index & vertex data. */
 //=============================================================================
-RoadType::RoadType(void):
+RoadType::RoadType():
 m_roadTexture(nullptr),
 m_vertexRoad(nullptr),
 m_indexRoad(nullptr),
@@ -146,7 +146,7 @@ m_uniqueID(-1)
 //=============================================================================
 /** Frees index & vertex data. */
 //=============================================================================
-RoadType::~RoadType(void)
+RoadType::~RoadType()
 {
 	REF_PTR_RELEASE(m_roadTexture);
 	REF_PTR_RELEASE(m_vertexRoad);
@@ -158,7 +158,7 @@ RoadType::~RoadType(void)
 //=============================================================================
 /** Sets the W3D texture. */
 //=============================================================================
-void RoadType::applyTexture(void)
+void RoadType::applyTexture()
 {
  	W3DShaderManager::setTexture(0,m_roadTexture);
 	DX8Wrapper::Set_Index_Buffer(m_indexRoad,0, "RoadType::applyTexture");
@@ -202,7 +202,7 @@ void RoadType::loadTexture(AsciiString path, Int ID)
 //=============================================================================
 /** Sets the W3D texture. */
 //=============================================================================
-void RoadType::loadTestTexture(void)
+void RoadType::loadTestTexture()
 {
 	if (m_isAutoLoaded && m_uniqueID>0 && !m_texturePath.isEmpty()) {
 		/// @todo - delay loading textures and only load textures referenced by map.
@@ -220,7 +220,7 @@ void RoadType::loadTestTexture(void)
 //=============================================================================
 /** Nulls index & vertex data. */
 //=============================================================================
-RoadSegment::RoadSegment(void) :
+RoadSegment::RoadSegment() :
 m_curveRadius(0.0f),
 m_type(SEGMENT),
 m_scale(1.0f),
@@ -240,7 +240,7 @@ m_bounds(Vector3(0.0f, 0.0f, 0.0f), 1.0f)
 //=============================================================================
 /** Frees index & vertex data. */
 //=============================================================================
-RoadSegment::~RoadSegment(void)
+RoadSegment::~RoadSegment()
 {
 	m_numVertex = 0;
 	delete[] m_vb;
@@ -340,7 +340,7 @@ Int RoadSegment::GetIndices(UnsignedShort *destination_ib, Int numToCopy, Int of
 //=============================================================================
 /** Updates the diffuse lighting in the vertex buffer. */
 //=============================================================================
-void RoadSegment::updateSegLighting(void)
+void RoadSegment::updateSegLighting()
 {
 	Int i;
 	Int borderSizeInLine=TheTerrainRenderObject->getMap()->getBorderSizeInline();
@@ -2583,7 +2583,7 @@ void W3DRoadBuffer::insert4Way(Vector2 loc, Int index1, Real scale)
 //=============================================================================
 /** Inserts Tee intersections at 3 way intersections. */
 //=============================================================================
-void W3DRoadBuffer::insertTeeIntersections(void)
+void W3DRoadBuffer::insertTeeIntersections()
 {
 	// Insert the tees.
 	Int numRoadSegments = m_numRoads;
@@ -2613,7 +2613,7 @@ void W3DRoadBuffer::insertTeeIntersections(void)
 //=============================================================================
 /** Inserts curved segments along connected segments. */
 //=============================================================================
-void W3DRoadBuffer::insertCurveSegments(void)
+void W3DRoadBuffer::insertCurveSegments()
 {
 	// Insert the curve segments.
 	Int numRoadSegments = m_numRoads;
@@ -2732,7 +2732,7 @@ void W3DRoadBuffer::adjustStacking(Int topUniqueID, Int bottomUniqueID)
 //=============================================================================
 /** Inserts alpha blend type joins at open ends. */
 //=============================================================================
-void W3DRoadBuffer::insertCrossTypeJoins(void)
+void W3DRoadBuffer::insertCrossTypeJoins()
 {
 	// Insert the curve segments.
 	Int numRoadSegments = m_numRoads;
@@ -3056,7 +3056,7 @@ void W3DRoadBuffer::rotateAbout(Vector2 *ptP, Vector2 center, Real angle)
 //=============================================================================
 /** Destructor. Releases w3d assets. */
 //=============================================================================
-W3DRoadBuffer::~W3DRoadBuffer(void)
+W3DRoadBuffer::~W3DRoadBuffer()
 {
 	freeRoadBuffers();
 	REF_PTR_RELEASE(m_map);
@@ -3067,7 +3067,7 @@ W3DRoadBuffer::~W3DRoadBuffer(void)
 //=============================================================================
 /** Constructor.  */
 //=============================================================================
-W3DRoadBuffer::W3DRoadBuffer(void)	:
+W3DRoadBuffer::W3DRoadBuffer()	:
 	m_roads(nullptr),
 	m_numRoads(0),
 	m_initialized(false),
@@ -3092,7 +3092,7 @@ W3DRoadBuffer::W3DRoadBuffer(void)	:
 //=============================================================================
 /** Frees the index and vertex buffers. */
 //=============================================================================
-void W3DRoadBuffer::freeRoadBuffers(void)
+void W3DRoadBuffer::freeRoadBuffers()
 {
 	delete[] m_roads;
 	m_roads = nullptr;
@@ -3106,7 +3106,7 @@ void W3DRoadBuffer::freeRoadBuffers(void)
 //=============================================================================
 /** Allocates the index and vertex buffers. */
 //=============================================================================
-void W3DRoadBuffer::allocateRoadBuffers(void)
+void W3DRoadBuffer::allocateRoadBuffers()
 {
 	Int i = 0;
 
@@ -3161,7 +3161,7 @@ void W3DRoadBuffer::allocateRoadBuffers(void)
 //=============================================================================
 /** Removes all roads. */
 //=============================================================================
-void W3DRoadBuffer::clearAllRoads(void)
+void W3DRoadBuffer::clearAllRoads()
 {
 	Int i;
 	if (m_roads)
@@ -3218,7 +3218,7 @@ void W3DRoadBuffer::loadRoads()
 //=============================================================================
 /** Draws the roads.  Uses terrain bounds to cull. */
 //=============================================================================
-void W3DRoadBuffer::updateLighting(void)
+void W3DRoadBuffer::updateLighting()
 {
 	/*
 	CRASH FIX: Kris Morness
@@ -3260,7 +3260,7 @@ void W3DRoadBuffer::updateLighting(void)
 //=============================================================================
 /** Sets the flag to reload the vertex buffer. */
 //=============================================================================
-void W3DRoadBuffer::updateCenter(void)
+void W3DRoadBuffer::updateCenter()
 {
 	m_updateBuffers = true;
 }

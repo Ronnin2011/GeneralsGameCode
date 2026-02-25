@@ -524,7 +524,7 @@ void W3DView::getPickRay(const ICoord2D *screen, Vector3 *rayStart, Vector3 *ray
 //-------------------------------------------------------------------------------------------------
 /** set the transform matrix of m_3DCamera, based on m_pos & m_angle */
 //-------------------------------------------------------------------------------------------------
-void W3DView::setCameraTransform( void )
+void W3DView::setCameraTransform()
 {
 	if (TheGlobalData->m_headless)
 		return;
@@ -600,7 +600,7 @@ void W3DView::setCameraTransform( void )
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-void W3DView::init( void )
+void W3DView::init()
 {
 	// extend View functionality
 	View::init();
@@ -645,7 +645,7 @@ const Coord3D& W3DView::get3DCameraPosition() const
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-void W3DView::reset( void )
+void W3DView::reset()
 {
 	View::reset();
 
@@ -998,7 +998,7 @@ static void drawablePostDraw( Drawable *draw, void *userData )
 //-------------------------------------------------------------------------------------------------
 // Display AI debug visuals
 //-------------------------------------------------------------------------------------------------
-static void renderAIDebug( void )
+static void renderAIDebug()
 {
 }
 
@@ -1045,7 +1045,7 @@ Bool W3DView::updateCameraMovements()
    (which update before the main rendering loop) could get a correct version of the scene.
    Without this change, the reflections were always 1 frame behind the non-reflected view.
 */
-void W3DView::updateView(void)
+void W3DView::updateView()
 {
 	UPDATE();
 }
@@ -1080,7 +1080,7 @@ void W3DView::stepView()
 }
 
 //DECLARE_PERF_TIMER(W3DView_updateView)
-void W3DView::update(void)
+void W3DView::update()
 {
 	//USE_PERF_TIMER(W3DView_updateView)
 	Bool didScriptedMovement = false;
@@ -1488,13 +1488,13 @@ void W3DView::calcDeltaScroll(Coord2D &screenDelta)
 /** Draw member for the W3D window, this will literally draw the window
   * for this view */
 //-------------------------------------------------------------------------------------------------
-void W3DView::drawView( void )
+void W3DView::drawView()
 {
 	DRAW();
 }
 
 //DECLARE_PERF_TIMER(W3DView_drawView)
-void W3DView::draw( void )
+void W3DView::draw()
 {
 	//USE_PERF_TIMER(W3DView_drawView)
 	Bool skipRender = false;
@@ -1858,7 +1858,7 @@ void W3DView::setPitch( Real radians )
 //-------------------------------------------------------------------------------------------------
 /** Set the view angle back to default */
 //-------------------------------------------------------------------------------------------------
-void W3DView::setAngleToDefault( void )
+void W3DView::setAngleToDefault()
 {
 	View::setAngleToDefault();
 
@@ -1868,7 +1868,7 @@ void W3DView::setAngleToDefault( void )
 //-------------------------------------------------------------------------------------------------
 /** Set the view pitch back to default */
 //-------------------------------------------------------------------------------------------------
-void W3DView::setPitchToDefault( void )
+void W3DView::setPitchToDefault()
 {
 	View::setPitchToDefault();
 
@@ -1930,7 +1930,7 @@ void W3DView::setZoom(Real z)
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-void W3DView::setZoomToDefault( void )
+void W3DView::setZoomToDefault()
 {
 	// default zoom has to be max, otherwise players will just zoom to max always
 
@@ -2315,7 +2315,7 @@ void W3DView::lookAt( const Coord3D *o )
 
 //-------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------
-void W3DView::initHeightForMap( void )
+void W3DView::initHeightForMap()
 {
 	m_groundLevel = TheTerrainLogic->getGroundHeight(m_pos.x, m_pos.y);
 	const Real MAX_GROUND_LEVEL = 120.0; // jba - starting ground level can't exceed this height.
@@ -2530,7 +2530,7 @@ void W3DView::cameraModFinalZoom( Real finalZoom, Real easeIn, Real easeOut )
 //-------------------------------------------------------------------------------------------------
 /** Sets the final zoom for a camera movement. */
 //-------------------------------------------------------------------------------------------------
-void W3DView::cameraModFreezeAngle(void)
+void W3DView::cameraModFreezeAngle()
 {
 	if (m_doingRotateCamera) {
 		if (m_rcInfo.trackObject) {
@@ -2751,7 +2751,7 @@ void W3DView::resetCamera(const Coord3D *location, Int milliseconds, Real easeIn
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-Bool W3DView::isCameraMovementFinished(void)
+Bool W3DView::isCameraMovementFinished()
 {
 	if (m_viewFilter == FT_VIEW_MOTION_BLUR_FILTER) {
 		// Several of the motion blur effects are similar to camera movements.
@@ -2768,7 +2768,7 @@ Bool W3DView::isCameraMovementFinished(void)
 }
 
 
-Bool W3DView::isCameraMovementAtWaypointAlongPath(void)
+Bool W3DView::isCameraMovementAtWaypointAlongPath()
 {
 	Bool returnValue = m_CameraArrivedAtWaypointOnPathFlag;
 	m_CameraArrivedAtWaypointOnPathFlag = false;
@@ -2910,7 +2910,7 @@ static Real makeQuadraticS(Real t)
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-void W3DView::rotateCameraOneFrame(void)
+void W3DView::rotateCameraOneFrame()
 {
 	m_rcInfo.curFrame++;
 	if (TheGlobalData->m_disableCameraMovement) {
@@ -2981,7 +2981,7 @@ void W3DView::rotateCameraOneFrame(void)
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-void W3DView::zoomCameraOneFrame(void)
+void W3DView::zoomCameraOneFrame()
 {
 	m_zcInfo.curFrame++;
 	if (TheGlobalData->m_disableCameraMovement) {
@@ -3007,7 +3007,7 @@ void W3DView::zoomCameraOneFrame(void)
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-void W3DView::pitchCameraOneFrame(void)
+void W3DView::pitchCameraOneFrame()
 {
 	m_pcInfo.curFrame++;
 	if (TheGlobalData->m_disableCameraMovement) {
@@ -3267,12 +3267,12 @@ void W3DView::cameraEnableSlaveMode(const AsciiString & objectName, const AsciiS
 	m_cameraSlaveObjectBoneName = boneName;
 }
 
-void W3DView::cameraDisableSlaveMode(void)
+void W3DView::cameraDisableSlaveMode()
 {
 	m_isCameraSlaved = false;
 }
 
-void W3DView::cameraEnableRealZoomMode(void) //WST added 10/18/2002
+void W3DView::cameraEnableRealZoomMode() //WST added 10/18/2002
 {
 	m_useRealZoomCam = true;
 	m_FXPitch = 1.0f;	//Reset to default
@@ -3280,7 +3280,7 @@ void W3DView::cameraEnableRealZoomMode(void) //WST added 10/18/2002
 	updateView();
 }
 
-void W3DView::cameraDisableRealZoomMode(void) //WST added 10/18/2002
+void W3DView::cameraDisableRealZoomMode() //WST added 10/18/2002
 {
 	m_useRealZoomCam = false;
 	m_FXPitch = 1.0f;	//Reset to default

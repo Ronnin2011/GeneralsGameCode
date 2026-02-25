@@ -37,12 +37,11 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-#include <d3d9.h>  // Native DX9
-
 #pragma once
 
 #include "always.h"
 #include "ww3dformat.h"
+#include <d3d9.h>  // Native DX9
 
 class DX8Caps
 {
@@ -207,7 +206,7 @@ public:
 
 
 	DX8Caps(IDirect3D9* direct3d, IDirect3DDevice9* D3DDevice,WW3DFormat display_format, const D3DADAPTER_IDENTIFIER9& adapter_id);
-	static void Shutdown(void);
+	static void Shutdown();
 
 	void Compute_Caps(WW3DFormat display_format, const D3DADAPTER_IDENTIFIER9& adapter_id);
 	bool Support_TnL() const { return SupportTnL; };
