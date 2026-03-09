@@ -165,12 +165,6 @@ inline void DX8PolygonRendererClass::Render_Instanced(int base_vertex_offset)
 {
 	WWASSERT(!strip); // Instancing only supports triangle lists
 
-	// Ronin @bugfix 19/02/2026 DX9: Warn if vertex_index_range is 0 — DIP will draw nothing
-	if (vertex_index_range == 0) {
-		WWDEBUG_SAY(("INST DRAW WARNING: vertex_index_range=0! idxOff=%u idxCnt=%u vtxOff=%u minVtx=%u — DIP will render nothing!",
-			index_offset, index_count, vertex_offset, min_vertex_index));
-	}
-
 	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
 	dev->DrawIndexedPrimitive(
 		D3DPT_TRIANGLELIST,

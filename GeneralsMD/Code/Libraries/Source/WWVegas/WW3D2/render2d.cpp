@@ -616,20 +616,25 @@ void Render2DClass::Render(void)
 		return;
 	}
 
+	// Save the view and projection matrices since we're nuking them
+	Matrix4x4 view, proj;
+	Matrix4x4 identity(true);
+
+	DX8Wrapper::Get_Transform(D3DTS_VIEW, view);
+	DX8Wrapper::Get_Transform(D3DTS_PROJECTION, proj);
+
+
 	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
 	if (!dev) {
 		return;
 	}
 
 	// Configure the viewport for entire screen
-	int width, height, bits;
-	bool windowed;
-	WW3D::Get_Device_Resolution(width, height, bits, windowed);
 	D3DVIEWPORT9 vp = { 0 };
-	vp.X = 0;
-	vp.Y = 0;
-	vp.Width = width;
-	vp.Height = height;
+	vp.X = (DWORD)ScreenResolution.Left;
+	vp.Y = (DWORD)ScreenResolution.Top;
+	vp.Width = (DWORD)ScreenResolution.Width();
+	vp.Height = (DWORD)ScreenResolution.Height();
 	vp.MinZ = 0.0f;
 	vp.MaxZ = 1.0f;
 	DX8Wrapper::Set_Viewport(&vp);
@@ -675,6 +680,16 @@ void Render2DClass::Render(void)
 	DX8Wrapper::Set_Vertex_Buffer(vb);
 	DX8Wrapper::Set_Index_Buffer(ib, 0);
 
+	// Ronin @bugfix 26/02/2026 DX9: Force ShaderClass to fully re-apply all texture stage
+// and render states. In DX9, previous render passes (instancing, water tracks, terrain)
+// can modify device TSS/render states directly or via HLSL shaders, but ShaderClass's
+// internal dirty-tracking (CurrentShader ^ ShaderBits) doesn't know about those changes.
+// If the ShaderBits happen to match what ShaderClass last applied, diff==0 and Apply()
+// returns immediately — leaving stale device states (wrong ALPHAOP, ALPHABLENDENABLE,
+// etc.) that cause black backgrounds behind transparent 2D elements like text labels.
+// Invalidate() sets ShaderDirty=true, forcing diff=0xFFFFFFFF so every state is re-set.
+	ShaderClass::Invalidate();
+
 	// Set shader and draw through wrapper (vanilla DX8 flow)
 	if (IsGrayScale)
 	{
@@ -715,8 +730,13 @@ void Render2DClass::Render(void)
 	// texture stages, blend states, and everything else internally.
 	DX8Wrapper::Draw_Triangles(0, Indices.Count() / 3, 0, Vertices.Count());
 
-	if (IsGrayScale)
-		ShaderClass::Invalidate();	// Force both stages to be reset
+	// Restore view and projection transforms
+	DX8Wrapper::Set_Transform(D3DTS_VIEW, view);
+	DX8Wrapper::Set_Transform(D3DTS_PROJECTION, proj);
+
+	// (3D or 2D) fully re-applies its shader states and doesn't inherit our 2D setup.
+	ShaderClass::Invalidate();
+
 }
 
 

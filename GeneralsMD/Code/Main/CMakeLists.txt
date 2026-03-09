@@ -80,7 +80,7 @@ if(MSVC)
     # This copies exe + pdb to Zero Hour installation after every build
     set(ZEROHOUR_INSTALL_PATH "C:/Program Files (x86)/Steam/steamapps/common/Command & Conquer Generals - Zero Hour")
     
-    # Ronin @build 18/02/2026 Path to the compiled instancing vertex shader
+    # Ronin @build 18/02/2026 Path to the compiled instancing/distortion vertex/pixel shaders
     set(SHADER_SOURCE_DIR "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/Shaders")
 
     add_custom_command(TARGET z_generals POST_BUILD
@@ -91,12 +91,27 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
    $<TARGET_FILE_DIR:z_generals>/generalszh.pdb
         "${ZEROHOUR_INSTALL_PATH}/generalszh.pdb"
-        # Ronin @build 18/02/2026 Deploy instancing vertex shader to shaders subfolder
+        # Ronin @build 18/02/2026 Deploy instancing vertex shaders to shaders subfolder
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "${ZEROHOUR_INSTALL_PATH}/shaders"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/RigidInstance.vso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/RigidInstance.vso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/RigidInstance_NoColor.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/RigidInstance_NoColor.vso"
+        # Ronin @build 18/02/2026 Deploy instancing pixel shader to shaders subfolder
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/RigidInstance.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/RigidInstance.pso"
+        # Ronin @build 03/03/2026 Deploy distortion pixel shader to shaders subfolder
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/distortion.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/distortion.pso"
+        # Ronin @build 03/03/2026 Deploy distortion vertex shader to shaders subfolder
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/distortion_vs.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/distortion_vs.vso"
         COMMENT "Auto-deploying to Zero Hour installation folder"
 
     )

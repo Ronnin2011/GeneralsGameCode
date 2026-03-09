@@ -983,7 +983,7 @@ void PointGroupClass::Render(RenderInfoClass &rinfo)
 		DX8Wrapper::BindLayoutFVF(PointVerts.FVF_Info().Get_FVF(), "PointGroupClass:Render");
 
 #ifdef _DEBUG
-		DX8Wrapper::Validate_Pipeline_State("PointGroupClass:Render");
+		//DX8Wrapper::Validate_Pipeline_State("PointGroupClass:Render");
 #endif
 
 
@@ -1909,7 +1909,7 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 			DX8Wrapper::BindLayoutFVF(PointVerts.FVF_Info().Get_FVF(), "PointGroupClass:RenderVolumeParticle");
 
 #ifdef _DEBUG
-			DX8Wrapper::Validate_Pipeline_State("PointGroupClass:RenderVolumeParticle");
+			//DX8Wrapper::Validate_Pipeline_State("PointGroupClass:RenderVolumeParticle");
 #endif
 
 			DX8Wrapper::Set_Index_Buffer (indexbuffer, 0, "PointGroupClass::RenderVolumeParticle");

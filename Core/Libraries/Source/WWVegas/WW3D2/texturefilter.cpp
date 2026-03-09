@@ -115,9 +115,12 @@ void TextureFilterClass::_Init_Filters(TextureFilterMode filter_type)
    	_MagTextureFilters[0][FILTER_TYPE_FAST]=D3DTEXF_LINEAR;
    	_MipMapFilters[0][FILTER_TYPE_FAST]=D3DTEXF_POINT;
 
-   	_MagTextureFilters[0][FILTER_TYPE_BEST]=D3DTEXF_POINT;
-   	_MinTextureFilters[0][FILTER_TYPE_BEST]=D3DTEXF_POINT;
-   	_MipMapFilters[0][FILTER_TYPE_BEST]=D3DTEXF_POINT;
+		// @bugfix Ronin 01/03/2026 DX9: FILTER_TYPE_BEST base values were D3DTEXF_POINT which is wrong.
+		// They get upgraded by caps checks below, but if caps bits are missing the fallback was point filtering.
+		// On any DX9-capable GPU, linear is the correct minimum for "best" quality.
+		_MagTextureFilters[0][FILTER_TYPE_BEST] = D3DTEXF_LINEAR;
+		_MinTextureFilters[0][FILTER_TYPE_BEST] = D3DTEXF_LINEAR;
+		_MipMapFilters[0][FILTER_TYPE_BEST] = D3DTEXF_LINEAR;
 #else
 	_MinTextureFilters[0][FILTER_TYPE_NONE]=D3DTEXF_ANISOTROPIC;
 	_MagTextureFilters[0][FILTER_TYPE_NONE]=D3DTEXF_ANISOTROPIC;
@@ -195,7 +198,12 @@ void TextureFilterClass::_Init_Filters(TextureFilterMode filter_type)
 		_MagTextureFilters[i][FILTER_TYPE_DEFAULT]=_MagTextureFilters[i][FILTER_TYPE_BEST];
 		_MipMapFilters[i][FILTER_TYPE_DEFAULT]=_MipMapFilters[i][FILTER_TYPE_BEST];
 
-		DX8Wrapper::Set_DX8_Sampler_State(i, D3DSAMP_MAXANISOTROPY,2);
+		DX8Wrapper::Set_DX8_Sampler_State(i, D3DSAMP_MAXANISOTROPY,16); // was 2
+
+		// @feature Ronin 01/03/2026 DX9: Negative mip LOD bias sharpens distant textures slightly,
+	  // counteracting the excessive blur from trilinear/aniso filtering on low-res mip levels.
+	  // -0.5f is a conservative value; -1.0f would be sharper but risks aliasing.
+		DX8Wrapper::Set_DX8_Sampler_State(i, D3DSAMP_MIPMAPLODBIAS, *reinterpret_cast<const DWORD*>(&(const float&)(float)-0.5f));
 	}
 
 }

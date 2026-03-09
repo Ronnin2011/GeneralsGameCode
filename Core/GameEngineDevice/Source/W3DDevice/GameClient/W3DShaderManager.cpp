@@ -99,6 +99,9 @@ protected:
 	Int m_numPasses;						///<number of passes to complete shader
 };
 
+IDirect3DSurface8* W3DShaderManager::m_oldDepthSurface = nullptr;	///<previous depth buffer surface
+IDirect3DSurface8* W3DShaderManager::m_rttDepthSurface = nullptr;	///<dedicated non-MSAA depth surface for RTT // @bugfix Ronin 04/03/2026
+
 //this table will contain custom versions of each shader tuned for specific video card and user options.
 static W3DFilterInterface *W3DFilters[FT_MAX];
 static W3DShaderInterface *W3DShaders[W3DShaderManager::ST_MAX];
@@ -118,7 +121,7 @@ Bool W3DShaderManager::m_renderingToTexture = false;
 IDirect3DSurface8 *W3DShaderManager::m_oldRenderSurface=nullptr;	///<previous render target
 IDirect3DTexture8 *W3DShaderManager::m_renderTexture=nullptr;		///<texture into which rendering will be redirected.
 IDirect3DSurface8 *W3DShaderManager::m_newRenderSurface=nullptr;	///<new render target inside m_renderTexture
-IDirect3DSurface8 *W3DShaderManager::m_oldDepthSurface=nullptr;	///<previous depth buffer surface
+
 /*===========================================================================================*/
 /*=========      Screen Shaders	=============================================================*/
 /*===========================================================================================*/
@@ -179,6 +182,11 @@ Int ScreenDefaultFilter::init()
 
 Bool ScreenDefaultFilter::preRender(Bool &skipRender, CustomScenePassModes &scenePassMode)
 {
+	// @bugfix Ronin 04/03/2026 Smudges no longer need full-scene RTT redirection.
+// W3DSmudgeManager::render() now uses StretchRect to copy the backbuffer on demand,
+// preserving MSAA for the main viewport. The ScreenDefaultFilter RTT path is only
+// needed for other filters (BW, crossfade, etc.) that actually process the whole frame.
+	return FALSE;
 	//Right now this filter is only used for smudges, so don't bother if none are present.
 	if (TheSmudgeManager)
 	{	if (((W3DSmudgeManager *)TheSmudgeManager)->getSmudgeCountLastFrame() == 0)
@@ -2651,66 +2659,99 @@ W3DShaderManager::W3DShaderManager()
 //=============================================================================
 void W3DShaderManager::init()
 {
-	int i,j;
+	int i, j;
 
 	D3DSURFACE_DESC desc;
 	// For now, check & see if we are gf3 or higher on the food chain.
 
-	ChipsetType res=DC_UNKNOWN;
-	if ((res=W3DShaderManager::getChipset()) != 0)
+	ChipsetType res = DC_UNKNOWN;
+	if ((res = W3DShaderManager::getChipset()) != 0)
 	{
 		m_currentChipset = res;	//cache the current chipset.
 
 		//Some of our effects require an offscreen render target, so try creating it here.
-		HRESULT hr=DX8Wrapper::_Get_D3D_Device8()->GetRenderTarget(0, &m_oldRenderSurface);
+		HRESULT hr = DX8Wrapper::_Get_D3D_Device8()->GetRenderTarget(0, &m_oldRenderSurface);
 
 		m_oldRenderSurface->GetDesc(&desc);
 
-		hr=DX8Wrapper::_Get_D3D_Device8()->CreateTexture(desc.Width,desc.Height,1,D3DUSAGE_RENDERTARGET,desc.Format,D3DPOOL_DEFAULT,&m_renderTexture, NULL);
+		hr = DX8Wrapper::_Get_D3D_Device8()->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format, D3DPOOL_DEFAULT, &m_renderTexture, NULL);
 
 		if (hr != S_OK)
 		{
 			if (m_oldRenderSurface) m_oldRenderSurface->Release();
 			m_oldRenderSurface = nullptr;
 			m_renderTexture = nullptr;
-		} else {
+		}
+		else {
 			hr = m_renderTexture->GetSurfaceLevel(0, &m_newRenderSurface);
 			if (hr != S_OK)
 			{
 				if (m_renderTexture) m_renderTexture->Release();
 				m_renderTexture = nullptr;
 				m_newRenderSurface = nullptr;
-			}	else {
-				hr = DX8Wrapper::_Get_D3D_Device8()->GetDepthStencilSurface(&m_oldDepthSurface);
-				if (hr != S_OK)
+			}
+			else {
+				// @bugfix Ronin 04/03/2026 Create a non-MSAA depth/stencil surface for RTT pass.
+				// The backbuffer depth surface may be MSAA, which is incompatible with
+				// a non-MSAA render target texture in DX9. We create a dedicated
+				// D3DMULTISAMPLE_NONE depth surface that matches the render texture dimensions.
+				IDirect3DSurface8* backbufferDepth = nullptr;
+				hr = DX8Wrapper::_Get_D3D_Device8()->GetDepthStencilSurface(&backbufferDepth);
+				if (SUCCEEDED(hr) && backbufferDepth)
+				{
+					D3DSURFACE_DESC depthDesc;
+					backbufferDepth->GetDesc(&depthDesc);
+
+					// Save reference to backbuffer depth for restoring after RTT
+					m_oldDepthSurface = backbufferDepth; // already AddRef'd by GetDepthStencilSurface
+
+					// Create a matching depth surface without MSAA for the RTT pass
+					hr = DX8Wrapper::_Get_D3D_Device8()->CreateDepthStencilSurface(
+						desc.Width, desc.Height,
+						depthDesc.Format,
+						D3DMULTISAMPLE_NONE, 0, // No MSAA, matches the render target texture
+						TRUE,                    // Discard — we don't need to preserve depth between frames
+						&m_rttDepthSurface,
+						nullptr);
+
+					if (FAILED(hr))
+					{
+						DEBUG_LOG(("W3DShaderManager: Failed to create RTT depth surface (0x%08X), falling back to shared depth", (unsigned)hr));
+						// Fallback: use the backbuffer depth (may fail with MSAA mismatch)
+						m_rttDepthSurface = m_oldDepthSurface;
+						m_rttDepthSurface->AddRef();
+					}
+				}
+				else
 				{
 					if (m_newRenderSurface) m_newRenderSurface->Release();
 					if (m_renderTexture) m_renderTexture->Release();
 					m_renderTexture = nullptr;
 					m_newRenderSurface = nullptr;
 					m_oldDepthSurface = nullptr;
+					m_rttDepthSurface = nullptr;
 				}
 			}
 		}
 	}
 
-	W3DShaderInterface **shaders;
+	W3DShaderInterface** shaders;
 
-	for (i=0; MasterShaderList[i] != nullptr; i++)
+	for (i = 0; MasterShaderList[i] != nullptr; i++)
 	{
-		shaders=MasterShaderList[i];
-		for (j=0; shaders[j] != nullptr; j++)
+		shaders = MasterShaderList[i];
+		for (j = 0; shaders[j] != nullptr; j++)
 		{
 			if (shaders[j]->init())
 				break;	//found a working shader
 		}
 	}
-	W3DFilterInterface **filters;
+	W3DFilterInterface** filters;
 
-	for (i=0; MasterFilterList[i] != nullptr; i++)
+	for (i = 0; MasterFilterList[i] != nullptr; i++)
 	{
-		filters=MasterFilterList[i];
-		for (j=0; filters[j] != nullptr; j++)
+		filters = MasterFilterList[i];
+		for (j = 0; filters[j] != nullptr; j++)
 		{
 			if (filters[j]->init())
 				break;	//found a working shader
@@ -2729,21 +2770,24 @@ void W3DShaderManager::shutdown()
 	if (m_renderTexture) m_renderTexture->Release();
 	if (m_oldRenderSurface) m_oldRenderSurface->Release();
 	if (m_oldDepthSurface) m_oldDepthSurface->Release();
+	// @bugfix Ronin 04/03/2026 Release dedicated RTT depth surface
+	if (m_rttDepthSurface) m_rttDepthSurface->Release();
 	m_renderTexture = nullptr;
 	m_newRenderSurface = nullptr;
 	m_oldDepthSurface = nullptr;
 	m_oldRenderSurface = nullptr;
+	m_rttDepthSurface = nullptr;
 	m_currentShader = ST_INVALID;
 	m_currentFilter = FT_NULL_FILTER;
 	//release any assets associated with a shader (vertex/pixel shaders, textures, etc.)
-	Int i=0;
-	for (; i<W3DShaderManager::ST_MAX; i++) {
+	Int i = 0;
+	for (; i < W3DShaderManager::ST_MAX; i++) {
 		if (W3DShaders[i]) {
 			W3DShaders[i]->shutdown();
 		}
 	}
 
-	for (i=0; i < FT_MAX; i++)
+	for (i = 0; i < FT_MAX; i++)
 	{
 		if (W3DFilters[i])
 		{
@@ -2913,57 +2957,85 @@ void W3DShaderManager::drawViewport(Int color)
 // W3DShaderManager::startRenderToTexture =======================================================
 /** Starts rendering to a texture.
  */
-//=============================================================================
+ //=============================================================================
 void W3DShaderManager::startRenderToTexture()
 {
 	DEBUG_ASSERTCRASH(!m_renderingToTexture, ("Already rendering to texture - cannot nest calls."));
 
-	if (m_renderingToTexture || m_newRenderSurface==nullptr || m_oldDepthSurface==nullptr) return;
+	if (m_renderingToTexture || m_newRenderSurface == nullptr) return;
 	HRESULT hr = DX8Wrapper::_Get_D3D_Device8()->SetRenderTarget(0, m_newRenderSurface);
 
-	if (SUCCEEDED(hr))
-		hr = DX8Wrapper::_Get_D3D_Device8()->SetDepthStencilSurface(m_oldDepthSurface);
-	DEBUG_ASSERTCRASH(hr==S_OK, ("Set target failed unexpectedly."));
+	// @bugfix Ronin 04/03/2026 Only swap to the dedicated non-MSAA depth surface when the
+	// backbuffer actually uses MSAA. When there is no MSAA, the backbuffer depth surface is
+	// already compatible with the non-MSAA render target texture, and keeping it bound
+	// preserves the depth contents from the main render loop (avoiding the need to clear).
+	// Swapping unconditionally causes the entire viewport to lose MSAA because the scene
+	// gets rendered into a non-MSAA target.
+	if (SUCCEEDED(hr) && m_rttDepthSurface && m_rttDepthSurface != m_oldDepthSurface)
+	{
+		// Only swap depth if backbuffer depth is MSAA (incompatible with non-MSAA RT)
+		D3DSURFACE_DESC depthDesc;
+		if (m_oldDepthSurface && SUCCEEDED(m_oldDepthSurface->GetDesc(&depthDesc))
+			&& depthDesc.MultiSampleType != D3DMULTISAMPLE_NONE)
+		{
+			hr = DX8Wrapper::_Get_D3D_Device8()->SetDepthStencilSurface(m_rttDepthSurface);
+			// Clear the dedicated depth buffer since it has undefined contents
+			if (SUCCEEDED(hr))
+				DX8Wrapper::_Get_D3D_Device8()->Clear(0, nullptr, D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, 0, 1.0f, 0);
+		}
+	}
+
+	DEBUG_ASSERTCRASH(hr == S_OK, ("Set target failed unexpectedly."));
 	if (hr != S_OK)
 		return;
+
 	m_renderingToTexture = true;
 	if (TheGlobalData->m_showSoftWaterEdge)
 	{	//Soft water edges use frame buffer destination alpha so we must clear it to a known value.
 		if (m_currentFilter == FT_VIEW_MOTION_BLUR_FILTER || m_currentFilter == FT_VIEW_CROSSFADE)
 		{	//these filters rely on the previous frame being visible so we must be careful about clearing
 			//frame buffer.  Only clear the alpha channel
-			DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_ALPHA);	//only clear alpha
-			ShaderClass shader=ShaderClass::_PresetOpaqueSolidShader;
+			DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_ALPHA);	//only clear alpha
+			ShaderClass shader = ShaderClass::_PresetOpaqueSolidShader;
 			shader.Set_Depth_Compare(ShaderClass::PASS_ALWAYS);
 			shader.Set_Depth_Mask(ShaderClass::DEPTH_WRITE_DISABLE);
 			DX8Wrapper::Set_Shader(shader);
 
-			VertexMaterialClass *vmat=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
+			VertexMaterialClass* vmat = VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
 			DX8Wrapper::Set_Material(vmat);
 			REF_PTR_RELEASE(vmat);	//no need to keep a reference since it's a preset.
 
-			drawViewport(0x00ffffff | (((Int)(TheWaterTransparency->m_minWaterOpacity*255.0f)) <<24));
-			DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE);	//disable writes to alpha
+			drawViewport(0x00ffffff | (((Int)(TheWaterTransparency->m_minWaterOpacity * 255.0f)) << 24));
+			DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);	//disable writes to alpha
 		}
 		else	//normal clear that overwrites everything.
-			DX8Wrapper::Clear(true, false, Vector3( 0.0f, 0.0f, 0.0f ), TheWaterTransparency->m_minWaterOpacity);
+			DX8Wrapper::Clear(true, false, Vector3(0.0f, 0.0f, 0.0f), TheWaterTransparency->m_minWaterOpacity);
 	}
 }
 
 // W3DShaderManager::startRenderToTexture =======================================================
 /** Ends rendering to a texture.
  */
-//=============================================================================
-IDirect3DTexture8 *W3DShaderManager::endRenderToTexture()
+ //=============================================================================
+IDirect3DTexture8* W3DShaderManager::endRenderToTexture()
 {
 	DEBUG_ASSERTCRASH(m_renderingToTexture, ("Not rendering to texture."));
 	if (!m_renderingToTexture) return nullptr;
 
 	HRESULT hr = DX8Wrapper::_Get_D3D_Device8()->SetRenderTarget(0, m_oldRenderSurface);
-	if (SUCCEEDED(hr))
-		hr = DX8Wrapper::_Get_D3D_Device8()->SetDepthStencilSurface(m_oldDepthSurface); //Restore old render target.
+	// @bugfix Ronin 04/03/2026 Restore backbuffer depth only if we actually swapped it
+	if (SUCCEEDED(hr) && m_oldDepthSurface)
+	{
+		IDirect3DSurface8* currentDepth = nullptr;
+		DX8Wrapper::_Get_D3D_Device8()->GetDepthStencilSurface(&currentDepth);
+		if (currentDepth != m_oldDepthSurface)
+		{
+			hr = DX8Wrapper::_Get_D3D_Device8()->SetDepthStencilSurface(m_oldDepthSurface);
+		}
+		if (currentDepth) currentDepth->Release(); // GetDepthStencilSurface AddRef'd
+	}
 
-	DEBUG_ASSERTCRASH(hr==S_OK, ("Set target failed unexpectedly."));
+	DEBUG_ASSERTCRASH(hr == S_OK, ("Set target failed unexpectedly."));
 	if (hr == S_OK)
 	{
 		//assume render target texture will be in stage 0.  Most hardware has "conditional" support for

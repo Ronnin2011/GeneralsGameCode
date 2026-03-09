@@ -61,7 +61,7 @@ public:
 
 	/**
 	** One-time initialization. Call after device creation.
-	** Creates the instance vertex buffer on stream 1 and loads the instancing vertex shader.
+	** Creates the instance vertex buffer on stream 1 and loads the instancing shaders.
 	** Returns true if hardware instancing is available and initialized successfully.
 	*/
 	bool Init();
@@ -83,19 +83,6 @@ public:
 	bool Is_Enabled() const { return m_enabled && m_available; }
 
 	/**
-	** Collects eligible instances from a render task list.
-	** Returns the number of instances collected. If >= 2, caller should
-	** use Draw_Instanced() instead of the per-mesh loop.
-	**
-	** @param render_task_head  Head of the PolyRenderTaskClass linked list
-	** @param first_renderer    The polygon renderer to match (all instances must share this)
-	** @return Number of instances collected into the internal buffer
-	*/
-	unsigned Collect_Instances(
-		PolyRenderTaskClass * render_task_head,
-		DX8PolygonRendererClass * first_renderer);
-
-	/**
 	** Issue the instanced draw call for the previously collected instances.
 	** Caller is responsible for having already set textures, shader, material,
 	** and the geometry vertex buffer on stream 0.
@@ -103,7 +90,7 @@ public:
 	** @param renderer      The polygon renderer that defines the index range
 	** @param geometryFVF   The FVF of the stream 0 vertex buffer (used to build the combined declaration)
 	*/
-	void Draw_Instanced(DX8PolygonRendererClass * renderer, DWORD geometryFVF);
+	void Draw_Instanced(DX8PolygonRendererClass* renderer, DWORD geometryFVF);
 
 	/**
 	** Reset the collection buffer for a new batch of instances.
@@ -120,7 +107,7 @@ public:
 	bool Add_Instance_Transform(const float row0[4], const float row1[4], const float row2[4])
 	{
 		if (m_collectedCount >= MAX_INSTANCES_PER_DRAW) return false;
-		InstanceData & inst = m_instanceBuffer[m_collectedCount];
+		InstanceData& inst = m_instanceBuffer[m_collectedCount];
 		inst.row0[0] = row0[0]; inst.row0[1] = row0[1]; inst.row0[2] = row0[2]; inst.row0[3] = row0[3];
 		inst.row1[0] = row1[0]; inst.row1[1] = row1[1]; inst.row1[2] = row1[2]; inst.row1[3] = row1[3];
 		inst.row2[0] = row2[0]; inst.row2[1] = row2[1]; inst.row2[2] = row2[2]; inst.row2[3] = row2[3];
@@ -138,6 +125,7 @@ public:
 	unsigned Get_Last_Frame_Instanced_Meshes() const { return m_lastFrameInstancedMeshes; }
 	void Begin_Frame_Statistics();
 	void End_Frame_Statistics();
+	void Release_Resources();
 
 private:
 
@@ -159,14 +147,16 @@ private:
 	struct CachedDecl
 	{
 		DWORD fvf;
-		IDirect3DVertexDeclaration9 * decl;
+		IDirect3DVertexDeclaration9* decl;
 	};
 
 	bool m_available;        // Hardware supports instancing
 	bool m_enabled;          // User has instancing enabled
 
-	IDirect3DVertexBuffer9*       m_instanceVB;       // Stream 1 instance buffer
-	IDirect3DVertexShader9*       m_instanceVS;       // Instancing vertex shader
+	IDirect3DVertexBuffer9* m_instanceVB;        // Stream 1 instance buffer
+	IDirect3DVertexShader9* m_instanceVS;        // Instancing vertex shader (with COLOR0)
+	IDirect3DVertexShader9* m_instanceVSNoColor; // Instancing vertex shader (no COLOR0)
+	IDirect3DPixelShader9* m_instancePS;        // Ronin @feature 08/03/2026 DX9: Minimal pixel shader to bypass FFP pixel combiners on AMD
 
 	// Ronin @bugfix 18/02/2026 DX9: Per-FVF declaration cache (replaces single m_instanceDecl)
 	CachedDecl m_declCache[MAX_CACHED_DECLS];
@@ -184,9 +174,10 @@ private:
 
 	// Internal helpers
 	bool Create_Instance_VB();
-	IDirect3DVertexDeclaration9 * Get_Or_Create_Instance_Decl(DWORD geometryFVF);
+	IDirect3DVertexDeclaration9* Get_Or_Create_Instance_Decl(DWORD geometryFVF);
 	bool Load_Instance_Shader();
-	void Release_Resources();
+	bool Load_Vertex_Shader_From_File(const char* shaderPath, IDirect3DVertexShader9** outShader);
+	bool Load_Pixel_Shader_From_File(const char* shaderPath, IDirect3DPixelShader9** outShader);
 };
 
 /**

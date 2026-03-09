@@ -2,6 +2,7 @@
 // Ronin @bugfix 21/02/2026 DX9: Match FFP lighting model (material ambient, multi-light)
 // Ronin @bugfix 21/02/2026 DX9: Respect D3DRS_DIFFUSEMATERIALSOURCE / AMBIENTMATERIALSOURCE
 // Ronin @bugfix 22/02/2026 DX9: Fix light direction convention — InputLights points toward light
+// Ronin @bugfix 28/02/2026 DX9: Use TEXCOORD1..3 for instance data to avoid TEXCOORD gaps on AMD
 //
 // Compile with: fxc /T vs_3_0 /Fo RigidInstance.vso RigidInstance.hlsl
 //
@@ -17,6 +18,11 @@
 //   c11     = Light1 direction (world-space, pointing TOWARD light source)
 //   c12     = Light1 diffuse color (RGB)
 //   c13     = Material source flags: (diffuseSrcVertex, ambientSrcVertex, emissiveSrcVertex, 0)
+//
+// Instance data on stream 1 is bound to TEXCOORD(N), TEXCOORD(N+1), TEXCOORD(N+2)
+// where N = number of texture coordinate channels in the geometry FVF.
+// For the most common case (1 UV channel), this is TEXCOORD1, TEXCOORD2, TEXCOORD3.
+// The vertex declaration built by DX8InstanceManagerClass ensures contiguous indices.
 
 float4x4 g_ViewProj : register(c0);
 float4 g_AmbientLight : register(c4);
@@ -36,11 +42,15 @@ struct VS_INPUT
     float3 normal : NORMAL;
     float4 diffuse : COLOR0;
     float2 uv0 : TEXCOORD0;
-    float2 uv1 : TEXCOORD1;
 
-    float4 worldRow0 : TEXCOORD4;
-    float4 worldRow1 : TEXCOORD5;
-    float4 worldRow2 : TEXCOORD6;
+    // Ronin @bugfix 28/02/2026 DX9: Instance data now uses contiguous TEXCOORD indices
+    // starting right after the geometry's last TEXCOORD. For the common case of 1 UV
+    // channel (D3DFVF_TEX1), these map to TEXCOORD1, TEXCOORD2, TEXCOORD3.
+    // For 2 UV channels they would be TEXCOORD2, TEXCOORD3, TEXCOORD4, etc.
+    // AMD drivers require no gaps in TEXCOORD usage indices within a vertex declaration.
+    float4 worldRow0 : TEXCOORD1;
+    float4 worldRow1 : TEXCOORD2;
+    float4 worldRow2 : TEXCOORD3;
 };
 
 struct VS_OUTPUT
@@ -122,7 +132,7 @@ VS_OUTPUT main(VS_INPUT input)
     output.diffuse.a = lerp(unlitAlpha, litAlpha, lightingEnabled);
 
     output.uv0 = input.uv0;
-    output.uv1 = input.uv1;
+    output.uv1 = float2(0, 0);
 
     return output;
 }

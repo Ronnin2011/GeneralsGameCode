@@ -224,7 +224,7 @@ static bool												_LargeTextureExtraReductionEnabled = false;
 int														WW3D::LastFrameMemoryAllocations;
 int														WW3D::LastFrameMemoryFrees;
 
-int														WW3D::TextureFilter = 0;
+int														WW3D::TextureFilter = TextureFilterClass::TEXTURE_FILTER_ANISOTROPIC; // was 0
 
 bool														WW3D::Lite = false;
 
@@ -1203,32 +1203,6 @@ WW3DErrorType WW3D::End_Render(bool flip_frame)
 					WWDEBUG_SAY(("🎬 End_Render #%d: GetRenderState failed hrZEnable=0x%08X hrZWrite=0x%08X",
 						s_endRenderWaterCheck, (unsigned)hrZEnable, (unsigned)hrZWrite));
 				}
-			}
-		}
-#endif
-
-#ifdef _DEBUG
-		// Track state at end of intro frames
-		if (FrameCount < 300) {
-			IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
-			if (pDev) {
-				DWORD zEnable = 0, colorWrite = 0;
-				pDev->GetRenderState(D3DRS_ZENABLE, &zEnable);
-				pDev->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
-
-				IDirect3DPixelShader9* ps = nullptr;
-				IDirect3DVertexShader9* vs = nullptr;
-				IDirect3DVertexDeclaration9* decl = nullptr;
-				pDev->GetPixelShader(&ps);
-				pDev->GetVertexShader(&vs);
-				pDev->GetVertexDeclaration(&decl);
-
-				WWDEBUG_SAY(("🎬 INTRO FRAME %lu END: ZEnable=%d ColorWrite=0x%X PS=%p VS=%p Decl=%p flip=%d",
-					FrameCount, zEnable, colorWrite, ps, vs, decl, flip_frame));
-
-				if (ps) ps->Release();
-				if (vs) vs->Release();
-				if (decl) decl->Release();
 			}
 		}
 #endif

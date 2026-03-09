@@ -47,6 +47,8 @@ public:
 
 private:
 	Bool testHardwareSupport();		///<test if video card supports the effect.
+	Bool initDistortionShader();	///< @feature Ronin 02/03/2026: Create distortion pixel shader + noise texture
+
 
 	enum { MAX_POINTS_PER_GROUP = 512 };
 
@@ -61,4 +63,15 @@ private:
 	DX8IndexBufferClass	*m_indexBuffer;
 	Int m_backBufferWidth;
 	Int m_backBufferHeight;
+
+	// @feature Ronin 05/03/2026: Dedicated non-MSAA resolve texture for smudge scene capture
+	IDirect3DTexture8* m_resolveTexture;
+	IDirect3DSurface8* m_resolveSurface;
+
+	// @feature Ronin 02/03/2026: Distortion pixel shader for MSAA-safe heat shimmer
+	IDirect3DPixelShader9* m_distortionPS;				///< Distortion pixel shader
+	IDirect3DVertexShader9* m_distortionVS;				///< @feature Ronin 05/03/2026: Pass-through vertex shader (required by ps_3_0)
+	IDirect3DVertexDeclaration9* m_distortionDecl;		///< Vertex declaration for distortion quads
+	TextureClass* m_noiseTexture;							///< Scrolling noise map for UV distortion
+	Bool m_useDistortionShader;
 };

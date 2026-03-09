@@ -224,15 +224,6 @@ static unsigned				last_frame_texture_stage_state_changes				= 0;
 static unsigned				last_frame_number_of_DX8_calls						= 0;
 static unsigned				last_frame_draw_calls									= 0;
 
-// @feature Ronin 09/02/2026 DX9: Lightweight draw-call HUD overlay for performance measurement
-bool DX8Wrapper::DrawCallHUDEnabled = false;
-
-void DX8Wrapper::Toggle_Draw_Call_HUD()
-{
-	DrawCallHUDEnabled = !DrawCallHUDEnabled;
-	WWDEBUG_SAY(("Draw Call HUD: %s", DrawCallHUDEnabled ? "ON" : "OFF"));
-}
-
 // Ronin @bugfix 09/11/2025: Track BeginScene/EndScene pairing to prevent INVALIDCALL errors
 static bool s_inScene = false;
 
@@ -547,13 +538,54 @@ static void Track_Decl_Bound_While_Wrapper_Expects_FVF(const char* where)
 }
 #endif // _DEBUG
 
+// @feature Ronin 01/03/2026 DX9: Query and configure multisampling for antialiasing.
+// Call this to fill in _PresentParameters.MultiSample* before CreateDevice/Reset.
+static void Configure_Multisampling(D3DPRESENT_PARAMETERS& pp, IDirect3D9* d3d, UINT adapter, D3DDEVTYPE devType)
+{
+	// Try sample counts from highest to lowest
+	static const D3DMULTISAMPLE_TYPE msTypes[] = {
+		D3DMULTISAMPLE_8_SAMPLES,
+		D3DMULTISAMPLE_4_SAMPLES,
+		D3DMULTISAMPLE_2_SAMPLES,
+	};
+
+	pp.MultiSampleType = D3DMULTISAMPLE_NONE;
+	pp.MultiSampleQuality = 0;
+
+	for (auto msType : msTypes) {
+		DWORD qualityLevels = 0;
+
+		// Check back buffer format
+		HRESULT hr = d3d->CheckDeviceMultiSampleType(
+			adapter, devType, pp.BackBufferFormat, pp.Windowed, msType, &qualityLevels);
+
+		if (FAILED(hr) || qualityLevels == 0)
+			continue;
+
+		// Also check depth/stencil format
+		hr = d3d->CheckDeviceMultiSampleType(
+			adapter, devType, pp.AutoDepthStencilFormat, pp.Windowed, msType, &qualityLevels);
+
+		if (SUCCEEDED(hr) && qualityLevels > 0) {
+			pp.MultiSampleType = msType;
+			pp.MultiSampleQuality = qualityLevels - 1; // Use highest quality
+			WWDEBUG_SAY(("MSAA: Enabled %dx (quality %d/%d)",
+				(int)msType, (int)pp.MultiSampleQuality, (int)qualityLevels));
+			break;
+		}
+	}
+
+	// MSAA requires discard swap effect
+	if (pp.MultiSampleType != D3DMULTISAMPLE_NONE) {
+		pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+	}
+}
+
 /***********************************************************************************
 **
 ** DX8Wrapper Implementation
 **
 ***********************************************************************************/
-
-
 
 // Ronin @bugfix 09/01/2026 DX9: Force stream0 binding with explicit stride (keeps wrapper tracking coherent)
 void DX8Wrapper::Force_Stream0(IDirect3DVertexBuffer9* vb, UINT offset, UINT stride)
@@ -729,22 +761,20 @@ void DX8Wrapper::Shutdown()
 		}
 	}
 
-	if (D3DInterface) {
-		UINT newRefCount=D3DInterface->Release();
-		D3DInterface=nullptr;
-	}
+	// Ronin @refactor 27/02/2026 DX9: Removed dead code — second D3DInterface release block
+	// was unreachable because D3DInterface was already nulled above.
 
 	if (D3D8Lib) {
 		FreeLibrary(D3D8Lib);
 		D3D8Lib = nullptr;
 	}
 
-	_RenderDeviceNameTable.Clear();		 // note - Delete_All() resizes the vector, causing a reallocation.  Clear is better. jba.
+	_RenderDeviceNameTable.Clear();
 	_RenderDeviceShortNameTable.Clear();
 	_RenderDeviceDescriptionTable.Clear();
 
 	DX8Caps::Shutdown();
-	IsInitted = false;		// 010803 srj
+	IsInitted = false;
 }
 
 void DX8Wrapper::Do_Onetime_Device_Dependent_Inits()
@@ -904,6 +934,11 @@ void DX8Wrapper::Set_Default_Global_Render_States()
 		Set_DX8_Sampler_State(i, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
 		Set_DX8_Sampler_State(i, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
 		Set_DX8_Sampler_State(i, D3DSAMP_MAXANISOTROPY, 1);
+	}
+
+	// @feature Ronin 01/03/2026 DX9: Enable multisampling antialiasing if device was created with MSAA
+	if (_PresentParameters.MultiSampleType != D3DMULTISAMPLE_NONE) {
+		Set_DX8_Render_State(D3DRS_MULTISAMPLEANTIALIAS, TRUE);
 	}
 
 #ifdef _DEBUG
@@ -1145,21 +1180,11 @@ bool DX8Wrapper::Create_Device()
 
 // Ronin @bugfix 09/11/2025: DX9 should prefer hardware vertex processing for performance
 // Use MIXED for compatibility, or HARDWARE for max performance
+// NOTE: D3DCREATE_PUREDEVICE disabled - causes GetRenderState() to return garbage
+// and prevents proper state debugging. Re-enable only for final Release builds.
 
-// Ronin @bugfix 19/12/2025: Use MIXED vertex processing for compatibility
-// Pure device mode could break GetRenderState() queries needed for debugging
-// and may cause state corruption issues during intro cinematics
-// Ronin @bugfix 16/02/2026: **Needs urgent revisit**
 	Vertex_Processing_Behavior = (caps.DevCaps & D3DDEVCAPS_HWTRANSFORMANDLIGHT) ?
 		D3DCREATE_MIXED_VERTEXPROCESSING : D3DCREATE_SOFTWARE_VERTEXPROCESSING;
-
-	// NOTE: D3DCREATE_PUREDEVICE disabled - causes GetRenderState() to return garbage
-	// and prevents proper state debugging. Re-enable only for final Release builds.
-	// if (caps.DevCaps & D3DDEVCAPS_PUREDEVICE) {
-	//     Vertex_Processing_Behavior |= D3DCREATE_PUREDEVICE;
-	//     WWDEBUG_SAY(("Using D3DCREATE_PUREDEVICE for maximum performance"));
-	// }
-
 
 	// enable this when all 'get' dx calls are removed KJM
 	/*if (caps.DevCaps&D3DDEVCAPS_PUREDEVICE)
@@ -1188,6 +1213,9 @@ bool DX8Wrapper::Create_Device()
 	// TheSuperHackers @bugfix xezon 13/06/2025 Front load the system dbghelp.dll to prevent
 	// the graphics driver from potentially loading the old game dbghelp.dll and then crashing the game process.
 	DbgHelpGuard dbgHelpGuard;
+
+	// @feature Ronin 01/03/2026 DX9: Multisampling configuration calling.
+	Configure_Multisampling(_PresentParameters, D3DInterface, CurRenderDevice, WW3D_DEVTYPE);
 
 	HRESULT hr=D3DInterface->CreateDevice
 	(
@@ -1258,6 +1286,10 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 		if (m_pCleanupHook) {
 			m_pCleanupHook->ReleaseResources();
 		}
+
+		// Ronin @bugfix 27/02/2026 DX9: Release D3DPOOL_DEFAULT instancing resources before Reset
+		TheDX8InstanceManager.Release_Resources();
+
 		DynamicVBAccessClass::_Deinit();
 		DynamicIBAccessClass::_Deinit();
 		DX8TextureManagerClass::Release_Textures();
@@ -1268,6 +1300,10 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 
 		memset(Vertex_Shader_Constants,0,sizeof(Vector4)*MAX_VERTEX_SHADER_CONSTANTS);
 		memset(Pixel_Shader_Constants,0,sizeof(Vector4)*MAX_PIXEL_SHADER_CONSTANTS);
+
+		// @feature Ronin 01/03/2026 DX9: Re-apply MSAA configuration before Reset to ensure
+		// the present parameters reflect the desired multisampling level.
+		Configure_Multisampling(_PresentParameters, D3DInterface, CurRenderDevice, WW3D_DEVTYPE);
 
 		HRESULT hr=_Get_D3D_Device8()->TestCooperativeLevel();
 		if (hr != D3DERR_DEVICELOST )
@@ -1285,6 +1321,10 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 				m_pCleanupHook->ReAcquireResources();
 			}
 		}
+
+		// Ronin @bugfix 27/02/2026 DX9: Reinitialize instancing resources after Reset
+		TheDX8InstanceManager.Init();
+
 		Invalidate_Cached_Render_States();
 		Set_Default_Global_Render_States();
 		SHD_INIT_SHADERS;
@@ -4357,6 +4397,12 @@ swap_chain->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &render_target);
 	//
 	Set_Render_Target (render_target, true);
 
+	// Ronin @bugfix 27/02/2026 DX9: Release the ref from GetBackBuffer (Set_Render_Target AddRef'd its own copy)
+	if (render_target) {
+		render_target->Release();
+		render_target = nullptr;
+	}
+
 	//
   	//	Release our hold on the "current" render target
 	//
@@ -5543,7 +5589,7 @@ bool DX8Wrapper::Validate_Pipeline_State(const char* callerName)
 	if (!pDev) return false;
 
 	// Keep early boot noise out (matches your old behavior)
-	if (FrameCount < 43) {
+	if (FrameCount < 45) {
 		return true;
 	}
 
@@ -5670,19 +5716,30 @@ bool DX8Wrapper::Validate_Pipeline_State(const char* callerName)
 		}
 	}
 	// =========================
-
-	// Update history (store a ref)
+	// Update history while decl is still valid
+	// =========================
+	// Ronin @bugfix 27/02/2026 DX9: History tracking must run before releasing the queried decl,
+	// otherwise g_stateHistory.lastDecl is always stored as null.
 	g_stateHistory.lastFVF = fvf;
-	if (g_stateHistory.lastDecl) g_stateHistory.lastDecl->Release();
-	g_stateHistory.lastDecl = decl;
-	if (decl) decl->AddRef();
+
+	// Release old history ref, store new one (transfers our queried ref to history)
+	if (g_stateHistory.lastDecl) {
+		g_stateHistory.lastDecl->Release();
+	}
+	g_stateHistory.lastDecl = decl;  // decl is still valid here; history takes ownership of the ref
+	if (decl) {
+		decl->AddRef();  // history holds its own ref
+	}
 
 	// Keep caller tracking meaningful: record based on *effective* mode
 	if (deviceDeclActive) g_stateHistory.lastSetDeclCaller = callerName;
 	else if (deviceFVFActive) g_stateHistory.lastSetFVFCaller = callerName;
 
-	// Release local ref
-	if (decl) decl->Release();
+	// Release the ref from GetVertexDeclaration (history now has its own AddRef'd copy)
+	if (decl) {
+		decl->Release();
+		decl = nullptr;
+	}
 
 	return true;
 }

@@ -1418,7 +1418,7 @@ void W3DDisplay::gatherDebugStats()
 												draw->getPosition()->z
 											);
 
-			const PhysicsBehavior *physics = obj->getPhysics();
+			const PhysicsBehavior* physics = obj ? obj->getPhysics() : nullptr; // Ronin @bugfix 27/02/2026 - need to check for obj before trying to get physics behavior (Added nullptr check)
 			PhysicsTurningType turnType = physics ? physics->getTurning() : TURN_NONE;
 
 			const DrawableLocoInfo *locoInfo = draw->getLocoInfo();
@@ -1717,8 +1717,6 @@ AGAIN:
 #if defined(RTS_DEBUG)
 				|| TheGlobalData->m_benchmarkTimer > 0
 #endif
-				// @feature Ronin 10/02/2026 DX9: Also gather stats when draw call HUD is enabled
-				|| DX8Wrapper::DrawCallHUDEnabled
 			)
 	{
 		gatherDebugStats();
@@ -1926,37 +1924,7 @@ AGAIN:
 					// draw the current debug display
 					drawCurrentDebugDisplay();
 				}
-	#ifdef _DEBUG
-				// @feature Ronin 09/02/2026 DX9: Draw in-world performance HUD independently of debug display
-				if (DX8Wrapper::DrawCallHUDEnabled)
-				{
-					if (m_displayStrings[0] != NULL)
-					{
-						Int x = 3, y = 3;
-
-						// @tweak Ronin 10/02/2026 DX9: Offset HUD down by one line to avoid overlapping the FPS/timer counters
-						Int w0, h0;
-						m_displayStrings[0]->getSize(&w0, &h0);
-						if (h0 > 0)
-							y += h0;
-						else
-							y += 13; // fallback: FixedSys 8pt font height
-
-						Color textColor = GameMakeColor(0, 255, 0, 255);
-						Color dropColor = GameMakeColor(0, 0, 0, 255);
-
-						// Draw all stats lines (already populated by gatherDebugStats)
-						Int w, h;
-						for (int i = 0; i < DisplayStringCount; i++)
-						{
-							m_displayStrings[i]->draw(x, y, textColor, dropColor);
-							m_displayStrings[i]->getSize(&w, &h);
-							y += h;
-						}
-					}
-				}
-	#endif
-
+	
 #if defined(RTS_DEBUG)
 				if (TheGlobalData->m_benchmarkTimer > 0)
 				{
@@ -2000,16 +1968,6 @@ AGAIN:
 	if (DX8Wrapper::stats.m_disableOverhead) {
 		goto AGAIN;
 	}
-#endif
-#ifdef _DEBUG
-	// --- backtick key edge detection (toggle HUD) ---
-	static bool s_prevGraveDown = false;
-	const SHORT state = GetAsyncKeyState(VK_OEM_3);
-	const bool nowDown = (state & 0x8000) != 0;
-	if (nowDown && !s_prevGraveDown) {
-		DX8Wrapper::Toggle_Draw_Call_HUD();
-	}
-	s_prevGraveDown = nowDown;
 #endif
 }
 

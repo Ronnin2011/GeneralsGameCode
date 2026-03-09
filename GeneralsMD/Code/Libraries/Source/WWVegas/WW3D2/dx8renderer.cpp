@@ -1817,23 +1817,42 @@ void DX8TextureCategoryClass::Render()
 	// and issue a single instanced DrawIndexedPrimitive, then remove them from the task list.
 	// Non-eligible meshes (skins, sorted, billboard, alpha override, scaled, strips, overflow)
 	// fall through to the original per-mesh rendering path below.
-
-	// Ronin @feature 23/02/2026 DX9: Multi-renderer instancing pre-pass for rigid mesh batching.
-	// Loop over ALL unique polygon renderers in the render task list, batching each group of >= 2
-	// eligible instances into a single instanced DrawIndexedPrimitive call. Previous implementation
-	// only batched the single most common renderer, leaving all other sub-mesh types (wheels,
-	// turrets, etc.) to fall through to per-mesh rendering.
-
-		// Ronin @feature 23/02/2026 DX9: Multi-renderer instancing pre-pass for rigid mesh batching.
-	// Loop over ALL unique polygon renderers in the render task list, batching each group of >= 2
-	// eligible instances into a single instanced DrawIndexedPrimitive call.
 	// Ronin @bugfix 23/02/2026 DX9: Match polygon renderers by geometric equivalence (same IB/VB
 	// range) rather than pointer identity, so meshes from different MeshModelClass instances that
 	// share the same container VB/IB can be batched together.
 
 	if (TheDX8InstanceManager.Is_Enabled() && render_task_head != nullptr) {
 
-		bool found_batch = true;
+		// Ronin @bugfix 27/02/2026 DX9: Skip instancing for FVFs without normals.
+		// The instancing vertex shader computes lighting via dot(N, lightDir). Without
+		// normals in the vertex declaration, the GPU reads float3(0,0,0) for NORMAL,
+		// causing normalize(0,0,0) -> NaN -> black/corrupted pixels. Prelit meshes
+		// don't need per-vertex lighting and gain nothing from the instancing shader.
+		const bool fvfHasNormals = (container->Get_FVF() & D3DFVF_NORMAL) != 0;
+		const int fvfTexCount = (container->Get_FVF() & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+
+		bool usesAdditionalTextureStages = false;
+		for (unsigned stage = 1; stage < MeshMatDescClass::MAX_TEX_STAGES; ++stage) {
+			if (Peek_Texture(stage) != nullptr) {
+				usesAdditionalTextureStages = true;
+				break;
+			}
+		}
+
+		// Ronin @bugfix 07/03/2026 DX9: Instancing now supports both FVF variants
+		// with and without D3DFVF_DIFFUSE via separate vertex shader bytecode.
+		// Keep the temporary TEX1 / stage0-only restriction until a multi-UV or
+		// multi-stage instancing shader variant is added.
+		const bool instancingShaderSupported =
+			fvfHasNormals &&
+			(fvfTexCount == 1) &&
+			!usesAdditionalTextureStages;
+
+		// Ronin @bugfix 07/03/2026 DX9: The instancing shader requires geometry TEXCOORD0.
+		// After fixing the vertex declaration to expose only TEXCOORD0 from stream 0 and
+		// TEXCOORD1..3 from stream 1, meshes with zero UV channels can no longer be safely
+		// instanced. NVIDIA used to tolerate the mismatch; AMD rejects it.
+		bool found_batch = instancingShaderSupported;
 		while (found_batch) {
 			found_batch = false;
 
@@ -1903,7 +1922,7 @@ void DX8TextureCategoryClass::Render()
 				MeshClass* mesh = prt_i->Peek_Mesh();
 				DX8PolygonRendererClass* renderer = prt_i->Peek_Polygon_Renderer();
 
-				bool eligible = (renderer == best_renderer) &&
+				bool eligible = Polygon_Renderers_Are_Equivalent(renderer, best_renderer) &&
 					mesh->Get_Base_Vertex_Offset() != VERTEX_BUFFER_OVERFLOW &&
 					!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) &&
 					!(!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) &&
@@ -1953,9 +1972,9 @@ void DX8TextureCategoryClass::Render()
 			}
 
 			unsigned collected = TheDX8InstanceManager.Get_Collected_Count();
-			WWDEBUG_SAY(("INST BATCH: best_count=%u collected=%u pre=%u post=%u removed=%u renderer=%p",
+			/*WWDEBUG_SAY(("INST BATCH: best_count=%u collected=%u pre=%u post=%u removed=%u renderer=%p",
 				best_count, collected, pre_splice_count, post_splice_count,
-				pre_splice_count - post_splice_count, best_renderer));
+				pre_splice_count - post_splice_count, best_renderer));*/
 
 			// Issue the instanced draw call for this renderer group
 			if (collected >= 2) {
@@ -1973,6 +1992,7 @@ void DX8TextureCategoryClass::Render()
 				DX8Wrapper::Apply_Render_State_Changes();
 			}
 		}
+		/*
 		// Ronin @bugfix 24/02/2026 DX9: Diagnostic to identify why remaining tasks aren't eligible for instancing
 #ifdef WWDEBUG
 		if (TheDX8InstanceManager.Is_Enabled() && render_task_head != nullptr) {
@@ -2010,7 +2030,7 @@ void DX8TextureCategoryClass::Render()
 					total_tasks, strip_tasks, skin_tasks, sort_tasks, aligned_tasks, alpha_tasks, userdata_tasks, scale_tasks, overflow_tasks, singleton_eligible));
 			}
 		}
-#endif
+#endif*/
 	}
 
 

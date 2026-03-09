@@ -116,10 +116,11 @@ public:
 	{
 		if (!m_dev) return;
 
-#ifdef _DEBUG
+/*#ifdef _DEBUG
 		// Capture snapshot but DON'T spam log; validate only on failure in dtor.
 		m_snapshot = DX8Wrapper::Capture_Pipeline_State(where);
-#endif
+		WWDEBUG_SAY(("CAPTURING PIPELINE STATE"));
+#endif*/
 
 		// Capture IA state
 		//m_dev->GetVertexDeclaration(&m_savedDecl);
@@ -545,7 +546,7 @@ void SortingRendererClass::Flush_Sorting_Pool()
 {
 	if (!overlapping_node_count) return;
 
-#ifdef WWDEBUG
+/*#ifdef WWDEBUG
 	// Ronin @debug 03/02/2026: Log what state sorting flush applies (to compare with skin path)
 	static int s_sortFlushLog = 0;
 	if (s_sortFlushLog < 1000) {
@@ -569,14 +570,15 @@ void SortingRendererClass::Flush_Sorting_Pool()
 				overlapping_node_count));
 		}
 	}
-#endif
+#endif*/
 
 	SNAPSHOT_SAY(("SortingSystem - Flush"));
 
 	// Ronin @bugfix 2/12/2025: State capture BEFORE flush
-#ifdef _DEBUG
+/*#ifdef _DEBUG
 	PipelineStateSnapshot* preFlushState = CAPTURE_PIPELINE_STATE();
-#endif
+	WWDEBUG_SAY(("CAPTURING BEFORE [SORTING-FLUSH]"));
+#endif*/
 
 	// Fill dynamic index buffer with sorting index buffer vertices
 	TempIndexStruct* tis=Get_Temp_Index_Array(overlapping_polygon_count);
@@ -720,7 +722,7 @@ void SortingRendererClass::Flush_Sorting_Pool()
 
 	DX8Wrapper::Apply_Render_State_Changes();
 
-#ifdef WWDEBUG
+/*#ifdef WWDEBUG
 	if (s_sortFlushLog <= 1000) {
 		IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
 		if (dev) {
@@ -738,7 +740,7 @@ void SortingRendererClass::Flush_Sorting_Pool()
 				zEnable, zWrite, lighting, cullMode, alphaBlend, srcBlend, dstBlend));
 		}
 	}
-#endif
+#endif*/
 
 	unsigned count_to_render=1;
 	unsigned start_index=0;
@@ -785,6 +787,13 @@ void SortingRendererClass::Flush_Sorting_Pool()
 
 	SNAPSHOT_SAY(("SortingSystem - Done flushing"));
 
+/*#ifdef _DEBUG
+	// @bugfix Ronin 27/02/2026 DX9: Delete captured pipeline snapshot to avoid COM ref leak
+	if (preFlushState) {
+		delete preFlushState;
+		preFlushState = nullptr;
+	}
+#endif*/
 }
 
 // ----------------------------------------------------------------------------

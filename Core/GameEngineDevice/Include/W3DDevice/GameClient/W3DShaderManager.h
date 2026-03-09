@@ -85,6 +85,17 @@ public:
 	static void shutdown();	///<release resources used by shaders
 	static void updateCloud();	///<update the cloud position once every render frame.
 
+	// Info for a render to texture surface for special effects.
+	static Bool m_renderingToTexture;
+	static IDirect3DSurface8* m_oldRenderSurface;	///<previous render target
+	static IDirect3DTexture8* m_renderTexture;		///<texture into which rendering will be redirected.
+	static IDirect3DSurface8* m_newRenderSurface;	///<new render target inside m_renderTexture
+	static IDirect3DSurface8* m_oldDepthSurface;	///<previous depth buffer surface (backbuffer's, may be MSAA)
+	static IDirect3DSurface8* m_rttDepthSurface;	///<dedicated non-MSAA depth surface for RTT pass // @bugfix Ronin 04/03/2026
+
+	// Ronin @bugfix 16/11/2026: Retrieve stored vertex declaration for a shader
+	static IDirect3DVertexDeclaration9* GetShaderDeclaration(void* shaderHandle);
+
 	static ChipsetType getChipset();	///<return current device chipset.
 	static GraphicsVenderID getCurrentVendor() {return m_currentVendor;}	///<return current card vendor.
 	static __int64 getCurrentDriverVersion() {return m_driverVersion; }	///<return current driver version.
@@ -134,13 +145,6 @@ protected:
 
 	static FilterTypes m_currentFilter; ///< Last filter that was set.
 	// Info for a render to texture surface for special effects.
-	static Bool m_renderingToTexture;
-	static IDirect3DSurface8 *m_oldRenderSurface;	///<previous render target
-	static IDirect3DTexture8 *m_renderTexture;		///<texture into which rendering will be redirected.
-	static IDirect3DSurface8 *m_newRenderSurface;	///<new render target inside m_renderTexture
-	static IDirect3DSurface8 *m_oldDepthSurface;	///<previous depth buffer surface
-
-
 };
 
 class W3DFilterInterface

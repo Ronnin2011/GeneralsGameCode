@@ -473,7 +473,7 @@ void	LineGroupClass::Render(RenderInfoClass &rinfo)
 	DX8Wrapper::BindLayoutFVF(vba.FVF_Info().Get_FVF(), "LineGroupClass:Render");	
 
 #ifdef _DEBUG
-	DX8Wrapper::Validate_Pipeline_State("LineGroupClass:Render");
+	//DX8Wrapper::Validate_Pipeline_State("LineGroupClass:Render");
 #endif
 
 

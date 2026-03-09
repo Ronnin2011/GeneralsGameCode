@@ -37,6 +37,8 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	, m_enabled(true)
 	, m_instanceVB(nullptr)
 	, m_instanceVS(nullptr)
+	, m_instanceVSNoColor(nullptr)
+	, m_instancePS(nullptr)
 	, m_declCacheCount(0)
 	, m_collectedCount(0)
 	, m_instancedDrawCalls(0)
@@ -69,6 +71,14 @@ bool DX8InstanceManagerClass::Init()
 		return false;
 	}
 
+	// Ronin @feature 08/03/2026 DX9: The instancing test path now uses a tiny programmable
+	// pixel shader to bypass fixed-function pixel combiner differences on AMD.
+	if (caps.PixelShaderVersion < D3DPS_VERSION(2, 0)) {
+		WWDEBUG_SAY(("DX8InstanceManager: PS 2.0 not available, instancing disabled"));
+		m_available = false;
+		return false;
+	}
+
 	// D3DDEVCAPS2_STREAMOFFSET is required for stream frequency divider
 	if (!(caps.DevCaps2 & D3DDEVCAPS2_STREAMOFFSET)) {
 		WWDEBUG_SAY(("DX8InstanceManager: Stream offset not supported, instancing disabled"));
@@ -83,7 +93,7 @@ bool DX8InstanceManagerClass::Init()
 	}
 
 	if (!Load_Instance_Shader()) {
-		WWDEBUG_SAY(("DX8InstanceManager: Failed to load instancing vertex shader"));
+		WWDEBUG_SAY(("DX8InstanceManager: Failed to load instancing shaders"));
 		Release_Resources();
 		return false;
 	}
@@ -107,6 +117,8 @@ void DX8InstanceManagerClass::Release_Resources()
 {
 	if (m_instanceVB) { m_instanceVB->Release(); m_instanceVB = nullptr; }
 	if (m_instanceVS) { m_instanceVS->Release(); m_instanceVS = nullptr; }
+	if (m_instanceVSNoColor) { m_instanceVSNoColor->Release(); m_instanceVSNoColor = nullptr; }
+	if (m_instancePS) { m_instancePS->Release(); m_instancePS = nullptr; }
 
 	// Ronin @bugfix 18/02/2026 DX9: Release all cached vertex declarations
 	for (unsigned i = 0; i < m_declCacheCount; ++i) {
@@ -144,6 +156,12 @@ bool DX8InstanceManagerClass::Create_Instance_VB()
 // Ronin @bugfix 19/02/2026 DX9: Build a combined vertex declaration from the
 // mesh's FVF (stream 0) + instance transform data (stream 1).
 // Cached per unique FVF to avoid recreating declarations every frame.
+// Ronin @bugfix 28/02/2026 DX9: Use contiguous TEXCOORD indices to fix AMD driver
+// compatibility. AMD rejects declarations with gaps in TEXCOORD usage indices.
+// Ronin @bugfix 01/03/2026 DX9: Always use TEXCOORD1..3 for stream 1 instance data
+// to match the compiled HLSL shader's hardcoded input semantics. The previous approach
+// of using contiguous indices after the geometry's last TEXCOORD caused a declaration/
+// shader semantic mismatch whenever texCount != 1, which AMD strictly rejects.
 
 IDirect3DVertexDeclaration9* DX8InstanceManagerClass::Get_Or_Create_Instance_Decl(DWORD geometryFVF)
 {
@@ -190,17 +208,33 @@ IDirect3DVertexDeclaration9* DX8InstanceManagerClass::Get_Or_Create_Instance_Dec
 		offset += 4;
 	}
 
-	// Texture coordinates
+	// Texture coordinates — expose ONLY geometry TEXCOORD0 on stream 0.
+	// The instancing shader reads geometry UVs from TEXCOORD0 and instance rows from
+	// TEXCOORD1, TEXCOORD2, TEXCOORD3. Do NOT emit geometry TEXCOORD1+ here, or the
+	// declaration will contain duplicate TEXCOORD usage indices across streams.
+	// NVIDIA tends to tolerate that ambiguity; AMD does not.
 	int texCount = (geometryFVF & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
-	for (int t = 0; t < texCount; ++t) {
-		elements[idx++] = { 0, offset, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, (BYTE)t };
+	if (texCount > 0) {
+		elements[idx++] = { 0, offset, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0 };
 		offset += 8;
 	}
 
-	// Stream 1: Per-instance world transform (3 rows of float4) at TEXCOORD4..6
-	elements[idx++] = { 1,  0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 4 };
-	elements[idx++] = { 1, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 5 };
-	elements[idx++] = { 1, 32, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 6 };
+	// Ronin @bugfix 01/03/2026 DX9: Stream 1 instance data MUST use TEXCOORD1, TEXCOORD2,
+	// TEXCOORD3 — matching the compiled RigidInstance.vso's hardcoded input semantics.
+	// The previous approach used nextTexIdx = texCount, which only matched the shader when
+	// texCount == 1. For texCount == 0 or texCount >= 2, the declaration/shader semantic
+	// indices diverged. NVIDIA tolerates this silently; AMD strictly validates and delivers
+	// zeroes or skips the draw entirely when the VS input signature doesn't match the decl.
+	//
+	// Using fixed indices 1/2/3 means there IS a gap when texCount == 0 (TEXCOORD0 missing
+	// from stream 0), but this is acceptable because:
+	//   a) Meshes with 0 UV channels are extremely rare in instancing-eligible rigid meshes
+	//   b) The gap is between streams (stream 0 has no TEXCOORD, stream 1 starts at TEXCOORD1)
+	//      which AMD handles correctly — the gap rejection only applies within a single stream
+	//   c) The shader's input signature is the authoritative contract; the decl must match it
+	elements[idx++] = { 1,  0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1 };
+	elements[idx++] = { 1, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 2 };
+	elements[idx++] = { 1, 32, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 3 };
 
 	elements[idx] = D3DDECL_END();
 
@@ -217,10 +251,18 @@ IDirect3DVertexDeclaration9* DX8InstanceManagerClass::Get_Or_Create_Instance_Dec
 		m_declCacheCount++;
 	}
 	else {
-		WWDEBUG_SAY(("DX8InstanceManager: Decl cache full! FVF 0x%08X not cached.", geometryFVF));
+		// Ronin @bugfix 27/02/2026 DX9: Evict oldest cache entry to prevent COM leak
+		WWDEBUG_SAY(("DX8InstanceManager: Decl cache full, evicting FVF 0x%08X for 0x%08X",
+			m_declCache[0].fvf, geometryFVF));
+		if (m_declCache[0].decl) {
+			m_declCache[0].decl->Release();
+		}
+		memmove(&m_declCache[0], &m_declCache[1], sizeof(CachedDecl) * (MAX_CACHED_DECLS - 1));
+		m_declCache[MAX_CACHED_DECLS - 1].fvf = geometryFVF;
+		m_declCache[MAX_CACHED_DECLS - 1].decl = newDecl;
 	}
 
-	WWDEBUG_SAY(("DX8InstanceManager: Created instancing decl for FVF 0x%08X (stream0 stride=%u, %d tex coords)",
+	WWDEBUG_SAY(("DX8InstanceManager: Created instancing decl for FVF 0x%08X (stream0 stride=%u, %d tex coords, instance TEXCOORD1..3 fixed)",
 		geometryFVF, (unsigned)offset, texCount));
 
 	return newDecl;
@@ -228,11 +270,18 @@ IDirect3DVertexDeclaration9* DX8InstanceManagerClass::Get_Or_Create_Instance_Dec
 
 // ----------------------------------------------------------------------------
 
-bool DX8InstanceManagerClass::Load_Instance_Shader()
+bool DX8InstanceManagerClass::Load_Vertex_Shader_From_File(const char* shaderPath, IDirect3DVertexShader9** outShader)
 {
-	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+	if (!shaderPath || !outShader) {
+		return false;
+	}
 
-	const char* shaderPath = "shaders\\RigidInstance.vso";
+	*outShader = nullptr;
+
+	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+	if (!dev) {
+		return false;
+	}
 
 	HANDLE hFile = CreateFileA(shaderPath, GENERIC_READ, FILE_SHARE_READ, nullptr,
 		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -242,7 +291,7 @@ bool DX8InstanceManagerClass::Load_Instance_Shader()
 	}
 
 	DWORD fileSize = GetFileSize(hFile, nullptr);
-	if (fileSize == 0 || fileSize == INVALID_FILE_SIZE) {
+	if (fileSize == 0 || fileSize == INVALID_FILE_SIZE || fileSize < sizeof(DWORD)) {
 		CloseHandle(hFile);
 		return false;
 	}
@@ -262,31 +311,114 @@ bool DX8InstanceManagerClass::Load_Instance_Shader()
 		return false;
 	}
 
-	HRESULT hr = dev->CreateVertexShader(shaderBytecode, &m_instanceVS);
-	HeapFree(GetProcessHeap(), 0, shaderBytecode);
-
-	if (FAILED(hr)) {
-		WWDEBUG_SAY(("DX8InstanceManager: CreateVertexShader failed: 0x%08X", hr));
+	// Ronin @bugfix 27/02/2026 DX9: Validate VS 3.0 bytecode magic before CreateVertexShader
+	if (shaderBytecode[0] != 0xFFFE0300) {
+		WWDEBUG_SAY(("DX8InstanceManager: %s is not a VS 3.0 shader (magic=0x%08X)", shaderPath, shaderBytecode[0]));
+		HeapFree(GetProcessHeap(), 0, shaderBytecode);
 		return false;
 	}
 
-	WWDEBUG_SAY(("DX8InstanceManager: Loaded %s (%lu bytes), VS=%p", shaderPath, fileSize, m_instanceVS));
+	HRESULT hr = dev->CreateVertexShader(shaderBytecode, outShader);
+	HeapFree(GetProcessHeap(), 0, shaderBytecode);
+
+	if (FAILED(hr)) {
+		WWDEBUG_SAY(("DX8InstanceManager: CreateVertexShader failed for %s: 0x%08X", shaderPath, hr));
+		return false;
+	}
+
+	WWDEBUG_SAY(("DX8InstanceManager: Loaded %s (%lu bytes), VS=%p", shaderPath, fileSize, *outShader));
+	return true;
+}
+
+bool DX8InstanceManagerClass::Load_Pixel_Shader_From_File(const char* shaderPath, IDirect3DPixelShader9** outShader)
+{
+	if (!shaderPath || !outShader) {
+		return false;
+	}
+
+	*outShader = nullptr;
+
+	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+	if (!dev) {
+		return false;
+	}
+
+	HANDLE hFile = CreateFileA(shaderPath, GENERIC_READ, FILE_SHARE_READ, nullptr,
+		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+	if (hFile == INVALID_HANDLE_VALUE) {
+		WWDEBUG_SAY(("DX8InstanceManager: Could not open %s (error %d)", shaderPath, GetLastError()));
+		return false;
+	}
+
+	DWORD fileSize = GetFileSize(hFile, nullptr);
+	if (fileSize == 0 || fileSize == INVALID_FILE_SIZE || fileSize < sizeof(DWORD)) {
+		CloseHandle(hFile);
+		return false;
+	}
+
+	DWORD* shaderBytecode = (DWORD*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, fileSize);
+	if (!shaderBytecode) {
+		CloseHandle(hFile);
+		return false;
+	}
+
+	DWORD bytesRead = 0;
+	BOOL readOk = ReadFile(hFile, shaderBytecode, fileSize, &bytesRead, nullptr);
+	CloseHandle(hFile);
+
+	if (!readOk || bytesRead != fileSize) {
+		HeapFree(GetProcessHeap(), 0, shaderBytecode);
+		return false;
+	}
+
+	// Ronin @feature 08/03/2026 DX9: Accept either ps_2_0 or ps_3_0 bytecode.
+	const DWORD shaderMagic = shaderBytecode[0];
+	if (shaderMagic != 0xFFFF0200 && shaderMagic != 0xFFFF0300) {
+		WWDEBUG_SAY(("DX8InstanceManager: %s is not a supported pixel shader (magic=0x%08X)", shaderPath, shaderMagic));
+		HeapFree(GetProcessHeap(), 0, shaderBytecode);
+		return false;
+	}
+
+	HRESULT hr = dev->CreatePixelShader(shaderBytecode, outShader);
+	HeapFree(GetProcessHeap(), 0, shaderBytecode);
+
+	if (FAILED(hr)) {
+		WWDEBUG_SAY(("DX8InstanceManager: CreatePixelShader failed for %s: 0x%08X", shaderPath, hr));
+		return false;
+	}
+
+	WWDEBUG_SAY(("DX8InstanceManager: Loaded %s (%lu bytes), PS=%p", shaderPath, fileSize, *outShader));
 	return true;
 }
 
 // ----------------------------------------------------------------------------
 
-unsigned DX8InstanceManagerClass::Collect_Instances(
-	PolyRenderTaskClass* render_task_head,
-	DX8PolygonRendererClass* first_renderer)
+bool DX8InstanceManagerClass::Load_Instance_Shader()
 {
-	m_collectedCount = 0;
+	// Ronin @bugfix 07/03/2026 DX9: Load two instancing VS variants:
+	//  - RigidInstance.vso         for FVFs with D3DFVF_DIFFUSE / COLOR0
+	//  - RigidInstance_NoColor.vso for FVFs without vertex diffuse color
+	if (!Load_Vertex_Shader_From_File("shaders\\RigidInstance.vso", &m_instanceVS)) {
+		WWDEBUG_SAY(("DX8InstanceManager: Failed loading shaders\\RigidInstance.vso"));
+		return false;
+	}
 
-	if (!Is_Enabled()) return 0;
-	if (!render_task_head || !first_renderer) return 0;
+	if (!Load_Vertex_Shader_From_File("shaders\\RigidInstance_NoColor.vso", &m_instanceVSNoColor)) {
+		WWDEBUG_SAY(("DX8InstanceManager: Failed loading shaders\\RigidInstance_NoColor.vso"));
+		return false;
+	}
 
-	return m_collectedCount;
+	// Ronin @feature 08/03/2026 DX9: Use a minimal programmable pixel shader for instanced
+	// draws so AMD does not have to interpret the fixed-function pixel combiner path here.
+	if (!Load_Pixel_Shader_From_File("shaders\\RigidInstance.pso", &m_instancePS)) {
+		WWDEBUG_SAY(("DX8InstanceManager: Failed loading shaders\\RigidInstance.pso"));
+		return false;
+	}
+
+	return true;
 }
+
+// ----------------------------------------------------------------------------
 
 // ----------------------------------------------------------------------------
 
@@ -304,6 +436,25 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 		return;
 	}
 
+	// Ronin @bugfix 07/03/2026 DX9: Select the shader variant that matches the
+	// geometry FVF. AMD strictly validates VS input semantics against the vertex
+	// declaration; meshes without D3DFVF_DIFFUSE must not use the COLOR0 variant.
+	const bool hasVertexColor = (geometryFVF & D3DFVF_DIFFUSE) != 0;
+	IDirect3DVertexShader9* selectedVS = hasVertexColor ? m_instanceVS : m_instanceVSNoColor;
+	if (!selectedVS) {
+		WWDEBUG_SAY(("DX8InstanceManager: Missing instancing shader variant for FVF 0x%08X (hasColor=%d)",
+			geometryFVF, hasVertexColor ? 1 : 0));
+		return;
+	}
+
+	// Ronin @feature 08/03/2026 DX9: Bind a tiny programmable pixel shader for the instanced
+	// path to remove fixed-function pixel combiner behavior from the AMD investigation.
+	IDirect3DPixelShader9* selectedPS = m_instancePS;
+	if (!selectedPS) {
+		WWDEBUG_SAY(("DX8InstanceManager: Missing instancing pixel shader"));
+		return;
+	}
+
 	// 1. Lock and fill the instance VB with collected transforms
 	void* pData = nullptr;
 	HRESULT hr = m_instanceVB->Lock(0, m_collectedCount * sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
@@ -314,8 +465,7 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 	memcpy(pData, m_instanceBuffer, m_collectedCount * sizeof(InstanceData));
 	m_instanceVB->Unlock();
 
-	// 2. Ronin @bugfix 19/02/2026 DX9: Snapshot the current stream 0 binding BEFORE we
-	// modify anything, so we can restore it precisely after the instanced draw.
+	// 2. Snapshot only the raw D3D state this function actually mutates.
 	IDirect3DVertexBuffer9* savedVB0 = nullptr;
 	UINT savedOffset0 = 0, savedStride0 = 0;
 	dev->GetStreamSource(0, &savedVB0, &savedOffset0, &savedStride0);
@@ -326,16 +476,49 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 	DWORD savedFVF = 0;
 	dev->GetFVF(&savedFVF);
 
-	// 3. Set the instancing vertex declaration and shader
+	IDirect3DVertexDeclaration9* savedDecl = nullptr;
+	dev->GetVertexDeclaration(&savedDecl);
+
+	IDirect3DVertexShader9* savedVS = nullptr;
+	dev->GetVertexShader(&savedVS);
+
+	IDirect3DPixelShader9* savedPS = nullptr;
+	dev->GetPixelShader(&savedPS);
+
+	// Ronin @bugfix 01/03/2026 DX9: On MIXED_VERTEXPROCESSING devices, AMD requires explicit
+	// hardware vertex processing mode before using VS 3.0 with stream frequency instancing.
+	BOOL savedSoftwareVP = dev->GetSoftwareVertexProcessing();
+	if (savedSoftwareVP) {
+		dev->SetSoftwareVertexProcessing(FALSE);
+	}
+
+	// Ronin @bugfix 28/02/2026 DX9: AMD driver requires specific call ordering:
+	// 1) SetVertexDeclaration  2) SetVertexShader  3) SetStreamSourceFreq
+	// 4) SetStreamSource  5) Draw
+	// Setting declaration BEFORE stream frequency is critical on AMD.
+
+	// 3. Set the instancing programmable pipeline.
 	dev->SetVertexDeclaration(instanceDecl);
-	dev->SetVertexShader(m_instanceVS);
+	dev->SetVertexShader(selectedVS);
+	dev->SetPixelShader(selectedPS);
 
-	// 4. Bind stream 1 with the instance data
-	dev->SetStreamSource(1, m_instanceVB, 0, sizeof(InstanceData));
-
-	// 5. Set stream frequency: stream 0 = indexed geometry, stream 1 = per-instance
+	// 4. Set stream frequency AFTER declaration (AMD requirement)
 	dev->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | m_collectedCount);
 	dev->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1);
+
+	// 5. Ronin @bugfix 01/03/2026 DX9: Re-bind BOTH stream sources AFTER setting frequency.
+	// AMD invalidates stream source bindings when SetStreamSourceFreq is called.
+	// NVIDIA preserves them, which is why it works there without re-binding.
+	if (savedVB0) {
+		dev->SetStreamSource(0, savedVB0, savedOffset0, savedStride0);
+	}
+	dev->SetStreamSource(1, m_instanceVB, 0, sizeof(InstanceData));
+
+	// Ronin @bugfix 06/03/2026 DX9: Re-bind index buffer AFTER SetVertexDeclaration.
+	// Commented out to check if actually needed. AMD seems to require index buffer bound before draw, but not necessarily immediately after decl.
+	/*if (savedIB) {
+		dev->SetIndices(savedIB);
+	}*/
 
 	// 6. Set world transform to identity (transforms are per-instance in the shader)
 	D3DMATRIX identityMat;
@@ -351,15 +534,11 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 	D3DXMATRIX dxView(viewMat), dxProj(projMat), dxViewProj;
 	D3DXMatrixMultiply(&dxViewProj, &dxView, &dxProj);
 
-	// Ronin @bugfix 20/02/2026 DX9: Transpose ViewProj for HLSL mul(vector, matrix) convention.
 	D3DXMATRIX dxViewProjT;
 	D3DXMatrixTranspose(&dxViewProjT, &dxViewProj);
 	dev->SetVertexShaderConstantF(0, (const float*)&dxViewProjT, 4);
 
 	// 8. Upload lighting state into VS constants c4..c13
-	// Ronin @bugfix 22/02/2026 DX9: Use LightEnvironmentClass for full-precision ambient and
-	// world-space light directions. InputLights[].Direction points TOWARD the light source;
-	// the shader computes dot(N, lightDir) without negation.
 	{
 		float ambientR = 0.0f, ambientG = 0.0f, ambientB = 0.0f;
 
@@ -407,7 +586,6 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 			}
 		}
 		else {
-			// Fallback: read from D3D device and inverse-transform from camera to world space
 			D3DXMATRIX dxViewInv;
 			D3DXMatrixInverse(&dxViewInv, nullptr, &dxView);
 
@@ -428,7 +606,6 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 				float* dirOut = (numLights < 1.0f) ? c5 : c11;
 				float* diffOut = (numLights < 1.0f) ? c6 : c12;
 
-				// Negate: D3D device stores toward-surface, shader wants toward-light
 				dirOut[0] = -worldDir.x;
 				dirOut[1] = -worldDir.y;
 				dirOut[2] = -worldDir.z;
@@ -457,11 +634,10 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 
 		DWORD lightingRS = FALSE;
 		dev->GetRenderState(D3DRS_LIGHTING, &lightingRS);
-		float hasVertexColor = (geometryFVF & D3DFVF_DIFFUSE) ? 1.0f : 0.0f;
-		float c9[4] = { lightingRS ? 1.0f : 0.0f, hasVertexColor, numLights, 0.0f };
+		float hasVertexColorFlag = (geometryFVF & D3DFVF_DIFFUSE) ? 1.0f : 0.0f;
+		float c9[4] = { lightingRS ? 1.0f : 0.0f, hasVertexColorFlag, numLights, 0.0f };
 		dev->SetVertexShaderConstantF(9, c9, 1);
 
-		// Ronin @bugfix 21/02/2026 DX9: Upload material source flags to match FFP behavior.
 		DWORD diffuseSrc = D3DMCS_MATERIAL, ambientSrc = D3DMCS_MATERIAL, emissiveSrc = D3DMCS_MATERIAL;
 		dev->GetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, &diffuseSrc);
 		dev->GetRenderState(D3DRS_AMBIENTMATERIALSOURCE, &ambientSrc);
@@ -475,11 +651,6 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 		dev->SetVertexShaderConstantF(13, c13, 1);
 	}
 
-	// Ronin @bugfix 22/02/2026 DX9: Disable stage 1 to prevent stale multi-texture ops
-	// from leaking into the instanced draw (instancing only uses stage 0).
-	dev->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
-	dev->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
-
 	// 9. Issue the instanced draw call
 	renderer->Render_Instanced(0);
 
@@ -490,33 +661,43 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 	// 11. Unbind stream 1
 	dev->SetStreamSource(1, nullptr, 0, 0);
 
-	// 12. Restore fixed-function pipeline
-	dev->SetVertexShader(nullptr);
-	dev->SetVertexDeclaration(nullptr);
-
-	// 13. Ronin @bugfix 19/02/2026 DX9: Restore the EXACT D3D device state that was
-	// active before instancing, using the saved raw D3D pointers.
-	if (savedVB0) {
-		dev->SetStreamSource(0, savedVB0, savedOffset0, savedStride0);
+	// 12. Restore raw D3D state touched by instancing
+	if (savedDecl) {
+		dev->SetVertexDeclaration(savedDecl);
 	}
-	if (savedIB) {
-		dev->SetIndices(savedIB);
-	}
-	if (savedFVF != 0) {
+	else if (savedFVF != 0) {
 		dev->SetFVF(savedFVF);
 	}
 	else if (DX8Wrapper::Get_Current_FVF() != 0) {
 		dev->SetFVF(DX8Wrapper::Get_Current_FVF());
 	}
 
-	// Release the GetStreamSource/GetIndices refs
+	dev->SetVertexShader(savedVS);
+	dev->SetPixelShader(savedPS);
+
+	// Ronin @bugfix 01/03/2026 DX9: Restore software vertex processing mode if it was active.
+	if (savedSoftwareVP) {
+		dev->SetSoftwareVertexProcessing(savedSoftwareVP);
+	}
+
+	if (savedVB0) {
+		dev->SetStreamSource(0, savedVB0, savedOffset0, savedStride0);
+	}
+	if (savedIB) {
+		dev->SetIndices(savedIB);
+	}
+
+	// Release the Get* refs
 	if (savedVB0) savedVB0->Release();
 	if (savedIB) savedIB->Release();
+	if (savedDecl) savedDecl->Release();
+	if (savedVS) savedVS->Release();
+	if (savedPS) savedPS->Release();
 
-	// 14. Tell ShaderClass to re-apply its cached state on the next draw.
+	// 13. Tell ShaderClass to re-apply its cached state on the next draw.
 	ShaderClass::Invalidate();
 
-	// 15. Ronin @bugfix 19/02/2026 DX9: Dirty the change flags so Apply_Render_State_Changes
+	// 14. Ronin @bugfix 19/02/2026 DX9: Dirty the change flags so Apply_Render_State_Changes
 	// re-validates. The container's VB is still valid and still bound on the device.
 	DX8Wrapper::Invalidate_Vertex_Buffer_State();
 
@@ -524,7 +705,6 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 	m_instancedDrawCalls++;
 	m_instancedMeshes += m_collectedCount;
 }
-
 // ----------------------------------------------------------------------------
 
 void DX8InstanceManagerClass::Begin_Frame_Statistics()

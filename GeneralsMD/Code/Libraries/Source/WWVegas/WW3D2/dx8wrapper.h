@@ -160,36 +160,36 @@ namespace DX8WrapperLayoutBinding
 // Ronin @feature 27/11/2025: Pipeline state capture for debugging state pollution
 #ifdef _DEBUG
 struct PipelineStateSnapshot {
-	DWORD fvf;
-	IDirect3DVertexDeclaration9* decl;
+	const char* captureLocation = nullptr;
+	DWORD fvf = 0;
+	IDirect3DVertexDeclaration9* decl = nullptr;
 
 	struct StreamBinding {
-		IDirect3DVertexBuffer9* buffer;
-		UINT offset;
-		UINT stride;
-	} streams[4];  // MAX_VERTEX_STREAMS
+		IDirect3DVertexBuffer9* buffer = nullptr;
+		UINT offset = 0;
+		UINT stride = 0;
+	} streams[4];
 
-	IDirect3DIndexBuffer9* indexBuffer;
-
+	IDirect3DIndexBuffer9* indexBuffer = nullptr;
+	D3DVIEWPORT9 viewport = {};
 	Matrix4x4 worldTransform;
 	Matrix4x4 viewTransform;
 	Matrix4x4 projectionTransform;
 
-	D3DVIEWPORT9 viewport;
-
-	const char* captureLocation;
-
-	PipelineStateSnapshot() : fvf(0), decl(nullptr), indexBuffer(nullptr), captureLocation("unknown") {
-		memset(streams, 0, sizeof(streams));
-	}
-
-	~PipelineStateSnapshot() {
-		if (decl) decl->Release();
-		if (indexBuffer) indexBuffer->Release();
-		for (int i = 0; i < 4; i++) {
-			if (streams[i].buffer) streams[i].buffer->Release();
+	// @bugfix Ronin 27/02/2026 DX9: Release all COM references captured by Get* calls
+	~PipelineStateSnapshot()
+	{
+		if (decl) { decl->Release(); decl = nullptr; }
+		for (int i = 0; i < 4; ++i) {
+			if (streams[i].buffer) { streams[i].buffer->Release(); streams[i].buffer = nullptr; }
 		}
+		if (indexBuffer) { indexBuffer->Release(); indexBuffer = nullptr; }
 	}
+
+	// Non-copyable (prevent double-release)
+	PipelineStateSnapshot() = default;
+	PipelineStateSnapshot(const PipelineStateSnapshot&) = delete;
+	PipelineStateSnapshot& operator=(const PipelineStateSnapshot&) = delete;
 };
 
 // Macro for capturing pipeline state with call-site tracking
@@ -464,14 +464,6 @@ public:
 		render_state_changed |= VERTEX_BUFFER_CHANGED | INDEX_BUFFER_CHANGED;
 	}
 
-	// Ronin @bugfix 19/02/2026 DX9: Re-apply wrapper's tracked VB/IB/FVF to the device
-	// Used after instanced drawing to restore IA state for subsequent non-instanced draws
-	static void Restore_IA_State_From_Wrapper();
-
-	// @feature Ronin 09/02/2026 DX9: Lightweight draw-call HUD overlay for performance measurement
-	static bool DrawCallHUDEnabled;
-	static void Toggle_Draw_Call_HUD();
-
 #ifdef WWDEBUG
 	// @debug Ronin 18/01/2026 DX9: Allow draw-site to tag subsequent DIP logs with a human-readable label
 	static void Set_Debug_Draw_Context(const char* label);
@@ -482,7 +474,6 @@ public:
 	// Ronin @debug 10/01/2026 Add optional caller tag to index buffer binding for tracking IB rebinds
 	static void Set_Index_Buffer(const IndexBufferClass* ib, unsigned short index_base_offset, const char* callerTag);
 	static void Set_Index_Buffer(const DynamicIBAccessClass& iba, unsigned short index_base_offset, const char* callerTag);
-
 
 	// Ronin @bugfix 09/01/2026 DX9: Force stream0 binding with explicit stride (keeps wrapper tracking coherent)
 	static void Force_Stream0(IDirect3DVertexBuffer9* vb, UINT offset, UINT stride);
@@ -1921,28 +1912,28 @@ WWINLINE void DX8Wrapper::Set_Render_State(const RenderStateStruct& state)
 
 WWINLINE void DX8Wrapper::Release_Render_State()
 {
-	int i;
-
 	if (render_state.index_buffer) {
 		render_state.index_buffer->Release_Engine_Ref();
 	}
 
-	for (i=0;i<MAX_VERTEX_STREAMS;++i) {
-		if (render_state.vertex_buffers[i]) {
-			render_state.vertex_buffers[i]->Release_Engine_Ref();
+	for (unsigned s = 0; s < MAX_VERTEX_STREAMS; ++s) {
+		if (render_state.vertex_buffers[s]) {
+			render_state.vertex_buffers[s]->Release_Engine_Ref();
 		}
-	}
-
-	for (i=0;i<MAX_VERTEX_STREAMS;++i) {
-		REF_PTR_RELEASE(render_state.vertex_buffers[i]);
+		REF_PTR_RELEASE(render_state.vertex_buffers[s]);
 	}
 	REF_PTR_RELEASE(render_state.index_buffer);
 	REF_PTR_RELEASE(render_state.material);
+	for (unsigned i = 0; i < MAX_TEXTURE_STAGES; ++i) REF_PTR_RELEASE(render_state.Textures[i]);
 
-
-	for (i=0;i<MAX_TEXTURE_STAGES;++i)
-	{
-		REF_PTR_RELEASE(render_state.Textures[i]);
+	// @bugfix Ronin 27/02/2026 DX9: Release COM refs on DX9-specific IA tracking members
+	if (render_state.vba_d3d_vb) {
+		render_state.vba_d3d_vb->Release();
+		render_state.vba_d3d_vb = nullptr;
+	}
+	if (render_state.expectedDecl) {
+		render_state.expectedDecl->Release();
+		render_state.expectedDecl = nullptr;
 	}
 }
 
@@ -1984,10 +1975,9 @@ WWINLINE RenderStateStruct::~RenderStateStruct()
 	expectedDecl = nullptr;
 
 	// Ronin @bugfix 26/01/2026 DX9: Release dynamic D3D VB tracking.
-	if (vba_d3d_vb) {
-		vba_d3d_vb->Release();
-		vba_d3d_vb = nullptr;
-	}
+	// Ronin @bugfix 27/02/2026 DX9: Release COM refs on DX9-specific IA tracking members
+	if (vba_d3d_vb) { vba_d3d_vb->Release(); vba_d3d_vb = nullptr; }
+	if (expectedDecl) { expectedDecl->Release(); expectedDecl = nullptr; }
 }
 
 
