@@ -2,9 +2,9 @@ add_executable(z_generals WIN32)
 
 # Use a binary name that doesn't conflict with original game.
 if("${CMAKE_SYSTEM}" MATCHES "Windows")
-    set_target_properties(z_generals PROPERTIES OUTPUT_NAME generalszh)
+    set_target_properties(z_generals PROPERTIES OUTPUT_NAME "generalszh${RTS_BUILD_OUTPUT_SUFFIX}")
 else()
-    set_target_properties(z_generals PROPERTIES OUTPUT_NAME generalszh)
+    set_target_properties(z_generals PROPERTIES OUTPUT_NAME "generalszh${RTS_BUILD_OUTPUT_SUFFIX}")
 endif()
 
 target_link_libraries(z_generals PRIVATE

@@ -58,6 +58,10 @@
             "inherits": "default",
             "hidden": false,
             "displayName": "Windows 32bit Release",
+            "architecture": {
+                "value": "Win32",
+                "strategy": "external"
+            },
             "cacheVariables": {
                 "RTS_FLAGS": "/W3"
             },
@@ -80,6 +84,10 @@
             "inherits": "default-vcpkg",
             "hidden": false,
             "displayName": "Windows 32bit VCPKG Release",
+            "architecture": {
+                "value": "Win32",
+                "strategy": "external"
+            },
             "cacheVariables": {
                 "RTS_FLAGS": "/W3"
             },
