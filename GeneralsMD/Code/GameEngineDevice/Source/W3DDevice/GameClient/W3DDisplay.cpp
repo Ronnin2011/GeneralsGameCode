@@ -542,6 +542,9 @@ void W3DDisplay::setGamma(Real gamma, Real bright, Real contrast, Bool calibrate
 //=============================================================================
 Bool W3DDisplay::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt bitdepth, Bool windowed )
 {
+	// Ronin @feature 10/03/2026 DX9: Apply current AA selection before any device reset.
+	WW3D::Set_Anti_Aliasing_Level(TheGlobalData->m_antiAliasBoxValue);
+
 	if (WW3D_ERROR_OK == WW3D::Set_Device_Resolution(xres,yres,bitdepth,windowed,true))
 	{
 		Render2DClass::Set_Screen_Resolution(RectClass(0, 0, xres, yres));
@@ -714,6 +717,9 @@ void W3DDisplay::init()
 		// create a 2D renderer helper
 		m_2DRender = NEW Render2DClass;
 		DEBUG_ASSERTCRASH( m_2DRender, ("Cannot create Render2DClass") );
+
+		// Ronin @feature 10/03/2026 DX9: Apply saved AA option before initial device creation.
+		WW3D::Set_Anti_Aliasing_Level(TheGlobalData->m_antiAliasBoxValue);
 
 		WW3DErrorType renderDeviceError;
 		Int attempt = 0;

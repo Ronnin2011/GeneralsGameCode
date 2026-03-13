@@ -136,6 +136,9 @@ public:
 	static void					Set_Texture_Filter(int filter);
 	static int					Get_Texture_Filter() { return TextureFilter; }
 
+	static void					Set_Anti_Aliasing_Level(int level);
+	static int					Get_Anti_Aliasing_Level();
+
 	/*
 	** Rendering functions
 	** Each frame should be bracketed by a Begin_Render and End_Render call.  Between these two calls you will

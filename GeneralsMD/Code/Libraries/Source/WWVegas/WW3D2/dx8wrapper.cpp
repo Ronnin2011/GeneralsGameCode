@@ -169,8 +169,10 @@ Vector3							DX8Wrapper::Ambient_Color;
 
 bool								DX8Wrapper::world_identity;
 unsigned							DX8Wrapper::RenderStates[256];
-unsigned							DX8Wrapper::TextureStageStates[MAX_TEXTURE_STAGES][32];
-IDirect3DBaseTexture8 *		DX8Wrapper::Textures[MAX_TEXTURE_STAGES];
+unsigned							DX8Wrapper::TextureStageStates[MAX_TEXTURE_STAGES][33];
+unsigned	            DX8Wrapper::SamplerStates[MAX_TEXTURE_STAGES][14];
+IDirect3DBaseTexture8* DX8Wrapper::Textures[MAX_TEXTURE_STAGES];
+int								DX8Wrapper::AntiAliasingLevel = 0;
 RenderStateStruct				DX8Wrapper::render_state;
 unsigned							DX8Wrapper::render_state_changed;
 
@@ -542,43 +544,90 @@ static void Track_Decl_Bound_While_Wrapper_Expects_FVF(const char* where)
 // Call this to fill in _PresentParameters.MultiSample* before CreateDevice/Reset.
 static void Configure_Multisampling(D3DPRESENT_PARAMETERS& pp, IDirect3D9* d3d, UINT adapter, D3DDEVTYPE devType)
 {
-	// Try sample counts from highest to lowest
-	static const D3DMULTISAMPLE_TYPE msTypes[] = {
+	pp.MultiSampleType = D3DMULTISAMPLE_NONE;
+	pp.MultiSampleQuality = 0;
+
+	if (!d3d) {
+		return;
+	}
+
+	if (DX8Wrapper::Get_Anti_Aliasing_Level() <= 0) {
+		return;
+	}
+
+	const D3DMULTISAMPLE_TYPE* types = nullptr;
+	int typeCount = 0;
+
+	static const D3DMULTISAMPLE_TYPE lowTypes[] = {
+		D3DMULTISAMPLE_2_SAMPLES,
+	};
+
+	static const D3DMULTISAMPLE_TYPE highTypes[] = {
 		D3DMULTISAMPLE_8_SAMPLES,
 		D3DMULTISAMPLE_4_SAMPLES,
 		D3DMULTISAMPLE_2_SAMPLES,
 	};
 
-	pp.MultiSampleType = D3DMULTISAMPLE_NONE;
-	pp.MultiSampleQuality = 0;
+	if (DX8Wrapper::Get_Anti_Aliasing_Level() == 1) {
+		types = lowTypes;
+		typeCount = sizeof(lowTypes) / sizeof(lowTypes[0]);
+	}
+	else {
+		types = highTypes;
+		typeCount = sizeof(highTypes) / sizeof(highTypes[0]);
+	}
 
-	for (auto msType : msTypes) {
-		DWORD qualityLevels = 0;
+	for (int i = 0; i < typeCount; ++i) {
+		const D3DMULTISAMPLE_TYPE msType = types[i];
 
-		// Check back buffer format
+		DWORD backBufferQualityLevels = 0;
 		HRESULT hr = d3d->CheckDeviceMultiSampleType(
-			adapter, devType, pp.BackBufferFormat, pp.Windowed, msType, &qualityLevels);
+			adapter,
+			devType,
+			pp.BackBufferFormat,
+			pp.Windowed,
+			msType,
+			&backBufferQualityLevels);
 
-		if (FAILED(hr) || qualityLevels == 0)
+		if (FAILED(hr) || backBufferQualityLevels == 0) {
 			continue;
-
-		// Also check depth/stencil format
-		hr = d3d->CheckDeviceMultiSampleType(
-			adapter, devType, pp.AutoDepthStencilFormat, pp.Windowed, msType, &qualityLevels);
-
-		if (SUCCEEDED(hr) && qualityLevels > 0) {
-			pp.MultiSampleType = msType;
-			pp.MultiSampleQuality = qualityLevels - 1; // Use highest quality
-			WWDEBUG_SAY(("MSAA: Enabled %dx (quality %d/%d)",
-				(int)msType, (int)pp.MultiSampleQuality, (int)qualityLevels));
-			break;
 		}
+
+		DWORD depthQualityLevels = 0;
+		hr = d3d->CheckDeviceMultiSampleType(
+			adapter,
+			devType,
+			pp.AutoDepthStencilFormat,
+			pp.Windowed,
+			msType,
+			&depthQualityLevels);
+
+		if (FAILED(hr) || depthQualityLevels == 0) {
+			continue;
+		}
+
+		const DWORD qualityLevels = (backBufferQualityLevels < depthQualityLevels)
+			? backBufferQualityLevels
+			: depthQualityLevels;
+
+		if (qualityLevels == 0) {
+			continue;
+		}
+
+		pp.MultiSampleType = msType;
+		pp.MultiSampleQuality = qualityLevels - 1;
+		pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+
+		WWDEBUG_SAY(("MSAA: Enabled mode=%d samples=%d quality=%d",
+			DX8Wrapper::Get_Anti_Aliasing_Level(),
+			(int)msType,
+			(int)pp.MultiSampleQuality));
+
+		return;
 	}
 
-	// MSAA requires discard swap effect
-	if (pp.MultiSampleType != D3DMULTISAMPLE_NONE) {
-		pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
-	}
+	WWDEBUG_SAY(("MSAA: Requested mode=%d but no supported multisample mode was found",
+		DX8Wrapper::Get_Anti_Aliasing_Level()));
 }
 
 /***********************************************************************************
@@ -651,7 +700,9 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 	// zero memory
 	memset(Textures,0,sizeof(IDirect3DBaseTexture8*)*MAX_TEXTURE_STAGES);
 	memset(RenderStates,0,sizeof(unsigned)*256);
-	memset(TextureStageStates,0,sizeof(unsigned)*32*MAX_TEXTURE_STAGES);
+	memset(TextureStageStates, 0, sizeof(TextureStageStates));
+	memset(SamplerStates, 0, sizeof(SamplerStates));
+
 	memset(Vertex_Shader_Constants,0,sizeof(Vector4)*MAX_VERTEX_SHADER_CONSTANTS);
 	memset(Pixel_Shader_Constants,0,sizeof(Vector4)*MAX_PIXEL_SHADER_CONSTANTS);
 
@@ -950,7 +1001,7 @@ void DX8Wrapper::Set_Default_Global_Render_States()
 }
 
 //**********************************************************************************************
-//! Resets render states between rendering passes to prevent state leakage
+// Resets render states between rendering passes to prevent state leakage
 // Ronin @build 07/11/2025: DX9 requires explicit state reset between passes
 void DX8Wrapper::Reset_Pass_Render_States()
 {
@@ -964,7 +1015,6 @@ void DX8Wrapper::Reset_Pass_Render_States()
 	// ========== ALPHA TESTING ==========
 	Set_DX8_Render_State(D3DRS_ALPHATESTENABLE, FALSE);
 	Set_DX8_Render_State(D3DRS_ALPHAREF, 0);
-	Set_DX8_Render_State(D3DRS_ALPHAFUNC, D3DCMP_GREATER);
 
 	// Ronin @bugfix 17/01/2026: Keep pass reset consistent with global defaults (avoids subtle foliage/alpha-test diffs)
 	Set_DX8_Render_State(D3DRS_ALPHAFUNC, D3DCMP_LESSEQUAL);
@@ -987,7 +1037,7 @@ void DX8Wrapper::Reset_Pass_Render_States()
 	// Ronin @bugfix 07/11/2025: DX9 requires explicit NULL
 	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
 	if (pDev) {
-		pDev->SetPixelShader(NULL);
+		pDev->SetPixelShader(nullptr);
 		number_of_DX8_calls++;
 	}
 
@@ -995,7 +1045,7 @@ void DX8Wrapper::Reset_Pass_Render_States()
 		// Ronin @bugfix 16/12/2025: Clear all texture stages between passes
 	int maxStages = CurrentCaps->Get_Max_Textures_Per_Pass();
 	for (int i = 0; i < maxStages; i++) {
-		Set_DX8_Texture(i, NULL);
+		Set_DX8_Texture(i, nullptr);
 	}
 
 	// Stage 0: Standard modulate
@@ -1056,14 +1106,16 @@ void DX8Wrapper::Invalidate_Cached_Render_States()
 
 	for (int a = 0; a < MAX_TEXTURE_STAGES; ++a)
 	{
-		for (int b = 0; b < 32; b++) {
+		for (int b = 0; b < 33; ++b) {
 			TextureStageStates[a][b] = 0x12345678;
 		}
+		for (int b = 0; b < 14; ++b) {
+			SamplerStates[a][b] = 0x12345678;
+		}
 
-		// Ronin @performance 19/02/2026 DX9: Always null the device texture to ensure clean slate,
-		// but only Release() the wrapper's ref if one exists.
 		if (pDev) {
 			pDev->SetTexture(a, nullptr);
+			number_of_DX8_calls++;
 		}
 		if (Textures[a] != nullptr) {
 			Textures[a]->Release();
@@ -1074,8 +1126,8 @@ void DX8Wrapper::Invalidate_Cached_Render_States()
 	// Ronin @bugfix 06/11/2025: DX9 requires explicit pixel shader cleanup during state invalidation
 	//IDirect3DDevice9* pDev = _Get_D3D_Device8();
 	if (pDev) {
-		pDev->SetPixelShader(NULL);
-		pDev->SetVertexShader(NULL);
+		pDev->SetPixelShader(nullptr);
+		pDev->SetVertexShader(nullptr);
 		number_of_DX8_calls += 2;
 
 		// Update wrapper tracking to match device state
@@ -2488,9 +2540,7 @@ void DX8Wrapper::End_Scene(bool flip_frames)
 		s_inScene = false;
 	}
 	else {
-		// Keep error logging
 		WWDEBUG_SAY(("EndScene FAILED: 0x%08X (%s)", hr, DXGetErrorString9A(hr)));
-		// Force reset the flag anyway
 		s_inScene = false;
 	}
 
@@ -2498,82 +2548,65 @@ void DX8Wrapper::End_Scene(bool flip_frames)
 
 	if (flip_frames) {
 		DX8_Assert();
-		HRESULT hr;
 
-		// Ronin @bugfix 09/11/2025: Enhanced device lost recovery
-		// Check device state BEFORE Present to avoid errors
-		HRESULT deviceState = _Get_D3D_Device8()->TestCooperativeLevel();
-		// WWDEBUG_SAY(("Device state before Present: 0x%08X", deviceState));
+		{
+			WWPROFILE("DX8Device::Present()");
+			hr = _Get_D3D_Device8()->Present(nullptr, nullptr, nullptr, nullptr);
+		}
+		number_of_DX8_calls++;
 
-		if (deviceState == D3D_OK) {
-			// Device is OK, safe to Present
-			// WWDEBUG_SAY(("Device OK, calling Present()..."));
-			{
-				WWPROFILE("DX8Device::Present()");
-				hr = _Get_D3D_Device8()->Present(NULL, NULL, NULL, NULL);
-			}
-			number_of_DX8_calls++;
-
-			if (SUCCEEDED(hr)) {
+		if (SUCCEEDED(hr)) {
 #ifdef EXTENDED_STATS
-				if (stats.m_sleepTime) {
-					::Sleep(stats.m_sleepTime);
-				}
-#endif
-				IsDeviceLost = false;
-				FrameCount++;
+			if (stats.m_sleepTime) {
+				::Sleep(stats.m_sleepTime);
 			}
-			else if (hr == D3DERR_DEVICELOST) {
-				// Device was just lost
-				WWDEBUG_SAY(("DEVICE LOST during Present!"));
-				IsDeviceLost = true;
+#endif
+			IsDeviceLost = false;
+			FrameCount++;
+		}
+		else {
+			IsDeviceLost = true;
+
+			// Ronin @performance 10/03/2026 DX9: Match reference flow more closely.
+			// Only query cooperative level after Present reports DEVICELOST.
+			if (hr == D3DERR_DEVICELOST) {
+				HRESULT deviceState = _Get_D3D_Device8()->TestCooperativeLevel();
+				number_of_DX8_calls++;
+
+				if (deviceState == D3DERR_DEVICENOTRESET) {
+					WWDEBUG_SAY(("Device ready for reset, attempting recovery..."));
+
+					// Reset_Device(true) already recreates assets, invalidates caches,
+					// restores default states and reacquires cleanup-hook resources.
+					if (Reset_Device(true)) {
+						WWDEBUG_SAY(("Device reset successful!"));
+						IsDeviceLost = false;
+					}
+					else {
+						WWDEBUG_SAY(("Device reset FAILED!"));
+						ThreadClass::Sleep_Ms(500);
+					}
+				}
+				else if (deviceState == D3DERR_DEVICELOST) {
+					WWDEBUG_SAY(("Device lost, waiting..."));
+					ThreadClass::Sleep_Ms(100);
+				}
+				else if (FAILED(deviceState)) {
+					WWDEBUG_SAY(("TestCooperativeLevel FAILED after Present DEVICELOST: 0x%08X (%s)",
+						deviceState, DXGetErrorString9A(deviceState)));
+					ThreadClass::Sleep_Ms(100);
+				}
 			}
 			else {
 				WWDEBUG_SAY(("Present FAILED: 0x%08X (%s)", hr, DXGetErrorString9A(hr)));
 			}
 		}
-		else if (deviceState == D3DERR_DEVICELOST) {
-			// Device is lost, wait for it to become available
-			WWDEBUG_SAY(("Device lost, waiting..."));
-			IsDeviceLost = true;
-			ThreadClass::Sleep_Ms(100);  // Don't spin too fast
-			hr = D3DERR_DEVICELOST;
-		}
-		else if (deviceState == D3DERR_DEVICENOTRESET) {
-			// Device is ready to be reset
-			WWDEBUG_SAY(("Device ready for reset, attempting recovery..."));
-
-			// Ronin @bugfix 09/11/2025: Proper asset preservation during reset
-			if (Reset_Device(true)) {  // true = restore assets
-				WWDEBUG_SAY(("Device reset successful!"));
-				IsDeviceLost = false;
-
-				// Force complete state reinitialization
-				Invalidate_Cached_Render_States();
-				Set_Default_Global_Render_States();
-
-				// Notify subsystems to recreate resources
-				if (m_pCleanupHook) {
-					m_pCleanupHook->ReAcquireResources();
-				}
-			}
-			else {
-				WWDEBUG_SAY(("Device reset FAILED!"));
-				ThreadClass::Sleep_Ms(500);  // Wait longer before retry
-			}
-			hr = deviceState;
-		}
-		else {
-			// Unknown device state
-			WWDEBUG_SAY(("Unknown device state: 0x%08X", deviceState));
-			hr = deviceState;
-		}
 	}
 
 	// Each frame, release all of the buffers and textures.
 	Set_Vertex_Buffer(nullptr);
-	Set_Index_Buffer(nullptr,0);
-	for (int i=0;i<CurrentCaps->Get_Max_Textures_Per_Pass();++i) Set_Texture(i,nullptr);
+	Set_Index_Buffer(nullptr, 0);
+	for (int i = 0; i < CurrentCaps->Get_Max_Textures_Per_Pass(); ++i) Set_Texture(i, nullptr);
 	Set_Material(nullptr);
 }
 
@@ -2612,6 +2645,7 @@ void DX8Wrapper::Flip_To_Primary()
 			} else {
 				WWDEBUG_SAY(("Flipping: %ld", FrameCount));
 				hr = _Get_D3D_Device8()->Present(nullptr, nullptr, nullptr, nullptr);
+				number_of_DX8_calls++;
 
 				if (SUCCEEDED(hr)) {
 					IsDeviceLost=false;
@@ -3167,146 +3201,146 @@ void DX8Wrapper::Apply_Render_State_Changes()
 {
 	SNAPSHOT_SAY(("DX8Wrapper::Apply_Render_State_Changes()"));
 
-    if (!render_state_changed) return;
+	if (!render_state_changed) return;
 
 #ifdef _DEBUG
-		Track_Decl_Bound_While_Wrapper_Expects_FVF("Apply_Render_State_Changes");
+	//Track_Decl_Bound_While_Wrapper_Expects_FVF("Apply_Render_State_Changes");
 #endif
 
-    // === SHADER ===
-    if (render_state_changed & SHADER_CHANGED) {
-        SNAPSHOT_SAY(("DX8 - apply shader"));
-        render_state.shader.Apply();
-    }
+	// === SHADER ===
+	if (render_state_changed & SHADER_CHANGED) {
+		SNAPSHOT_SAY(("DX8 - apply shader"));
+		render_state.shader.Apply();
+	}
 
-    // === TEXTURES ===
-    unsigned mask = TEXTURE0_CHANGED;
-    for (int i = 0; i < CurrentCaps->Get_Max_Textures_Per_Pass(); ++i, mask <<= 1) {
-        if (render_state_changed & mask) {
-            SNAPSHOT_SAY(("DX8 - apply texture %d", i));
-            if (render_state.Textures[i]) {
-                render_state.Textures[i]->Apply(i);
-            } else {
-                TextureBaseClass::Apply_Null(i);
-            }
-        }
-    }
+	// === TEXTURES ===
+	unsigned mask = TEXTURE0_CHANGED;
+	for (int i = 0; i < CurrentCaps->Get_Max_Textures_Per_Pass(); ++i, mask <<= 1)
+	{
+		if (render_state_changed & mask)
+		{
+			SNAPSHOT_SAY(("DX8 - apply texture %d", i));
 
-    // === MATERIAL ===
-    if (render_state_changed & MATERIAL_CHANGED) {
-        SNAPSHOT_SAY(("DX8 - apply material"));
-        VertexMaterialClass* material = const_cast<VertexMaterialClass*>(render_state.material);
-        if (material) material->Apply();
-        else VertexMaterialClass::Apply_Null();
-    }
-
-    // === LIGHTS ===
-    if (render_state_changed & LIGHTS_CHANGED) {
-        unsigned lmask = LIGHT0_CHANGED;
-        for (unsigned index = 0; index < 4; ++index, lmask <<= 1) {
-            if (render_state_changed & lmask) {
-                SNAPSHOT_SAY(("DX8 - apply light %d", index));
-                if (render_state.LightEnable[index]) {
-                    Set_DX8_Light(index, &render_state.Lights[index]);
-                } else {
-                    Set_DX8_Light(index, nullptr);
-                }
-            }
-        }
-    }
-
-    // === TRANSFORMS ===
-    if (render_state_changed & WORLD_CHANGED) {
-        SNAPSHOT_SAY(("DX8 - apply world matrix"));
-        _Set_DX8_Transform(D3DTS_WORLD, render_state.world);
-    }
-    if (render_state_changed & VIEW_CHANGED) {
-        SNAPSHOT_SAY(("DX8 - apply view matrix"));
-        _Set_DX8_Transform(D3DTS_VIEW, render_state.view);
-    }
-
-		if (render_state_changed & VERTEX_BUFFER_CHANGED) {
-			SNAPSHOT_SAY(("DX8 - apply vb change"));
-
-			IDirect3DDevice9* dev = _Get_D3D_Device8();
-			WWASSERT(dev);
-
-#ifdef _DEBUG
-			ALLOW_LAYOUT_BINDING();
-#endif
-
-			// Ronin @bugfix 05/12/2025: Decide intended layout ONCE before binding streams
-			// Honor explicitly set currentDecl/currentFVF instead of deriving from VB
-			const bool useDecl = (render_state.currentDecl != nullptr);
-
-			// Programmable path
-			if (useDecl) {
-#ifdef _DEBUG
-				ASSERT_LAYOUT_BINDING_ALLOWED_API("Apply_Render_State_Changes::SetVertexDeclaration");
-#endif
-				// Programmable: bind decl only
-				DX8CALL(SetVertexDeclaration(render_state.currentDecl));
-				// Explicitly clear FVF to prevent conflicts
-
-#ifdef _DEBUG
-				ASSERT_LAYOUT_BINDING_ALLOWED_API("Apply_Render_State_Changes::SetFVF");
-#endif
-				DX8CALL(SetFVF(0));
+			if (render_state.Textures[i])
+			{
+				render_state.Textures[i]->Apply(i);
 			}
-			else {
-#ifdef _DEBUG
-				ASSERT_LAYOUT_BINDING_ALLOWED();
-#endif
-				// Fixed-function: ensure decl is NULL, then set FVF
-				DX8CALL(SetVertexDeclaration(nullptr));
-				render_state.currentDecl = nullptr;  // Clear wrapper tracking too
+			else
+			{
+				TextureBaseClass::Apply_Null(i);
+			}
+		}
+	}
 
-				DWORD fvf = render_state.currentFVF;
+	// === MATERIAL ===
+	if (render_state_changed & MATERIAL_CHANGED)
+	{
+		SNAPSHOT_SAY(("DX8 - apply material"));
+		VertexMaterialClass* material = const_cast<VertexMaterialClass*>(render_state.material);
+		if (material)
+		{
+			material->Apply();
+		}
+		else {
+			VertexMaterialClass::Apply_Null();
+		}
+	}
 
-
-				if (fvf == 0) {
-					if (render_state.vertex_buffers[0] &&
-						(render_state.vertex_buffer_types[0] == BUFFER_TYPE_DX8)) {
-						DX8VertexBufferClass* vb0 = static_cast<DX8VertexBufferClass*>(render_state.vertex_buffers[0]);
-						fvf = vb0->FVF_Info().Get_FVF();
-					}
-				}
-				// Ronin @bugfix 17/01/2026: Prefer dynamic VB FVF over unsafe 2D fallback when layout is unknown
-				if (fvf == 0) {
-					if ((render_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_DX8 ||
-						render_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_SORTING) &&
-						render_state.vba_fvf != 0) {
-						fvf = render_state.vba_fvf;
-					}
-				}
-
-				// CRITICAL FIX: Never call SetFVF(0)!
-				if (fvf != 0) {
-#ifdef _DEBUG
-					ASSERT_LAYOUT_BINDING_ALLOWED();
-#endif
-					Set_Vertex_Shader(fvf);
-					//DX8CALL(SetFVF(fvf));
+	// === LIGHTS ===
+	if (render_state_changed & LIGHTS_CHANGED)
+	{
+		unsigned lmask = LIGHT0_CHANGED;
+		for (unsigned index = 0; index < 4; ++index, lmask <<= 1) {
+			if (render_state_changed & lmask) {
+				SNAPSHOT_SAY(("DX8 - apply light %d", index));
+				if (render_state.LightEnable[index]) {
+					Set_DX8_Light(index, &render_state.Lights[index]);
 				}
 				else {
-					// @bugfix Ronin 17/01/2026: Do not guess a layout here (FVF=0x142 fallback can corrupt IA tracking)
-					WWDEBUG_SAY(("Apply: No FVF available; leaving device FVF untouched. owner=%s",
-						render_state.layoutOwner ? render_state.layoutOwner : "(null)"));
+					Set_DX8_Light(index, nullptr);
+				}
+			}
+		}
+	}
+
+	// === TRANSFORMS ===
+	if (render_state_changed & WORLD_CHANGED) {
+		SNAPSHOT_SAY(("DX8 - apply world matrix"));
+		_Set_DX8_Transform(D3DTS_WORLD, render_state.world);
+	}
+	if (render_state_changed & VIEW_CHANGED) {
+		SNAPSHOT_SAY(("DX8 - apply view matrix"));
+		_Set_DX8_Transform(D3DTS_VIEW, render_state.view);
+	}
+
+	if (render_state_changed & VERTEX_BUFFER_CHANGED) {
+		SNAPSHOT_SAY(("DX8 - apply vb change"));
+
+		IDirect3DDevice9* dev = _Get_D3D_Device8();
+		WWASSERT(dev);
+
+#ifdef _DEBUG
+		ALLOW_LAYOUT_BINDING();
+#endif
+
+		// Ronin @bugfix 10/03/2026 DX9: Re-assert the active input layout on VB changes.
+		// Water and a few other legacy paths still use raw D3D state changes between wrapper calls,
+		// so "assume layout already bound" is not safe here.
+		const bool useDecl = (render_state.currentDecl != nullptr);
+
+		if (useDecl) {
+#ifdef _DEBUG
+			ASSERT_LAYOUT_BINDING_ALLOWED_API("Apply_Render_State_Changes::SetVertexDeclaration");
+#endif
+			DX8CALL(SetVertexDeclaration(render_state.currentDecl));
+
+#ifdef _DEBUG
+			ASSERT_LAYOUT_BINDING_ALLOWED_API("Apply_Render_State_Changes::SetFVF");
+#endif
+			DX8CALL(SetFVF(0));
+		}
+		else {
+#ifdef _DEBUG
+			ASSERT_LAYOUT_BINDING_ALLOWED_API("Apply_Render_State_Changes::SetVertexDeclaration");
+#endif
+			DX8CALL(SetVertexDeclaration(nullptr));
+			render_state.currentDecl = nullptr;
+
+			DWORD fvf = render_state.currentFVF;
+
+			if (fvf == 0) {
+				if (render_state.vertex_buffers[0] &&
+					(render_state.vertex_buffer_types[0] == BUFFER_TYPE_DX8)) {
+					DX8VertexBufferClass* vb0 = static_cast<DX8VertexBufferClass*>(render_state.vertex_buffers[0]);
+					fvf = vb0->FVF_Info().Get_FVF();
 				}
 			}
 
-
-			// Bind streams with correct stride (layout already decided above)
-			for (int s = 0; s < MAX_VERTEX_STREAMS; ++s) {
-
-				if (!render_state.vertex_buffers[s]) {
-					DX8CALL(SetStreamSource(s, nullptr, 0, 0));
-					DX8_RECORD_VERTEX_BUFFER_CHANGE();
-					continue;
+			// Ronin @bugfix 17/01/2026: Prefer dynamic VB FVF over unsafe fallback when layout is unknown
+			if (fvf == 0) {
+				if ((render_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_DX8 ||
+					render_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_SORTING) &&
+					render_state.vba_fvf != 0) {
+					fvf = render_state.vba_fvf;
 				}
+			}
 
+			// CRITICAL FIX: Never call SetFVF(0)!
+			if (fvf != 0) {
+
+				Set_FVF(fvf);
+			}
+			else {
+				// @bugfix Ronin 17/01/2026: Do not guess a layout here (FVF=0x142 fallback can corrupt IA tracking)
+				WWDEBUG_SAY(("Apply: No FVF available; leaving device FVF untouched. owner=%s",
+					render_state.layoutOwner ? render_state.layoutOwner : "(null)"));
+			}
+		}
+
+		// Bind streams with correct stride (layout already decided above)
+		for (int s = 0; s < MAX_VERTEX_STREAMS; ++s) {
+			if (render_state.vertex_buffers[s]) {
 				switch (render_state.vertex_buffer_types[s]) {
-
 				case BUFFER_TYPE_DX8:
 				{
 					DX8VertexBufferClass* vb = static_cast<DX8VertexBufferClass*>(render_state.vertex_buffers[s]);
@@ -3316,17 +3350,15 @@ void DX8Wrapper::Apply_Render_State_Changes()
 					DX8_RECORD_VERTEX_BUFFER_CHANGE();
 					break;
 				}
-
 				case BUFFER_TYPE_DYNAMIC_DX8:
 				{
 					// Ronin @bugfix 26/01/2026 DX9: Bind dynamic stream from stored D3D VB pointer (no RTTI, no unsafe casts).
 					if (render_state.vba_fvf != 0 && render_state.vba_d3d_vb != nullptr) {
-
 						FVFInfoClass fi(render_state.vba_fvf);
-						const UINT expectedStride = (UINT)fi.Get_FVF_Size();
-						WWASSERT(expectedStride != 0);
-						const UINT offsetInBytes = (UINT)render_state.vba_offset * expectedStride;
-						DX8CALL(SetStreamSource(s, render_state.vba_d3d_vb, offsetInBytes, expectedStride));
+						const UINT stride = (UINT)fi.Get_FVF_Size();
+						const UINT offsetInBytes = (UINT)render_state.vba_offset * stride;
+						WWASSERT(stride != 0);
+						DX8CALL(SetStreamSource(s, render_state.vba_d3d_vb, offsetInBytes, stride));
 						DX8_RECORD_VERTEX_BUFFER_CHANGE();
 					}
 					else {
@@ -3337,57 +3369,69 @@ void DX8Wrapper::Apply_Render_State_Changes()
 					}
 					break;
 				}
+				case BUFFER_TYPE_SORTING:
+				case BUFFER_TYPE_DYNAMIC_SORTING:
+					break;
+				default:
+					WWASSERT(0);
+					break;
 				}
-			}
-#ifdef _DEBUG
-			// @refactor Ronin 08/02/2026 DX9: Streamlined IA verify - fail-only.
-			{
-				IDirect3DVertexBuffer9* devVB0 = nullptr;
-				UINT devOff0 = 0, devStride0 = 0;
-				dev->GetStreamSource(0, &devVB0, &devOff0, &devStride0);
-
-				UINT expectedStride0 = 0;
-				if (render_state.vertex_buffers[0]) {
-					if (render_state.vertex_buffer_types[0] == BUFFER_TYPE_DX8) {
-						expectedStride0 = static_cast<DX8VertexBufferClass*>(render_state.vertex_buffers[0])->FVF_Info().Get_FVF_Size();
-					}
-					else if (render_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_DX8 && render_state.vba_fvf != 0) {
-						FVFInfoClass fi(render_state.vba_fvf);
-						expectedStride0 = fi.Get_FVF_Size();
-					}
-				}
-
-				if (expectedStride0 != 0 && devStride0 != expectedStride0) {
-					WWDEBUG_SAY(("IA VERIFY: Stream0 stride mismatch expected=%u device=%u type=%u owner=%s",
-						(unsigned)expectedStride0, (unsigned)devStride0,
-						(unsigned)render_state.vertex_buffer_types[0],
-						render_state.layoutOwner ? render_state.layoutOwner : "(null)"));
-					WWASSERT(0 && "Stream0 stride mismatch after Apply_Render_State_Changes()");
-				}
-
-				if (devVB0) devVB0->Release();
-			}
-#endif
-		}
-
-		// === INDEX BUFFER ===
-		if (render_state_changed & INDEX_BUFFER_CHANGED) {
-		SNAPSHOT_SAY(("DX8 - apply ib change"));
-		if (render_state.index_buffer &&
-				(render_state.index_buffer_type == BUFFER_TYPE_DX8 ||
-					render_state.index_buffer_type == BUFFER_TYPE_DYNAMIC_DX8)) {
-
-				DX8IndexBufferClass* ib = static_cast<DX8IndexBufferClass*>(render_state.index_buffer);
-				DX8CALL(SetIndices(ib->Get_DX8_Index_Buffer()));
-				DX8_RECORD_INDEX_BUFFER_CHANGE();
 			}
 			else {
-				DX8CALL(SetIndices(nullptr));
-				DX8_RECORD_INDEX_BUFFER_CHANGE();
+				DX8CALL(SetStreamSource(s, nullptr, 0, 0));
+				DX8_RECORD_VERTEX_BUFFER_CHANGE();
 			}
 		}
 
-	render_state_changed&=((unsigned)WORLD_IDENTITY|(unsigned)VIEW_IDENTITY);
+/*#ifdef _DEBUG
+		// @refactor Ronin 08/02/2026 DX9: Streamlined IA verify - fail-only.
+		{
+			IDirect3DVertexBuffer9* devVB0 = nullptr;
+			UINT devOff0 = 0, devStride0 = 0;
+			dev->GetStreamSource(0, &devVB0, &devOff0, &devStride0);
+
+			UINT expectedStride0 = 0;
+			if (render_state.vertex_buffers[0]) {
+				if (render_state.vertex_buffer_types[0] == BUFFER_TYPE_DX8) {
+					expectedStride0 = static_cast<DX8VertexBufferClass*>(render_state.vertex_buffers[0])->FVF_Info().Get_FVF_Size();
+				}
+				else if (render_state.vertex_buffer_types[0] == BUFFER_TYPE_DYNAMIC_DX8 && render_state.vba_fvf != 0) {
+					FVFInfoClass fi(render_state.vba_fvf);
+					expectedStride0 = fi.Get_FVF_Size();
+				}
+			}
+
+			if (expectedStride0 != 0 && devStride0 != expectedStride0) {
+				WWDEBUG_SAY(("IA VERIFY: Stream0 stride mismatch expected=%u device=%u type=%u owner=%s",
+					(unsigned)expectedStride0, (unsigned)devStride0,
+					(unsigned)render_state.vertex_buffer_types[0],
+					render_state.layoutOwner ? render_state.layoutOwner : "(null)"));
+				WWASSERT(0 && "Stream0 stride mismatch after Apply_Render_State_Changes()");
+			}
+
+			if (devVB0) devVB0->Release();
+		}
+#endif*/
+	}
+
+	// === INDEX BUFFER ===
+	if (render_state_changed & INDEX_BUFFER_CHANGED) {
+		SNAPSHOT_SAY(("DX8 - apply ib change"));
+		if (render_state.index_buffer &&
+			(render_state.index_buffer_type == BUFFER_TYPE_DX8 ||
+				render_state.index_buffer_type == BUFFER_TYPE_DYNAMIC_DX8)) {
+
+			DX8IndexBufferClass* ib = static_cast<DX8IndexBufferClass*>(render_state.index_buffer);
+			DX8CALL(SetIndices(ib->Get_DX8_Index_Buffer()));
+			DX8_RECORD_INDEX_BUFFER_CHANGE();
+		}
+		else {
+			DX8CALL(SetIndices(nullptr));
+			DX8_RECORD_INDEX_BUFFER_CHANGE();
+		}
+	}
+
+	render_state_changed &= ((unsigned)WORLD_IDENTITY | (unsigned)VIEW_IDENTITY);
 
 	SNAPSHOT_SAY(("DX8Wrapper::Apply_Render_State_Changes() - finished"));
 }
@@ -4286,9 +4330,6 @@ void DX8Wrapper::Create_Render_Target
 		*depth_buffer=nullptr;
 		return;
 		D3DDISPLAYMODE mode;
-		// Ronin @build 28/10/2025 DX9: GetDisplayMode requires adapter index
-		DX8CALL(GetDisplayMode(D3DADAPTER_DEFAULT, &mode));
-		format=D3DFormat_To_WW3DFormat(mode.Format);
 	}
 
 	// If render target format isn't supported return null
@@ -5793,11 +5834,13 @@ void DX8Wrapper::Set_Vertex_Declaration(IDirect3DVertexDeclaration9* decl)
 	}
 }
 
-void DX8Wrapper::BindLayoutFVF(DWORD fvf, const char* owner) {
+void DX8Wrapper::BindLayoutFVF(DWORD fvf, const char* owner)
+{
 #ifdef _DEBUG
 	ALLOW_LAYOUT_BINDING();
 #endif
-	// Ronin @bugfix 13/01/2026 DX9: Make BindLayoutFVF production-safe (no stream tampering, wrapper-coherent)
+
+	// Ronin @refactor 10/03/2026 DX9: Remove dead duplicate FVF==0 branch.
 	if (fvf == 0) {
 		WWDEBUG_SAY(("BindLayoutFVF(%s): invalid FVF=0, ignoring", owner ? owner : "?"));
 		return;
@@ -5806,33 +5849,10 @@ void DX8Wrapper::BindLayoutFVF(DWORD fvf, const char* owner) {
 	IDirect3DDevice9* pDev = _Get_D3D_Device8();
 	if (!pDev) return;
 
-	// Ronin @bugfix 20/01/2026 DX9: Treat FVF=0 as an explicit "clear fixed-function layout" request.
-	// Guards may legitimately restore an "unknown/none" layout early in startup.
-	if (fvf == 0) {
-		pDev->SetVertexShader(nullptr);
-		pDev->SetVertexDeclaration(nullptr);
-		pDev->SetFVF(0);
-		number_of_DX8_calls += 3;
-
-		render_state.currentFVF = 0;
-		render_state.currentDecl = nullptr;
-		render_state.layoutOwner = owner ? owner : "BindLayoutFVF(clear)";
-
-		render_state_changed |= VERTEX_BUFFER_CHANGED;
-		return;
-	}
-
 	// Fixed-function input layout only:
 	// - clear VS + decl
 	// - set FVF
 	// Pixel shader is intentionally preserved (river/trapezoid use PS with FVF pipeline).
-	// 
-	// IMPORTANT:
-	// Do NOT modify stream bindings here (SetStreamSource).
-	// Stream binding + stride must remain authored by DX8Wrapper::Set_Vertex_Buffer()
-	// and applied by Apply_Render_State_Changes() to keep wrapper/device coherent.
-
-
 	pDev->SetVertexShader(nullptr);
 	pDev->SetVertexDeclaration(nullptr);
 	number_of_DX8_calls += 2;
@@ -5846,13 +5866,9 @@ void DX8Wrapper::BindLayoutFVF(DWORD fvf, const char* owner) {
 	}
 #endif
 
-	// Track wrapper state (authoritative for Apply_Render_State_Changes()).
 	render_state.currentFVF = fvf;
 	render_state.currentDecl = nullptr;
 	render_state.layoutOwner = owner;
-
-	// Force a re-apply so stream 0 stride/VB is guaranteed to be re-bound correctly.
-	//render_state_changed |= VERTEX_BUFFER_CHANGED;
 }
 
 void DX8Wrapper::BindLayoutDecl(IDirect3DVertexDeclaration9* decl, const char* owner) {
@@ -5872,6 +5888,8 @@ void DX8Wrapper::BindLayoutDecl(IDirect3DVertexDeclaration9* decl, const char* o
 
 	// Bind declaration (DX9 ignores FVF when decl is active; GetFVF may remain non-zero)
 	HRESULT hr = pDev->SetVertexDeclaration(decl);
+	number_of_DX8_calls++;
+
 	if (FAILED(hr)) {
 		WWDEBUG_SAY(("BindLayoutDecl: SetVertexDeclaration(%p) failed: 0x%08X", decl, hr));
 		return;
@@ -6087,3 +6105,11 @@ void DX8Wrapper::Log_Pipeline_State_Diff(const PipelineStateSnapshot* before, co
 }
 
 #endif // _DEBUG
+
+void DX8Wrapper::Set_Anti_Aliasing_Level(int level)
+{
+	if (level < 0) level = 0;
+	if (level > 2) level = 2;
+
+	AntiAliasingLevel = level;
+}

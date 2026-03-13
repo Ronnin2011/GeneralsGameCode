@@ -361,8 +361,7 @@ Bool W3DSmudgeManager::initDistortionShader()
 	}
 
 	// @debug Ronin 03/03/2026: Verify noise texture has a valid D3D resource
-	IDirect3DBaseTexture8* noiseD3D = m_noiseTexture->Peek_D3D_Base_Texture();
-	DEBUG_LOG(("W3DSmudge: Noise texture D3D ptr = %p", noiseD3D));
+	DEBUG_LOG(("W3DSmudge: Noise texture D3D ptr = %p", m_noiseTexture->Peek_D3D_Base_Texture()));
 
 	// Set noise texture to wrap (repeat) + no mipmaps for smooth scrolling
 	m_noiseTexture->Get_Filter().Set_U_Addr_Mode(TextureFilterClass::TEXTURE_ADDRESS_REPEAT);

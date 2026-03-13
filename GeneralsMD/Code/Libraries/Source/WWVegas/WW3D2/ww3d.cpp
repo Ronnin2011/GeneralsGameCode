@@ -2098,6 +2098,16 @@ void WW3D::Update_Pixel_Center()
 #endif //WW3D_DX8
 }
 
+void WW3D::Set_Anti_Aliasing_Level(int level)
+{
+	DX8Wrapper::Set_Anti_Aliasing_Level(level);
+}
+
+int WW3D::Get_Anti_Aliasing_Level()
+{
+	return DX8Wrapper::Get_Anti_Aliasing_Level();
+}
+
 void WW3D::Set_Texture_Bitdepth(int bitdepth)
 {
 	DX8Wrapper::Set_Texture_Bitdepth(bitdepth);

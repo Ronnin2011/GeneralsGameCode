@@ -57,6 +57,7 @@ target_include_directories(z_generals PRIVATE
 target_sources(z_generals PRIVATE
     WinMain.cpp
     WinMain.h
+        ${CMAKE_SOURCE_DIR}/Core/GameEngine/Source/Common/GpuPreferenceExports.cpp
 )
 
 # RC files optional for MinGW builds

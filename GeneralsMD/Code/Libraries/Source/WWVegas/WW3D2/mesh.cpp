@@ -1011,7 +1011,7 @@ void MeshClass::Render_Material_Pass(MaterialPassClass * pass,IndexBufferClass *
 			DX8FVFCategoryContainer* container = Model->PolygonRendererList.Peek_Head()->Get_Texture_Category()->Get_Container();
 			DWORD containerFVF = container->Get_FVF();
 
-#ifdef WWDEBUG
+/*#ifdef WWDEBUG
 			static int rigidMatPassCount = 0;
 			rigidMatPassCount++;
 			if (rigidMatPassCount <= 1000) {
@@ -1019,7 +1019,7 @@ void MeshClass::Render_Material_Pass(MaterialPassClass * pass,IndexBufferClass *
 					rigidMatPassCount, containerFVF));
 
 			}
-#endif
+#endif*/
 		}
 
 		SNAPSHOT_SAY(("Set_World_Transform"));

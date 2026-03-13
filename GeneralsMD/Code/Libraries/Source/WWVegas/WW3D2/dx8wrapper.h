@@ -457,6 +457,10 @@ class DX8Wrapper
 
 public:
 
+	// Ronin @feature 10/03/2026 DX9: Bind existing GUI AntiAliasing option to DX9 multisampling.
+	static void Set_Anti_Aliasing_Level(int level);
+	static int Get_Anti_Aliasing_Level() { return AntiAliasingLevel; }
+
 	// Ronin @bugfix 19/02/2026 DX9: Dirty VB/IB change flags without clearing the tracked pointers.
 	// Used after instanced drawing so Apply_Render_State_Changes re-binds the container's buffers.
 	static void Invalidate_Vertex_Buffer_State()
@@ -948,6 +952,8 @@ protected:
 	static int								TextureBitDepth;
 	static bool								IsWindowed;
 	static D3DFORMAT					DisplayFormat;
+	static int								AntiAliasingLevel; // Ronin @feature 10/03/2026 DX9: Track current anti-aliasing level for use in device creation and state management.
+
 
 	static D3DMATRIX						old_world;
 	static D3DMATRIX						old_view;
@@ -972,7 +978,8 @@ protected:
 
 	static bool								world_identity;
 	static unsigned						RenderStates[256];
-	static unsigned						TextureStageStates[MAX_TEXTURE_STAGES][32];
+	static unsigned						TextureStageStates[MAX_TEXTURE_STAGES][33];
+	static unsigned						SamplerStates[MAX_TEXTURE_STAGES][14];  // @build Ronin 29/10/2025 DX9: Sampler states added to wrapper tracking
 	static IDirect3DBaseTexture8 *	Textures[MAX_TEXTURE_STAGES];
 
 	// These fog settings are constant for all objects in a given scene,
@@ -1022,6 +1029,78 @@ inline DWORD FloatToDword(float f) {
 	return *reinterpret_cast<DWORD*>(&f);
 }
 
+WWINLINE void DX8Wrapper::Set_FVF(unsigned fvf)
+{
+	// Ronin @bugfix 05/12/2025: Fixed pipeline switching
+
+	DX8_THREAD_ASSERT();
+
+#ifdef _DEBUG
+	ASSERT_LAYOUT_BINDING_ALLOWED_API("SetFVF");
+#endif
+
+	IDirect3DDevice9* pDev = _Get_D3D_Device8();
+	if (!pDev || fvf == 0) return;
+
+	// Ronin @refactor 12/03/2026: I think clearing it inside Apply_Render_State_Changes
+	// when we detect a pipeline switch, is cleaner and works. So I will keep it commented out.
+	// Ronin @bugfix 08/12/2025: Testing "Clear vertex declaration before setting FVF"
+	// FVF and explicit declarations are mutually exclusive per Microsoft DX9 docs
+	/*IDirect3DVertexDeclaration9* currentDecl = nullptr;
+	pDev->GetVertexDeclaration(&currentDecl);
+	if (currentDecl) {
+		pDev->SetVertexDeclaration(nullptr);
+		currentDecl->Release();
+		number_of_DX8_calls++;
+#ifdef _DEBUG
+		WWDEBUG_SAY(("Wrapper: cleared decl=%p before setting FVF=0x%08X", currentDecl, fvf));
+#endif
+	}*/
+
+	// Step 1: Clear vertex shader when switching to fixed-function pipeline
+// Per Microsoft: "call SetVertexShader(NULL)" before SetFVF
+	IDirect3DVertexShader9* currentVS = nullptr;
+	pDev->GetVertexShader(&currentVS);
+	if (currentVS) {
+		pDev->SetVertexShader(nullptr);
+		currentVS->Release();
+		number_of_DX8_calls++;
+	}
+
+	//pDev->SetVertexShader(nullptr);
+	
+	//We don't clear pixel shader cause many FVF paths use one. DX9 allows FVF and pixel shader to co-exist.
+
+	// Step 2: Now set the FVF
+	HRESULT hr = pDev->SetFVF(fvf);
+	if (FAILED(hr)) {
+		WWDEBUG_SAY(("❌ SetFVF(0x%08X) FAILED: 0x%08X", fvf, hr));
+		return;
+	}
+	number_of_DX8_calls++;
+
+	// Update tracking
+	//render_state.currentDecl = nullptr;
+	render_state.currentVS = nullptr;
+
+
+#ifdef _DEBUG
+	// Verify it was actually set
+	DWORD actualFVF = 0;
+	pDev->GetFVF(&actualFVF);
+	if (actualFVF != fvf) {
+		WWDEBUG_SAY(("❌ Set_FVF MISMATCH: Expected 0x%08X, Got 0x%08X", fvf, actualFVF));
+	}
+	else {
+		static unsigned long lastLogFrame = 0;
+		if (FrameCount != lastLogFrame) {
+			lastLogFrame = FrameCount;
+			WWDEBUG_SAY(("✅ Set_FVF: 0x%08X (verified, VS/Decl cleared)", fvf));
+		}
+	}
+#endif
+}
+
 // shader system updates KJM v
 WWINLINE void DX8Wrapper::Set_Vertex_Shader(DWORD vertex_shader)
 {
@@ -1049,11 +1128,13 @@ WWINLINE void DX8Wrapper::Set_Vertex_Shader(DWORD vertex_shader)
 		// DX8: SetVertexShader(0) = disable shader, revert to fixed-function
 		// DX9: Just disable the programmable shader, don't touch FVF
 		pDev->SetVertexShader(nullptr);
+		number_of_DX8_calls++;
 		return;
 	}
 
 	// Assume it's an FVF code
 	pDev->SetFVF(vertex_shader);
+	number_of_DX8_calls++;
 }
 
 WWINLINE void DX8Wrapper::Set_Pixel_Shader(DWORD pixel_shader)
@@ -1220,17 +1301,20 @@ WWINLINE void DX8Wrapper::Set_DX8_Render_State(D3DRENDERSTATETYPE state, unsigne
 
 #ifdef MESH_RENDER_SNAPSHOT_ENABLED
 	if (WW3D::Is_Snapshot_Activated()) {
-		StringClass value_name(0,true);
-		Get_DX8_Render_State_Value_Name(value_name,state,value);
+		StringClass value_name(0, true);
+		Get_DX8_Render_State_Value_Name(value_name, state, value);
 		SNAPSHOT_SAY(("DX8 - SetRenderState(state: %s, value: %s)",
 			Get_DX8_Render_State_Name(state),
 			value_name.str()));
 	}
 #endif
 
-	RenderStates[state]=value;
-	DX8CALL(SetRenderState( state, value ));
+	// Ronin @refactor 10/03/2026 DX9: Keep render-state cache write-through only for now.
+	// Raw device SetRenderState callers still exist, so render-state early-outs remain unsafe.
+	RenderStates[state] = value;
+	DX8CALL(SetRenderState(state, value));
 	DX8_RECORD_RENDER_STATE_CHANGE();
+
 }
 
 WWINLINE void DX8Wrapper::Set_DX8_Clip_Plane(DWORD Index, CONST float* pPlane)
@@ -1240,20 +1324,25 @@ WWINLINE void DX8Wrapper::Set_DX8_Clip_Plane(DWORD Index, CONST float* pPlane)
 
 WWINLINE void DX8Wrapper::Set_DX8_Texture_Stage_State(unsigned stage, D3DTEXTURESTAGESTATETYPE state, unsigned value)
 {
-  	if (stage >= MAX_TEXTURE_STAGES)
-  	{	DX8CALL(SetTextureStageState( stage, state, value ));
-  		return;
-  	}
+	if (stage >= MAX_TEXTURE_STAGES)
+	{
+		DX8CALL(SetTextureStageState(stage, state, value));
+		DX8_RECORD_TEXTURE_STAGE_STATE_CHANGE();
+		return;
+	}
 
-		// Ronin @bugfix 08/11/2025: DX9 cache comparison broken - bypass cache temporarily
-		// TODO: Investigate why cache comparison fails in DX9
-		// Can't monitor state changes because setShader call to GERD may change the states!
-		// if (TextureStageStates[stage][(unsigned int)state]==value) return;  // DISABLED - cache check broken in DX9
+	const unsigned stateIndex = (unsigned)state;
+	if (stateIndex < 33) {
+		if (TextureStageStates[stage][stateIndex] == value) {
+			return;
+		}
+		TextureStageStates[stage][stateIndex] = value;
+	}
 
 #ifdef MESH_RENDER_SNAPSHOT_ENABLED
 	if (WW3D::Is_Snapshot_Activated()) {
-		StringClass value_name(0,true);
-		Get_DX8_Texture_Stage_State_Value_Name(value_name,state,value);
+		StringClass value_name(0, true);
+		Get_DX8_Texture_Stage_State_Value_Name(value_name, state, value);
 		SNAPSHOT_SAY(("DX8 - SetTextureStageState(stage: %d, state: %s, value: %s)",
 			stage,
 			Get_DX8_Texture_Stage_State_Name(state),
@@ -1261,8 +1350,7 @@ WWINLINE void DX8Wrapper::Set_DX8_Texture_Stage_State(unsigned stage, D3DTEXTURE
 	}
 #endif
 
-	TextureStageStates[stage][(unsigned int)state]=value;
-	DX8CALL(SetTextureStageState( stage, state, value ));
+	DX8CALL(SetTextureStageState(stage, state, value));
 	DX8_RECORD_TEXTURE_STAGE_STATE_CHANGE();
 }
 
@@ -1276,106 +1364,23 @@ WWINLINE void DX8Wrapper::Set_DX8_Sampler_State(unsigned stage, D3DSAMPLERSTATET
 		return;
 	}
 
-	// Ronin @bugfix 08/11/2025: DX9 cache comparison broken - bypass cache temporarily
-	// TODO: Investigate why cache comparison fails in DX9
-	// Can't monitor state changes because setShader call to GERD may change the states!
-	// if (TextureStageStates[stage][(unsigned int)state] == value) return;  // DISABLED - cache check broken in DX9
-
-	TextureStageStates[stage][(unsigned int)state] = value;
+	const unsigned stateIndex = (unsigned)state;
+	if (stateIndex < 14) {
+		if (SamplerStates[stage][stateIndex] == value) {
+			return;
+		}
+		SamplerStates[stage][stateIndex] = value;
+	}
 
 #ifdef MESH_RENDER_SNAPSHOT_ENABLED
 	if (WW3D::Is_Snapshot_Activated()) {
-		// @bugfix Ronin 07/11/2025 DX9: Sampler states use different enums than texture stage states
-		// Simplified logging since we don't have dedicated sampler state name functions yet
 		SNAPSHOT_SAY(("DX8 - SetSamplerState(stage: %d, state: %d, value: %d)",
 			stage, (int)state, value));
 	}
-
 #endif
 
-	DX8CALL(SetSamplerState( stage, state, value ));
+	DX8CALL(SetSamplerState(stage, state, value));
 	DX8_RECORD_TEXTURE_STAGE_STATE_CHANGE();
-}
-
-
-
-WWINLINE void DX8Wrapper::Set_FVF(unsigned fvf)
-{
-	// Ronin @bugfix 05/12/2025: Fixed pipeline switching per Microsoft DX9 docs
-
-	DX8_THREAD_ASSERT();
-
-#ifdef _DEBUG
-	ASSERT_LAYOUT_BINDING_ALLOWED_API("SetFVF");
-#endif
-
-	IDirect3DDevice9* pDev = _Get_D3D_Device8();
-	if (!pDev || fvf == 0) return;
-
-	// Ronin @bugfix 08/12/2025: Testing "Clear vertex declaration before setting FVF"
-	// FVF and explicit declarations are mutually exclusive per Microsoft DX9 docs
-	IDirect3DVertexDeclaration9* currentDecl = nullptr;
-	pDev->GetVertexDeclaration(&currentDecl);
-	if (currentDecl) {
-		pDev->SetVertexDeclaration(nullptr);
-		currentDecl->Release();
-		number_of_DX8_calls++;
-#ifdef _DEBUG
-		WWDEBUG_SAY(("Wrapper: cleared decl=%p before setting FVF=0x%08X", currentDecl, fvf));
-#endif
-	}
-
-
-	// Step 1: Clear vertex shader when switching to fixed-function pipeline
-	// Per Microsoft: "call SetVertexShader(NULL)" before SetFVF
-	IDirect3DVertexShader9* currentVS = nullptr;
-	pDev->GetVertexShader(&currentVS);
-	if (currentVS) {
-		pDev->SetVertexShader(nullptr);
-		currentVS->Release();
-		number_of_DX8_calls++;
-	}
-
-	/*
-	// Step 2: Clear pixel shader as well for complete fixed-function switch
-	IDirect3DPixelShader9* currentPS = nullptr;
-	pDev->GetPixelShader(&currentPS);
-	if (currentPS) {
-		pDev->SetPixelShader(nullptr);
-		currentPS->Release();
-		number_of_DX8_calls++;
-	}*/
-
-	// Step 4: Now set the FVF
-	HRESULT hr = pDev->SetFVF(fvf);
-	if (FAILED(hr)) {
-		WWDEBUG_SAY(("❌ SetFVF(0x%08X) FAILED: 0x%08X", fvf, hr));
-		return;
-	}
-	number_of_DX8_calls++;
-
-	// Update tracking
-	render_state.currentFVF = fvf;
-	render_state.currentDecl = nullptr;
-	render_state.currentVS = nullptr;
-	//render_state.currentPS = nullptr;
-	render_state_changed |= VERTEX_BUFFER_CHANGED;
-
-#ifdef _DEBUG
-	// Verify it was actually set
-	DWORD actualFVF = 0;
-	pDev->GetFVF(&actualFVF);
-	if (actualFVF != fvf) {
-		WWDEBUG_SAY(("❌ Set_FVF MISMATCH: Expected 0x%08X, Got 0x%08X", fvf, actualFVF));
-	}
-	else {
-		static unsigned long lastLogFrame = 0;
-		if (FrameCount != lastLogFrame) {
-			lastLogFrame = FrameCount;
-			WWDEBUG_SAY(("✅ Set_FVF: 0x%08X (verified, VS/Decl cleared)", fvf));
-		}
-	}
-#endif
 }
 
 WWINLINE void DX8Wrapper::Set_DX8_Texture(unsigned int stage, IDirect3DBaseTexture8* texture)

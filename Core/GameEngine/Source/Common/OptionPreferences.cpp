@@ -66,6 +66,21 @@ Bool OptionPreferences::loadFromIniFile()
 	return load("Options.ini");
 }
 
+Int OptionPreferences::getAntiAliasingMode() const
+{
+	OptionPreferences::const_iterator it = find("AntiAliasing");
+	if (it == end())
+		return 0;
+
+	Int value = atoi(it->second.str());
+	if (value < 0)
+		value = 0;
+	if (value > 2)
+		value = 2;
+
+	return value;
+}
+
 Int OptionPreferences::getCampaignDifficulty()
 {
 	OptionPreferences::const_iterator it = find("CampaignDifficulty");

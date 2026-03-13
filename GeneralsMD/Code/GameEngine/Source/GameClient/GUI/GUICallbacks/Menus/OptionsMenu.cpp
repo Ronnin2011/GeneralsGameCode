@@ -380,6 +380,8 @@ static void saveOptions()
 {
 	Int index;
 	Int val;
+	Bool antiAliasingChanged = FALSE;
+	Bool resolutionChanged = FALSE;
 	//-------------------------------------------------------------------------------------------------
 //	// provider type
 //	Bool isChecked = GadgetCheckBoxIsChecked(checkAudioHardware);
@@ -554,14 +556,16 @@ static void saveOptions()
 
 	//-------------------------------------------------------------------------------------------------
 	// antialiasing
-  GadgetComboBoxGetSelectedPos(comboBoxAntiAliasing, &index);
-  if( index >= 0 && TheGlobalData->m_antiAliasBoxValue != index )
-  {
-    TheWritableGlobalData->m_antiAliasBoxValue = index;
-    AsciiString prefString;
+	GadgetComboBoxGetSelectedPos(comboBoxAntiAliasing, &index);
+	if (index >= 0 && TheGlobalData->m_antiAliasBoxValue != index)
+	{
+		TheWritableGlobalData->m_antiAliasBoxValue = index;
+		antiAliasingChanged = TRUE;
+
+		AsciiString prefString;
 		prefString.format("%d", index);
 		(*pref)["AntiAliasing"] = prefString;
-  }
+	}
 
 
 	//-------------------------------------------------------------------------------------------------
@@ -815,7 +819,8 @@ static void saveOptions()
 	// processing all the options. This is necessary, because recreating the Shell will destroy the
 	// Options Menu and therefore prevent any further ui gadget interactions afterwards.
 
-	GadgetComboBoxGetSelectedPos( comboBoxResolution, &index );
+
+	GadgetComboBoxGetSelectedPos(comboBoxResolution, &index);
 	Int xres, yres, bitDepth;
 
 	oldDispSettings.xRes = TheDisplay->getWidth();
@@ -825,11 +830,12 @@ static void saveOptions()
 
 	if (comboBoxResolution && comboBoxResolution->winGetEnabled() && index < TheDisplay->getDisplayModeCount() && index >= 0)
 	{
-		TheDisplay->getDisplayModeDescription(index,&xres,&yres,&bitDepth);
+		TheDisplay->getDisplayModeDescription(index, &xres, &yres, &bitDepth);
 		if (TheGlobalData->m_xResolution != xres || TheGlobalData->m_yResolution != yres)
 		{
-			if (TheDisplay->setDisplayMode(xres,yres,bitDepth,TheDisplay->getWindowed()))
+			if (TheDisplay->setDisplayMode(xres, yres, bitDepth, TheDisplay->getWindowed()))
 			{
+				resolutionChanged = TRUE;
 				dispChanged = TRUE;
 				TheWritableGlobalData->m_xResolution = xres;
 				TheWritableGlobalData->m_yResolution = yres;
@@ -837,14 +843,13 @@ static void saveOptions()
 				TheHeaderTemplateManager->onResolutionChanged();
 				TheMouse->onResolutionChanged();
 
-				//Save new settings for a dialog box confirmation after options are accepted
 				newDispSettings.xRes = xres;
 				newDispSettings.yRes = yres;
 				newDispSettings.bitDepth = bitDepth;
 				newDispSettings.windowed = TheDisplay->getWindowed();
 
 				AsciiString prefString;
-				prefString.format("%d %d", xres, yres );
+				prefString.format("%d %d", xres, yres);
 				(*pref)["Resolution"] = prefString;
 
 				TheShell->recreateWindowLayouts();
@@ -853,6 +858,16 @@ static void saveOptions()
 				TheInGameUI->refreshCustomUiResources();
 			}
 		}
+	}
+
+	// Ronin @feature 10/03/2026 DX9: AA changes require a device reset even when resolution is unchanged.
+	if (antiAliasingChanged && !resolutionChanged)
+	{
+		TheDisplay->setDisplayMode(
+			TheDisplay->getWidth(),
+			TheDisplay->getHeight(),
+			TheDisplay->getBitDepth(),
+			TheDisplay->getWindowed());
 	}
 
 	// MUST NEVER ADD ANOTHER OPTION HERE AT THE END !
@@ -1148,6 +1163,10 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 	if( val < 0 || val > NUM_ALIASING_MODES )
 	{
 		TheWritableGlobalData->m_antiAliasBoxValue = val = 0;
+	}
+	else
+	{
+		TheWritableGlobalData->m_antiAliasBoxValue = val;
 	}
 	GadgetComboBoxSetSelectedPos(comboBoxAntiAliasing, val);
 

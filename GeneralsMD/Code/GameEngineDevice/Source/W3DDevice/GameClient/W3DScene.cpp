@@ -892,7 +892,7 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	// Ronin @bugfix 07/11/2025: DX9 requires render state reset after alpha/translucent passes
 	// Water and translucent objects can set depth bias, pixel shaders, texture stages, etc.
 	// that must be cleaned up before particle rendering to prevent state leakage
-	DX8Wrapper::Reset_Pass_Render_States();
+	//DX8Wrapper::Reset_Pass_Render_States();
 
 	TheDX8MeshRenderer.Clear_Pending_Delete_Lists();
 }

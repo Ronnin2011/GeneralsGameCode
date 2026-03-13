@@ -512,29 +512,6 @@ else
 	vb->v1=1.0f;
 	vb++;
 
-	// Ronin @diagnostic 06/12/2025: Log actual vertex data to verify geometry
-#ifdef _DEBUG
-	{
-		VertexFormatXYZDUV1* debugVB = vb - 4;  // Rewind to first vertex
-		DWORD alpha0 = (debugVB[0].diffuse >> 24) & 0xFF;
-
-		static int frameLogCount = 0;
-		if (frameLogCount < 3) {
-			WWDEBUG_SAY(("VERTEX DATA Track type=%d:", m_type));
-			WWDEBUG_SAY(("   V0: pos=[%.1f, %.1f, %.1f] alpha=%d uv=[%.2f,%.2f]",
-				debugVB[0].x, debugVB[0].y, debugVB[0].z, alpha0,
-				debugVB[0].u1, debugVB[0].v1));
-			WWDEBUG_SAY(("   V2: pos=[%.1f, %.1f, %.1f]",
-				debugVB[2].x, debugVB[2].y, debugVB[2].z));
-
-			if (alpha0 == 0) {
-				WWDEBUG_SAY(("ALPHA IS ZERO!"));
-			}
-			frameLogCount++;
-		}
-	}
-#endif
-
 	vertexBuffer->Get_DX8_Vertex_Buffer()->Unlock();
 
 	Int idxCount=(m_y-1)*(m_x*2+2) - 2;	//index count

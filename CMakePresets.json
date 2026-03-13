@@ -60,7 +60,7 @@
             "displayName": "Windows 32bit Release",
             "architecture": {
                 "value": "Win32",
-                "strategy": "external"
+                "strategy": "set"
             },
             "cacheVariables": {
                 "RTS_FLAGS": "/W3"
