@@ -1,5 +1,5 @@
 /*
-**	Command & Conquer Generals(tm)
+**	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
 **	This program is free software: you can redistribute it and/or modify
@@ -325,6 +325,14 @@ public:
 	UnsignedInt costToHierGoal( PathfindCell *goal );
 
 	UnsignedInt costSoFar( PathfindCell *parent );
+
+#if RETAIL_COMPATIBLE_PATHFINDING
+	// Forward insertion sort that is 100% retail compatible
+	void forwardInsertionSortRetailCompatible(PathfindCellList& list);
+#endif
+
+	// Forward insertion sort, in ascending cost order
+	void forwardInsertionSort(PathfindCellList& list);
 
 	/// put self on "open" list in ascending cost order
 	void putOnSortedOpenList( PathfindCellList &list );
