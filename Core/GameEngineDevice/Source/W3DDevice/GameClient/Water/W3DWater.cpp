@@ -168,8 +168,6 @@ static ShaderClass blendStagesShader(SC_DETAIL_BLEND);
 
 WaterRenderObjClass *TheWaterRenderObj=nullptr; ///<global water rendering object
 
-#define SAFE_RELEASE(p)      { if(p) { (p)->Release(); (p)=nullptr; } }
-
 void doSkyBoxSet(Bool startDraw)
 {
 	if (TheWritableGlobalData)
