@@ -179,6 +179,42 @@ DEFINE_AUTO_POOL(MatPassTaskClass, 256);
 
 // ----------------------------------------------------------------------------
 
+// Ronin @bugfix 17/03/2026 DX9: Instanced batches must not mix meshes whose effective
+// lighting differs. Selection flash/tint is folded into LightEnvironmentClass in
+// RTS3DScene::renderOneObject(), so batching selected and unselected units together
+// causes the whole batch to inherit one unit's highlight state.
+static bool Light_Environments_Are_Equivalent_For_Instancing(
+	LightEnvironmentClass* a,
+	LightEnvironmentClass* b)
+{
+	if (a == b) {
+		return true;
+	}
+
+	if (a == nullptr || b == nullptr) {
+		return a == b;
+	}
+
+	if (a->Get_Light_Count() != b->Get_Light_Count()) {
+		return false;
+	}
+
+	if (!(a->Get_Equivalent_Ambient() == b->Get_Equivalent_Ambient())) {
+		return false;
+	}
+
+	for (int i = 0; i < a->Get_Light_Count(); ++i) {
+		if (!(a->Get_Light_Direction(i) == b->Get_Light_Direction(i))) {
+			return false;
+		}
+		if (!(a->Get_Light_Diffuse(i) == b->Get_Light_Diffuse(i))) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
 // Ronin @feature 23/02/2026 DX9: Check if two polygon renderers reference the same geometry
 // in the shared VB/IB. This enables instancing across different MeshModelClass instances that
 // were registered into the same FVF container (and thus share the same VB/IB ranges).
@@ -1769,25 +1805,25 @@ unsigned DX8TextureCategoryClass::Add_Mesh(
 
 void DX8TextureCategoryClass::Render()
 {
-	#ifdef WWDEBUG
+#ifdef WWDEBUG
 	if (!WW3D::Expose_Prelit()) {
-	#endif
+#endif
 
-		for (unsigned i=0;i<MeshMatDescClass::MAX_TEX_STAGES;++i)
+		for (unsigned i = 0; i < MeshMatDescClass::MAX_TEX_STAGES; ++i)
 		{
 			SNAPSHOT_SAY(("Set_Texture(%d,%s)", i, Peek_Texture(i) ? Peek_Texture(i)->Get_Texture_Name().str() : "NULL"));
 			DX8Wrapper::Set_Texture(i, Peek_Texture(i));
 		}
 
-	#ifdef WWDEBUG
+#ifdef WWDEBUG
 	}
-	#endif
+#endif
 
-	SNAPSHOT_SAY(("Set_Material(%s)",Peek_Material() ? Peek_Material()->Get_Name() : "null"));
-	VertexMaterialClass *vmaterial=(VertexMaterialClass *)Peek_Material();	//ugly cast from const but we'll restore it after changes so okay. -MW
+	SNAPSHOT_SAY(("Set_Material(%s)", Peek_Material() ? Peek_Material()->Get_Name() : "null"));
+	VertexMaterialClass* vmaterial = (VertexMaterialClass*)Peek_Material();	//ugly cast from const but we'll restore it after changes so okay. -MW
 	DX8Wrapper::Set_Material(vmaterial);
 
-	SNAPSHOT_SAY(("Set_Shader(%x)",Get_Shader().Get_Bits()));
+	SNAPSHOT_SAY(("Set_Shader(%x)", Get_Shader().Get_Bits()));
 	ShaderClass theShader = Get_Shader();
 
 	//Setup an alpha blend version of this shader just in case it's needed. -MW
@@ -1808,7 +1844,7 @@ void DX8TextureCategoryClass::Render()
 		//DX8Wrapper::Set_Material(material);
 		//REF_PTR_RELEASE(material);
 		DX8Wrapper::Apply_Render_State_Changes();
-		DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND,D3DBLEND_DESTCOLOR);
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_DESTCOLOR);
 	}
 
 	// Ronin @feature 19/02/2026 DX9: Hardware instancing pre-pass for rigid mesh batching.
@@ -1858,12 +1894,14 @@ void DX8TextureCategoryClass::Render()
 
 			// Scan for the most common eligible polygon renderer among remaining tasks.
 			DX8PolygonRendererClass* best_renderer = nullptr;
+			LightEnvironmentClass* best_light_env = nullptr;
 			unsigned best_count = 0;
 
 			PolyRenderTaskClass* scan = render_task_head;
 			while (scan != nullptr) {
 				DX8PolygonRendererClass* candidate = scan->Peek_Polygon_Renderer();
 				MeshClass* mesh = scan->Peek_Mesh();
+				LightEnvironmentClass* candidate_light_env = mesh->Get_Lighting_Environment();
 
 				// Quick eligibility pre-check
 				if (mesh->Get_Base_Vertex_Offset() != VERTEX_BUFFER_OVERFLOW &&
@@ -1882,7 +1920,10 @@ void DX8TextureCategoryClass::Render()
 								!m->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
 								m->Get_Alpha_Override() == 1.0f &&
 								!(m->Get_User_Data() && *(int*)m->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE) &&
-								m->Get_ObjectScale() == 1.0f)
+								m->Get_ObjectScale() == 1.0f &&
+								Light_Environments_Are_Equivalent_For_Instancing(
+									m->Get_Lighting_Environment(),
+									candidate_light_env))
 							{
 								count++;
 							}
@@ -1893,6 +1934,7 @@ void DX8TextureCategoryClass::Render()
 					if (count > best_count) {
 						best_count = count;
 						best_renderer = candidate;
+						best_light_env = candidate_light_env;
 					}
 				}
 
@@ -1930,7 +1972,10 @@ void DX8TextureCategoryClass::Render()
 					!mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
 					mesh->Get_Alpha_Override() == 1.0f &&
 					!(mesh->Get_User_Data() && *(int*)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE) &&
-					mesh->Get_ObjectScale() == 1.0f;
+					mesh->Get_ObjectScale() == 1.0f &&
+					Light_Environments_Are_Equivalent_For_Instancing(
+						mesh->Get_Lighting_Environment(),
+						best_light_env);
 
 				if (eligible) {
 					const Matrix3D& tm = mesh->Get_Transform();
@@ -1976,7 +2021,7 @@ void DX8TextureCategoryClass::Render()
 				best_count, collected, pre_splice_count, post_splice_count,
 				pre_splice_count - post_splice_count, best_renderer));*/
 
-			// Issue the instanced draw call for this renderer group
+				// Issue the instanced draw call for this renderer group
 			if (collected >= 2) {
 
 				TheDX8InstanceManager.Draw_Instanced(best_renderer, container->Get_FVF());
@@ -2034,18 +2079,27 @@ void DX8TextureCategoryClass::Render()
 	}
 
 
-	bool renderTasksRemaining=false;
+	bool renderTasksRemaining = false;
 
-	PolyRenderTaskClass * prt = render_task_head;
-	PolyRenderTaskClass * last_prt = nullptr;
+	PolyRenderTaskClass* prt = render_task_head;
+	PolyRenderTaskClass* last_prt = nullptr;
 
 	while (prt) {
 
 		/*
 		** Dig out the parameters for this render task
 		*/
-		DX8PolygonRendererClass * renderer = prt->Peek_Polygon_Renderer();
-		MeshClass * mesh = prt->Peek_Mesh();
+		DX8PolygonRendererClass* renderer = prt->Peek_Polygon_Renderer();
+		MeshClass* mesh = prt->Peek_Mesh();
+
+#ifdef WWDEBUG
+		StringClass debug_context(true);
+		debug_context.Format(
+			"%s %s",
+			mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) ? "SKIN" : "MESH",
+			mesh->Get_Name() ? mesh->Get_Name() : "(unnamed)");
+		DX8Wrapper::Set_Debug_Draw_Context(debug_context.str());
+#endif
 
 		if (mesh->Get_Base_Vertex_Offset() == VERTEX_BUFFER_OVERFLOW)	//check if this mesh is valid
 		{	//skip this mesh so it gets rendered later after vertices are filled in.
@@ -2055,66 +2109,67 @@ void DX8TextureCategoryClass::Render()
 			continue;
 		}
 
-		SNAPSHOT_SAY(("mesh = %s",mesh->Get_Name()));
+		SNAPSHOT_SAY(("mesh = %s", mesh->Get_Name()));
 
-		#ifdef WWDEBUG
+#ifdef WWDEBUG
 		// Debug rendering: if it exists, expose prelighting on this mesh by disabling all base textures.
 		if (WW3D::Expose_Prelit()) {
-			switch (mesh->Peek_Model()->Get_Flag (MeshGeometryClass::PRELIT_MASK)) {
+			switch (mesh->Peek_Model()->Get_Flag(MeshGeometryClass::PRELIT_MASK)) {
 
 				unsigned i;
 
-				case MeshGeometryClass::PRELIT_VERTEX:
+			case MeshGeometryClass::PRELIT_VERTEX:
 
-					// Disable texturing on all stages and passes.
+				// Disable texturing on all stages and passes.
+				for (i = 0; i < MeshMatDescClass::MAX_TEX_STAGES; i++)
+				{
+					DX8Wrapper::Set_Texture(i, nullptr);
+				}
+				break;
+
+			case MeshGeometryClass::PRELIT_LIGHTMAP_MULTI_PASS:
+
+				// Disable texturing on all but the last pass.
+				if (pass == mesh->Peek_Model()->Get_Pass_Count() - 1) {
 					for (i = 0; i < MeshMatDescClass::MAX_TEX_STAGES; i++)
 					{
-						DX8Wrapper::Set_Texture (i, nullptr);
+						DX8Wrapper::Set_Texture(i, Peek_Texture(i));
 					}
-					break;
-
-				case MeshGeometryClass::PRELIT_LIGHTMAP_MULTI_PASS:
-
-					// Disable texturing on all but the last pass.
-					if (pass == mesh->Peek_Model()->Get_Pass_Count() - 1) {
-						for (i = 0; i < MeshMatDescClass::MAX_TEX_STAGES; i++)
-						{
-							DX8Wrapper::Set_Texture (i, Peek_Texture (i));
-						}
-					} else {
-						for (i = 0; i < MAX_TEXTURE_STAGES; i++) {
-							DX8Wrapper::Set_Texture (i, nullptr);
-						}
+				}
+				else {
+					for (i = 0; i < MAX_TEXTURE_STAGES; i++) {
+						DX8Wrapper::Set_Texture(i, nullptr);
 					}
-					break;
+				}
+				break;
 
-				case MeshGeometryClass::PRELIT_LIGHTMAP_MULTI_TEXTURE:
+			case MeshGeometryClass::PRELIT_LIGHTMAP_MULTI_TEXTURE:
 
-					// Disable texturing on all but the zeroth stage of each pass.
-					DX8Wrapper::Set_Texture (0, Peek_Texture (0));
-					for (i = 1; i < MeshMatDescClass::MAX_TEX_STAGES; i++)
-					{
-						DX8Wrapper::Set_Texture (i, nullptr);
-					}
-					break;
+				// Disable texturing on all but the zeroth stage of each pass.
+				DX8Wrapper::Set_Texture(0, Peek_Texture(0));
+				for (i = 1; i < MeshMatDescClass::MAX_TEX_STAGES; i++)
+				{
+					DX8Wrapper::Set_Texture(i, nullptr);
+				}
+				break;
 
-				default:
-					for (i = 0; i < MeshMatDescClass::MAX_TEX_STAGES; i++)
-					{
-						DX8Wrapper::Set_Texture (i, Peek_Texture (i));
-					}
-					break;
+			default:
+				for (i = 0; i < MeshMatDescClass::MAX_TEX_STAGES; i++)
+				{
+					DX8Wrapper::Set_Texture(i, Peek_Texture(i));
+				}
+				break;
 			}
 		}
-		#endif
+#endif
 
 		/*
 		** If the user is not installing LightEnvironmentClasses, we leave the lighting render
 		** states untouched.  This way they can set a couple global lights that affect the entire scene.
 		*/
-		LightEnvironmentClass * lenv = mesh->Get_Lighting_Environment();
+		LightEnvironmentClass* lenv = mesh->Get_Lighting_Environment();
 		if (lenv != nullptr) {
-			SNAPSHOT_SAY(("LightEnvironment, lights: %d",lenv->Get_Light_Count()));
+			SNAPSHOT_SAY(("LightEnvironment, lights: %d", lenv->Get_Light_Count()));
 			DX8Wrapper::Set_Light_Environment(lenv);
 		}
 		else {
@@ -2125,7 +2180,7 @@ void DX8TextureCategoryClass::Render()
 		** Support for ALIGNED and ORIENTED camera modes
 		*/
 		const Matrix3D* world_transform = &mesh->Get_Transform();
-		bool identity=mesh->Is_Transform_Identity();
+		bool identity = mesh->Is_Transform_Identity();
 		Matrix3D tmp_world;
 
 		if (mesh->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED)) {
@@ -2137,10 +2192,11 @@ void DX8TextureCategoryClass::Render()
 			TheDX8MeshRenderer.Peek_Camera()->Get_Transform().Get_Z_Vector(&camera_z_vector);
 			mesh->Get_Transform().Get_Translation(&mesh_position);
 
-			tmp_world.Obj_Look_At(mesh_position,mesh_position + camera_z_vector,0.0f);
+			tmp_world.Obj_Look_At(mesh_position, mesh_position + camera_z_vector, 0.0f);
 			world_transform = &tmp_world;
 
-		} else if (mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED)) {
+		}
+		else if (mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED)) {
 			SNAPSHOT_SAY(("Camera mode ORIENTED"));
 
 			Vector3 mesh_position;
@@ -2149,15 +2205,16 @@ void DX8TextureCategoryClass::Render()
 			TheDX8MeshRenderer.Peek_Camera()->Get_Transform().Get_Translation(&camera_position);
 			mesh->Get_Transform().Get_Translation(&mesh_position);
 
-			tmp_world.Obj_Look_At(mesh_position,camera_position,0.0f);
+			tmp_world.Obj_Look_At(mesh_position, camera_position, 0.0f);
 			world_transform = &tmp_world;
 
-		} else if (mesh->Peek_Model()->Get_Flag(MeshModelClass::SKIN)) {
+		}
+		else if (mesh->Peek_Model()->Get_Flag(MeshModelClass::SKIN)) {
 			SNAPSHOT_SAY(("Set world identity (for skin)"));
 
 			tmp_world.Make_Identity();
 			world_transform = &tmp_world;
-			identity=true;
+			identity = true;
 		}
 
 
@@ -2167,94 +2224,98 @@ void DX8TextureCategoryClass::Render()
 		}
 		else {
 			SNAPSHOT_SAY(("Set_World_Transform"));
-			DX8Wrapper::Set_Transform(D3DTS_WORLD,*world_transform);
+			DX8Wrapper::Set_Transform(D3DTS_WORLD, *world_transform);
 		}
 
-//--------------------------------------------------------------------
+		//--------------------------------------------------------------------
 		if (mesh->Get_ObjectScale() != 1.0f)
 			DX8Wrapper::Set_DX8_Render_State(D3DRS_NORMALIZENORMALS, TRUE);
-//--------------------------------------------------------------------
-		/*
-		** Render mesh using either sorting or immediate pipeline
-		*/
-		//(gth) this if statement's contents are not tabbed to avoid perforce merge problems...
+		//--------------------------------------------------------------------
+				/*
+				** Render mesh using either sorting or immediate pipeline
+				*/
+				//(gth) this if statement's contents are not tabbed to avoid perforce merge problems...
 		if (!DX8RendererDebugger::Is_Enabled() || !mesh->Is_Disabled_By_Debugger()) {
 
-		if ((!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT)) && WW3D::Is_Sorting_Enabled()) {
-			renderer->Render_Sorted(mesh->Get_Base_Vertex_Offset(),mesh->Get_Bounding_Sphere());
-		} else {
-
-			//non-transparent mesh that will be rendered immediately.  Okay to adjust the shader/material
-			//if necessary
-			if (mesh->Get_Alpha_Override() != 1.0 || (mesh->Get_User_Data() && *(int *)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE))
-			{	//mesh has material override of some kind
-				//adjust the opacity of this model
-				float oldOpacity=vmaterial->Get_Opacity();
-				Vector3 oldDiffuse;
-				Vector2 oldUVOffset;
-				unsigned int oldUVOffsetSyncTime;
-				vmaterial->Get_Diffuse(&oldDiffuse);
-				LinearOffsetTextureMapperClass *oldMapper=(LinearOffsetTextureMapperClass *)vmaterial->Peek_Mapper();
-				if ( mesh->Get_User_Data() && *(int *)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE && oldMapper && oldMapper->Mapper_ID() == TextureMapperClass::MAPPER_ID_LINEAR_OFFSET)
-				{	RenderObjClass::Material_Override *matOverride=(RenderObjClass::Material_Override *)mesh->Get_User_Data();
-					oldUVOffsetSyncTime = oldMapper->Get_LastUsedSyncTime();
-					oldMapper->Set_LastUsedSyncTime(WW3D::Get_Sync_Time());	//make sure zero time passes for the mapper.
-					oldMapper->Get_Current_UV_Offset(oldUVOffset);
-					oldMapper->Set_Current_UV_Offset(matOverride->customUVOffset);
-				}
-				else
-					oldMapper=nullptr;
-				if (mesh->Get_Alpha_Override() != 1.0)
-				{
-					if (mesh->Is_Additive())
-					{	//additvie blended mesh can't switch to alpha or we will get a black outline.
-						//so adjust diffuse color instead.
-						vmaterial->Set_Diffuse(mesh->Get_Alpha_Override(),mesh->Get_Alpha_Override(),mesh->Get_Alpha_Override());
-						theAlphaShader = theShader;	//keep using additive blending.
-					}
-					vmaterial->Set_Opacity(mesh->Get_Alpha_Override());
-					DX8Wrapper::Set_Shader(theAlphaShader);
-					DX8Wrapper::Apply_Render_State_Changes();
-					DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF,(int)((float)0x60*mesh->Get_Alpha_Override()));
-					renderer->Render(mesh->Get_Base_Vertex_Offset());
-					DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF,0x60);
-					vmaterial->Set_Opacity(oldOpacity);	//restore previous value
-					vmaterial->Set_Diffuse(oldDiffuse.X,oldDiffuse.Y,oldDiffuse.Z);
-					DX8Wrapper::Set_Shader(theShader);	//restore previous value
-				}
-				else
-					renderer->Render(mesh->Get_Base_Vertex_Offset());
-
-				if (oldMapper)	//did we override the uv offset?
-				{	oldMapper->Set_LastUsedSyncTime(oldUVOffsetSyncTime);
-					oldMapper->Set_Current_UV_Offset(oldUVOffset);
-				}
-				DX8Wrapper::Set_Material(nullptr);	//force a reset of vertex material since we secretly changed opacity
-				DX8Wrapper::Set_Material(vmaterial);	//restore previous material.
+			if ((!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT)) && WW3D::Is_Sorting_Enabled()) {
+				renderer->Render_Sorted(mesh->Get_Base_Vertex_Offset(), mesh->Get_Bounding_Sphere());
 			}
-			else
-				renderer->Render(mesh->Get_Base_Vertex_Offset());
+			else {
+
+				//non-transparent mesh that will be rendered immediately.  Okay to adjust the shader/material
+				//if necessary
+				if (mesh->Get_Alpha_Override() != 1.0 || (mesh->Get_User_Data() && *(int*)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE))
+				{	//mesh has material override of some kind
+					//adjust the opacity of this model
+					float oldOpacity = vmaterial->Get_Opacity();
+					Vector3 oldDiffuse;
+					Vector2 oldUVOffset;
+					unsigned int oldUVOffsetSyncTime;
+					vmaterial->Get_Diffuse(&oldDiffuse);
+					LinearOffsetTextureMapperClass* oldMapper = (LinearOffsetTextureMapperClass*)vmaterial->Peek_Mapper();
+					if (mesh->Get_User_Data() && *(int*)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE && oldMapper && oldMapper->Mapper_ID() == TextureMapperClass::MAPPER_ID_LINEAR_OFFSET)
+					{
+						RenderObjClass::Material_Override* matOverride = (RenderObjClass::Material_Override*)mesh->Get_User_Data();
+						oldUVOffsetSyncTime = oldMapper->Get_LastUsedSyncTime();
+						oldMapper->Set_LastUsedSyncTime(WW3D::Get_Sync_Time());	//make sure zero time passes for the mapper.
+						oldMapper->Get_Current_UV_Offset(oldUVOffset);
+						oldMapper->Set_Current_UV_Offset(matOverride->customUVOffset);
+					}
+					else
+						oldMapper = nullptr;
+					if (mesh->Get_Alpha_Override() != 1.0)
+					{
+						if (mesh->Is_Additive())
+						{	//additvie blended mesh can't switch to alpha or we will get a black outline.
+							//so adjust diffuse color instead.
+							vmaterial->Set_Diffuse(mesh->Get_Alpha_Override(), mesh->Get_Alpha_Override(), mesh->Get_Alpha_Override());
+							theAlphaShader = theShader;	//keep using additive blending.
+						}
+						vmaterial->Set_Opacity(mesh->Get_Alpha_Override());
+						DX8Wrapper::Set_Shader(theAlphaShader);
+						DX8Wrapper::Apply_Render_State_Changes();
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF, (int)((float)0x60 * mesh->Get_Alpha_Override()));
+						renderer->Render(mesh->Get_Base_Vertex_Offset());
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF, 0x60);
+						vmaterial->Set_Opacity(oldOpacity);	//restore previous value
+						vmaterial->Set_Diffuse(oldDiffuse.X, oldDiffuse.Y, oldDiffuse.Z);
+						DX8Wrapper::Set_Shader(theShader);	//restore previous value
+					}
+					else
+						renderer->Render(mesh->Get_Base_Vertex_Offset());
+
+					if (oldMapper)	//did we override the uv offset?
+					{
+						oldMapper->Set_LastUsedSyncTime(oldUVOffsetSyncTime);
+						oldMapper->Set_Current_UV_Offset(oldUVOffset);
+					}
+					DX8Wrapper::Set_Material(nullptr);	//force a reset of vertex material since we secretly changed opacity
+					DX8Wrapper::Set_Material(vmaterial);	//restore previous material.
+				}
+				else
+					renderer->Render(mesh->Get_Base_Vertex_Offset());
+			}
+			//--------------------------------------------------------------------
+			if (mesh->Get_ObjectScale() != 1.0f)
+				DX8Wrapper::Set_DX8_Render_State(D3DRS_NORMALIZENORMALS, FALSE);
+			//--------------------------------------------------------------------
+
+
+
+
 		}
-//--------------------------------------------------------------------
-		if (mesh->Get_ObjectScale() != 1.0f)
-			DX8Wrapper::Set_DX8_Render_State(D3DRS_NORMALIZENORMALS, FALSE);
-//--------------------------------------------------------------------
-
-
-
-
-        }
 
 		/*
 		** Move to the next render task.  Note that the delete should be fast because prt's are pooled
 		*/
-		PolyRenderTaskClass * next_prt = prt->Get_Next_Visible();
+		PolyRenderTaskClass* next_prt = prt->Get_Next_Visible();
 
 		// remove from list, then delete
 		if (last_prt == nullptr) {
-		   render_task_head = next_prt;
-		} else {
-		  last_prt->Set_Next_Visible(next_prt);
+			render_task_head = next_prt;
+		}
+		else {
+			last_prt->Set_Next_Visible(next_prt);
 		}
 
 		delete prt;

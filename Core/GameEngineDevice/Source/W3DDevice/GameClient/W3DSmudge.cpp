@@ -93,7 +93,7 @@ void W3DSmudgeManager::ReleaseResources()
 	if (m_distortionVS) { m_distortionVS->Release(); m_distortionVS = nullptr; }
 	if (m_distortionDecl) { m_distortionDecl->Release(); m_distortionDecl = nullptr; }
 	REF_PTR_RELEASE(m_noiseTexture);
-	m_useDistortionShader = false;
+	m_useDistortionShader = false; // VSO mudge Shader switch.
 }
 
 //Make sure (SMUDGE_DRAW_SIZE * 12) < 65535 because that's the max index buffer size.

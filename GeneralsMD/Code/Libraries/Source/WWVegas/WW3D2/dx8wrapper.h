@@ -1066,8 +1066,6 @@ WWINLINE void DX8Wrapper::Set_FVF(unsigned fvf)
 		currentVS->Release();
 		number_of_DX8_calls++;
 	}
-
-	//pDev->SetVertexShader(nullptr);
 	
 	//We don't clear pixel shader cause many FVF paths use one. DX9 allows FVF and pixel shader to co-exist.
 
@@ -1081,8 +1079,15 @@ WWINLINE void DX8Wrapper::Set_FVF(unsigned fvf)
 
 	// Update tracking
 	//render_state.currentDecl = nullptr;
+	render_state.currentFVF = fvf;
 	render_state.currentVS = nullptr;
+	render_state.layoutOwner = "Set_FVF";
 
+	render_state.expectedFVF = fvf;
+	if (render_state.expectedDecl) {
+		render_state.expectedDecl->Release();
+		render_state.expectedDecl = nullptr;
+	}
 
 #ifdef _DEBUG
 	// Verify it was actually set
@@ -1940,6 +1945,14 @@ WWINLINE void DX8Wrapper::Release_Render_State()
 		render_state.expectedDecl->Release();
 		render_state.expectedDecl = nullptr;
 	}
+
+	render_state.vba_fvf = 0;
+	render_state.currentFVF = 0;
+	render_state.currentDecl = nullptr;
+	render_state.currentVS = nullptr;
+	render_state.currentPS = nullptr;
+	render_state.expectedFVF = 0;
+	render_state.layoutOwner = "none";
 }
 
 
@@ -2052,12 +2065,19 @@ WWINLINE RenderStateStruct& RenderStateStruct::operator= (const RenderStateStruc
 
 	currentFVF = src.currentFVF;  
 	currentDecl = src.currentDecl;
+	currentVS = src.currentVS;
+	currentPS = src.currentPS;
+	layoutOwner = src.layoutOwner;
 
 	// Copy expected layout (with AddRef)
 	expectedFVF = src.expectedFVF;
-	if (expectedDecl) expectedDecl->Release();
+	if (expectedDecl) {
+		expectedDecl->Release();
+	}
 	expectedDecl = src.expectedDecl;
-	if (expectedDecl) expectedDecl->AddRef();
+	if (expectedDecl) {
+		expectedDecl->AddRef();
+	}
 
 	// Ronin @bugfix 26/01/2026 DX9: Copy dynamic D3D VB tracking safely.
 	if (vba_d3d_vb) {
