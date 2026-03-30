@@ -114,7 +114,7 @@ public:
 	static float		Get_Lighting_LOD_Cutoff();
 
 	static int			Get_Max_Lights() { return MAX_LIGHTS; }
-	enum { MAX_LIGHTS = 4 };	//Made this public, so other code can tell how many lights are allowed. - MW
+	enum { MAX_LIGHTS = 10 };	//Made this public, so other code can tell how many lights are allowed. - MW
 
 	bool operator== (const LightEnvironmentClass& that) const
 	{

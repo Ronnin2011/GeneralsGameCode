@@ -197,7 +197,7 @@ unsigned							DX8Wrapper::render_state_changes						= 0;
 unsigned							DX8Wrapper::texture_stage_state_changes			= 0;
 unsigned							DX8Wrapper::draw_calls									= 0;
 unsigned							DX8Wrapper::_MainThreadID								= 0;
-bool								DX8Wrapper::CurrentDX8LightEnables[4];
+bool								DX8Wrapper::CurrentDX8LightEnables[MAX_LIGHTS];
 bool								DX8Wrapper::IsDeviceLost;
 int								DX8Wrapper::ZBias;
 float								DX8Wrapper::ZNear;
@@ -727,7 +727,10 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 	IsWindowed = false;
 	DX8Wrapper_IsWindowed = false;
 
-	for (int light=0;light<4;++light) CurrentDX8LightEnables[light]=false;
+	// @refactor Ronin 26/03/2026 DX9: Keep wrapper light-enable cache aligned with MAX_LIGHTS.
+	for (unsigned light = 0; light < MAX_LIGHTS; ++light) {
+		CurrentDX8LightEnables[light] = false;
+	}
 
 	::ZeroMemory(&old_world, sizeof(D3DMATRIX));
 	::ZeroMemory(&old_view, sizeof(D3DMATRIX));
@@ -3091,7 +3094,7 @@ void DX8Wrapper::Draw(
 				DX8_RECORD_DRAW_CALLS();
 
 				const unsigned drawStartIndex = start_index + render_state.iba_offset;
-				const int baseVertex = (int)render_state.index_base_offset;
+				int baseVertex = (int)render_state.index_base_offset;
 
 #ifdef WWDEBUG
 				//Ensure_Device_IB_Matches_Wrapper_Expected("DX8Wrapper::Draw");
@@ -3204,6 +3207,10 @@ void DX8Wrapper::Apply_Render_State_Changes()
 	if (!render_state_changed) return;
 
 #ifdef _DEBUG
+	const char* apply_ctx = DX8Wrapper::Get_Debug_Draw_Context();
+#endif
+
+#ifdef _DEBUG
 	//Track_Decl_Bound_While_Wrapper_Expects_FVF("Apply_Render_State_Changes");
 #endif
 
@@ -3250,7 +3257,7 @@ void DX8Wrapper::Apply_Render_State_Changes()
 	if (render_state_changed & LIGHTS_CHANGED)
 	{
 		unsigned lmask = LIGHT0_CHANGED;
-		for (unsigned index = 0; index < 4; ++index, lmask <<= 1) {
+		for (unsigned index = 0; index < MAX_LIGHTS; ++index, lmask <<= 1) {
 			if (render_state_changed & lmask) {
 				SNAPSHOT_SAY(("DX8 - apply light %d", index));
 				if (render_state.LightEnable[index]) {
@@ -3356,7 +3363,7 @@ void DX8Wrapper::Apply_Render_State_Changes()
 					if (render_state.vba_fvf != 0 && render_state.vba_d3d_vb != nullptr) {
 						FVFInfoClass fi(render_state.vba_fvf);
 						const UINT stride = (UINT)fi.Get_FVF_Size();
-						const UINT offsetInBytes = (UINT)render_state.vba_offset * stride;
+						UINT offsetInBytes = (UINT)render_state.vba_offset * stride;
 						WWASSERT(stride != 0);
 						DX8CALL(SetStreamSource(s, render_state.vba_d3d_vb, offsetInBytes, stride));
 						DX8_RECORD_VERTEX_BUFFER_CHANGE();
@@ -4036,6 +4043,12 @@ void DX8Wrapper::Compute_Caps(WW3DFormat display_format)
 
 void DX8Wrapper::Set_Light(unsigned index, const D3DLIGHT9* light)
 {
+	// @bugfix Ronin 26/03/2026 DX9: Guard wrapper light writes against MAX_LIGHTS.
+	WWASSERT(index < MAX_LIGHTS);
+	if (index >= MAX_LIGHTS) {
+		return;
+	}
+
 	if (light) {
 		render_state.Lights[index]=*light;
 		render_state.LightEnable[index]=true;
@@ -4166,10 +4179,17 @@ void DX8Wrapper::Set_Light_Environment(LightEnvironmentClass* light_env)
 				light.Position = (const D3DVECTOR&)light_env->getPointCenter(l);
 				light.Range = light_env->getPointOrad(l);
 
+				// @tweak Ronin 26/03/2026 DX9: Stretch effective point-light radii globally.
+				// The current DX9 path already uses very soft attenuation (A2=0), so the remaining
+				// "too short" look is most likely the hard Range cutoff rather than Attenuation1.
+				const double pointLightRadiusScale = 1.15;  //If set in a value that affects other units, we can't batch their meshes for instancing..
+
 				// Inverse linear light 1/(1+D)
 				double a,b;
-				b = light_env->getPointOrad(l);
-				a = light_env->getPointIrad(l);
+				b = light_env->getPointOrad(l) * pointLightRadiusScale;
+				a = light_env->getPointIrad(l) * pointLightRadiusScale;
+
+				//light.Range = (float)b;
 
 //(gth) CNC3 Generals code for the attenuation factors is causing the lights to over-brighten
 //I'm changing the Attenuation0 parameter to 1.0 to avoid this problem.
@@ -4178,21 +4198,28 @@ void DX8Wrapper::Set_Light_Environment(LightEnvironmentClass* light_env)
 #else
 				light.Attenuation0=1.0f;
 #endif
-				if (fabs(a-b)<1e-5)
+				if (fabs(a - b) < 1e-5) {
 					// if the attenuation range is too small assume uniform with cutoff
-					light.Attenuation1=0.0f;
-				else
-					// this will cause the light to drop to half intensity at the first far attenuation
-					light.Attenuation1=(float) 0.1/a;
+					light.Attenuation1 = 0.0f;
+					light.Attenuation2 = 0.0f;
+				}
+				else {
+					// double safeInner = (a < 1.0) ? 1.0 : a;
+					const double safeOuterSq = (b < 1.0) ? 1.0 : (b * b);
+					const double pointLightQuadraticStrength = 1.75;
 
-				light.Attenuation2=8.0f/(b*b);
+					// this will cause the light to drop to half intensity at the first far attenuation
+					light.Attenuation1 = (float)(0.1 / a);
+					light.Attenuation2 = (float)(pointLightQuadraticStrength / safeOuterSq);
+				}
 			}
 
 			Set_Light(l,&light);
 		}
 
-		for (;l<4;++l) {
-			Set_Light(l,nullptr);
+		// @refactor Ronin 26/03/2026 DX9: Clear all remaining wrapper light slots via MAX_LIGHTS.
+		for (; l < (int)MAX_LIGHTS; ++l) {
+			Set_Light((unsigned)l, nullptr);
 		}
 	}
 /*	else {
@@ -4977,7 +5004,8 @@ void DX8Wrapper::Apply_Default_State()
 //	DX8Wrapper::Set_Material(nullptr);
 	VertexMaterialClass::Apply_Null();
 
-	for (unsigned index=0;index<4;++index) {
+	// @refactor Ronin 26/03/2026 DX9: Clear all wrapper light slots using shared MAX_LIGHTS.
+	for (unsigned index = 0; index < MAX_LIGHTS; ++index) {
 		SNAPSHOT_SAY(("Clearing light %d to NULL",index));
 		Set_DX8_Light(index,nullptr);
 	}

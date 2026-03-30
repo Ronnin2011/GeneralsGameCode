@@ -160,7 +160,6 @@ inline void DX8PolygonRendererClass::Render_Sorted(/*const Matrix3D & tm,*/int b
 
 // Ronin @feature 18/02/2026 DX9: Instanced draw call bypasses DX8Wrapper state management
 // because the instance manager has already configured streams, declarations, and shaders.
-// Ronin @bugfix 19/02/2026 DX9: Log actual min_vertex_index and vertex_index_range for diagnosis.
 inline void DX8PolygonRendererClass::Render_Instanced(int base_vertex_offset)
 {
 	WWASSERT(!strip); // Instancing only supports triangle lists

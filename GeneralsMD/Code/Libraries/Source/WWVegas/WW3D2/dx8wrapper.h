@@ -217,6 +217,8 @@ const unsigned MAX_VERTEX_STREAMS=2;
 const unsigned MAX_VERTEX_SHADER_CONSTANTS=96;
 const unsigned MAX_PIXEL_SHADER_CONSTANTS=8;
 const unsigned MAX_SHADOW_MAPS=1;
+// @feature Ronin 26/03/2026 DX9: Keep wrapper light storage aligned with LightEnvironmentClass.
+const unsigned MAX_LIGHTS = LightEnvironmentClass::MAX_LIGHTS;
 
 #define prevVer
 #define nextVer
@@ -365,8 +367,8 @@ struct RenderStateStruct
 	ShaderClass shader;
 	VertexMaterialClass* material;
 	TextureBaseClass * Textures[MAX_TEXTURE_STAGES];
-	D3DLIGHT9 Lights[4];
-	bool LightEnable[4];
+	D3DLIGHT9 Lights[MAX_LIGHTS];
+	bool LightEnable[MAX_LIGHTS];
   //unsigned lightsHash;
 	D3DMATRIX world;
 	D3DMATRIX view;
@@ -418,27 +420,38 @@ struct RenderStateStruct
 class DX8Wrapper
 {
 	enum ChangedStates {
-		WORLD_CHANGED	=	1<<0,
-		VIEW_CHANGED	=	1<<1,
-		LIGHT0_CHANGED	=	1<<2,
-		LIGHT1_CHANGED	=	1<<3,
-		LIGHT2_CHANGED	=	1<<4,
-		LIGHT3_CHANGED	=	1<<5,
-		TEXTURE0_CHANGED=	1<<6,
-		TEXTURE1_CHANGED=	1<<7,
-		TEXTURE2_CHANGED=	1<<8,
-		TEXTURE3_CHANGED=	1<<9,
-		MATERIAL_CHANGED=	1<<14,
-		SHADER_CHANGED	=	1<<15,
-		VERTEX_BUFFER_CHANGED = 1<<16,
-		INDEX_BUFFER_CHANGED = 1 << 17,
-		WORLD_IDENTITY=	1<<18,
-		VIEW_IDENTITY=		1<<19,
+		WORLD_CHANGED = 1 << 0,
+		VIEW_CHANGED = 1 << 1,
 
-		TEXTURES_CHANGED=
-			TEXTURE0_CHANGED|TEXTURE1_CHANGED|TEXTURE2_CHANGED|TEXTURE3_CHANGED,
-		LIGHTS_CHANGED=
-			LIGHT0_CHANGED|LIGHT1_CHANGED|LIGHT2_CHANGED|LIGHT3_CHANGED,
+		LIGHT0_CHANGED = 1 << 2,
+		LIGHT1_CHANGED = 1 << 3,
+		LIGHT2_CHANGED = 1 << 4,
+		LIGHT3_CHANGED = 1 << 5,
+		LIGHT4_CHANGED = 1 << 6,
+		LIGHT5_CHANGED = 1 << 7,
+		LIGHT6_CHANGED = 1 << 8,
+		LIGHT7_CHANGED = 1 << 9,
+		LIGHT8_CHANGED = 1 << 10,
+		LIGHT9_CHANGED = 1 << 11,
+
+		TEXTURE0_CHANGED = 1 << 12,
+		TEXTURE1_CHANGED = 1 << 13,
+		TEXTURE2_CHANGED = 1 << 14,
+		TEXTURE3_CHANGED = 1 << 15,
+
+		MATERIAL_CHANGED = 1 << 16,
+		SHADER_CHANGED = 1 << 17,
+		VERTEX_BUFFER_CHANGED = 1 << 18,
+		INDEX_BUFFER_CHANGED = 1 << 19,
+		WORLD_IDENTITY = 1 << 20,
+		VIEW_IDENTITY = 1 << 21,
+
+		TEXTURES_CHANGED =
+		TEXTURE0_CHANGED | TEXTURE1_CHANGED | TEXTURE2_CHANGED | TEXTURE3_CHANGED,
+		LIGHTS_CHANGED =
+		LIGHT0_CHANGED | LIGHT1_CHANGED | LIGHT2_CHANGED | LIGHT3_CHANGED |
+		LIGHT4_CHANGED | LIGHT5_CHANGED | LIGHT6_CHANGED | LIGHT7_CHANGED |
+		LIGHT8_CHANGED | LIGHT9_CHANGED,
 	};
 
 	static void Draw_Sorting_IB_VB(
@@ -996,7 +1009,7 @@ protected:
 	static unsigned						render_state_changes;
 	static unsigned						texture_stage_state_changes;
 	static unsigned						draw_calls;
-	static bool								CurrentDX8LightEnables[4];
+	static bool								CurrentDX8LightEnables[MAX_LIGHTS];
 
 	static DX8Caps*						CurrentCaps;
 
@@ -1036,7 +1049,7 @@ WWINLINE void DX8Wrapper::Set_FVF(unsigned fvf)
 	DX8_THREAD_ASSERT();
 
 #ifdef _DEBUG
-	ASSERT_LAYOUT_BINDING_ALLOWED_API("SetFVF");
+	//ASSERT_LAYOUT_BINDING_ALLOWED_API("SetFVF");
 #endif
 
 	IDirect3DDevice9* pDev = _Get_D3D_Device8();
@@ -1967,11 +1980,13 @@ WWINLINE RenderStateStruct::RenderStateStruct()
 	currentVS(nullptr),
 	currentPS(nullptr), 
 	currentFVF(0), 
-	currentDecl(nullptr)
+	currentDecl(nullptr),
+	layoutOwner("none")
 {
 	unsigned i;
-	for (i=0;i<MAX_VERTEX_STREAMS;++i) vertex_buffers[i]=0;
-	for (i=0;i<MAX_TEXTURE_STAGES;++i) Textures[i]=0;
+	for (i = 0; i < MAX_VERTEX_STREAMS; ++i) vertex_buffers[i] = 0;
+	for (i = 0; i < MAX_TEXTURE_STAGES; ++i) Textures[i] = 0;
+	for (i = 0; i < MAX_LIGHTS; ++i) LightEnable[i] = false;
   //lightsHash = (unsigned)this;
 }
 
@@ -2027,26 +2042,16 @@ WWINLINE RenderStateStruct& RenderStateStruct::operator= (const RenderStateStruc
 		REF_PTR_SET(Textures[i],src.Textures[i]);
 	}
 
-	LightEnable[0]=src.LightEnable[0];
-	LightEnable[1]=src.LightEnable[1];
-	LightEnable[2]=src.LightEnable[2];
-	LightEnable[3]=src.LightEnable[3];
-	if (LightEnable[0]) {
-		Lights[0]=src.Lights[0];
-		if (LightEnable[1]) {
-			Lights[1]=src.Lights[1];
-			if (LightEnable[2]) {
-				Lights[2]=src.Lights[2];
-				if (LightEnable[3]) {
-					Lights[3]=src.Lights[3];
-				}
-			}
-		}
+	for (i = 0;i<MAX_LIGHTS;++i)
+	{
+		LightEnable[i] = src.LightEnable[i];
+		if (LightEnable[i]) { Lights[i] = src.Lights[i]; }
+	}
 
 
     //lightsHash = flimby((char*)(&Lights[0]), sizeof(D3DLIGHT9)-1 );
 
-	}
+	
 
 	shader=src.shader;
 	world=src.world;

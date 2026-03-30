@@ -608,8 +608,6 @@ void	Render2DClass::Add_Outline(const RectClass& rect, float width, const RectCl
 // Now that dynamic_fvf_type works correctly with per-FVF VB pools, we no longer need
 // direct device calls or manual texture/blend state management. The wrapper handles
 // all state application through Apply_Render_State_Changes() called by Draw_Triangles().
-// Scoped2DStateGuard is retained for DX9-specific state isolation (VertexDeclaration,
-// extra texture stages, viewport, etc.) that the original DX8 code didn't need.
 void Render2DClass::Render(void)
 {
 	if (!Indices.Count() || IsHidden) {
@@ -638,8 +636,6 @@ void Render2DClass::Render(void)
 	vp.MinZ = 0.0f;
 	vp.MaxZ = 1.0f;
 	DX8Wrapper::Set_Viewport(&vp);
-
-	// Set texture and material through wrapper (vanilla DX8 flow)
 	DX8Wrapper::Set_Texture(0, Texture);
 
 	VertexMaterialClass* vm = VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
@@ -680,7 +676,7 @@ void Render2DClass::Render(void)
 	DX8Wrapper::Set_Vertex_Buffer(vb);
 	DX8Wrapper::Set_Index_Buffer(ib, 0);
 
-	// Ronin @bugfix 26/02/2026 DX9: Force ShaderClass to fully re-apply all texture stage
+// Ronin @bugfix 26/02/2026 DX9: Force ShaderClass to fully re-apply all texture stage
 // and render states. In DX9, previous render passes (instancing, water tracks, terrain)
 // can modify device TSS/render states directly or via HLSL shaders, but ShaderClass's
 // internal dirty-tracking (CurrentShader ^ ShaderBits) doesn't know about those changes.
@@ -688,7 +684,7 @@ void Render2DClass::Render(void)
 // returns immediately — leaving stale device states (wrong ALPHAOP, ALPHABLENDENABLE,
 // etc.) that cause black backgrounds behind transparent 2D elements like text labels.
 // Invalidate() sets ShaderDirty=true, forcing diff=0xFFFFFFFF so every state is re-set.
-	ShaderClass::Invalidate();
+	//ShaderClass::Invalidate();
 
 	// Set shader and draw through wrapper (vanilla DX8 flow)
 	if (IsGrayScale)
@@ -720,10 +716,8 @@ void Render2DClass::Render(void)
 		}
 	}
 	else
-	{
-		DX8Wrapper::Set_Shader(Shader);
-	}
 
+	DX8Wrapper::Set_Shader(Shader);	
 	DX8Wrapper::BindLayoutFVF(dynamic_fvf_type, "Render2D");
 
 	// Single wrapper draw call — Apply_Render_State_Changes() handles FVF binding,
@@ -733,9 +727,8 @@ void Render2DClass::Render(void)
 	// Restore view and projection transforms
 	DX8Wrapper::Set_Transform(D3DTS_VIEW, view);
 	DX8Wrapper::Set_Transform(D3DTS_PROJECTION, proj);
-
-	// (3D or 2D) fully re-applies its shader states and doesn't inherit our 2D setup.
-	ShaderClass::Invalidate();
+	if (IsGrayScale)
+		ShaderClass::Invalidate(); 	// (3D or 2D) fully re-applies its shader states and doesn't inherit our 2D setup.
 
 }
 

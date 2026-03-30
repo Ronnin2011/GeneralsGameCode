@@ -892,38 +892,16 @@ static inline DWORD F2DW(FLOAT f) { return *((DWORD*)&f); }
 //=============================================================================
 /** Draw all active track marks for this frame */
 //=============================================================================
-void WaterTracksRenderSystem::flush(RenderInfoClass & rinfo)
+void WaterTracksRenderSystem::flush(RenderInfoClass& rinfo)
 {
-#ifdef WWDEBUG
-	DX8Wrapper::Validate_Pipeline_State("WaterTracks::Render_Entry");
-#endif
-
-	/*bool isTrackVisible = true;
-
-	// Simple frustum check - if NDC coordinates are too far outside [-1,1] range, skip
-	if (fabs(ndcX) > 2.0f || fabs(ndcY) > 2.0f) {
-		isTrackVisible = false;
-	}
-
-	if (!isTrackVisible) {
-		// Skip this track as it's not visible
-		continue;
-	}*/
-
-
 	/** @todo: Optimize system by drawing tracks as triangle strips and use dynamic vertex buffer access.
-May also try rendering all tracks with one call to W3D/D3D by grouping them by texture.
-Try improving the fit to vertical surfaces like cliffs.
-*/
+	May also try rendering all tracks with one call to W3D/D3D by grouping them by texture.
+	Try improving the fit to vertical surfaces like cliffs.
+	*/
 	Int	diffuseLight;
 
 	if (!TheGlobalData->m_showSoftWaterEdge || TheWaterTransparency->m_transparentWaterDepth == 0)
-	{
-		WWDEBUG_SAY(("EXITING: Water edge disabled or no transparent water depth!"));
-		WWDEBUG_SAY(("=== WATER TRACKS FLUSH ABORTED (CONDITION 1) ==="));
-
 		return;
-	}
 
 	if (TheGlobalData->m_usingWaterTrackEditor)
 		TestWaterUpdate();
@@ -933,13 +911,11 @@ Try improving the fit to vertical surfaces like cliffs.
 	rinfo.Camera.Apply();
 
 	if (!m_usedModules || ShaderClass::Is_Backface_Culling_Inverted())
-		return;	//don't render track marks in reflections.
 	{
-			WWDEBUG_SAY(("EXITING: No modules or backface culling inverted (reflection pass)!"));
-			WWDEBUG_SAY(("=== WATER TRACKS FLUSH ABORTED (CONDITION 2) ==="));
-			return;	//don't render track marks in reflections.
+		WWDEBUG_SAY(("EXITING: No modules or backface culling inverted (reflection pass)!"));
+		WWDEBUG_SAY(("=== WATER TRACKS FLUSH ABORTED (CONDITION 2) ==="));
+		return;	//don't render track marks in reflections.
 	}
-		WWDEBUG_SAY(("All checks passed, proceeding with rendering..."));
 
 	//According to Nvidia there's a D3D bug that happens if you don't start with a
 	//new dynamic VB each frame - so we force a DISCARD by overflowing the counter.
@@ -950,96 +926,53 @@ Try improving the fit to vertical surfaces like cliffs.
 	shadeR = TheGlobalData->m_terrainAmbient[0].red;
 	shadeG = TheGlobalData->m_terrainAmbient[0].green;
 	shadeB = TheGlobalData->m_terrainAmbient[0].blue;
-	shadeR += TheGlobalData->m_terrainDiffuse[0].red/2;
-	shadeG += TheGlobalData->m_terrainDiffuse[0].green/2;
-	shadeB += TheGlobalData->m_terrainDiffuse[0].blue/2;
-	shadeR*=255.0f;
-	shadeG*=255.0f;
-	shadeB*=255.0f;
+	shadeR += TheGlobalData->m_terrainDiffuse[0].red / 2;
+	shadeG += TheGlobalData->m_terrainDiffuse[0].green / 2;
+	shadeB += TheGlobalData->m_terrainDiffuse[0].blue / 2;
+	shadeR *= 255.0f;
+	shadeG *= 255.0f;
+	shadeB *= 255.0f;
 
-	diffuseLight=REAL_TO_INT(shadeB) | (REAL_TO_INT(shadeG) << 8) | (REAL_TO_INT(shadeR) << 16);
+	diffuseLight = REAL_TO_INT(shadeB) | (REAL_TO_INT(shadeG) << 8) | (REAL_TO_INT(shadeR) << 16);
 
 	Matrix3D tm(1);	///set to identity
-	DX8Wrapper::Set_Transform(D3DTS_WORLD,tm);	//position the water surface
+	DX8Wrapper::Set_Transform(D3DTS_WORLD, tm);	//position the water surface
 
-	// Step 1: Bind layout BEFORE Apply (prevents stomp)
-	// Use simple FVF for water tracks: XYZ | DIFFUSE | TEX1
 	DX8Wrapper::BindLayoutFVF(DX8_FVF_XYZDUV1, "WaterTracks");
 
-	// Step 2: Bind vertex buffer (sets stream source data)
-	DX8Wrapper::Set_Vertex_Buffer(m_vertexBuffer);
-	if (!m_vertexBuffer) {
-		WWDEBUG_SAY(("Water tracks: No vertex buffer"));
-		return;
-	}
-
-	// Step 3: Set material (vertex colors, lighting properties)
 	DX8Wrapper::Set_Material(m_vertexMaterialClass);
-
-	// Step 4: Apply shader (render state configuration for alpha blending)
 	DX8Wrapper::Set_Shader(m_shaderClass);
 
-	// Enforce fixed-function color combine for WaterTracks (stage 0)
-	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
-	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
-	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+	DX8Wrapper::Set_Vertex_Buffer(m_vertexBuffer);
 
-	// Disable higher texture stages to avoid overrides
-	int maxStages = DX8Wrapper::Get_Current_Caps()->Get_Max_Textures_Per_Pass();
-	for (int s = 1; s < maxStages; ++s) {
-		DX8Wrapper::Set_DX8_Texture_Stage_State(s, D3DTSS_COLOROP, D3DTOP_DISABLE);
-		DX8Wrapper::Set_DX8_Texture_Stage_State(s, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
-	}
+	// Ronin @bugfix 23/03/2026 DX9: Use DX9 depth-bias render states in place of legacy D3DRS_ZBIAS.
+	const float bias = 1.5e-3f;
+	const float slope = 1.5f;
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, F2DW(bias));
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, F2DW(slope));
 
-  // DX8 never manually set these states - shader controlled them
-  // Manual override was breaking shader state management in DX9
-
-	// Step 5: Set depth bias for water tracks (expert-recommended values)
-	// DX8 used D3DRS_ZBIAS with integer value 8, DX9 uses D3DRS_DEPTHBIAS with float
-	// Ronin @bugfix 28/11/2025: Depth bias settings
-	float bias = 1.5e-3f;  // Positive bias (expert recommendation: +1e-3 to +2e-3)
-	float slope = 1.5f;    // Slope scale (expert recommendation: 1.0 to 2.0)
-
-	DWORD biasDW = *reinterpret_cast<DWORD*>(&bias);
-	DWORD slopeDW = *reinterpret_cast<DWORD*>(&slope);
-
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, biasDW);
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, slopeDW);
-
-
-#ifdef _DEBUG
-	WWDEBUG_SAY(("🎯 Water tracks: Set depth bias=%.8f, slope=%.2f", biasDW, slopeDW));
-#endif
-
-	// Step 6: Apply render state changes.
+	//Force apply of render states so we can override them.
 	DX8Wrapper::Apply_Render_State_Changes();
 
 	if (TheTerrainRenderObject->getShroud())
 	{
-		W3DShaderManager::setTexture(0,TheTerrainRenderObject->getShroud()->getShroudTexture());
+		W3DShaderManager::setTexture(0, TheTerrainRenderObject->getShroud()->getShroudTexture());
 		W3DShaderManager::setShader(W3DShaderManager::ST_SHROUD_TEXTURE, 1);
 
 		//modulate with shroud texture
-		DX8Wrapper::Set_DX8_Texture_Stage_State( 1, D3DTSS_COLORARG1, D3DTA_TEXTURE );	//stage 1 texture
-		DX8Wrapper::Set_DX8_Texture_Stage_State( 1, D3DTSS_COLORARG2, D3DTA_CURRENT );	//previous stage texture
-		DX8Wrapper::Set_DX8_Texture_Stage_State( 1, D3DTSS_COLOROP,   D3DTOP_MODULATE );
-		DX8Wrapper::Set_DX8_Texture_Stage_State( 1, D3DTSS_ALPHAOP,   D3DTOP_MODULATE );
+		DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_COLORARG1, D3DTA_TEXTURE);	//stage 1 texture
+		DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_COLORARG2, D3DTA_CURRENT);	//previous stage texture
+		DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_COLOROP, D3DTOP_MODULATE);
+		DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
 
+		//Shroud shader uses z-compare of EQUAL which wouldn't work on water because it doesn't
+		//write to the zbuffer. Change to LESSEQUAL only for the wave draw.
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
 	}
 
-		// Ronin @bugfix 06/11/2025: Water tracks need LESSEQUAL regardless of shroud state
-		// Must be set AFTER shroud shader which resets it to EQUAL
-		//Shroud shader uses z-compare of EQUAL which wouldn't work on water because it doesn't
-		//write to the zbuffer.  Change to LESSEQUAL.
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+	Int LastTextureType = -1;
 
-	// Ronin @bugfix 06/11/2025: Add rendering loop debug logging
-	Int LastTextureType=-1;
-
-	WaterTracksObj *mod=m_usedModules;
-	int tracksRendered = 0;
+	WaterTracksObj* mod = m_usedModules;
 
 	while (mod)
 	{
@@ -1051,113 +984,19 @@ Try improving the fit to vertical surfaces like cliffs.
 
 		Int vertsRendered = mod->render(m_vertexBuffer, m_batchStart);
 
-		m_batchStart = vertsRendered;
-		tracksRendered++;
-		mod = mod->m_nextSystem;
-	}
-
-#ifdef _DEBUG
-	WWDEBUG_SAY(("🌊 Total water tracks rendered: %d", tracksRendered));
-#endif
-
-#ifdef _DEBUG
-	// Extended diagnostics - only enable if tracks still invisible
-	IDirect3DDevice9* pDevDebug = DX8Wrapper::_Get_D3D_Device8();
-	if (pDevDebug) {
-		DWORD alpha = 0, src = 0, dst = 0, zwrite = 0, zfunc = 0;
-		pDevDebug->GetRenderState(D3DRS_ALPHABLENDENABLE, &alpha);
-		pDevDebug->GetRenderState(D3DRS_SRCBLEND, &src);
-		pDevDebug->GetRenderState(D3DRS_DESTBLEND, &dst);
-		pDevDebug->GetRenderState(D3DRS_ZWRITEENABLE, &zwrite);
-		pDevDebug->GetRenderState(D3DRS_ZFUNC, &zfunc);
-
-		WWDEBUG_SAY(("🌊 Water tracks exit state:"));
-		WWDEBUG_SAY(("   AlphaBlend=%d, Src=%d, Dst=%d", alpha, src, dst));
-		WWDEBUG_SAY(("   ZWrite=%d, ZFunc=%d", zwrite, zfunc));
-	}
-#endif
-
-	m_batchStart = 0;  // Ronin @bugfix 06/11/2025: Reset for next frame
-	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
-	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
-	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE);
-	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE);
-	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
-	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE);
-	DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
-	DX8Wrapper::Set_DX8_Texture_Stage_State(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
-
-	/*while (mod)
-	{
-		if (LastTextureType != mod->m_type)
-			DX8Wrapper::Set_Texture(0,mod->m_stageZeroTexture);
-
-		Int vertsRendered=mod->render(m_vertexBuffer,m_batchStart);
-
 		m_batchStart = vertsRendered;	//advance past vertices already in buffer
 
 		mod = mod->m_nextSystem;
-	}*/
+	}
 
-	// Ronin @bugfix 25/11/2025: Proper DX9 state cleanup using wrapper functions
-	// CRITICAL: Use wrapper functions to synchronize cache AND invalidate shader state
-	// This prevents state pollution when next renderer uses same _PresetAlphaShader
-
-		// Step 1: Reset depth bias using wrapper (syncs cache)
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, 0);
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, 0);
 
-#ifdef _DEBUG
-	WWDEBUG_SAY(("🎯 Water tracks: Restored depth bias to zero"));
-#endif
-
-	// Step 2: Reset alpha blending using wrapper (syncs cache)
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, FALSE);
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_ONE);
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_ZERO);
-
-	// Step 3: Reset Z-buffer states using wrapper (syncs cache)
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZWRITEENABLE, TRUE);
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
-
-	// Step 4: Invalidate shader state to force next Apply() to update
-	// Without this, if next renderer uses _PresetAlphaShader, it sees diff==0 and skips updates
-	ShaderClass::Invalidate();
-
-#ifdef _DEBUG
-	WWDEBUG_SAY(("✅ Water tracks cleanup: Wrapper state management complete"));
-
-	// Verify cleanup worked
-	{
-		IDirect3DDevice9* pDevVerify = DX8Wrapper::_Get_D3D_Device8();
-		if (pDevVerify) {
-			DWORD alphaBlend = 0, zWrite = 0;
-			pDevVerify->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
-			pDevVerify->GetRenderState(D3DRS_ZWRITEENABLE, &zWrite);
-			WWDEBUG_SAY(("=== POST-WRAPPER-CLEANUP STATE ==="));
-			WWDEBUG_SAY(("  AlphaBlend: %d (expected: 0), ZWrite: %d (expected: 1)", alphaBlend, zWrite));
-			if (alphaBlend != 0 || zWrite != 1) {
-				WWDEBUG_SAY(("  ❌ WARNING: Wrapper cleanup verification failed!"));
-			}
-			else {
-				WWDEBUG_SAY(("  ✅ Wrapper cleanup verified - states correct"));
-			}
-		}
-	}
-#endif
-
 	if (TheTerrainRenderObject->getShroud())
 	{	//we used the shroud shader, so reset it.
-		DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_EQUAL);
 		W3DShaderManager::resetShader(W3DShaderManager::ST_SHROUD_TEXTURE);
 	}
-
-	WWDEBUG_SAY(("=== WATER TRACKS FLUSH COMPLETE ==="));
-#ifdef _DEBUG
-	//DX8Wrapper::Validate_Pipeline_State("Water Tracks Exit");
-	//WWDEBUG_SAY(("=== WATER TRACKS RENDER END ==="));
-#endif
-
 }
 
 WaterTracksObj *WaterTracksRenderSystem::findTrack(Vector2 &start, Vector2 &end, waveType type)
