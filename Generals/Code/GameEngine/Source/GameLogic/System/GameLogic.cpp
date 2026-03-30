@@ -356,7 +356,7 @@ void GameLogic::init()
 	// Create system for holding deleted objects that are
 	// still in the partition manager because player has a fogged
 	// view of them.
-	TheGhostObjectManager = createGhostObjectManager();
+	TheGhostObjectManager = createGhostObjectManager(TheGlobalData->m_headless);
 
 	// create the terrain logic
 	TheTerrainLogic = createTerrainLogic();
@@ -395,13 +395,13 @@ void GameLogic::reset()
 #endif
 
 	m_pauseFrame = 0;
-	m_gamePaused = FALSE;
 	m_pauseSound = FALSE;
 	m_pauseMusic = FALSE;
-	m_pauseInput = FALSE;
 	m_inputEnabledMemory = TRUE;
 	m_mouseVisibleMemory = TRUE;
 	m_logicTimeScaleEnabledMemory = FALSE;
+	pauseGameLogic(FALSE);
+	pauseGameInput(FALSE);
 
 	setFPMode();
 
@@ -3938,8 +3938,10 @@ UnsignedInt GameLogic::getObjectCount()
 
 // ------------------------------------------------------------------------------------------------
 // ------------------------------------------------------------------------------------------------
-GhostObjectManager *GameLogic::createGhostObjectManager()
+GhostObjectManager *GameLogic::createGhostObjectManager(bool dummy)
 {
+	if (dummy)
+		return NEW GhostObjectManagerDummy;
 	return NEW GhostObjectManager;
 }
 

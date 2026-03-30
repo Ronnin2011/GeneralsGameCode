@@ -101,7 +101,7 @@ public:
 	{
 	}
 
-	virtual void Recreate() const
+	virtual void Recreate() const override
 	{
 		WWASSERT(Texture->Peek_D3D_Base_Texture()==nullptr);
 		Texture->Poke_Texture
@@ -138,7 +138,7 @@ public:
 	{
 	}
 
-	virtual void Recreate() const
+	virtual void Recreate() const override
 	{
 		WWASSERT(Texture->Peek_D3D_Base_Texture()==nullptr);
 		Texture->Poke_Texture
