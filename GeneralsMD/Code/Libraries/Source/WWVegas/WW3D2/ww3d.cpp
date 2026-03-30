@@ -1,4 +1,4 @@
-﻿/*
+/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -84,6 +84,7 @@
 
 #include <d3d9.h>  // Native DX9
 
+#include "ww3d.h"
 #include "rinfo.h"
 #include "assetmgr.h"
 #include "boxrobj.h"
@@ -284,18 +285,24 @@ WW3DErrorType WW3D::Init(void *hwnd, char *defaultpal, bool lite)
 		MMRESULT r = timeBeginPeriod(1);
 		WWASSERT(r == TIMERR_NOERROR);
 
-    /*
-    ** Initialize the dazzle system
-    */
-    if (!lite) {
-        WWDEBUG_SAY(("Init Dazzles"));
-        FileClass * dazzle_ini_file = _TheFileFactory->Get_File(DAZZLE_INI_FILENAME);
-        if (dazzle_ini_file) {
-            INIClass dazzle_ini(*dazzle_ini_file);
-            DazzleRenderObjClass::Init_From_INI(&dazzle_ini);
-            _TheFileFactory->Return_File(dazzle_ini_file);
-        }
-    }
+	/*
+	** Initialize the dazzle system
+	*/
+	if (!lite) {
+		WWDEBUG_SAY(("Init Dazzles"));
+		FileClass * dazzle_ini_file = _TheFileFactory->Get_File(DAZZLE_INI_FILENAME);
+		if (dazzle_ini_file) {
+			INIClass dazzle_ini(*dazzle_ini_file);
+			DazzleRenderObjClass::Init_From_INI(&dazzle_ini);
+			_TheFileFactory->Return_File(dazzle_ini_file);
+		}
+	}
+	/*
+	** Initialize the default static sort lists
+	** Note that DefaultStaticSortLists[0] is unused.
+	*/
+	DefaultStaticSortLists = W3DNEW DefaultStaticSortListClass();
+	Reset_Current_Static_Sort_Lists_To_Default();
 
     // Initialize the default static sort lists
     DefaultStaticSortLists = W3DNEW DefaultStaticSortListClass();
@@ -308,6 +315,7 @@ WW3DErrorType WW3D::Init(void *hwnd, char *defaultpal, bool lite)
     WWDEBUG_SAY(("WW3D Init completed"));
     return WW3D_ERROR_OK;
 }
+
 
 /***********************************************************************************************
  * WW3D::Shutdown -- shutdown the WW3D Library                                                 *
