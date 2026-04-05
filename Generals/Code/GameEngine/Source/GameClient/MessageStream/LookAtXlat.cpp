@@ -315,6 +315,7 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 			// if middle button is "clicked", reset to "home" orientation
 			if (!didMove && elapsedMsec < CLICK_DURATION_MSEC)
 			{
+				TheTacticalView->userResetPivotToGround();
 				TheTacticalView->userSetAngleToDefault();
 				TheTacticalView->userSetPitchToDefault();
 				TheTacticalView->userSetZoomToDefault();
@@ -532,10 +533,10 @@ GameMessageDisposition LookAtTranslator::translateGameMessage(const GameMessage 
 				ViewLocation currentView;
 				TheTacticalView->getLocation(&currentView);
 				GameMessage *msg = TheMessageStream->appendMessage( GameMessage::MSG_SET_REPLAY_CAMERA );
-				msg->appendLocationArgument( currentView.m_pos );
-				msg->appendRealArgument( currentView.m_angle );
-				msg->appendRealArgument( currentView.m_pitch );
-				msg->appendRealArgument( currentView.m_zoom );
+				msg->appendLocationArgument( currentView.getPosition() );
+				msg->appendRealArgument( currentView.getAngle() );
+				msg->appendRealArgument( currentView.getPitch() );
+				msg->appendRealArgument( currentView.getZoom() );
 				msg->appendIntegerArgument( (Int)TheMouse->getMouseCursor() );
 				msg->appendPixelArgument( m_currentPos );
 			}

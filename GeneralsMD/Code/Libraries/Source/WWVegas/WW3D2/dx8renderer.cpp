@@ -896,23 +896,14 @@ void DX8RigidFVFCategoryContainer::Render()
 	}
 
 	SNAPSHOT_SAY(("DX8RigidFVFCategoryContainer::Render()"));
-	// The Z-biasing was causing more problems than they solved.
-	// Disabling it for now HY.
-	//int zbias=0;
-	//DX8Wrapper::Set_DX8_ZBias(zbias);
 	for (unsigned p=0;p<passes;++p) {
 		SNAPSHOT_SAY(("Pass: %d",p));
 		while (DX8TextureCategoryClass * tex = visible_texture_category_list[p].Remove_Head()) {
 			tex->Render();
 		}
-		//zbias++;
-		//if (zbias>15) zbias=15;
-		//DX8Wrapper::Set_DX8_ZBias(zbias);
 	}
 
 	Render_Procedural_Material_Passes();
-
-	//DX8Wrapper::Set_DX8_ZBias(0);
 }
 
 // ----------------------------------------------------------------------------
@@ -1577,6 +1568,8 @@ void DX8SkinFVFCategoryContainer::Add_Visible_Skin(MeshClass * mesh)
 }
 
 
+// ----------------------------------------------------------------------------
+
 void DX8SkinFVFCategoryContainer::Reset()
 {
 	clearVisibleSkinList();
@@ -1945,7 +1938,7 @@ void DX8TextureCategoryClass::Render()
 			if (best_count < 2 || best_renderer == nullptr)
 				break;
 
-			// Found a batchable group — collect transforms and splice them out.
+			// Found a batchable group \97 collect transforms and splice them out.
 			found_batch = true;
 			TheDX8InstanceManager.Reset_Collection();
 
@@ -2472,7 +2465,7 @@ void DX8MeshRendererClass::Register_Mesh_Type(MeshModelClass* mmc)
 			// clone its polygon renderers to reuse the same VB/IB offsets.
 			MeshModelClass* donor = Find_Registered_Mesh_Sharing_Geometry(mmc);
 			if (donor != nullptr) {
-				// Clone polygon renderers from the donor — they reference the same VB/IB ranges
+				// Clone polygon renderers from the donor \97 they reference the same VB/IB ranges
 				DX8PolygonRendererListIterator pr_it(&donor->PolygonRendererList);
 				while (!pr_it.Is_Done()) {
 					DX8PolygonRendererClass* src_pr = pr_it.Peek_Obj();

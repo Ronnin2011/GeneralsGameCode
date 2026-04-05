@@ -65,7 +65,7 @@ typedef IDirect3DSurface9 IDirect3DSurface8;
 
 #include "always.h"
 #include "dllist.h"
-#include "d3d9.h"  // Changed from d3d8.h for DX9 migration
+
 #include "matrix4.h"
 #include "statistics.h"
 #include "wwstring.h"
@@ -96,10 +96,6 @@ const unsigned MAX_VERTEX_SHADER_CONSTANTS=96;
 const unsigned MAX_PIXEL_SHADER_CONSTANTS=8;
 const unsigned MAX_SHADOW_MAPS=1;
 
-#define prevVer
-#define nextVer
-
-
 enum {
 	BUFFER_TYPE_DX8,
 	BUFFER_TYPE_SORTING,
@@ -120,21 +116,46 @@ class TextureClass;
 class LightClass;
 class SurfaceClass;
 
-#define DX8_RECORD_MATRIX_CHANGE()				matrix_changes++
-#define DX8_RECORD_MATERIAL_CHANGE()			material_changes++
-#define DX8_RECORD_VERTEX_BUFFER_CHANGE()		vertex_buffer_changes++
-#define DX8_RECORD_INDEX_BUFFER_CHANGE()		index_buffer_changes++
-#define DX8_RECORD_LIGHT_CHANGE()				light_changes++
-#define DX8_RECORD_TEXTURE_CHANGE()				texture_changes++
-#define DX8_RECORD_RENDER_STATE_CHANGE()		render_state_changes++
-#define DX8_RECORD_TEXTURE_STAGE_STATE_CHANGE() texture_stage_state_changes++
-#define DX8_RECORD_DRAW_CALLS()					draw_calls++
+struct DX8FrameStatistics
+{
+	DX8FrameStatistics() :
+		matrix_changes(0),
+		material_changes(0),
+		vertex_buffer_changes(0),
+		index_buffer_changes(0),
+		light_changes(0),
+		texture_changes(0),
+		render_state_changes(0),
+		texture_stage_state_changes(0),
+		dx8_calls(0),
+		draw_calls(0)
+	{
+	}
 
-extern unsigned number_of_DX8_calls;
+	unsigned matrix_changes;
+	unsigned material_changes;
+	unsigned vertex_buffer_changes;
+	unsigned index_buffer_changes;
+	unsigned light_changes;
+	unsigned texture_changes;
+	unsigned render_state_changes;
+	unsigned texture_stage_state_changes;
+	unsigned dx8_calls;
+	unsigned draw_calls;
+};
+
+#define DX8_RECORD_MATRIX_CHANGE()				FrameStatistics.matrix_changes++
+#define DX8_RECORD_MATERIAL_CHANGE()			FrameStatistics.material_changes++
+#define DX8_RECORD_VERTEX_BUFFER_CHANGE()		FrameStatistics.vertex_buffer_changes++
+#define DX8_RECORD_INDEX_BUFFER_CHANGE()		FrameStatistics.index_buffer_changes++
+#define DX8_RECORD_LIGHT_CHANGE()				FrameStatistics.light_changes++
+#define DX8_RECORD_TEXTURE_CHANGE()				FrameStatistics.texture_changes++
+#define DX8_RECORD_RENDER_STATE_CHANGE()		FrameStatistics.render_state_changes++
+#define DX8_RECORD_TEXTURE_STAGE_STATE_CHANGE() FrameStatistics.texture_stage_state_changes++
+#define DX8_RECORD_DX8_CALLS()					FrameStatistics.dx8_calls++
+#define DX8_RECORD_DRAW_CALLS()					FrameStatistics.draw_calls++
+
 extern bool _DX8SingleThreaded;
-
-// Ronin @build 02/11/2025 DX9: Forward declare DXGetErrorString9A for enhanced error reporting
-const char* DXGetErrorString9A(HRESULT hr);
 
 void DX8_Assert();
 void Log_DX8_ErrorCode(unsigned res);
@@ -193,9 +214,9 @@ WWINLINE void DX8_ErrorCode(unsigned res)
 
 #define DX8_THREAD_ASSERT() if (_DX8SingleThreaded) { WWASSERT_PRINT(DX8Wrapper::_Get_Main_Thread_ID()==ThreadClass::_Get_Current_Thread_ID(),"DX8Wrapper::DX8 calls must be called from the main thread!"); }
 #else
-#define DX8CALL_HRES(x,res) res = DX8Wrapper::_Get_D3D_Device8()->x; number_of_DX8_calls++;
-#define DX8CALL(x) DX8Wrapper::_Get_D3D_Device8()->x; number_of_DX8_calls++;
-#define DX8CALL_D3D(x) DX8Wrapper::_Get_D3D8()->x; number_of_DX8_calls++;
+#define DX8CALL_HRES(x,res) res = DX8Wrapper::_Get_D3D_Device8()->x; DX8Wrapper::Increment_DX8_CallCount();
+#define DX8CALL(x) DX8Wrapper::_Get_D3D_Device8()->x; DX8Wrapper::Increment_DX8_CallCount();
+#define DX8CALL_D3D(x) DX8Wrapper::_Get_D3D8()->x; DX8Wrapper::Increment_DX8_CallCount();
 #define DX8_THREAD_ASSERT() ;
 #endif
 
@@ -309,29 +330,6 @@ class DX8Wrapper
 		unsigned short vertex_count=0);
 
 public:
-
-	// Ronin @feature 10/11/2025: DX9 shader/FVF management helpers
-
-	/**
-	 * Safely switches to fixed-function pipeline
-	 * Clears all shaders and sets FVF
-	 */
-	//static void Switch_To_Fixed_Function_Pipeline(DWORD fvf);
-
-	/**
-	 * Safely switches to programmable pipeline
-	 * Clears FVF before setting shaders
-	 */
-	//static void Switch_To_Programmable_Pipeline(
-	//	IDirect3DVertexShader9* vs = nullptr,
-//	IDirect3DPixelShader9* ps = nullptr);
-
-	/**
-	 * Debug helper to validate current pipeline state
-	 */
-	//static bool Validate_Pipeline_State();
-
-
 #ifdef EXTENDED_STATS
 	static DX8_Stats stats;
 #endif
@@ -557,18 +555,9 @@ public:
 	*/
 	static void Begin_Statistics();
 	static void End_Statistics();
-	static unsigned Get_Last_Frame_Matrix_Changes();
-	static unsigned Get_Last_Frame_Material_Changes();
-	static unsigned Get_Last_Frame_Vertex_Buffer_Changes();
-	static unsigned Get_Last_Frame_Index_Buffer_Changes();
-	static unsigned Get_Last_Frame_Light_Changes();
-	static unsigned Get_Last_Frame_Texture_Changes();
-	static unsigned Get_Last_Frame_Render_State_Changes();
-	static unsigned Get_Last_Frame_Texture_Stage_State_Changes();
-	static unsigned Get_Last_Frame_DX8_Calls();
-	static unsigned Get_Last_Frame_Draw_Calls();
-
+	static const DX8FrameStatistics& Get_Last_Frame_Statistics();
 	static unsigned long Get_FrameCount();
+	static void Increment_DX8_CallCount() { DX8_RECORD_DX8_CALLS(); }
 
 	// Needed by shader class
 	static bool						Get_Fog_Enable() { return FogEnable; }
@@ -774,9 +763,6 @@ protected:
 	static D3DFORMAT					DisplayFormat;
 	static D3DMULTISAMPLE_TYPE	MultiSampleAntiAliasing;
 
-	static D3DMATRIX						old_world;
-	static D3DMATRIX						old_view;
-	static D3DMATRIX						old_prj;
 
 	// shader system updates KJM v
 	static DWORD							Vertex_Shader;
@@ -786,7 +772,6 @@ protected:
 	static Vector4							Pixel_Shader_Constants[MAX_PIXEL_SHADER_CONSTANTS];
 
 	static LightEnvironmentClass*		Light_Environment;
-	static RenderInfoClass*				Render_Info;
 
 	static DWORD							Vertex_Processing_Behavior;
 
@@ -805,15 +790,7 @@ protected:
 	static bool								FogEnable;
 	static D3DCOLOR						FogColor;
 
-	static unsigned						matrix_changes;
-	static unsigned						material_changes;
-	static unsigned						vertex_buffer_changes;
-	static unsigned						index_buffer_changes;
-	static unsigned						light_changes;
-	static unsigned						texture_changes;
-	static unsigned						render_state_changes;
-	static unsigned						texture_stage_state_changes;
-	static unsigned						draw_calls;
+	static DX8FrameStatistics			FrameStatistics;
 	static bool								CurrentDX8LightEnables[4];
 
 	static unsigned long FrameCount;
@@ -1058,7 +1035,6 @@ WWINLINE void DX8Wrapper::Set_DX8_Texture_Stage_State(unsigned stage, D3DTEXTURE
 	DX8_RECORD_TEXTURE_STAGE_STATE_CHANGE();
 }
 
-
 WWINLINE void DX8Wrapper::Set_DX8_Texture(unsigned int stage, IDirect3DBaseTexture8* texture)
 {
   	if (stage >= MAX_TEXTURE_STAGES)
@@ -1166,7 +1142,6 @@ WWINLINE void DX8Wrapper::_Copy_DX8_Rects(
 		}
 	}
 }
-
 
 WWINLINE Vector4 DX8Wrapper::Convert_Color(unsigned color)
 {
@@ -1312,7 +1287,7 @@ WWINLINE void DX8Wrapper::Clamp_Color(Vector4& color)
 		and edi,ebx
 		cmp edi,edx		// if no less than 1.0 set to 1.0
 		cmovnb edi,edx
-		mov		dword ptr[esi],edi
+		mov dword ptr[esi],edi
 
 		mov edi,dword ptr[esi+4]
 		mov ebx,edi
@@ -1321,7 +1296,7 @@ WWINLINE void DX8Wrapper::Clamp_Color(Vector4& color)
 		and edi,ebx
 		cmp edi,edx		// if no less than 1.0 set to 1.0
 		cmovnb edi,edx
-		mov		dword ptr[esi+4],edi
+		mov dword ptr[esi+4],edi
 
 		mov edi,dword ptr[esi+8]
 		mov ebx,edi
@@ -1330,7 +1305,7 @@ WWINLINE void DX8Wrapper::Clamp_Color(Vector4& color)
 		and edi,ebx
 		cmp edi,edx		// if no less than 1.0 set to 1.0
 		cmovnb edi,edx
-		mov		dword ptr[esi+8],edi
+		mov dword ptr[esi+8],edi
 
 		mov edi,dword ptr[esi+12]
 		mov ebx,edi
@@ -1339,7 +1314,7 @@ WWINLINE void DX8Wrapper::Clamp_Color(Vector4& color)
 		and edi,ebx
 		cmp edi,edx		// if no less than 1.0 set to 1.0
 		cmovnb edi,edx
-		mov		dword ptr[esi+12],edi
+		mov dword ptr[esi+12],edi
 	}
 	return;
 	}
@@ -1496,17 +1471,6 @@ WWINLINE void DX8Wrapper::Get_Transform(D3DTRANSFORMSTATETYPE transform, Matrix4
 		break;
 	}
 }
-
-WWINLINE const D3DLIGHT9& DX8Wrapper::Peek_Light(unsigned index)
-{
-	return render_state.Lights[index];
-}
-
-WWINLINE bool DX8Wrapper::Is_Light_Enabled(unsigned index)
-{
-	return render_state.LightEnable[index];
-}
-
 
 WWINLINE void DX8Wrapper::Set_Render_State(const RenderStateStruct& state)
 {

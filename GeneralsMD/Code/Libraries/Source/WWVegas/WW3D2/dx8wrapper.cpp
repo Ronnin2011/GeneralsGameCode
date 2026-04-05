@@ -121,6 +121,9 @@ const int DEFAULT_RESOLUTION_HEIGHT = 480;
 const int DEFAULT_BIT_DEPTH = 32;
 const int DEFAULT_TEXTURE_BIT_DEPTH = 16;
 
+DX8FrameStatistics DX8Wrapper::FrameStatistics;
+static DX8FrameStatistics LastFrameStatistics;
+
 bool DX8Wrapper_IsWindowed = true;
 
 // FPU_PRESERVE
@@ -147,10 +150,6 @@ int								DX8Wrapper::TextureBitDepth							= DEFAULT_TEXTURE_BIT_DEPTH;
 bool								DX8Wrapper::IsWindowed									= false;
 D3DFORMAT					DX8Wrapper::DisplayFormat	= D3DFMT_UNKNOWN;
 
-D3DMATRIX						DX8Wrapper::old_world;
-D3DMATRIX						DX8Wrapper::old_view;
-D3DMATRIX						DX8Wrapper::old_prj;
-
 // shader system additions KJM v
 DWORD								DX8Wrapper::Vertex_Shader								= 0;
 DWORD								DX8Wrapper::Pixel_Shader								= 0;
@@ -159,7 +158,6 @@ Vector4							DX8Wrapper::Vertex_Shader_Constants[MAX_VERTEX_SHADER_CONSTANTS];
 Vector4							DX8Wrapper::Pixel_Shader_Constants[MAX_PIXEL_SHADER_CONSTANTS];
 
 LightEnvironmentClass*		DX8Wrapper::Light_Environment							= nullptr;
-RenderInfoClass*				DX8Wrapper::Render_Info									= nullptr;
 
 DWORD								DX8Wrapper::Vertex_Processing_Behavior				= 0;
 ZTextureClass*					DX8Wrapper::Shadow_Map[MAX_SHADOW_MAPS];
@@ -187,15 +185,6 @@ IDirect3DSurface8 *			DX8Wrapper::DefaultRenderTarget						= nullptr;
 IDirect3DSurface8 *			DX8Wrapper::DefaultDepthBuffer						= nullptr;
 bool								DX8Wrapper::IsRenderToTexture							= false;
 
-unsigned							DX8Wrapper::matrix_changes								= 0;
-unsigned							DX8Wrapper::material_changes							= 0;
-unsigned							DX8Wrapper::vertex_buffer_changes					= 0;
-unsigned							DX8Wrapper::index_buffer_changes                = 0;
-unsigned							DX8Wrapper::light_changes								= 0;
-unsigned							DX8Wrapper::texture_changes							= 0;
-unsigned							DX8Wrapper::render_state_changes						= 0;
-unsigned							DX8Wrapper::texture_stage_state_changes			= 0;
-unsigned							DX8Wrapper::draw_calls									= 0;
 unsigned							DX8Wrapper::_MainThreadID								= 0;
 bool								DX8Wrapper::CurrentDX8LightEnables[MAX_LIGHTS];
 bool								DX8Wrapper::IsDeviceLost;
@@ -214,25 +203,11 @@ D3DADAPTER_IDENTIFIER9		DX8Wrapper::CurrentAdapterIdentifier;
 
 bool								_DX8SingleThreaded										= false;
 
-unsigned							number_of_DX8_calls										= 0;
-static unsigned				last_frame_matrix_changes								= 0;
-static unsigned				last_frame_material_changes							= 0;
-static unsigned				last_frame_vertex_buffer_changes						= 0;
-static unsigned				last_frame_index_buffer_changes						= 0;
-static unsigned				last_frame_light_changes								= 0;
-static unsigned				last_frame_texture_changes								= 0;
-static unsigned				last_frame_render_state_changes						= 0;
-static unsigned				last_frame_texture_stage_state_changes				= 0;
-static unsigned				last_frame_number_of_DX8_calls						= 0;
-static unsigned				last_frame_draw_calls									= 0;
-
 // Ronin @bugfix 09/11/2025: Track BeginScene/EndScene pairing to prevent INVALIDCALL errors
 static bool s_inScene = false;
 
 // Ronin @feature 27/11/2025: Vertex declaration cache instance
 VertexDeclCache* DX8Wrapper::DeclCache = nullptr;
-
-static D3DDISPLAYMODE DesktopMode;
 
 static D3DPRESENT_PARAMETERS								_PresentParameters;
 static DynamicVectorClass<StringClass>					_RenderDeviceNameTable;
@@ -394,7 +369,7 @@ static void Ensure_Device_IB_Matches_Wrapper_Expected(const char* where)
 
 	if (boundIB != expectedIB) {
 		dev->SetIndices(expectedIB);
-		number_of_DX8_calls++;
+		DX8_RECORD_DX8_CALLS();
 
 		WWDEBUG_SAY((
 			"IA ENSURE(IB) [Frame %lu] where=%s expected=%p bound=%p type=%u",
@@ -643,7 +618,7 @@ void DX8Wrapper::Force_Stream0(IDirect3DVertexBuffer9* vb, UINT offset, UINT str
 	if (!dev) return;
 
 	dev->SetStreamSource(0, vb, offset, stride);
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 
 	// Keep wrapper bookkeeping consistent (stream0 only).
 	// NOTE: render_state.vertex_buffers[] tracks engine buffers, not raw D3D vbs,
@@ -731,10 +706,6 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 	for (unsigned light = 0; light < MAX_LIGHTS; ++light) {
 		CurrentDX8LightEnables[light] = false;
 	}
-
-	::ZeroMemory(&old_world, sizeof(D3DMATRIX));
-	::ZeroMemory(&old_view, sizeof(D3DMATRIX));
-	::ZeroMemory(&old_prj, sizeof(D3DMATRIX));
 
 	//old_vertex_shader; TODO
 	//old_sr_shader;
@@ -1041,7 +1012,7 @@ void DX8Wrapper::Reset_Pass_Render_States()
 	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
 	if (pDev) {
 		pDev->SetPixelShader(nullptr);
-		number_of_DX8_calls++;
+		DX8_RECORD_DX8_CALLS();
 	}
 
 	// ========== TEXTURE STAGE RESET ==========
@@ -1118,7 +1089,7 @@ void DX8Wrapper::Invalidate_Cached_Render_States()
 
 		if (pDev) {
 			pDev->SetTexture(a, nullptr);
-			number_of_DX8_calls++;
+			DX8_RECORD_DX8_CALLS();
 		}
 		if (Textures[a] != nullptr) {
 			Textures[a]->Release();
@@ -1231,8 +1202,6 @@ bool DX8Wrapper::Create_Device()
 		return false;
 	}
 
-#ifndef _XBOX
-
 // Ronin @bugfix 09/11/2025: DX9 should prefer hardware vertex processing for performance
 // Use MIXED for compatibility, or HARDWARE for max performance
 // NOTE: D3DCREATE_PUREDEVICE disabled - causes GetRenderState() to return garbage
@@ -1246,10 +1215,6 @@ bool DX8Wrapper::Create_Device()
 	{
 		Vertex_Processing_Behavior|=D3DCREATE_PUREDEVICE;
 	}*/
-
-#else // XBOX
-	Vertex_Processing_Behavior=D3DCREATE_PUREDEVICE;
-#endif // XBOX
 
 #ifdef CREATE_DX8_MULTI_THREADED
 	Vertex_Processing_Behavior|=D3DCREATE_MULTITHREADED;
@@ -2405,73 +2370,29 @@ bool DX8Wrapper::Test_Z_Mode(D3DFORMAT colorbuffer,D3DFORMAT backbuffer, D3DFORM
 
 void DX8Wrapper::Reset_Statistics()
 {
-	matrix_changes	= 0;
-	material_changes = 0;
-	vertex_buffer_changes = 0;
-	index_buffer_changes = 0;
-	light_changes = 0;
-	texture_changes = 0;
-	render_state_changes =0;
-	texture_stage_state_changes =0;
-	draw_calls =0;
-
-	number_of_DX8_calls = 0;
-	last_frame_matrix_changes = 0;
-	last_frame_material_changes = 0;
-	last_frame_vertex_buffer_changes = 0;
-	last_frame_index_buffer_changes = 0;
-	last_frame_light_changes = 0;
-	last_frame_texture_changes = 0;
-	last_frame_render_state_changes = 0;
-	last_frame_texture_stage_state_changes = 0;
-	last_frame_number_of_DX8_calls = 0;
-	last_frame_draw_calls =0;
+	FrameStatistics = DX8FrameStatistics();
+	LastFrameStatistics = DX8FrameStatistics();
 }
 
 void DX8Wrapper::Begin_Statistics()
 {
-	matrix_changes=0;
-	material_changes=0;
-	vertex_buffer_changes=0;
-	index_buffer_changes=0;
-	light_changes=0;
-	texture_changes = 0;
-	render_state_changes =0;
-	texture_stage_state_changes =0;
-	number_of_DX8_calls=0;
-	draw_calls=0;
-
+	FrameStatistics = DX8FrameStatistics();
 	// Ronin @feature 18/02/2026 DX9: Reset instancing frame statistics
 	TheDX8InstanceManager.Begin_Frame_Statistics();
 }
 
 void DX8Wrapper::End_Statistics()
 {
-	last_frame_matrix_changes=matrix_changes;
-	last_frame_material_changes=material_changes;
-	last_frame_vertex_buffer_changes=vertex_buffer_changes;
-	last_frame_index_buffer_changes=index_buffer_changes;
-	last_frame_light_changes=light_changes;
-	last_frame_texture_changes = texture_changes;
-	last_frame_render_state_changes = render_state_changes;
-	last_frame_texture_stage_state_changes = texture_stage_state_changes;
-	last_frame_number_of_DX8_calls=number_of_DX8_calls;
-	last_frame_draw_calls=draw_calls;
-
+	LastFrameStatistics = FrameStatistics;
 	// Ronin @feature 18/02/2026 DX9: Capture instancing frame statistics
 	TheDX8InstanceManager.End_Frame_Statistics();
 }
 
-unsigned DX8Wrapper::Get_Last_Frame_Matrix_Changes()			{ return last_frame_matrix_changes; }
-unsigned DX8Wrapper::Get_Last_Frame_Material_Changes()		{ return last_frame_material_changes; }
-unsigned DX8Wrapper::Get_Last_Frame_Vertex_Buffer_Changes()	{ return last_frame_vertex_buffer_changes; }
-unsigned DX8Wrapper::Get_Last_Frame_Index_Buffer_Changes()	{ return last_frame_index_buffer_changes; }
-unsigned DX8Wrapper::Get_Last_Frame_Light_Changes()			{ return last_frame_light_changes; }
-unsigned DX8Wrapper::Get_Last_Frame_Texture_Changes()			{ return last_frame_texture_changes; }
-unsigned DX8Wrapper::Get_Last_Frame_Render_State_Changes()	{ return last_frame_render_state_changes; }
-unsigned DX8Wrapper::Get_Last_Frame_Texture_Stage_State_Changes()	{ return last_frame_texture_stage_state_changes; }
-unsigned DX8Wrapper::Get_Last_Frame_DX8_Calls()					{ return last_frame_number_of_DX8_calls; }
-unsigned DX8Wrapper::Get_Last_Frame_Draw_Calls()				{ return last_frame_draw_calls; }
+const DX8FrameStatistics& DX8Wrapper::Get_Last_Frame_Statistics()
+{
+	return LastFrameStatistics;
+}
+
 unsigned long DX8Wrapper::Get_FrameCount() {return FrameCount;}
 
 void DX8_Assert()
@@ -2490,7 +2411,7 @@ void DX8Wrapper::Begin_Scene()
 	if (SUCCEEDED(hr)) {
 		// Successfully started a new scene
 		s_inScene = true;
-		number_of_DX8_calls++;
+		DX8_RECORD_DX8_CALLS();
 
 /*#ifdef _DEBUG
 		// VERIFY: State is clean after our cleanup
@@ -2521,13 +2442,13 @@ void DX8Wrapper::Begin_Scene()
 	// Handle error cases
 	if (hr == D3DERR_INVALIDCALL) {
 		s_inScene = true;  // Mark that we're in a scene
-		number_of_DX8_calls++;
+		DX8_RECORD_DX8_CALLS();
 		return;
 	}
 
 	// Other error - keep this one for actual errors
 	WWDEBUG_SAY(("BeginScene FAILED: 0x%08X (%s)", hr, DXGetErrorString9A(hr)));
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 }
 
 void DX8Wrapper::End_Scene(bool flip_frames)
@@ -2536,7 +2457,7 @@ void DX8Wrapper::End_Scene(bool flip_frames)
 
 	// Ronin @bugfix 09/11/2025: Reset scene tracking on successful EndScene
 	HRESULT hr = _Get_D3D_Device8()->EndScene();
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 
 	if (SUCCEEDED(hr)) {
 		s_inScene = false;
@@ -2555,7 +2476,8 @@ void DX8Wrapper::End_Scene(bool flip_frames)
 			WWPROFILE("DX8Device::Present()");
 			hr = _Get_D3D_Device8()->Present(nullptr, nullptr, nullptr, nullptr);
 		}
-		number_of_DX8_calls++;
+
+		DX8_RECORD_DX8_CALLS();
 
 		if (SUCCEEDED(hr)) {
 #ifdef EXTENDED_STATS
@@ -2573,7 +2495,7 @@ void DX8Wrapper::End_Scene(bool flip_frames)
 			// Only query cooperative level after Present reports DEVICELOST.
 			if (hr == D3DERR_DEVICELOST) {
 				HRESULT deviceState = _Get_D3D_Device8()->TestCooperativeLevel();
-				number_of_DX8_calls++;
+				DX8_RECORD_DX8_CALLS();
 
 				if (deviceState == D3DERR_DEVICENOTRESET) {
 					WWDEBUG_SAY(("Device ready for reset, attempting recovery..."));
@@ -2607,8 +2529,8 @@ void DX8Wrapper::End_Scene(bool flip_frames)
 
 	// Each frame, release all of the buffers and textures.
 	Set_Vertex_Buffer(nullptr);
-	Set_Index_Buffer(nullptr, 0);
-	for (int i = 0; i < CurrentCaps->Get_Max_Textures_Per_Pass(); ++i) Set_Texture(i, nullptr);
+	Set_Index_Buffer(nullptr,0);
+	for (int i=0;i<CurrentCaps->Get_Max_Textures_Per_Pass();++i) Set_Texture(i,nullptr);
 	Set_Material(nullptr);
 }
 
@@ -2647,7 +2569,7 @@ void DX8Wrapper::Flip_To_Primary()
 			} else {
 				WWDEBUG_SAY(("Flipping: %ld", FrameCount));
 				hr = _Get_D3D_Device8()->Present(nullptr, nullptr, nullptr, nullptr);
-				number_of_DX8_calls++;
+				DX8_RECORD_DX8_CALLS();
 
 				if (SUCCEEDED(hr)) {
 					IsDeviceLost=false;
@@ -2683,7 +2605,7 @@ void DX8Wrapper::Clear(bool clear_color, bool clear_z_stencil, const Vector3 &co
 	IDirect3DSurface8* depthbuffer;
 
 	_Get_D3D_Device8()->GetDepthStencilSurface(&depthbuffer);
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 
 	if (depthbuffer)
 	{
@@ -2967,7 +2889,7 @@ void DX8Wrapper::Draw_Sorting_IB_VB(
 		(unsigned short)drawStartIndex,
 		polygon_count);
 
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 
 #ifdef WWDEBUG
 	// @debug Ronin 13/01/2026 Sorting DIP result + conditional diagnostics
@@ -3107,7 +3029,7 @@ void DX8Wrapper::Draw(
 					drawStartIndex,
 					polygon_count);
 
-				number_of_DX8_calls++; // mirror DX8CALL behavior (keeps stats sane) || Ronin @feauture 16/02/2026: **Revisit required**
+				DX8_RECORD_DX8_CALLS(); // mirror DX8CALL behavior (keeps stats sane) || Ronin @feauture 16/02/2026: **Revisit required**
 
 			}
 			break;
@@ -4270,7 +4192,7 @@ SurfaceClass * DX8Wrapper::_Get_DX8_Back_Buffer(unsigned int num)
 	DX8_THREAD_ASSERT();
 	if (_Get_D3D_Device8()) {
 		_Get_D3D_Device8()->SetSamplerState(stage, type, value);
-		number_of_DX8_calls++;
+		DX8_RECORD_DX8_CALLS();
 	}
 }*/
 
@@ -4280,7 +4202,7 @@ DX8Wrapper::Create_Render_Target (int width, int height, WW3DFormat format)
 {
 	DX8_THREAD_ASSERT();
 	DX8_Assert();
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 
 	// Use the current display format if format isn't specified
 	if (format==WW3D_FORMAT_UNKNOWN) {
@@ -4347,7 +4269,7 @@ void DX8Wrapper::Create_Render_Target
 {
 	DX8_THREAD_ASSERT();
 	DX8_Assert();
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 
 	// Use the current display format if format isn't specified
 	if (format==WW3D_FORMAT_UNKNOWN)
@@ -4486,7 +4408,6 @@ swap_chain->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO, &render_target);
 void
 DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default_depth_buffer)
 {
-//#ifndef _XBOX
 	DX8_THREAD_ASSERT();
 	DX8_Assert();
 
@@ -4612,7 +4533,6 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 
 	IsRenderToTexture = false;
 	return ;
-//#endif // XBOX
 }
 
 
@@ -4626,7 +4546,6 @@ void DX8Wrapper::Set_Render_Target
 	IDirect3DSurface8* depth_buffer
 )
 {
-//#ifndef _XBOX
 	DX8_THREAD_ASSERT();
 	DX8_Assert();
 
@@ -4735,7 +4654,6 @@ void DX8Wrapper::Set_Render_Target
 	}
 
 	IsRenderToTexture=true;
-//#endif // XBOX
 }
 
 
@@ -4777,7 +4695,7 @@ void DX8Wrapper::Flush_DX8_Resource_Manager(unsigned int bytes)
 unsigned int DX8Wrapper::Get_Free_Texture_RAM()
 {
 	DX8_Assert();
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 	return DX8Wrapper::_Get_D3D_Device8()->GetAvailableTextureMem();
 }
 
@@ -4793,7 +4711,7 @@ void DX8Wrapper::Set_Gamma(float gamma,float bright,float contrast,bool calibrat
 	float oo_gamma=1.0f/gamma;
 
 	DX8_Assert();
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 
 	DWORD flag=(calibrate?D3DSGR_CALIBRATE:D3DSGR_NO_CALIBRATION);
 
@@ -5830,7 +5748,7 @@ void DX8Wrapper::Set_Vertex_Declaration(IDirect3DVertexDeclaration9* decl)
 		pDev->GetFVF(&currentFVF);
 		if (currentFVF != 0) {
 			pDev->SetFVF(0);
-			number_of_DX8_calls++;
+			DX8_RECORD_DX8_CALLS();
 #ifdef _DEBUG
 			WWDEBUG_SAY(("Wrapper: cleared FVF=0x%08X before binding decl=%p", currentFVF, decl));
 #endif
@@ -5842,7 +5760,7 @@ void DX8Wrapper::Set_Vertex_Declaration(IDirect3DVertexDeclaration9* decl)
 		WWDEBUG_SAY(("SetVertexDeclaration(%p) failed: 0x%08X", decl, hr));
 		return;
 	}
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 
 	// Track state
 	render_state.currentDecl = decl;
@@ -5885,7 +5803,7 @@ void DX8Wrapper::BindLayoutFVF(DWORD fvf, const char* owner)
 	number_of_DX8_calls += 2;
 
 	HRESULT hr = pDev->SetFVF(fvf);
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 
 #ifdef WWDEBUG
 	if (FAILED(hr)) {
@@ -5915,7 +5833,7 @@ void DX8Wrapper::BindLayoutDecl(IDirect3DVertexDeclaration9* decl, const char* o
 
 	// Bind declaration (DX9 ignores FVF when decl is active; GetFVF may remain non-zero)
 	HRESULT hr = pDev->SetVertexDeclaration(decl);
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 
 	if (FAILED(hr)) {
 		WWDEBUG_SAY(("BindLayoutDecl: SetVertexDeclaration(%p) failed: 0x%08X", decl, hr));

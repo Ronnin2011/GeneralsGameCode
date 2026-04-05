@@ -131,7 +131,8 @@ public:
 	virtual void forceRedraw() = 0;
 
 	virtual void lookAt( const Coord3D *o );														///< Center the view on the given coordinate
-	virtual void initHeightForMap() {};														///<  Init the camera height for the map at the current position.
+	virtual void initHeightForMap() {};														///< Init the camera height for the map at the current position.
+	virtual void resetPivotToGround() {};													///< Set the camera pivot to the terrain height at the current position.
 	virtual void scrollBy( const Coord2D *delta );														///< Shift the view by the given delta
 
 	virtual void moveCameraTo(const Coord3D *o, Int frames, Int shutter, Bool orient, Real easeIn=0.0f, Real easeOut=0.0f) { lookAt( o ); }
@@ -204,6 +205,7 @@ public:
 	Bool userSetZoomToDefault()                          { return doUserAction(&View::setZoomToDefault); }
 	Bool userSetFieldOfView(Real angle)                  { return doUserAction(&View::setFieldOfView, angle); }
 	Bool userLookAt(const Coord3D *o)                    { return doUserAction(&View::lookAt, o); }
+	Bool userResetPivotToGround()                        { return doUserAction(&View::resetPivotToGround); }
 	Bool userScrollBy(const Coord2D *delta)              { return doUserAction(&View::scrollBy, delta); }
 	Bool userSetLocation(const ViewLocation *location)   { return doUserAction(&View::setLocation, location); }
 	Bool userSetCameraLock(ObjectID id)                  { return doUserAction(&View::setCameraLock, id); }
@@ -337,43 +339,41 @@ protected:
 // ------------------------------------------------------------------------------------------------
 class ViewLocation
 {
-	friend class View;
-	friend class LookAtTranslator;
+public:
 
-	protected:
-		Bool m_valid;																								///< Is this location valid
-		Coord3D m_pos;																							///< Position of this view, in world coordinates
-		Real m_angle;																								///< Angle at which view has been rotated about the Z axis
-		Real m_pitch;																								///< Angle at which view has been rotated about the Y axis
-		Real m_zoom;																								///< Current zoom value
+	ViewLocation()
+	{
+		m_valid = false;
+		m_pos.zero();
+		m_angle = 0.0f;
+		m_pitch = 0.0f;
+		m_zoom = 0.0f;
+	}
 
-	public:
+	Bool isValid() const { return m_valid; }
+	const Coord3D& getPosition() const { return m_pos; }
+	Real getAngle() const { return m_angle; }
+	Real getPitch() const { return m_pitch; }
+	Real getZoom() const { return m_zoom; }
 
-		ViewLocation()
-		{
-			m_valid = FALSE;
-			m_pos.zero();
-			m_angle = 0.0f;
-			m_pitch = 0.0f;
-			m_zoom = 0.0f;
-		}
+	void init(Real x, Real y, Real z, Real angle, Real pitch, Real zoom)
+	{
+		m_valid = true;
+		m_pos.x = x;
+		m_pos.y = y;
+		m_pos.z = z;
+		m_angle = angle;
+		m_pitch = pitch;
+		m_zoom = zoom;
+	}
 
-		const Coord3D& getPosition() const { return m_pos; }
-		Bool isValid() const { return m_valid; }
-		Real getAngle() const { return m_angle; }
-		Real getPitch() const { return m_pitch; }
-		Real getZoom() const { return m_zoom; }
+private:
 
-		void init(Real x, Real y, Real z, Real angle, Real pitch, Real zoom)
-		{
-			m_pos.x = x;
-			m_pos.y = y;
-			m_pos.z = z;
-			m_angle = angle;
-			m_pitch = pitch;
-			m_zoom = zoom;
-			m_valid = true;
-		}
+	Bool m_valid;					///< Is this location valid
+	Coord3D m_pos;				///< Position of this view, in world coordinates
+	Real m_angle;					///< Angle at which view has been rotated about the Z axis
+	Real m_pitch;					///< Angle at which view has been rotated about the Y axis
+	Real m_zoom;					///< Current zoom value
 };
 
 // TheSuperHackers @feature bobtista 31/01/2026
