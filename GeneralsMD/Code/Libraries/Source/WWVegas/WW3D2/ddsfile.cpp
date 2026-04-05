@@ -78,6 +78,23 @@ DDSFileClass::DDSFileClass(const char* name,unsigned reduction_factor)
 		WWASSERT("File loading failed trying to read header");
 		return;
 	}
+
+	// Ronin @bugfix 30/03/2026 HD texture override can resolve a DDS request to a TGA file.
+	// Bail out cleanly so the loader falls back to the uncompressed TGA path.
+	if (header[0] != 'D' || header[1] != 'D' || header[2] != 'S' || header[3] != ' ')
+	{
+		WWDEBUG_SAY(("DDSFileClass rejected %s because header was %02X %02X %02X %02X",
+			Name,
+			(unsigned char)header[0],
+			(unsigned char)header[1],
+			(unsigned char)header[2],
+			(unsigned char)header[3]));
+		file->Close();
+		return;
+	}
+
+	WWDEBUG_SAY(("DDSFileClass accepted %s as DDS", Name));
+
 	// Now, we read DDSURFACEDESC2 defining the compressed data
 	read_bytes=file->Read(&SurfaceDesc,sizeof(LegacyDDSURFACEDESC2));
 	// Verify the structure size matches the read size

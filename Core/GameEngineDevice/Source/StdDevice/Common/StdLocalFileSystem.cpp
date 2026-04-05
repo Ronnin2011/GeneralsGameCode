@@ -159,6 +159,10 @@ File * StdLocalFileSystem::openFile(const Char *filename, Int access, size_t buf
 		deleteInstance(file);
 		file = nullptr;
 	} else {
+		WWDEBUG_SAY(("StdLocalFileSystem::openFile OPEN_LOCAL requested=%s resolved=%s access=%d",
+			filename,
+			path.string().c_str(),
+			access));
 		file->deleteOnClose();
 	}
 

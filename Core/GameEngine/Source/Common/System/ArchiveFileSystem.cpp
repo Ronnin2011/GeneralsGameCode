@@ -296,7 +296,18 @@ File * ArchiveFileSystem::openFile(const Char *filename, Int access, FileInstanc
 	if (archive == nullptr)
 		return nullptr;
 
-	return archive->openFile(filename, access);
+	File* file = archive->openFile(filename, access);
+	if (file != nullptr)
+	{
+		// @bugfix Ronin 01/04/2026 Log successful archive file opens to distinguish archive loads from loose-file loads.
+		DEBUG_LOG(("ArchiveFileSystem::openFile OPEN_ARCHIVE path=%s archive=%s instance=%u access=%d",
+			filename,
+			archive->getName().str(),
+			UnsignedInt(instance),
+			access));
+	}
+
+	return file;
 }
 
 Bool ArchiveFileSystem::getFileInfo(const AsciiString& filename, FileInfo *fileInfo, FileInstance instance) const

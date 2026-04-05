@@ -52,8 +52,6 @@ File * Win32LocalFileSystem::openFile(const Char *filename, Int access, size_t b
 	}
 
 	if (access & File::WRITE) {
-		// if opening the file for writing, we need to make sure the directory is there
-		// before we try to create the file.
 		AsciiString string;
 		string = filename;
 		AsciiString token;
@@ -68,34 +66,17 @@ File * Win32LocalFileSystem::openFile(const Char *filename, Int access, size_t b
 		}
 	}
 
-	// TheSuperHackers @fix Mauller 21/04/2025 Create new file handle when necessary to prevent memory leak
-	Win32LocalFile *file = newInstance( Win32LocalFile );
+	Win32LocalFile* file = newInstance(Win32LocalFile);
 
 	if (file->open(filename, access, bufferSize) == FALSE) {
 		deleteInstance(file);
 		file = nullptr;
-	} else {
+	}
+	else {
+		// @bugfix Ronin 01/04/2026 Log successful local file opens in the Win32 local filesystem backend.
+		WWDEBUG_SAY(("Win32LocalFileSystem::openFile OPEN_LOCAL path=%s access=%d", filename, access));
 		file->deleteOnClose();
 	}
-
-// this will also need to play nice with the STREAMING type that I added, if we ever enable this
-
-// srj sez: this speeds up INI loading, but makes BIG files unusable.
-// don't enable it without further tweaking.
-//
-// unless you like running really slowly.
-//	if (!(access&File::WRITE)) {
-//		// Return a ramfile.
-//		RAMFile *ramFile = newInstance( RAMFile );
-//		if (ramFile->open(file)) {
-//			file->close(); // is deleteonclose, so should delete.
-//			ramFile->deleteOnClose();
-//			return ramFile;
-//		}	else {
-//			ramFile->close();
-//			deleteInstance(ramFile);
-//		}
-//	}
 
 	return file;
 }

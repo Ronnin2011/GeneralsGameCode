@@ -58,6 +58,35 @@
 
 #define PATHFIND_CLIFF_SLOPE_LIMIT_F	9.8f
 
+static Int getSupportedTextureSheetWidth(Int tileWidth, Int tileHeight)
+{
+	Int supportedWidth = WorldHeightMap::getMaxTextureSheetWidthInTiles();
+	if (tileWidth < supportedWidth) {
+		supportedWidth = tileWidth;
+	}
+	if (tileHeight < supportedWidth) {
+		supportedWidth = tileHeight;
+	}
+	return supportedWidth;
+}
+
+// Add this new method.
+/*static*/ Int WorldHeightMap::getMaxTextureSheetWidthInTiles()
+{
+	// @feature Ronin 04/04/2026 Allow terrain sheets larger than 10x10 up to the atlas-supported width.
+	Int maxWidthFromTilePool = 0;
+	while ((maxWidthFromTilePool + 1) * (maxWidthFromTilePool + 1) <= NUM_SOURCE_TILES) {
+		++maxWidthFromTilePool;
+	}
+
+	const Int maxWidthFromTexture = TEXTURE_WIDTH / (TILE_PIXEL_EXTENT + TILE_OFFSET);
+	if (maxWidthFromTexture < maxWidthFromTilePool) {
+		return maxWidthFromTexture;
+	}
+
+	return maxWidthFromTilePool;
+}
+
 // -----------------------------------------------------------
 static AsciiString validateName(AsciiString n, Int flags)
 {
@@ -1016,9 +1045,9 @@ void WorldHeightMap::readTexClass(TXTextureClass *texClass, TileData **tileData)
 		if (numTiles >= texClass->numTiles) {
 			numTiles = texClass->numTiles;
 			Int width;
-			for (width = 10; width >= 1; width--) {
-				if (numTiles >= width*width) {
-					numTiles = width*width;
+			for (width = WorldHeightMap::getMaxTextureSheetWidthInTiles(); width >= 1; width--) {
+				if (numTiles >= width * width) {
+					numTiles = width * width;
 					break;
 				}
 			}
@@ -1308,10 +1337,10 @@ Int WorldHeightMap::countTiles(InputStream *pStr, Bool *halfTile)
 	if (halfTile) {
 		*halfTile = false;
 	}
-	Int len = pStr->read(&hdr,sizeof(hdr));
-	if (len!=sizeof(hdr)) return(0);
-	Int tileWidth = hdr.imageWidth/TILE_PIXEL_EXTENT;
-	Int tileHeight = hdr.imageHeight/TILE_PIXEL_EXTENT;
+	Int len = pStr->read(&hdr, sizeof(hdr));
+	if (len != sizeof(hdr)) return(0);
+	Int tileWidth = hdr.imageWidth / TILE_PIXEL_EXTENT;
+	Int tileHeight = hdr.imageHeight / TILE_PIXEL_EXTENT;
 
 	if (hdr.colorMapType != 0) {
 		return(0); // we don't do indexed at this time. jba.
@@ -1322,22 +1351,13 @@ Int WorldHeightMap::countTiles(InputStream *pStr, Bool *halfTile)
 
 	if (hdr.pixelDepth < 24) return(false);
 	if (hdr.pixelDepth > 32) return(false);
-	// 3x3 gives 9,
-	// 2x2 gives 4,
-	// 1x1 gives 1,
-	// else 0;
-	if (tileWidth>10 || tileHeight>10) return(0);  // don't do huge images, or bad files.
-	if (tileWidth>=10 && tileHeight >=10) return(100);
-	if (tileWidth>=9 && tileHeight >=9) return(81);
-	if (tileWidth>=8 && tileHeight >=8) return(64);
-	if (tileWidth>=7 && tileHeight >=7) return(49);
-	if (tileWidth>=6 && tileHeight >=6) return(36);
-	if (tileWidth>=5 && tileHeight >=5) return(25);
-	if (tileWidth>=4 && tileHeight >=4) return(16);
-	if (tileWidth>=3 && tileHeight >=3) return(9);
-	if (tileWidth>=2 && tileHeight >=2) return(4);
-	if (tileWidth>=1 && tileHeight >=1) return(1);
-	if (halfTile && hdr.imageHeight==TILE_PIXEL_EXTENT/2 && hdr.imageWidth==TILE_PIXEL_EXTENT/2) {
+
+	const Int supportedWidth = getSupportedTextureSheetWidth(tileWidth, tileHeight);
+	if (supportedWidth >= 1) {
+		return supportedWidth * supportedWidth;
+	}
+
+	if (halfTile && hdr.imageHeight == TILE_PIXEL_EXTENT / 2 && hdr.imageWidth == TILE_PIXEL_EXTENT / 2) {
 		*halfTile = true;
 		return 1;
 	}
@@ -1358,7 +1378,7 @@ Bool WorldHeightMap::readTiles(InputStream *pStr, TileData **tiles, Int numRows)
 		tileWidth = 1;
 	}
 
-	if (tileWidth<numRows && tileHeight<numRows) {
+	if (tileWidth < numRows || tileHeight < numRows) {
 		return(false);
 	}
 	Bool compressed = false;

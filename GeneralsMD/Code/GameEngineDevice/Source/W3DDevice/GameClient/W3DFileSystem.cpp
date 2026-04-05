@@ -41,9 +41,11 @@
 // #define MAINTAIN_LEGACY_FILES
 
 #include "Common/ArchiveFile.h"
+#include "Common/ArchiveFileSystem.h"
 #include "Common/Debug.h"
 #include "Common/file.h"
 #include "Common/FileSystem.h"
+#include "Common/LocalFileSystem.h"
 #include "Common/GlobalData.h"
 #include "Common/MapObject.h"
 #include "Common/Registry.h"
@@ -139,6 +141,30 @@ static GameFileType getFileType( char const *filename )
 	return FILE_TYPE_COMPLETELY_UNKNOWN;  // MBL FILE_TYPE_UNKNOWN change due to compile error
 }
 
+static void Build_Image_Path(char* outPath, size_t outPathSize, const char* basePath, const char* filename)
+{
+	strlcpy(outPath, basePath, outPathSize);
+	strlcat(outPath, filename, outPathSize);
+}
+
+static void Build_HD_Image_Override_Path(char* outPath, size_t outPathSize, const char* filename)
+{
+	char overrideFilename[_MAX_PATH];
+	strlcpy(overrideFilename, filename, ARRAY_SIZE(overrideFilename));
+
+	char* extension = strrchr(overrideFilename, '.');
+	if (extension != nullptr)
+	{
+		strcpy(extension, ".tga");
+	}
+	else
+	{
+		strlcat(overrideFilename, ".tga", ARRAY_SIZE(overrideFilename));
+	}
+
+	Build_Image_Path(outPath, outPathSize, HD_TGA_DIR_PATH, overrideFilename);
+}
+
 //-------------------------------------------------------------------------------------------------
 /**
 	Sets the file name, and finds the GDI asset if present.
@@ -177,18 +203,33 @@ char const * GameFileClass::Set_Name( char const *filename )
 
 	}
 	// We need to be able to grab images from a localization dir, because Art has a fetish for baked-in text.  Munkee.
-	else if( isImageFileType(fileType) )
+	/*else if (isImageFileType(fileType))
 	{
 		static const char *localizedPathFormat = "Data/%s/Art/Textures/";
 		sprintf(m_filePath,localizedPathFormat, GetRegistryLanguage().str());
 		strlcat(m_filePath, filename, ARRAY_SIZE(m_filePath));
 
-	}
+	}*/
 
 	// see if the file exists
 	m_fileExists = TheFileSystem->doesFileExist( m_filePath );
 
+	// Ronin @feature 30/03/2026 HD texture override: prefer Art/Textures/HD/*.tga before standard texture lookup.
+	if (m_fileExists == FALSE && isImageFileType(fileType))
+	{
+		Build_HD_Image_Override_Path(m_filePath, ARRAY_SIZE(m_filePath), filename);
+		m_fileExists = TheFileSystem->doesFileExist(m_filePath);
+	}
 
+	// Ronin @bugfix 02/04/2026 Restore localized image lookup before generic Art/Textures lookup to preserve Zero Hour localized asset resolution.
+	if (m_fileExists == FALSE && isImageFileType(fileType))
+	{
+		static const char* localizedPathFormat = "Data/%s/Art/Textures/";
+		sprintf(m_filePath, localizedPathFormat, GetRegistryLanguage().str());
+		strlcat(m_filePath, filename, ARRAY_SIZE(m_filePath));
+
+		m_fileExists = TheFileSystem->doesFileExist(m_filePath);
+	}
 
 	// Now try the main lookup of hitting local files and big files
 	if( m_fileExists == FALSE )
@@ -197,7 +238,7 @@ char const * GameFileClass::Set_Name( char const *filename )
 		if( fileType == FILE_TYPE_W3D )
 		{
 
-			static_assert(ARRAY_SIZE(m_filePath) >= ARRAY_SIZE(W3D_DIR_PATH), "Incorrect array size");
+			static_assert(ARRAY_SIZE(m_filePath) >= ARRAY_SIZE(W3D_DIR_PATH), "Incorrect array size"); 
 			strcpy( m_filePath, W3D_DIR_PATH );
 			strlcat(m_filePath, filename, ARRAY_SIZE(m_filePath));
 
@@ -300,20 +341,21 @@ char const * GameFileClass::Set_Name( char const *filename )
 
 
 	// We need to be able to temporarily copy over the map preview for whichever directory it came from
-	if( m_fileExists == FALSE  && TheGlobalData)
+	if (m_fileExists == FALSE && TheGlobalData)
 	{
-		if( fileType == FILE_TYPE_TGA ) // just TGA, since we don't do dds previews
+		if (fileType == FILE_TYPE_TGA) // just TGA, since we don't do dds previews
 		{
-			sprintf(m_filePath,MAP_PREVIEW_DIR_PATH, TheGlobalData->getPath_UserData().str());
+			sprintf(m_filePath, MAP_PREVIEW_DIR_PATH, TheGlobalData->getPath_UserData().str());
 			strlcat(m_filePath, filename, ARRAY_SIZE(m_filePath));
 
 		}
 
 		// see if the file exists
-		m_fileExists = TheFileSystem->doesFileExist( m_filePath );
+		m_fileExists = TheFileSystem->doesFileExist(m_filePath);
 
 	}
 
+	WWDEBUG_SAY(("GameFileClass::Set_Name request=%s resolved=%s exists=%d", m_filename, m_filePath, m_fileExists));
 	return m_filename;
 
 }
@@ -359,7 +401,11 @@ int  GameFileClass::Open(int rights)
 		return(false);
 	}
 
-	m_theFile = TheFileSystem->openFile( m_filePath, File::READ | File::BINARY );
+	ArchiveFile* archive = (TheArchiveFileSystem != nullptr) ? TheArchiveFileSystem->getArchiveFile(m_filePath) : nullptr;
+	Bool localExists = (TheLocalFileSystem != nullptr) ? TheLocalFileSystem->doesFileExist(m_filePath) : FALSE;
+	WWDEBUG_SAY(("GameFileClass::Open path=%s local=%d archive=%s", m_filePath, localExists, archive ? archive->getName().str() : "<none>"));
+
+	m_theFile = TheFileSystem->openFile(m_filePath, File::READ | File::BINARY);
 
 	return (m_theFile != nullptr);
 }

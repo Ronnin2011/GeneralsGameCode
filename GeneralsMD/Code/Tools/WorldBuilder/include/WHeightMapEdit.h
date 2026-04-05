@@ -39,7 +39,9 @@ public:
 	~CProcessNode(void) { };
 };
 
-#define MAX_TILES_PER_CLASS 100
+// @feature Ronin 04/04/2026 Allow a single terrain class to use the full source tile budget.
+#define MAX_TILES_PER_CLASS NUM_SOURCE_TILES
+
 /// Struct in memory.
 typedef struct
 {

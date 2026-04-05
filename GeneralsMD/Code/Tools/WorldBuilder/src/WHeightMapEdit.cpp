@@ -348,27 +348,26 @@ void WorldHeightMapEdit::loadBitmap(char *path, const char *uiName)
 	{
 		return;
 	}
-	InputStream *pStrm = &stream;
+	InputStream* pStrm = &stream;
 
 	Int numTiles = WorldHeightMap::countTiles(pStrm);
-	int width;
-	Bool ok=false;
+	Bool ok = false;
 	if (numTiles < 1) {
 		return;
 	}
+
+	const Int width = getTextureClassWidthFromTileCount(numTiles);
+	if (width < 1) {
+		return;
+	}
+	numTiles = width * width;
 
 	stream.rewind();
 
 	Int texToUse = m_numGlobalTextureClasses;
 	Int j;
-	for (j=0; j<MAX_TILES_PER_CLASS; j++) {
+	for (j = 0; j < MAX_TILES_PER_CLASS; j++) {
 		REF_PTR_RELEASE(m_globalTextureClasses[texToUse].tiles[j]);
-	}
-	for (width = 10; width >= 1; width--) {
-		if (numTiles >= width*width) {
-			numTiles = width*width;
-			break;
-		}
 	}
 
 #define BLEND_TILE_PREFIX "TE"
@@ -378,7 +377,7 @@ void WorldHeightMapEdit::loadBitmap(char *path, const char *uiName)
 	m_globalTextureClasses[texToUse].width = width;
 	m_globalTextureClasses[texToUse].name = path;
 	m_globalTextureClasses[texToUse].uiName = uiName;
-	Bool isBlend = (0==strncmp(BLEND_TILE_PREFIX, uiName, strlen(BLEND_TILE_PREFIX)));
+	Bool isBlend = (0 == strncmp(BLEND_TILE_PREFIX, uiName, strlen(BLEND_TILE_PREFIX)));
 	m_globalTextureClasses[texToUse].isBlendEdgeTile = isBlend;
 	m_globalTextureClasses[texToUse].filePath = path;
 	m_numGlobalTextureClasses++;
@@ -446,64 +445,48 @@ void WorldHeightMapEdit::loadDirectoryOfImages(const char *pFilePath)
 	* TerrainType entity (i.e. tga file)*/
 void WorldHeightMapEdit::loadImagesFromTerrainType( TerrainType *terrain )
 {
-
-	// sanity
-	if( terrain == nullptr )
+	if (terrain == nullptr)
 		return;
 
-	char buffer[ _MAX_PATH ];
+	char buffer[_MAX_PATH];
+	snprintf(buffer, ARRAY_SIZE(buffer), "%s%s", TERRAIN_TGA_DIR_PATH, terrain->getTexture().str());
+	AsciiString texturePath(buffer);
 
-	// build path to texture file
-	snprintf( buffer, ARRAY_SIZE(buffer), "%s%s", TERRAIN_TGA_DIR_PATH, terrain->getTexture().str() );
-
-	// create ascii string for texture path
-	AsciiString texturePath( buffer );
-
-	// open file
 	CachedFileInputStream stream;
-	if( !stream.open( texturePath ) )
+	if (!stream.open(texturePath))
 		return;
 
-	// get pointer to stream
-	InputStream *pStrm = &stream;
+	InputStream* pStrm = &stream;
 
-	// could the tiles in the file
-	Int numTiles = WorldHeightMap::countTiles( pStrm );
-	Int width;
-	if( numTiles < 1 )
+	Int numTiles = WorldHeightMap::countTiles(pStrm);
+	if (numTiles < 1)
 		return;
 
-	// rewind the stream
+	const Int width = getTextureClassWidthFromTileCount(numTiles);
+	if (width < 1) {
+		return;
+	}
+	numTiles = width * width;
+
 	stream.rewind();
 
-	// setup our entry in the global textures classes
 	Int texToUse = m_numGlobalTextureClasses;
 	Int j;
-	for( j = 0; j < MAX_TILES_PER_CLASS; j++ )
-		REF_PTR_RELEASE( m_globalTextureClasses[ texToUse ].tiles[ j ] );
+	for (j = 0; j < MAX_TILES_PER_CLASS; j++)
+		REF_PTR_RELEASE(m_globalTextureClasses[texToUse].tiles[j]);
 
-	for (width = 10; width >= 1; width--) {
-		if (numTiles >= width*width) {
-			numTiles = width*width;
-			break;
-		}
-	}
-
-// -->
-
-	// read the tiles out of .tga file
-	Bool ok = readTiles( pStrm, m_globalTextureClasses[ texToUse ].tiles, width );
-	if( !ok )
+	Bool ok = readTiles(pStrm, m_globalTextureClasses[texToUse].tiles, width);
+	if (!ok)
 		return;
-	m_globalTextureClasses[ texToUse ].name = terrain->getName();
-	m_globalTextureClasses[ texToUse ].numTiles = numTiles;
-	m_globalTextureClasses[ texToUse ].width = width;
-	m_globalTextureClasses[ texToUse ].filePath = texturePath;
-	m_globalTextureClasses[ texToUse ].uiName = terrain->getName();
-	m_globalTextureClasses[ texToUse ].terrainType = terrain;
-	m_globalTextureClasses[ texToUse ].isBlendEdgeTile = terrain->isBlendEdge();
-	m_numGlobalTextureClasses++;
 
+	m_globalTextureClasses[texToUse].name = terrain->getName();
+	m_globalTextureClasses[texToUse].numTiles = numTiles;
+	m_globalTextureClasses[texToUse].width = width;
+	m_globalTextureClasses[texToUse].filePath = texturePath;
+	m_globalTextureClasses[texToUse].uiName = terrain->getName();
+	m_globalTextureClasses[texToUse].terrainType = terrain;
+	m_globalTextureClasses[texToUse].isBlendEdgeTile = terrain->isBlendEdge();
+	m_numGlobalTextureClasses++;
 }
 
 UnsignedByte * WorldHeightMapEdit::getPointerToClassTileData(Int texClass)
@@ -1609,7 +1592,7 @@ void WorldHeightMapEdit::showTileStatusInfo(void)
 {
 	CString message;
 	Int tilesPerRow = TEXTURE_WIDTH/(2*TILE_PIXEL_EXTENT+TILE_OFFSET);
-	Int availableTiles = 4 * tilesPerRow * tilesPerRow;
+	Int availableTiles = tilesPerRow * tilesPerRow;
 	Int availableBlends = NUM_BLEND_TILES;
 
 	CString tmp;
@@ -2202,6 +2185,16 @@ static const Real TEX_PER_CELL = 32.0f/TEXTURE_WIDTH; // we use 32 texels per ce
 static const Real MIN_U_SPAN = TEX_PER_CELL * 0.4f;
 
 static Bool debugToggle = true;
+
+static Int getTextureClassWidthFromTileCount(Int numTiles)
+{
+	for (Int width = WorldHeightMap::getMaxTextureSheetWidthInTiles(); width >= 1; --width) {
+		if (numTiles >= width * width) {
+			return width;
+		}
+	}
+	return 0;
+}
 
 /******************************************************************
 	doCliffAdjustment

@@ -317,6 +317,7 @@ public:  // modify height value
 		if ((ndx>=0) && (ndx<m_dataSize) && m_data) m_data[ndx]=height;
 	};
 public: // Read tile utilities. jba [7/9/2003]
+	static Int getMaxTextureSheetWidthInTiles();
 	static Bool readTiles(InputStream *pStrm, TileData **tiles, Int numRows);
 	static Int countTiles(InputStream *pStrm, Bool *halfTile=nullptr);
 

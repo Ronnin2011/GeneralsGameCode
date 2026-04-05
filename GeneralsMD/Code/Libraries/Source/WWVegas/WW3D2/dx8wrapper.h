@@ -41,6 +41,12 @@
 
 #pragma once
 
+ // Ronin @build 30/03/2026 DX9: D3DX effect handles must be large-address-safe in LAA builds.
+#ifndef D3DXFX_LARGEADDRESS_HANDLE
+#define D3DXFX_LARGEADDRESS_HANDLE
+#endif
+
+
 // Ronin 19/10/2025 DX8-to-DX9 compatibility layer must be included before always.h to block DX8 headers.
 #include <d3d9.h>  // Native DX9
 #include <d3dx9.h> // Ronin @bugfix 02/11/2025 DX9: Required for D3DXLoadSurfaceFromSurface

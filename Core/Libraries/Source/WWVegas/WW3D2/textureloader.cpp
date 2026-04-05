@@ -960,6 +960,8 @@ void TextureLoader::Load_Thumbnail(TextureBaseClass *tc)
 	// apply thumbnail to texture
 	if (tc->Get_Asset_Type()==TextureBaseClass::TEX_REGULAR)
 	{
+		WWDEBUG_SAY(("TextureLoader::Load_Thumbnail APPLY_THUMB path=%s tex=%p init=%d d3d=%p",
+			tc->Get_Full_Path().str(), tc, 0, d3d_texture));
 		tc->Apply_New_Surface(d3d_texture, false);
 	}
 
@@ -1291,7 +1293,19 @@ void TextureLoadTaskClass::Apply(bool initialize)
 	for (unsigned i=0;i<MipLevelCount;++i) {
 		WWASSERT(LockedSurfacePtr[i]==nullptr);
 	}
-
+	WWDEBUG_SAY(("TextureLoadTaskClass::Apply APPLY_FULL path=%s tex=%p init=%d d3d=%p state=%d type=%d priority=%d mips=%u size=%ux%u format=%d reduction=%u",
+		Texture->Get_Full_Path().str(),
+		Texture,
+		initialize ? 1 : 0,
+		D3DTexture,
+		int(State),
+		int(Type),
+		int(Priority),
+		MipLevelCount,
+		Width,
+		Height,
+		int(Format),
+		Reduction));
 	Texture->Apply_New_Surface(D3DTexture, initialize);
 
 	D3DTexture->Release();
@@ -1310,7 +1324,21 @@ static bool	Get_Texture_Information
 	bool compressed
 )
 {
-	ThumbnailClass* thumb=ThumbnailManagerClass::Peek_Thumbnail_Instance_From_Any_Manager(filename);
+
+	reduction = 0;
+	w = 0;
+	h = 0;
+	d = 1;
+	format = WW3D_FORMAT_UNKNOWN;
+	mip_count = 0;
+
+	ThumbnailClass* thumb = nullptr;
+	if (!compressed)
+	{
+		thumb = ThumbnailManagerClass::Peek_Thumbnail_Instance_From_Any_Manager(filename);
+	}
+
+	//ThumbnailClass* thumb=ThumbnailManagerClass::Peek_Thumbnail_Instance_From_Any_Manager(filename);
 
 	if (!thumb)
 	{
