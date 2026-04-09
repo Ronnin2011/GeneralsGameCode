@@ -545,6 +545,12 @@ Bool W3DDisplay::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt
 	// Ronin @feature 10/03/2026 DX9: Apply current AA selection before any device reset.
 	WW3D::Set_Anti_Aliasing_Level(TheGlobalData->m_antiAliasBoxValue);
 
+
+	const UnsignedInt oldWidth = getWidth();
+	const UnsignedInt oldHeight = getHeight();
+	const UnsignedInt oldBitDepth = getBitDepth();
+	const Bool oldWindowed = getWindowed();
+
 	if (WW3D_ERROR_OK == WW3D::Set_Device_Resolution(xres,yres,bitdepth,windowed,true))
 	{
 		Render2DClass::Set_Screen_Resolution(RectClass(0, 0, xres, yres));
@@ -553,9 +559,9 @@ Bool W3DDisplay::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt
 	}
 
 	//set back to the original mode.
-	WW3D::Set_Device_Resolution(getWidth(),getHeight(),getBitDepth(),getWindowed(), true);
-	Render2DClass::Set_Screen_Resolution(RectClass(0, 0, getWidth(),getHeight()));
-	Display::setDisplayMode(getWidth(),getHeight(),getBitDepth(), getWindowed());
+	WW3D::Set_Device_Resolution(oldWidth, oldHeight, oldBitDepth, oldWindowed, true);
+	Render2DClass::Set_Screen_Resolution(RectClass(0, 0, oldWidth, oldHeight));
+	Display::setDisplayMode(oldWidth, oldHeight, oldBitDepth, oldWindowed);
 	return FALSE;	//did not change to a new mode.
 }
 
