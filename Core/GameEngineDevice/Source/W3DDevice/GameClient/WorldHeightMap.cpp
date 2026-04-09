@@ -53,10 +53,130 @@
 
 #include "Common/file.h"
 
+// @feature Ronin 05/04/2026 Support HD terrain replacements without changing logical terrain coverage.
+#include <algorithm>
+#include <vector>
 
 #define K_OBSOLETE_HEIGHT_MAP_VERSION 8
 
 #define PATHFIND_CLIFF_SLOPE_LIMIT_F	9.8f
+
+Int WorldHeightMap::getTerrainTexturePageForTileNdx(Short tileNdx) const
+{
+	// @feature Ronin 08/04/2026 Query terrain atlas page ownership from packed source tile indices.
+	const Short baseNdx = tileNdx >> 2;
+	if (baseNdx < 0 || baseNdx >= NUM_SOURCE_TILES) {
+		return 0;
+	}
+
+	TileData* pTile = m_sourceTiles[baseNdx];
+	if (pTile == nullptr) {
+		return 0;
+	}
+
+	return pTile->m_texturePage;
+}
+
+Int WorldHeightMap::getEdgeTexturePageForBlendClass(Int edgeClass) const
+{
+	// @feature Ronin 08/04/2026 Query edge atlas page ownership from blend edge classes.
+	if (edgeClass < 0 || edgeClass >= m_numEdgeTextureClasses) {
+		return 0;
+	}
+
+	return m_edgeTextureClasses[edgeClass].texturePage;
+}
+
+Int WorldHeightMap::getTerrainTexturePageForCell(Int xIndex, Int yIndex) const
+{
+	// @feature Ronin 08/04/2026 Query base terrain atlas page ownership using draw-local cell coordinates.
+	xIndex += m_drawOriginX;
+	yIndex += m_drawOriginY;
+
+	const Int ndx = (yIndex * m_width) + xIndex;
+	if (ndx < 0 || ndx >= m_dataSize || m_tileNdxes == nullptr) {
+		return 0;
+	}
+
+	return getTerrainTexturePageForTileNdx(m_tileNdxes[ndx]);
+}
+
+Int WorldHeightMap::getAlphaTexturePageForCell(Int xIndex, Int yIndex) const
+{
+	// @feature Ronin 08/04/2026 Query alpha terrain atlas page ownership using draw-local cell coordinates.
+	xIndex += m_drawOriginX;
+	yIndex += m_drawOriginY;
+
+	const Int ndx = (yIndex * m_width) + xIndex;
+	if (ndx < 0 || ndx >= m_dataSize || m_tileNdxes == nullptr) {
+		return 0;
+	}
+
+	Short tileNdx = m_tileNdxes[ndx];
+	const Short blendNdx = (m_blendTileNdxes != nullptr) ? m_blendTileNdxes[ndx] : 0;
+	if (blendNdx > 0 && blendNdx < m_numBlendedTiles) {
+		tileNdx = m_blendedTiles[blendNdx].blendNdx;
+	}
+
+	return getTerrainTexturePageForTileNdx(tileNdx);
+}
+
+Int WorldHeightMap::getExtraAlphaTexturePageForCell(Int xIndex, Int yIndex) const
+{
+	// @feature Ronin 09/04/2026 Query extra-blend terrain atlas page ownership using draw-local cell coordinates.
+	xIndex += m_drawOriginX;
+	yIndex += m_drawOriginY;
+
+	const Int ndx = (yIndex * m_width) + xIndex;
+	if (ndx < 0 || ndx >= m_dataSize || m_tileNdxes == nullptr) {
+		return 0;
+	}
+
+	Short tileNdx = m_tileNdxes[ndx];
+	const Short blendNdx = (m_extraBlendTileNdxes != nullptr) ? m_extraBlendTileNdxes[ndx] : 0;
+	if (blendNdx > 0 && blendNdx < m_numBlendedTiles) {
+		tileNdx = m_blendedTiles[blendNdx].blendNdx;
+	}
+
+	return getTerrainTexturePageForTileNdx(tileNdx);
+}
+
+TextureClass* WorldHeightMap::getTerrainTexture(Int page)
+{
+	if (page < 0 || page >= m_numTerrainTexturePages) {
+		return nullptr;
+	}
+	if (m_terrainTex == nullptr) {
+		getTerrainTexture();
+	}
+	return m_terrainTextures[page];
+}
+
+TextureClass* WorldHeightMap::getAlphaTerrainTexture(Int page)
+{
+	if (page < 0 || page >= m_numTerrainTexturePages) {
+		return nullptr;
+	}
+	if (m_alphaTerrainTex == nullptr) {
+		getTerrainTexture();
+	}
+	return m_alphaTerrainTextures[page];
+}
+
+TextureClass* WorldHeightMap::getEdgeTerrainTexture(Int page)
+{
+	if (page < 0 || page >= m_numEdgeTexturePages) {
+		return nullptr;
+	}
+	if (m_alphaEdgeTex == nullptr) {
+		getTerrainTexture();
+	}
+	return m_alphaEdgeTextures[page];
+}
+
+// @bugfix Ronin 05/04/2026 Forward declare HD terrain helper before first use in readTexClass().
+static Bool getSourceTilePixelExtentForLogicalWidth(InputStream* pStr, Int logicalWidth, Int* tilePixelExtent);
+
 
 static Int getSupportedTextureSheetWidth(Int tileWidth, Int tileHeight)
 {
@@ -437,6 +557,14 @@ WorldHeightMap::~WorldHeightMap()
 	for (i=0; i<NUM_ALPHA_TILES; i++) {
 		REF_PTR_RELEASE(m_alphaTiles[i]);
 	}
+
+	for (i = 0; i < MAX_TEXTURE_ATLAS_PAGES; ++i) {
+		// @feature Ronin 08/04/2026 Release per-page terrain texture storage before releasing legacy page-0 aliases.
+		REF_PTR_RELEASE(m_terrainTextures[i]);
+		REF_PTR_RELEASE(m_alphaTerrainTextures[i]);
+		REF_PTR_RELEASE(m_alphaEdgeTextures[i]);
+	}
+
 	REF_PTR_RELEASE(m_terrainTex);
 	REF_PTR_RELEASE(m_alphaTerrainTex);
 	REF_PTR_RELEASE(m_alphaEdgeTex);
@@ -477,6 +605,22 @@ WorldHeightMap::WorldHeightMap():
 		m_edgeTiles[i] = nullptr;
 	}
 
+	m_alphaEdgeTex = nullptr;
+	m_alphaEdgeHeight = 1;
+
+	m_numTerrainTexturePages = 1;
+	m_numEdgeTexturePages = 1;
+	for (i = 0; i < MAX_TEXTURE_ATLAS_PAGES; ++i) {
+		// @feature Ronin 08/04/2026 Initialize per-page terrain texture storage for multi-page atlases.
+		m_terrainTextures[i] = nullptr;
+		m_alphaTerrainTextures[i] = nullptr;
+		m_alphaEdgeTextures[i] = nullptr;
+		m_terrainTexturePages[i].textureHeight = 0;
+		m_edgeTexturePages[i].textureHeight = 0;
+	}
+	m_terrainTexturePages[0].textureHeight = m_terrainTexHeight;
+	m_edgeTexturePages[0].textureHeight = m_alphaEdgeHeight;
+
 	TheSidesList->validateSides();
 	setupAlphaTiles();
 }
@@ -516,6 +660,23 @@ WorldHeightMap::WorldHeightMap(ChunkInputStream *pStrm, Bool logicalDataOnly):
 		m_sourceTiles[i]=nullptr;
 		m_edgeTiles[i]=nullptr;
 	}
+
+	m_alphaEdgeTex = nullptr;
+	m_alphaEdgeHeight = 1;
+
+	m_numTerrainTexturePages = 1;
+	m_numEdgeTexturePages = 1;
+	for (i = 0; i < MAX_TEXTURE_ATLAS_PAGES; ++i) {
+		// @feature Ronin 08/04/2026 Initialize per-page terrain texture storage for multi-page atlases.
+		m_terrainTextures[i] = nullptr;
+		m_alphaTerrainTextures[i] = nullptr;
+		m_alphaEdgeTextures[i] = nullptr;
+		m_terrainTexturePages[i].textureHeight = 0;
+		m_edgeTexturePages[i].textureHeight = 0;
+	}
+	m_terrainTexturePages[0].textureHeight = m_terrainTexHeight;
+	m_edgeTexturePages[0].textureHeight = m_alphaEdgeHeight;
+
 	if (TheGlobalData && TheGlobalData->m_stretchTerrain) {
 		m_drawWidthX=STRETCH_DRAW_WIDTH;
 		m_drawHeightY=STRETCH_DRAW_HEIGHT;
@@ -1016,45 +1177,91 @@ Bool WorldHeightMap::ParseBlendTileDataChunk(DataChunkInput &file, DataChunkInfo
 }
 
 /** Function to read in the tiles for a texture class. */
-void WorldHeightMap::readTexClass(TXTextureClass *texClass, TileData **tileData)
+void WorldHeightMap::readTexClass(TXTextureClass* texClass, TileData** tileData)
 {
-	char path[_MAX_PATH];
-	path[0] = 0;
-	File *theFile = nullptr;
+	char resolvedPath[_MAX_PATH];
+	resolvedPath[0] = 0;
+	File* theFile = nullptr;
+
+	const char* textureKind = "Unknown";
+	if (tileData == m_sourceTiles) {
+		textureKind = "Base";
+	}
+	else if (tileData == m_edgeTiles) {
+		textureKind = "Edge";
+	}
 
 	// get the file from the description in TheTerrainTypes
-	TerrainType *terrain = TheTerrainTypes->findTerrain( texClass->name );
-	char texturePath[ _MAX_PATH ];
-	if (terrain==nullptr)
+	TerrainType* terrain = TheTerrainTypes->findTerrain(texClass->name);
+	char texturePath[_MAX_PATH];
+	if (terrain == nullptr)
 	{
 #ifdef LOAD_TEST_ASSETS
-		theFile = TheFileSystem->openFile( texClass->name.str(), File::READ|File::BINARY);
+		snprintf(resolvedPath, ARRAY_SIZE(resolvedPath), "%s", texClass->name.str());
+		theFile = TheFileSystem->openFile(resolvedPath, File::READ | File::BINARY);
 #endif
 	}
 	else
 	{
-		snprintf( texturePath, ARRAY_SIZE(texturePath), "%s%s", TERRAIN_TGA_DIR_PATH, terrain->getTexture().str() );
-		theFile = TheFileSystem->openFile( texturePath, File::READ|File::BINARY);
+		snprintf(texturePath, ARRAY_SIZE(texturePath), "%s%s", TERRAIN_TGA_DIR_PATH, terrain->getTexture().str());
+		snprintf(resolvedPath, ARRAY_SIZE(resolvedPath), "%s", texturePath);
+		theFile = TheFileSystem->openFile(texturePath, File::READ | File::BINARY);
 	}
 
-	if (theFile != nullptr) {
-		GDIFileStream theStream(theFile);
-		InputStream *pStr = &theStream;
-		Int numTiles = WorldHeightMap::countTiles(pStr);
-		theFile->seek(0, File::START);
-		if (numTiles >= texClass->numTiles) {
-			numTiles = texClass->numTiles;
-			Int width;
-			for (width = WorldHeightMap::getMaxTextureSheetWidthInTiles(); width >= 1; width--) {
-				if (numTiles >= width * width) {
-					numTiles = width * width;
-					break;
-				}
-			}
-			WorldHeightMap::readTiles(pStr, tileData+texClass->firstTile, width);
-		}
-		theFile->close();
+	if (theFile == nullptr) {
+		DEBUG_LOG(("MapTerrainTexture: kind=%s class=%s path=%s logicalWidth=%d numTiles=%d firstTile=%d load=open_failed",
+			textureKind,
+			texClass->name.str(),
+			resolvedPath[0] ? resolvedPath : "<unresolved>",
+			texClass->width,
+			texClass->numTiles,
+			texClass->firstTile));
+		return;
 	}
+
+	GDIFileStream theStream(theFile);
+	InputStream* pStr = &theStream;
+
+	Int sourceTilePixelExtent = TILE_PIXEL_EXTENT;
+	texClass->texturePage = 0;
+	if (getSourceTilePixelExtentForLogicalWidth(pStr, texClass->width, &sourceTilePixelExtent)) {
+		theFile->seek(0, File::START);
+		texClass->tilePixelExtent = sourceTilePixelExtent;
+
+		const Bool ok = WorldHeightMap::readTiles(pStr, tileData + texClass->firstTile, texClass->width, sourceTilePixelExtent);
+		if (ok) {
+			for (Int tileIndex = 0; tileIndex < texClass->numTiles; ++tileIndex) {
+				TileData* pTile = tileData[texClass->firstTile + tileIndex];
+				if (pTile == nullptr) {
+					continue;
+				}
+				pTile->m_texturePage = 0;
+				pTile->m_tileLocationInTexture.x = 0;
+				pTile->m_tileLocationInTexture.y = 0;
+			}
+		}
+
+		DEBUG_LOG(("MapTerrainTexture: kind=%s class=%s path=%s logicalWidth=%d numTiles=%d tilePixelExtent=%d firstTile=%d load=%s",
+			textureKind,
+			texClass->name.str(),
+			resolvedPath[0] ? resolvedPath : "<unresolved>",
+			texClass->width,
+			texClass->numTiles,
+			texClass->tilePixelExtent,
+			texClass->firstTile,
+			ok ? "ok" : "read_failed"));
+	}
+	else {
+		DEBUG_LOG(("MapTerrainTexture: kind=%s class=%s path=%s logicalWidth=%d numTiles=%d firstTile=%d load=invalid_layout",
+			textureKind,
+			texClass->name.str(),
+			resolvedPath[0] ? resolvedPath : "<unresolved>",
+			texClass->width,
+			texClass->numTiles,
+			texClass->firstTile));
+	}
+
+	theFile->close();
 }
 
 /**
@@ -1126,31 +1333,37 @@ Bool WorldHeightMap::ParseBlendTileData(DataChunkInput &file, DataChunkInfo *inf
 		m_numCliffInfo = 1;	// cliffInfo[0] is the default info.
 	}
 // --> file loading here
-	m_numTextureClasses	= file.readInt();
-	DEBUG_ASSERTCRASH(m_numTextureClasses>0 && m_numTextureClasses<200, ("Unlikely m_numTextureClasses."));
-	for (i=0; i<m_numTextureClasses; i++) {
+	m_numTextureClasses = file.readInt();
+	DEBUG_ASSERTCRASH(m_numTextureClasses > 0 && m_numTextureClasses < 200, ("Unlikely m_numTextureClasses."));
+	for (i = 0; i < m_numTextureClasses; i++) {
 		m_textureClasses[i].globalTextureClass = -1;
 		m_textureClasses[i].firstTile = file.readInt();
 		m_textureClasses[i].numTiles = file.readInt();
 		m_textureClasses[i].width = file.readInt();
+		m_textureClasses[i].tilePixelExtent = TILE_PIXEL_EXTENT;
+		m_textureClasses[i].texturePage = 0;
+
 
 		// legacy GDF data
 		// used to read "m_textureClasses[i].isGDF = file.readInt();"
-	/*	Int legacy = */ file.readInt();
+		/* Int legacy = */ file.readInt();
 
 		m_textureClasses[i].name = file.readAsciiString();
 		readTexClass(&m_textureClasses[i], m_sourceTiles);
 	}
+
 	m_numEdgeTextureClasses = 0;
 	m_numEdgeTiles = 0;
 	if (info->version >= K_BLEND_TILE_VERSION_4) {
-		m_numEdgeTiles	= file.readInt();
-		m_numEdgeTextureClasses	= file.readInt();
-		for (i=0; i<m_numEdgeTextureClasses; i++) {
+		m_numEdgeTiles = file.readInt();
+		m_numEdgeTextureClasses = file.readInt();
+		for (i = 0; i < m_numEdgeTextureClasses; i++) {
 			m_edgeTextureClasses[i].globalTextureClass = -1;
 			m_edgeTextureClasses[i].firstTile = file.readInt();
 			m_edgeTextureClasses[i].numTiles = file.readInt();
 			m_edgeTextureClasses[i].width = file.readInt();
+			m_edgeTextureClasses[i].tilePixelExtent = TILE_PIXEL_EXTENT;
+			m_edgeTextureClasses[i].texturePage = 0;
 			m_edgeTextureClasses[i].name = file.readAsciiString();
 			readTexClass(&m_edgeTextureClasses[i], m_edgeTiles);
 		}
@@ -1328,7 +1541,57 @@ typedef struct {
 
 // followed by optional data.
 
+// Add below TTargaHeader.
 
+static Bool isPowerOfTwo(Int value)
+{
+	return value > 0 && (value & (value - 1)) == 0;
+}
+
+static Bool readTgaHeader(InputStream* pStr, TTargaHeader* hdr)
+{
+	if (pStr == nullptr || hdr == nullptr) {
+		return false;
+	}
+
+	return pStr->read(hdr, sizeof(*hdr)) == sizeof(*hdr);
+}
+
+static Bool getSourceTilePixelExtentForLogicalWidth(InputStream* pStr, Int logicalWidth, Int* tilePixelExtent)
+{
+	TTargaHeader hdr;
+	if (!readTgaHeader(pStr, &hdr)) {
+		return false;
+	}
+
+	if (hdr.colorMapType != 0) {
+		return false;
+	}
+	if (hdr.imageType != 0x2 && hdr.imageType != 0xA) {
+		return false;
+	}
+	if (hdr.pixelDepth < 24 || hdr.pixelDepth > 32) {
+		return false;
+	}
+	if (logicalWidth <= 0) {
+		return false;
+	}
+	if ((hdr.imageWidth % logicalWidth) != 0 || (hdr.imageHeight % logicalWidth) != 0) {
+		return false;
+	}
+
+	const Int pixelExtentX = hdr.imageWidth / logicalWidth;
+	const Int pixelExtentY = hdr.imageHeight / logicalWidth;
+	if (pixelExtentX != pixelExtentY) {
+		return false;
+	}
+	if (!isPowerOfTwo(pixelExtentX)) {
+		return false;
+	}
+
+	*tilePixelExtent = pixelExtentX;
+	return true;
+}
 
 /// Count how many tiles come in from a targa file.
 Int WorldHeightMap::countTiles(InputStream *pStr, Bool *halfTile)
@@ -1364,54 +1627,60 @@ Int WorldHeightMap::countTiles(InputStream *pStr, Bool *halfTile)
 	return(0);
 }
 /*Break down a .tga file into a collection of tiles.  numRows * numRows total tiles.*/
-Bool WorldHeightMap::readTiles(InputStream *pStr, TileData **tiles, Int numRows)
+Bool WorldHeightMap::readTiles(InputStream* pStr, TileData** tiles, Int numRows, Int tilePixelExtent)
 {
 	TTargaHeader hdr;
 	pStr->read(&hdr, sizeof(hdr));
-	Int tileWidth = hdr.imageWidth/TILE_PIXEL_EXTENT;
-	Int tileHeight = hdr.imageHeight/TILE_PIXEL_EXTENT;
 
-	if (hdr.imageHeight==TILE_PIXEL_EXTENT/2) {
+	Int tileWidth = hdr.imageWidth / tilePixelExtent;
+	Int tileHeight = hdr.imageHeight / tilePixelExtent;
+
+	if (hdr.imageHeight == tilePixelExtent / 2) {
 		tileHeight = 1;
 	}
-	if (hdr.imageWidth==TILE_PIXEL_EXTENT/2) {
+	if (hdr.imageWidth == tilePixelExtent / 2) {
 		tileWidth = 1;
 	}
 
 	if (tileWidth < numRows || tileHeight < numRows) {
-		return(false);
+		return false;
 	}
+
 	Bool compressed = false;
 	if (hdr.imageType & 0x08) {
 		compressed = true;
 	}
+
 	int row = 0;
 	int column = 0;
-	int bytesPerPixel = (hdr.pixelDepth+7)/8;
-	if (bytesPerPixel < 3) return(false);
-	if (bytesPerPixel > 4) return(false);
+	int bytesPerPixel = (hdr.pixelDepth + 7) / 8;
+	if (bytesPerPixel < 3) return false;
+	if (bytesPerPixel > 4) return false;
+
 	int i;
-	for (i=0; i<numRows*numRows; i++) {
-		if (tiles[i] == nullptr)
-			tiles[i] = MSGNEW("WorldHeightMap_readTiles") TileData;
+	for (i = 0; i < numRows * numRows; i++) {
+		if (tiles[i] == nullptr) {
+			tiles[i] = MSGNEW("WorldHeightMap_readTiles") TileData(tilePixelExtent);
+		}
 	}
+
 	UnsignedByte buf[4];
 	int repeatCount = 0;
-//	Bool read = false;
 	Bool running = false;
-	for (row = 0; row < numRows*TILE_PIXEL_EXTENT; row++) {
-		for (column=0; column<hdr.imageWidth; column++) {
+	for (row = 0; row < numRows * tilePixelExtent; row++) {
+		for (column = 0; column < hdr.imageWidth; column++) {
 			UnsignedByte r, g, b, a;
 			if (row < hdr.imageHeight) {
-				if (compressed && repeatCount==0) {
+				if (compressed && repeatCount == 0) {
 					UnsignedByte flag;
 					pStr->read(&flag, 1);
-					repeatCount = flag&0x7f;
+					repeatCount = flag & 0x7f;
 					repeatCount++;
-					if (flag&0x80) {
+					if (flag & 0x80) {
 						running = true;
 						pStr->read(buf, bytesPerPixel);
-					} else {
+					}
+					else {
 						running = false;
 					}
 				}
@@ -1419,240 +1688,305 @@ Bool WorldHeightMap::readTiles(InputStream *pStr, TileData **tiles, Int numRows)
 				if (!running) {
 					pStr->read(buf, bytesPerPixel);
 				}
-				r = buf[2]; g = buf[1]; b = buf[0];
-				if (bytesPerPixel==4) {
+				r = buf[2];
+				g = buf[1];
+				b = buf[0];
+				if (bytesPerPixel == 4) {
 					a = buf[3];
-				} else {
-					a = 255;// solid alpha.
 				}
-			} else {
+				else {
+					a = 255;
+				}
+			}
+			else {
 				r = g = b = a = 0;
 			}
-			if (column >= (numRows*TILE_PIXEL_EXTENT)) continue;
-			int tileNdx = (column/TILE_PIXEL_EXTENT) + numRows*(row/TILE_PIXEL_EXTENT);
-			int pixelNdx = (column%TILE_PIXEL_EXTENT) + TILE_PIXEL_EXTENT*(row%TILE_PIXEL_EXTENT);
 
-			UnsignedByte *pixel = tiles[tileNdx]->getDataPtr();
+			if (column >= (numRows * tilePixelExtent)) continue;
 
-			pixel += pixelNdx*TILE_BYTES_PER_PIXEL;
+			const Int tileNdx = (column / tilePixelExtent) + numRows * (row / tilePixelExtent);
+			const Int pixelNdx = (column % tilePixelExtent) + tilePixelExtent * (row % tilePixelExtent);
+
+			UnsignedByte* pixel = tiles[tileNdx]->getDataPtr();
+			pixel += pixelNdx * TILE_BYTES_PER_PIXEL;
 			*pixel++ = b;
 			*pixel++ = g;
 			*pixel++ = r;
 			*pixel = a;
-
 		}
-		DEBUG_ASSERTCRASH(repeatCount==0, ("Invalid tga."));
+		DEBUG_ASSERTCRASH(repeatCount == 0, ("Invalid tga."));
 	}
-	for (i=0; i<numRows*numRows; i++) {
+
+	for (i = 0; i < numRows * numRows; i++) {
 		tiles[i]->updateMips();
 	}
-	return(true);
+	return true;
 }
 
+namespace
+{
+	struct TextureAtlasPackPageState
+	{
+		Int cursorX;
+		Int cursorY;
+		Int rowHeight;
+
+		TextureAtlasPackPageState() :
+			cursorX(0),
+			cursorY(0),
+			rowHeight(0)
+		{
+		}
+	};
+}
 
 
 /** updateTileTexturePositions - assigns each tile a location in the texture.
 */
-Int WorldHeightMap::updateTileTexturePositions(Int *edgeHeight)
+Int WorldHeightMap::updateTileTexturePositions(Int* edgeHeight)
 {
-	Int i, j;
-	Int maxHeight = 0;
-	const Int tilesPerRow = TEXTURE_WIDTH/(TILE_PIXEL_EXTENT+TILE_OFFSET);
+	Int i;
 
-	Bool availableGrid[tilesPerRow][tilesPerRow];
-	Int row, column;
-	for (row=0; row<tilesPerRow; row++) {
-		for (column=0; column<tilesPerRow; column++) {
-			availableGrid[row][column] = true;
-		}
+	m_numTerrainTexturePages = 1;
+	m_numEdgeTexturePages = 1;
+	for (i = 0; i < MAX_TEXTURE_ATLAS_PAGES; ++i) {
+		// @bugfix Ronin 08/04/2026 Reset only atlas layout metadata here; runtime texture objects are owned elsewhere.
+		m_terrainTexturePages[i].textureHeight = 0;
+		m_edgeTexturePages[i].textureHeight = 0;
 	}
 
-	for (i=0; i<m_numBitmapTiles; i++) {
+	for (i = 0; i < m_numBitmapTiles; i++) {
 		if (m_sourceTiles[i]) {
+			m_sourceTiles[i]->m_texturePage = 0;
 			m_sourceTiles[i]->m_tileLocationInTexture.x = 0;
 			m_sourceTiles[i]->m_tileLocationInTexture.y = 0;
 		}
 	}
 
-	/* put the normal tiles into the terrain texture */
-	Int texClass;
-	Int tileWidth;
-	for (tileWidth = tilesPerRow; tileWidth>0; tileWidth--) {
-		for (texClass=0; texClass<m_numTextureClasses; texClass++) {
-			Int width = m_textureClasses[texClass].width;
-			if (width != tileWidth) continue;
-			// Find an available block of space.
-			Bool found = false;
-			for (row=0; row<tilesPerRow-width+1 && !found; row++) {
-				for (column=0; column<tilesPerRow-width+1 && !found; column++) {
-					if (availableGrid[row][column]) {
-						Bool open = true;
-						for (i=0; i<width && open; i++) {
-							for (j=0; j<width&&open; j++) {
-								if (!availableGrid[row+j][column+i]) {
-									open = false;
-								}
-							}
-						}
-						if (open) found = true;
-						break;
-					}
-				}
-				if (found) break;
-			}
-			if (!found) {
-				m_textureClasses[texClass].positionInTexture.x = 0;
-				m_textureClasses[texClass].positionInTexture.y = 0;
-				continue;
-			}
-
-			Int xOrigin = TILE_OFFSET/2 + column*(TILE_PIXEL_EXTENT+TILE_OFFSET);
-			Int yOrigin = TILE_OFFSET/2 + row*(TILE_PIXEL_EXTENT+TILE_OFFSET);
-			m_textureClasses[texClass].positionInTexture.x = xOrigin;
-			m_textureClasses[texClass].positionInTexture.y = yOrigin;
-			Int classHeight = yOrigin + width*TILE_PIXEL_EXTENT+ TILE_OFFSET/2;
-			if (maxHeight < classHeight) maxHeight = classHeight;
-
-			for (i=0; i<width; i++) {
-				for (j=0; j<width; j++) {
-					availableGrid[row+j][column+i] = false;
-					Int baseNdx = m_textureClasses[texClass].firstTile + i + j*width;
-					// In case we are just checking for room...
-					if (m_sourceTiles[baseNdx] == nullptr) continue;
-					Int x = xOrigin + i*TILE_PIXEL_EXTENT;
-					Int y = yOrigin + (width-j-1)*TILE_PIXEL_EXTENT;
-					m_sourceTiles[baseNdx]->m_tileLocationInTexture.x = x;
-					m_sourceTiles[baseNdx]->m_tileLocationInTexture.y = y;
-				}
-			}
-		}
-	}
-
-	for (i=0; i<m_numBitmapTiles; i++) {
+	for (i = 0; i < m_numEdgeTiles; i++) {
 		if (m_edgeTiles[i]) {
+			m_edgeTiles[i]->m_texturePage = 0;
 			m_edgeTiles[i]->m_tileLocationInTexture.x = 0;
 			m_edgeTiles[i]->m_tileLocationInTexture.y = 0;
 		}
 	}
 
-	/* put the blend edge tiles into the blend edges texture */
-	Int maxEdgeHeight = 0;
-	// Reset the grid, cause we're using a different texture now.
-	for (row=0; row<tilesPerRow; row++) {
-		for (column=0; column<tilesPerRow; column++) {
-			availableGrid[row][column] = true;
-		}
-	}
-	for (texClass=0; texClass<m_numEdgeTextureClasses; texClass++) {
-		Int width = m_edgeTextureClasses[texClass].width;
-		// Find an available block of space.
-		Bool found = false;
-		for (row=0; row<tilesPerRow-width+1 && !found; row++) {
-			for (column=0; column<tilesPerRow-width+1 && !found; column++) {
-				if (availableGrid[row][column]) {
-					Bool open = true;
-					for (i=0; i<width && open; i++) {
-						for (j=0; j<width&&open; j++) {
-							if (!availableGrid[row+j][column+i]) {
-								open = false;
-							}
-						}
+	auto packTextureClassesIntoPages =
+		[&](TXTextureClass* classes,
+			Int numClasses,
+			TileData** tiles,
+			TTextureAtlasPageInfo* outPages,
+			Int* outNumPages,
+			Int maxPages) -> Int
+		{
+			if (outNumPages) {
+				*outNumPages = 1;
+			}
+			if (maxPages < 1) {
+				return 0;
+			}
+
+			std::vector<Bool> packed(numClasses, false);
+			std::vector<TextureAtlasPackPageState> pages(maxPages);
+			Int usedPages = 1;
+
+			for (Int packedCount = 0; packedCount < numClasses; ++packedCount) {
+				Int bestClass = -1;
+				Int bestPixelSize = -1;
+
+				for (Int texClass = 0; texClass < numClasses; ++texClass) {
+					if (packed[texClass]) {
+						continue;
 					}
-					if (open) found = true;
+
+					const Int classPixelSize = classes[texClass].width * classes[texClass].tilePixelExtent + TILE_OFFSET;
+					if (classPixelSize > bestPixelSize) {
+						bestPixelSize = classPixelSize;
+						bestClass = texClass;
+					}
+				}
+
+				if (bestClass < 0) {
 					break;
 				}
-			}
-			if (found) break;
-		}
-		if (!found) {
-			m_edgeTextureClasses[texClass].positionInTexture.x = 0;
-			m_edgeTextureClasses[texClass].positionInTexture.y = 0;
-			continue;
-		}
 
-		Int xOrigin = TILE_OFFSET/2 + column*(TILE_PIXEL_EXTENT+TILE_OFFSET);
-		Int yOrigin = TILE_OFFSET/2 + row*(TILE_PIXEL_EXTENT+TILE_OFFSET);
-		m_edgeTextureClasses[texClass].positionInTexture.x = xOrigin;
-		m_edgeTextureClasses[texClass].positionInTexture.y = yOrigin;
-		Int classHeight = yOrigin + width*TILE_PIXEL_EXTENT+ TILE_OFFSET/2;
-		if (maxEdgeHeight < classHeight) maxEdgeHeight = classHeight;
+				packed[bestClass] = true;
+				TXTextureClass& textureClass = classes[bestClass];
+				textureClass.texturePage = 0;
+				textureClass.positionInTexture.x = 0;
+				textureClass.positionInTexture.y = 0;
 
-		for (i=0; i<width; i++) {
-			for (j=0; j<width; j++) {
-				availableGrid[row+j][column+i] = false;
-				Int baseNdx = m_edgeTextureClasses[texClass].firstTile + i + j*width;
-				// In case we are just checking for room...
-				if (m_edgeTiles[baseNdx] == nullptr) continue;
-				Int x = xOrigin + i*TILE_PIXEL_EXTENT;
-				Int y = yOrigin + (width-j-1)*TILE_PIXEL_EXTENT;
-				// Use negative offsets to differentiate between tiles & edges.
-				m_edgeTiles[baseNdx]->m_tileLocationInTexture.x = x;
-				m_edgeTiles[baseNdx]->m_tileLocationInTexture.y = y;
+				const Int tilePixelExtent = textureClass.tilePixelExtent;
+				const Int classPixelSize = textureClass.width * tilePixelExtent + TILE_OFFSET;
+
+				if (classPixelSize > TEXTURE_WIDTH) {
+					continue;
+				}
+
+				Bool placed = false;
+				for (Int page = 0; page < maxPages; ++page) {
+					TextureAtlasPackPageState& state = pages[page];
+
+					if (state.cursorX != 0 && state.cursorX + classPixelSize > TEXTURE_WIDTH) {
+						state.cursorX = 0;
+						state.cursorY += state.rowHeight;
+						state.rowHeight = 0;
+					}
+
+					if (state.cursorY + classPixelSize > TEXTURE_WIDTH) {
+						continue;
+					}
+
+					if (usedPages < page + 1) {
+						usedPages = page + 1;
+					}
+
+					const Int xOrigin = state.cursorX + TILE_OFFSET / 2;
+					const Int yOrigin = state.cursorY + TILE_OFFSET / 2;
+					textureClass.texturePage = page;
+					textureClass.positionInTexture.x = xOrigin;
+					textureClass.positionInTexture.y = yOrigin;
+
+					const Int classHeight = yOrigin + textureClass.width * tilePixelExtent + TILE_OFFSET / 2;
+					if (outPages[page].textureHeight < classHeight) {
+						outPages[page].textureHeight = classHeight;
+					}
+
+					for (Int classX = 0; classX < textureClass.width; ++classX) {
+						for (Int classY = 0; classY < textureClass.width; ++classY) {
+							const Int baseNdx = textureClass.firstTile + classX + classY * textureClass.width;
+							if (tiles[baseNdx] == nullptr) {
+								continue;
+							}
+
+							const Int x = xOrigin + classX * tilePixelExtent;
+							const Int y = yOrigin + (textureClass.width - classY - 1) * tilePixelExtent;
+							tiles[baseNdx]->m_texturePage = page;
+							tiles[baseNdx]->m_tileLocationInTexture.x = x;
+							tiles[baseNdx]->m_tileLocationInTexture.y = y;
+						}
+					}
+
+					state.cursorX += classPixelSize;
+					if (state.rowHeight < classPixelSize) {
+						state.rowHeight = classPixelSize;
+					}
+
+					placed = true;
+					break;
+				}
+
+				if (!placed) {
+					textureClass.texturePage = 0;
+					textureClass.positionInTexture.x = 0;
+					textureClass.positionInTexture.y = 0;
+				}
 			}
-		}
+
+			if (outNumPages) {
+				*outNumPages = usedPages;
+			}
+
+			Int maxPackedHeight = 0;
+			for (Int page = 0; page < usedPages; ++page) {
+				if (outPages[page].textureHeight > maxPackedHeight) {
+					maxPackedHeight = outPages[page].textureHeight;
+				}
+			}
+
+			return maxPackedHeight;
+		};
+
+	// Compatibility mode: layout is page-aware, but runtime still consumes one page.
+	const Int kCompatibilityMaxAtlasPages = MAX_TEXTURE_ATLAS_PAGES;
+
+	const Int maxHeight = packTextureClassesIntoPages(
+		m_textureClasses,
+		m_numTextureClasses,
+		m_sourceTiles,
+		m_terrainTexturePages,
+		&m_numTerrainTexturePages,
+		kCompatibilityMaxAtlasPages);
+
+	const Int maxEdgeHeight = packTextureClassesIntoPages(
+		m_edgeTextureClasses,
+		m_numEdgeTextureClasses,
+		m_edgeTiles,
+		m_edgeTexturePages,
+		&m_numEdgeTexturePages,
+		kCompatibilityMaxAtlasPages);
+
+	if (edgeHeight) {
+		*edgeHeight = maxEdgeHeight;
 	}
-	if (edgeHeight) *edgeHeight = maxEdgeHeight;
+
 	return maxHeight;
 }
 
 /** getUVData - Gets the texture coordinates to use.  See getTerrainTexture.
 */
-void WorldHeightMap::getUVForNdx(Int tileNdx, float *minU, float *minV, float *maxU, float*maxV)
+void WorldHeightMap::getUVForNdx(Int tileNdx, float* minU, float* minV, float* maxU, float* maxV)
 {
-	Short baseNdx = tileNdx>>2;
+	Short baseNdx = tileNdx >> 2;
 	if (m_sourceTiles[baseNdx] == nullptr) {
-		// Missing texture.
 		*minU = *minV = *maxU = *maxV = 0.0f;
 		return;
 	}
-	ICoord2D pos = m_sourceTiles[baseNdx]->m_tileLocationInTexture;
-	*minU = pos.x;
-	*minV = pos.y;
-	*maxU = *minU+TILE_PIXEL_EXTENT;
-	*maxV = *minV+TILE_PIXEL_EXTENT;
-#ifdef EVAL_TILING_MODES
-	if (m_tileMode == TILE_8x8) {
-		*maxU = *minU+TILE_PIXEL_EXTENT/2.0f;
-		*maxV = *minV+TILE_PIXEL_EXTENT/2.0f;
-	} else if (m_tileMode == TILE_6x6) {
-		*maxU = *minU+2.0f*TILE_PIXEL_EXTENT/3.0f;
-		*maxV = *minV+2.0f*TILE_PIXEL_EXTENT/3.0f;
-	} else {
-		*maxU = *minU+TILE_PIXEL_EXTENT;
-		*maxV = *minV+TILE_PIXEL_EXTENT;
-	}
-#endif
-	*minU/=TEXTURE_WIDTH;
-	*minV/=m_terrainTexHeight;
-	*maxU/=TEXTURE_WIDTH;
-	*maxV/=m_terrainTexHeight;
 
-	// Tiles are 64x64 pixels, height grids map to 32x32.
-	// So get the proper quadrant of the tile.
-	Real midX = (*minU+*maxU)/2;
-	Real midY = (*minV+*maxV)/2;
-	if (tileNdx&2) {		// y's are flipped.
+	TileData* pTile = m_sourceTiles[baseNdx];
+	const Int tilePixelExtent = pTile->getPixelExtent();
+	ICoord2D pos = pTile->m_tileLocationInTexture;
+	const Int texturePage = pTile->m_texturePage;
+	Int textureHeight = getTerrainTextureHeightForPage(texturePage);
+	if (textureHeight <= 0) {
+		textureHeight = m_terrainTexHeight;
+	}
+
+	*minU = (Real)pos.x;
+	*minV = (Real)pos.y;
+	*maxU = *minU + tilePixelExtent;
+	*maxV = *minV + tilePixelExtent;
+
+	*minU /= TEXTURE_WIDTH;
+	*minV /= textureHeight;
+	*maxU /= TEXTURE_WIDTH;
+	*maxV /= textureHeight;
+
+	// @feature Ronin 05/04/2026 Split the actual source tile extent into quadrants instead of always assuming 64x64.
+	const Real midX = (*minU + *maxU) / 2.0f;
+	const Real midY = (*minV + *maxV) / 2.0f;
+	if (tileNdx & 2) {
 		*maxV = midY;
-	} else {
+	}
+	else {
 		*minV = midY;
 	}
-	if (tileNdx&1) {
+	if (tileNdx & 1) {
 		*minU = midX;
-	} else {
+	}
+	else {
 		*maxU = midX;
 	}
 }
 
 /** getUVData - Gets the texture coordinates to use.  See getTerrainTexture.
 */
-void WorldHeightMap::getUVForBlend(Int edgeClass, Region2D *range)
+void WorldHeightMap::getUVForBlend(Int edgeClass, Region2D* range)
 {
 	ICoord2D pos = m_edgeTextureClasses[edgeClass].positionInTexture;
 	Int width = m_edgeTextureClasses[edgeClass].width;
-	range->lo.x = (Real)pos.x/TEXTURE_WIDTH;
-	range->lo.y = (Real)pos.y/m_alphaEdgeHeight;
-	range->hi.x = ((Real)pos.x + width*TILE_PIXEL_EXTENT)/TEXTURE_WIDTH;
-	range->hi.y = ((Real)pos.y + width*TILE_PIXEL_EXTENT)/m_alphaEdgeHeight;
+	Int tilePixelExtent = m_edgeTextureClasses[edgeClass].tilePixelExtent;
+	const Int texturePage = m_edgeTextureClasses[edgeClass].texturePage;
+	Int textureHeight = getEdgeTextureHeightForPage(texturePage);
+	if (textureHeight <= 0) {
+		textureHeight = m_alphaEdgeHeight;
+	}
+
+	range->lo.x = (Real)pos.x / TEXTURE_WIDTH;
+	range->lo.y = (Real)pos.y / textureHeight;
+	range->hi.x = ((Real)pos.x + width * tilePixelExtent) / TEXTURE_WIDTH;
+	range->hi.y = ((Real)pos.y + width * tilePixelExtent) / textureHeight;
+
 }
 
 /// Get whether something is cliff indexed with the offset that HeightMapRenderObjClass uses built in.
@@ -1710,70 +2044,71 @@ Bool WorldHeightMap::getUVData(Int xIndex, Int yIndex, float U[4], float V[4])
 Bool WorldHeightMap::getUVForTileIndex(Int ndx, Short tileNdx, float U[4], float V[4])
 {
 	Real nU, nV, xU, xV;
-	nU=nV=xU=xV = 0.0f;
-	Int tilesPerRow = TEXTURE_WIDTH/(2*TILE_PIXEL_EXTENT+TILE_OFFSET);
-	tilesPerRow *= 4;
+	nU = nV = xU = xV = 0.0f;
 
-	if ((ndx<m_dataSize) && m_tileNdxes) {
+	if ((ndx < m_dataSize) && m_tileNdxes) {
 		getUVForNdx(tileNdx, &nU, &nV, &xU, &xV);
 		U[0] = nU; U[1] = xU; U[2] = xU; U[3] = nU;
 		V[0] = xV; V[1] = xV; V[2] = nV; V[3] = nV;
 		if (TheGlobalData && !TheGlobalData->m_adjustCliffTextures) {
 			return false;
 		}
-		if (nU==0.0) {
+		if (nU == 0.0f) {
 			return false; // missing texture.
 		}
 		if (m_cliffInfoNdxes[ndx]) {
 			TCliffInfo info = m_cliffInfo[m_cliffInfoNdxes[ndx]];
 			Bool tilesMatch = false;
-			Int ndx1 = tileNdx>>2;
-			Int ndx2 = info.tileIndex>>2;
+			Int ndx1 = tileNdx >> 2;
+			Int ndx2 = info.tileIndex >> 2;
 			Int i;
-			for (i=0; i<this->m_numTextureClasses; i++) {
+			for (i = 0; i < this->m_numTextureClasses; i++) {
 				if (ndx1 >= m_textureClasses[i].firstTile && ndx1 < m_textureClasses[i].firstTile + m_textureClasses[i].numTiles) {
 					tilesMatch = ndx2 >= m_textureClasses[i].firstTile && ndx2 < m_textureClasses[i].firstTile + m_textureClasses[i].numTiles;
-					//tilesMatch = true;
 					break;
 				}
 			}
 			if (tilesMatch) {
+				const Int classPixelExtent = m_textureClasses[i].width * m_textureClasses[i].tilePixelExtent;
+				const Int texturePage = m_textureClasses[i].texturePage;
+				Int textureHeight = getTerrainTextureHeightForPage(texturePage);
+				if (textureHeight <= 0) {
+					textureHeight = m_terrainTexHeight;
+				}
+
 				Real minU = m_textureClasses[i].positionInTexture.x;
-				Real maxV = m_textureClasses[i].positionInTexture.y + m_textureClasses[i].width*TILE_PIXEL_EXTENT;
-				minU/=TEXTURE_WIDTH;
-				maxV/=m_terrainTexHeight;
-				Real vFactor = TEXTURE_WIDTH/m_terrainTexHeight;
-				U[0] = info.u0+minU;
-				U[1] = info.u1+minU;
-				U[2] = info.u2+minU;
-				U[3] = info.u3+minU;
-				V[0] = info.v0*vFactor+maxV;
-				V[1] = info.v1*vFactor+maxV;
-				V[2] = info.v2*vFactor+maxV;
-				V[3] = info.v3*vFactor+maxV;
+				Real maxV = m_textureClasses[i].positionInTexture.y + classPixelExtent;
+				minU /= TEXTURE_WIDTH;
+				maxV /= textureHeight;
+				Real vFactor = (Real)TEXTURE_WIDTH / textureHeight;
+				U[0] = info.u0 + minU;
+				U[1] = info.u1 + minU;
+				U[2] = info.u2 + minU;
+				U[3] = info.u3 + minU;
+				V[0] = info.v0 * vFactor + maxV;
+				V[1] = info.v1 * vFactor + maxV;
+				V[2] = info.v2 * vFactor + maxV;
+				V[3] = info.v3 * vFactor + maxV;
 				return info.flip;
 			}
 		}
 
-// TheSuperHackers @info xezon 11/12/2025 The old uv adjustment for cliffs produces bad uv tiles on steep terrain
-// and is also not helping performance. But we cannot just remove it, because it is required to render smooth
-// steep diagonal slopes.
+		// TheSuperHackers @info xezon 11/12/2025 The old uv adjustment for cliffs produces bad uv tiles on steep terrain
+		// and is also not helping performance. But we cannot just remove it, because it is required to render smooth
+		// steep diagonal slopes.
 #define DO_OLD_UV
 #ifdef DO_OLD_UV
 // old uv adjustment for cliffs
 		static Real STRETCH_LIMIT = 1.5f;	 // If it is stretching less than this, don't adjust.
 		static Real TILE_LIMIT = 4.0;			// Our tiles are currently 4 cells wide & tall, so dont'
-																			// adjust to more than 4.0.
+		// adjust to more than 4.0.
 
 		static Real TALL_STRETCH_LIMIT = 2.0f;
 		static Real DIAMOND_STRETCH_LIMIT = 2.4f;
 		static Real HEIGHT_SCALE = MAP_HEIGHT_SCALE / MAP_XY_FACTOR;
 
 		Real nU, nV, xU, xV;
-		nU=nV=xU=xV = 0.0f;
-		Int tilesPerRow = TEXTURE_WIDTH/(2*TILE_PIXEL_EXTENT+TILE_OFFSET);
-		tilesPerRow *= 4;
-
+		nU = nV = xU = xV = 0.0f;
 
 		getUVForNdx(tileNdx, &nU, &nV, &xU, &xV);
 		U[0] = nU; U[1] = xU; U[2] = xU; U[3] = nU;
@@ -1781,177 +2116,162 @@ Bool WorldHeightMap::getUVForTileIndex(Int ndx, Short tileNdx, float U[4], float
 		if (TheGlobalData && !TheGlobalData->m_adjustCliffTextures) {
 			return false;
 		}
-		if (nU==0.0) {
+		if (nU == 0.0f) {
 			return false; // missing texture.
 		}
 		// check for excessive heights.
 		if (ndx < this->m_dataSize - m_width - 1) {
 			Int h0 = m_data[ndx];
-			Int h1 = m_data[ndx+1];
-			Int h2 = m_data[ndx+m_width+1];
-			Int h3 = m_data[ndx+m_width];
+			Int h1 = m_data[ndx + 1];
+			Int h2 = m_data[ndx + m_width + 1];
+			Int h3 = m_data[ndx + m_width];
 			Int minH, maxH;
 			minH = maxH = h0;
-			if (minH>h1) minH = h1;
-			if (maxH<h1) maxH = h1;
-			if (minH>h2) minH = h2;
-			if (maxH<h2) maxH = h2;
-			if (minH>h3) minH = h3;
-			if (maxH<h3) maxH = h3;
-//			Int avgH = (h1+h2+h3+h0+2)/4;
-			Int deltaH = maxH-minH;
+			if (minH > h1) minH = h1;
+			if (maxH < h1) maxH = h1;
+			if (minH > h2) minH = h2;
+			if (maxH < h2) maxH = h2;
+			if (minH > h3) minH = h3;
+			if (maxH < h3) maxH = h3;
+			Int deltaH = maxH - minH;
 			Int below = 0;
 			Int above = 0;
-			Int belowLimit = minH+(2*deltaH+1)/3;
-			Int aboveLimit = minH+(deltaH+1)/3;
-			if (h0<belowLimit) below++;
-			if (h1<belowLimit) below++;
-			if (h2<belowLimit) below++;
-			if (h3<belowLimit) below++;
-			if (h0>aboveLimit) above++;
-			if (h1>aboveLimit) above++;
-			if (h2>aboveLimit) above++;
-			if (h3>aboveLimit) above++;
-			if (deltaH*HEIGHT_SCALE < STRETCH_LIMIT) {
+			Int belowLimit = minH + (2 * deltaH + 1) / 3;
+			Int aboveLimit = minH + (deltaH + 1) / 3;
+			if (h0 < belowLimit) below++;
+			if (h1 < belowLimit) below++;
+			if (h2 < belowLimit) below++;
+			if (h3 < belowLimit) below++;
+			if (h0 > aboveLimit) above++;
+			if (h1 > aboveLimit) above++;
+			if (h2 > aboveLimit) above++;
+			if (h3 > aboveLimit) above++;
+			if (deltaH * HEIGHT_SCALE < STRETCH_LIMIT) {
 				return false;
 			}
 
-			Short baseNdx = tileNdx>>2;
+			Short baseNdx = tileNdx >> 2;
 			Short texClass;
-			for (texClass=0; texClass<m_numTextureClasses; texClass++) {
-				if (m_textureClasses[texClass].firstTile<0) {
+			for (texClass = 0; texClass < m_numTextureClasses; texClass++) {
+				if (m_textureClasses[texClass].firstTile < 0) {
 					continue;
 				}
-				// see if the blend tile is in a texture class, and get the right tile for xIndex, yIndex.
 				if (baseNdx >= m_textureClasses[texClass].firstTile &&
-					baseNdx < m_textureClasses[texClass].firstTile+m_textureClasses[texClass].numTiles) {
+					baseNdx < m_textureClasses[texClass].firstTile + m_textureClasses[texClass].numTiles) {
 					break;
 				}
 			}
-			if (texClass>= m_numTextureClasses) return false;
+			if (texClass >= m_numTextureClasses) return false;
+
+			const Int classPixelExtent = m_textureClasses[texClass].width * m_textureClasses[texClass].tilePixelExtent;
 			Real nUb, nVb, xUb, xVb;
 			nUb = m_textureClasses[texClass].positionInTexture.x;
 			nVb = m_textureClasses[texClass].positionInTexture.y;
-			xUb = nUb+m_textureClasses[texClass].width*TILE_PIXEL_EXTENT;
-			xVb = nVb+m_textureClasses[texClass].width*TILE_PIXEL_EXTENT;
-			nUb/=TEXTURE_WIDTH;
-			nVb/=m_terrainTexHeight;
-			xUb/=TEXTURE_WIDTH;
-			xVb/=m_terrainTexHeight;
-			// Now covers texture bounds.
-			// too much stretch.
-			Real divisor = TILE_LIMIT/(deltaH*HEIGHT_SCALE);
+			xUb = nUb + classPixelExtent;
+			xVb = nVb + classPixelExtent;
+			const Int texturePage = m_textureClasses[texClass].texturePage;
+			Int textureHeight = getTerrainTextureHeightForPage(texturePage);
+			if (textureHeight <= 0) {
+				textureHeight = m_terrainTexHeight;
+			}
+
+			nUb /= TEXTURE_WIDTH;
+			nVb /= textureHeight;
+			xUb /= TEXTURE_WIDTH;
+			xVb /= textureHeight;
+
+			Real divisor = TILE_LIMIT / (deltaH * HEIGHT_SCALE);
 			if (divisor > TILE_LIMIT) divisor = TILE_LIMIT;
 			if (divisor < 1.0f) divisor = 1.0f;
-			Real deltaV = (xVb-nVb);
-//			Real deltaU = (xUb-nUb);
+			Real deltaV = (xVb - nVb);
 
-			if (above != 1 && below != 1 && (above!=2 || below != 2)) {
-				// diamond shaped.  Use default if it is not too stretched, as
-				// the fix is not that appealing either.
-				if (deltaH*HEIGHT_SCALE < DIAMOND_STRETCH_LIMIT) {
+			if (above != 1 && below != 1 && (above != 2 || below != 2)) {
+				if (deltaH * HEIGHT_SCALE < DIAMOND_STRETCH_LIMIT) {
 					return false;
 				}
 			}
 
-			if (below==1 || above>below) { //(avgH > minH + (2*deltaH+2)/3)
-				// we got one low guy.
-				if (h0==minH) {
-					V[0] = nV+deltaV/divisor;
-				} else if (h1 == minH) {
-					V[1] = nV+deltaV/divisor;
-				}	else if (h2 == minH) {
-					V[2] = xV-deltaV/divisor;
-				} else if (h3 == minH) {
-					V[3] = xV-deltaV/divisor;
+			if (below == 1 || above > below) {
+				if (h0 == minH) {
+					V[0] = nV + deltaV / divisor;
 				}
-#if 0
-				nU = nV = xU = xV = 1.0f;
-				U[0] = nU; U[1] = xU; U[2] = xU; U[3] = nU;
-				V[0] = xV; V[1] = xV; V[2] = nV; V[3] = nV;
-				return false;
-#endif
-			}	else if (above==1 || below>above) { //(avgH < minH + (deltaH+1)/3)
-				// we got one high guy
-				if (h0==maxH) {
-					V[0] = nV+deltaV/divisor;
-				} else if (h1 == maxH) {
-					V[1] = nV+deltaV/divisor;
-				}	else if (h2 == maxH) {
-					V[2] = xV-deltaV/divisor;
-				} else if (h3 == maxH) {
-					V[3] = xV-deltaV/divisor;
+				else if (h1 == minH) {
+					V[1] = nV + deltaV / divisor;
 				}
-#if 0
-				nU = nV = xU = xV = 0.0f;
-				U[0] = nU; U[1] = xU; U[2] = xU; U[3] = nU;
-				V[0] = xV; V[1] = xV; V[2] = nV; V[3] = nV;
-				return false;
-#endif
-			} else {
-				// we got two up and two down.
-				if (deltaH*HEIGHT_SCALE < TALL_STRETCH_LIMIT) {
+				else if (h2 == minH) {
+					V[2] = xV - deltaV / divisor;
+				}
+				else if (h3 == minH) {
+					V[3] = xV - deltaV / divisor;
+				}
+			}
+			else if (above == 1 || below > above) {
+				if (h0 == maxH) {
+					V[0] = nV + deltaV / divisor;
+				}
+				else if (h1 == maxH) {
+					V[1] = nV + deltaV / divisor;
+				}
+				else if (h2 == maxH) {
+					V[2] = xV - deltaV / divisor;
+				}
+				else if (h3 == maxH) {
+					V[3] = xV - deltaV / divisor;
+				}
+			}
+			else {
+				if (deltaH * HEIGHT_SCALE < TALL_STRETCH_LIMIT) {
 					return false;
 				}
-#if 0
-				nU = nV = xU = xV = 0.0f;
-				U[0] = nU; U[1] = xU; U[2] = xU; U[3] = nU;
-				V[0] = xV; V[1] = xV; V[2] = nV; V[3] = nV;
-				return;
-#endif
-				Real dx = (h3-h2)*HEIGHT_SCALE;
-				dx = sqrt(1+dx*dx); // length of the bottom of the cell
-				Real dy =	(h3-h0)*HEIGHT_SCALE;
-				dy = sqrt(1+dy*dy); // length of the left side.
-				if (dx<STRETCH_LIMIT) dx = 1.0f; // don't make a seam unless there is great stretch.
-				if (dy<STRETCH_LIMIT) dy = 1.0f; // don't make a seam unless there is great stretch.
-				if (dx>TILE_LIMIT) dx = TILE_LIMIT; // don't tile past the texture's edge.
-				if (dy>TILE_LIMIT) dy = TILE_LIMIT; // don't tile past the texture's edge.
-				dx *= xU-nU;
-				dy *= xV-nV;
-				U[0] = nU; U[1] = nU+dx; U[2] = nU+dx; U[3] = nU;
-				V[0] = nV+dy; V[1] = nV+dy; V[2] = nV; V[3] = nV;
-				if (below==1) {
-					below = 1;
-				}
-				// recalc for point 1.
-				dx = (h1-h0)*HEIGHT_SCALE;
-				dx = sqrt(1+dx*dx); // length of the bottom of the cell
-				dy =	(h2-h1)*HEIGHT_SCALE;
-				dy = sqrt(1+dy*dy); // length of the left side.
-				if (dx<STRETCH_LIMIT) dx = 1.0f; // don't make a seam unless there is great stretch.
-				if (dy<STRETCH_LIMIT) dy = 1.0f; // don't make a seam unless there is great stretch.
-				if (dx>TILE_LIMIT) dx = TILE_LIMIT; // don't tile past the texture's edge.
-				if (dy>TILE_LIMIT) dy = TILE_LIMIT; // don't tile past the texture's edge.
-				dx *= xU-nU;
-				dy *= xV-nV;
-				U[1] = U[0]+dx;
+
+				Real dx = (h3 - h2) * HEIGHT_SCALE;
+				dx = sqrt(1 + dx * dx);
+				Real dy = (h3 - h0) * HEIGHT_SCALE;
+				dy = sqrt(1 + dy * dy);
+				if (dx < STRETCH_LIMIT) dx = 1.0f;
+				if (dy < STRETCH_LIMIT) dy = 1.0f;
+				if (dx > TILE_LIMIT) dx = TILE_LIMIT;
+				if (dy > TILE_LIMIT) dy = TILE_LIMIT;
+				dx *= xU - nU;
+				dy *= xV - nV;
+				U[0] = nU; U[1] = nU + dx; U[2] = nU + dx; U[3] = nU;
+				V[0] = nV + dy; V[1] = nV + dy; V[2] = nV; V[3] = nV;
+
+				dx = (h1 - h0) * HEIGHT_SCALE;
+				dx = sqrt(1 + dx * dx);
+				dy = (h2 - h1) * HEIGHT_SCALE;
+				dy = sqrt(1 + dy * dy);
+				if (dx < STRETCH_LIMIT) dx = 1.0f;
+				if (dy < STRETCH_LIMIT) dy = 1.0f;
+				if (dx > TILE_LIMIT) dx = TILE_LIMIT;
+				if (dy > TILE_LIMIT) dy = TILE_LIMIT;
+				dx *= xU - nU;
+				dy *= xV - nV;
+				U[1] = U[0] + dx;
 				V[1] = V[3] + dy;
 			}
-			// Make sure we are within the texture;
+
 			Real adjU = 0;
 			Real adjV = 0;
 			Int i;
-			for (i=0; i<4; i++) {
+			for (i = 0; i < 4; i++) {
 				if (nVb - V[i] > adjV) adjV = nVb - V[i];
 			}
-			for (i=0; i<4; i++) {
+			for (i = 0; i < 4; i++) {
 				V[i] += adjV;
 			}
 			adjV = 0;
-			for (i=0; i<4; i++) {
-				if (U[i] - xUb > adjU) adjU = U[i]-xUb;
-				if (V[i] - xVb > adjV) adjV = V[i]-xVb;
+			for (i = 0; i < 4; i++) {
+				if (U[i] - xUb > adjU) adjU = U[i] - xUb;
+				if (V[i] - xVb > adjV) adjV = V[i] - xVb;
 			}
-			for (i=0; i<4; i++) {
+			for (i = 0; i < 4; i++) {
 				U[i] -= adjU;
 				V[i] -= adjV;
 			}
 		}
 		return true;
-//
 #endif
-
 	}
 	return false;
 }
@@ -2142,28 +2462,55 @@ void WorldHeightMap::setTextureLOD(Int lod)
 TextureClass *WorldHeightMap::getTerrainTexture()
 {
 	if (m_terrainTex == nullptr) {
-		Int edgeHeight;
-		Int height = updateTileTexturePositions(&edgeHeight);
-		Int pow2Height = 1;
-		while (pow2Height<height) {
-			pow2Height *=2;
-		}
-		REF_PTR_RELEASE(m_terrainTex);
-		m_terrainTex = MSGNEW("WorldHeightMap_getTerrainTexture") TerrainTextureClass(pow2Height);
-		m_terrainTexHeight = m_terrainTex->update(this);
-		char buf[64];
-		sprintf(buf, "Base tex height %d", pow2Height);
-		DEBUG_LOG((buf));
-		REF_PTR_RELEASE(m_alphaTerrainTex);
-		m_alphaTerrainTex = MSGNEW("WorldHeightMap_getTerrainTexture") AlphaTerrainTextureClass(m_terrainTex);
+		updateTileTexturePositions(nullptr);
 
-		pow2Height = 1;
-		while (pow2Height<edgeHeight) {
-			pow2Height *=2;
+		for (Int page = 0; page < MAX_TEXTURE_ATLAS_PAGES; ++page) {
+			// @feature Ronin 08/04/2026 Rebuild all per-page terrain atlas textures after layout changes.
+			REF_PTR_RELEASE(m_terrainTextures[page]);
+			REF_PTR_RELEASE(m_alphaTerrainTextures[page]);
+			REF_PTR_RELEASE(m_alphaEdgeTextures[page]);
 		}
-		REF_PTR_RELEASE(m_alphaEdgeTex);
-		m_alphaEdgeTex = MSGNEW("WorldHeightMap_getTerrainTexture") AlphaEdgeTextureClass(pow2Height);
-		m_alphaEdgeHeight = m_alphaEdgeTex->update(this);
+
+		for (Int page = 0; page < m_numTerrainTexturePages; ++page) {
+			Int pow2Height = 1;
+			while (pow2Height < m_terrainTexturePages[page].textureHeight) {
+				pow2Height *= 2;
+			}
+
+			m_terrainTextures[page] = MSGNEW("WorldHeightMap_getTerrainTexture") TerrainTextureClass(pow2Height);
+			m_terrainTexturePages[page].textureHeight = m_terrainTextures[page]->update(this, page);
+
+			m_alphaTerrainTextures[page] = MSGNEW("WorldHeightMap_getTerrainTexture") AlphaTerrainTextureClass(m_terrainTextures[page]);
+
+			if (page == 0) {
+				REF_PTR_RELEASE(m_terrainTex);
+				REF_PTR_SET(m_terrainTex, m_terrainTextures[page]);
+				m_terrainTexHeight = m_terrainTexturePages[page].textureHeight;
+
+				REF_PTR_RELEASE(m_alphaTerrainTex);
+				REF_PTR_SET(m_alphaTerrainTex, m_alphaTerrainTextures[page]);
+
+				char buf[64];
+				sprintf(buf, "Base tex height %d", pow2Height);
+				DEBUG_LOG((buf));
+			}
+		}
+
+		for (Int page = 0; page < m_numEdgeTexturePages; ++page) {
+			Int pow2Height = 1;
+			while (pow2Height < m_edgeTexturePages[page].textureHeight) {
+				pow2Height *= 2;
+			}
+
+			m_alphaEdgeTextures[page] = MSGNEW("WorldHeightMap_getTerrainTexture") AlphaEdgeTextureClass(pow2Height);
+			m_edgeTexturePages[page].textureHeight = m_alphaEdgeTextures[page]->update(this, page);
+
+			if (page == 0) {
+				REF_PTR_RELEASE(m_alphaEdgeTex);
+				REF_PTR_SET(m_alphaEdgeTex, m_alphaEdgeTextures[page]);
+				m_alphaEdgeHeight = m_edgeTexturePages[page].textureHeight;
+			}
+		}
 
 		//Generate lookup table for determining triangle order in each terrain cell.
 		//Not the best place to put this but getAlphaUVData() requires a valid terrain
@@ -2381,48 +2728,57 @@ AsciiString WorldHeightMap::getTerrainNameAt(Real x, Real y)
 }
 
 
-static UnsignedByte s_buffer[DATA_LEN_BYTES];
-static UnsignedByte s_blendBuffer[DATA_LEN_BYTES];
+static std::vector<UnsignedByte> s_buffer;
+static std::vector<UnsignedByte> s_blendBuffer;
 
-UnsignedByte * WorldHeightMap::getPointerToTileData(Int xIndex, Int yIndex, Int width)
+UnsignedByte* WorldHeightMap::getPointerToTileData(Int xIndex, Int yIndex, Int width)
 {
-	Int ndx = (yIndex*m_width)+xIndex;
-	if (yIndex<0 || xIndex<0 || xIndex>=m_width || yIndex>=m_height) {
+	Int ndx = (yIndex * m_width) + xIndex;
+	if (yIndex < 0 || xIndex < 0 || xIndex >= m_width || yIndex >= m_height) {
 		return nullptr;
 	}
-	if (ndx<0 || ndx>=m_dataSize) {
+	if (ndx < 0 || ndx >= m_dataSize) {
 		return nullptr;
 	}
-	TBlendTileInfo *pBlend = nullptr;
+
+	const Int requiredLen = width * width * TILE_BYTES_PER_PIXEL;
+	if ((Int)s_buffer.size() < requiredLen) {
+		s_buffer.resize(requiredLen);
+	}
+	if ((Int)s_blendBuffer.size() < requiredLen) {
+		s_blendBuffer.resize(requiredLen);
+	}
+
+	TBlendTileInfo* pBlend = nullptr;
 	Short tileNdx = m_tileNdxes[ndx];
-	if (getRawTileData(tileNdx, width, s_buffer, DATA_LEN_BYTES)) {
+	if (getRawTileData(tileNdx, width, s_buffer.data(), requiredLen)) {
 		Short blendTileNdx = m_blendTileNdxes[ndx];
-		if (blendTileNdx>0 && blendTileNdx < NUM_BLEND_TILES) {
+		if (blendTileNdx > 0 && blendTileNdx < NUM_BLEND_TILES) {
 			pBlend = &m_blendedTiles[blendTileNdx];
-			if (getRawTileData(pBlend->blendNdx, width, s_blendBuffer, DATA_LEN_BYTES)) {
-				UnsignedByte *pAlpha = getRGBAlphaDataForWidth(width, pBlend);
+			if (getRawTileData(pBlend->blendNdx, width, s_blendBuffer.data(), requiredLen)) {
+				UnsignedByte* pAlpha = getRGBAlphaDataForWidth(width, pBlend);
 				pAlpha += 3;  // skip over the rgb to the a.
 				Int i, limit;
-				limit = width*width;
-				UnsignedByte *pBlendData = s_blendBuffer;
-				UnsignedByte *pDestData = s_buffer;
-				for (i=0; i<limit; i++) {
-					Int r,g,b,a;
+				limit = width * width;
+				UnsignedByte* pBlendData = s_blendBuffer.data();
+				UnsignedByte* pDestData = s_buffer.data();
+				for (i = 0; i < limit; i++) {
+					Int r, g, b, a;
 					b = *pBlendData++;
 					g = *pBlendData++;
 					r = *pBlendData++; pBlendData++;
 					a = *pAlpha; pAlpha += 4;
-					*pDestData++ = ((b*a)/255) + (((*pDestData)*(255-a))/255);
-					*pDestData++ = ((g*a)/255) + (((*pDestData)*(255-a))/255);
-					*pDestData++ = ((r*a)/255) + (((*pDestData)*(255-a))/255);
-					*pDestData++ = 255; // just skip alpha.  not really used. jba.
+					*pDestData++ = ((b * a) / 255) + (((*pDestData) * (255 - a)) / 255);
+					*pDestData++ = ((g * a) / 255) + (((*pDestData) * (255 - a)) / 255);
+					*pDestData++ = ((r * a) / 255) + (((*pDestData) * (255 - a)) / 255);
+					*pDestData++ = 255;
 				}
 			}
 		}
-		return(s_buffer);
+		return s_buffer.data();
 	}
 
-	return(nullptr);
+	return nullptr;
 }
 
 #define K_HORIZ 0

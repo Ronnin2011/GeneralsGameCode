@@ -55,6 +55,8 @@ public:
 		// just use default destructor. ~TerrainTextureClass();
 public:
 	int update(WorldHeightMap *htMap); ///< Sets the pixels, and returns the actual height of the texture.
+	// @feature Ronin 08/04/2026 Page-aware terrain atlas upload path for multi-page terrain rendering.
+	int update(WorldHeightMap* htMap, Int texturePage); ///< Sets the pixels for one atlas page, and returns the actual height of the texture.
 	Bool updateFlat(WorldHeightMap *htMap, Int xCell, Int yCell, Int cellWidth, Int pixelsPerCell); ///< Sets the pixels.
 	void setLOD(Int LOD);
 };
@@ -90,8 +92,9 @@ public:
 		// just use default destructor. ~TerrainTextureClass();
 public:
 	int update(WorldHeightMap *htMap); ///< Sets the pixels, and returns the actual height of the texture.
-
-};
+	// @feature Ronin 08/04/2026 Page-aware edge atlas upload path for multi-page terrain rendering.
+	int update(WorldHeightMap* htMap, Int texturePage); ///< Sets the pixels for one atlas page, and returns the actual height of the texture.
+	};
 
 class LightMapTerrainTextureClass : public TextureClass
 {

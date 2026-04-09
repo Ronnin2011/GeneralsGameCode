@@ -32,6 +32,8 @@
 #include "WWLib/refcount.h"
 #include "Common/AsciiString.h"
 
+#include <vector>
+
 typedef struct {
 	Int blendNdx;
 	UnsignedByte horiz;
@@ -63,39 +65,36 @@ create the D3D texture in the game and 3d windows, and to create DIB data for th
 class TileData : public RefCountClass
 {
 protected:
+	// @feature Ronin 05/04/2026 Allow a logical terrain tile to keep higher source resolution.
+	Int m_pixelExtent;
 
 	// data is bgrabgrabgra to be compatible with windows blt. jba.
 	// Also, first byte is lower left pixel, not upper left pixel.
 	// so 0,0 is lower left, not upper left.
-	UnsignedByte m_tileData[DATA_LEN_BYTES];
-	/// Mipped down copies of the tile data.
-	UnsignedByte m_tileDataMip32[TILE_PIXEL_EXTENT_MIP1*TILE_PIXEL_EXTENT_MIP1*TILE_BYTES_PER_PIXEL];
-	UnsignedByte m_tileDataMip16[TILE_PIXEL_EXTENT_MIP2*TILE_PIXEL_EXTENT_MIP2*TILE_BYTES_PER_PIXEL];
-	UnsignedByte m_tileDataMip8[TILE_PIXEL_EXTENT_MIP3*TILE_PIXEL_EXTENT_MIP3*TILE_BYTES_PER_PIXEL];
-	UnsignedByte m_tileDataMip4[TILE_PIXEL_EXTENT_MIP4*TILE_PIXEL_EXTENT_MIP4*TILE_BYTES_PER_PIXEL];
-	UnsignedByte m_tileDataMip2[TILE_PIXEL_EXTENT_MIP5*TILE_PIXEL_EXTENT_MIP5*TILE_BYTES_PER_PIXEL];
-	UnsignedByte m_tileDataMip1[TILE_PIXEL_EXTENT_MIP6*TILE_PIXEL_EXTENT_MIP6*TILE_BYTES_PER_PIXEL];
+	std::vector<UnsignedByte> m_tileData;
+	std::vector<std::vector<UnsignedByte>> m_mipData;
 
 public:
+	// @feature Ronin 07/04/2026 Track which atlas page owns this tile for future multi-page terrain atlases.
+	Int m_texturePage;
 	ICoord2D	m_tileLocationInTexture;
-
 
 protected:
 	/** doMip - generates the next mip level mipping pHiRes down to pLoRes.
 				pLoRes is 1/2 the width of pHiRes, and both are square. */
-	static void doMip(UnsignedByte *pHiRes, Int hiRow, UnsignedByte *pLoRes);
-
-
+	static void doMip(UnsignedByte* pHiRes, Int hiRow, UnsignedByte* pLoRes);
 
 public:
-	TileData();
+	explicit TileData(Int pixelExtent = TILE_PIXEL_EXTENT);
 
 public:
-	UnsignedByte *getDataPtr() {return(m_tileData);};
-	static Int dataLen() {return(DATA_LEN_BYTES);};
+	UnsignedByte* getDataPtr() { return m_tileData.data(); }
+	static Int dataLen() { return DATA_LEN_BYTES; }
+	Int getDataLen() const { return m_pixelExtent * m_pixelExtent * TILE_BYTES_PER_PIXEL; }
+	Int getPixelExtent() const { return m_pixelExtent; }
 
 	void updateMips();
 
 	Bool hasRGBDataForWidth(Int width);
-	UnsignedByte *getRGBDataForWidth(Int width);
+	UnsignedByte* getRGBDataForWidth(Int width);
 };

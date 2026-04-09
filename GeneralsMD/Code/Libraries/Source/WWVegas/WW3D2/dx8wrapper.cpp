@@ -368,8 +368,7 @@ static void Ensure_Device_IB_Matches_Wrapper_Expected(const char* where)
 	dev->GetIndices(&boundIB);
 
 	if (boundIB != expectedIB) {
-		dev->SetIndices(expectedIB);
-		DX8_RECORD_DX8_CALLS();
+		DX8CALL(SetIndices(expectedIB));
 
 		WWDEBUG_SAY((
 			"IA ENSURE(IB) [Frame %lu] where=%s expected=%p bound=%p type=%u",
@@ -918,10 +917,9 @@ void DX8Wrapper::Set_Default_Global_Render_States()
 	// Ronin @bugfix 07/11/2025: DX9 requires explicit pixel shader NULL
 	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
 	if (pDev) {
-		pDev->SetPixelShader(NULL);
-		pDev->SetVertexShader(NULL);       // Clear vertex shader
+		DX8CALL(SetPixelShader(NULL));
+		DX8CALL(SetVertexShader(NULL));      // Clear vertex shader
 		//pDev->SetVertexDeclaration(NULL);  // Clear vertex declaration
-		number_of_DX8_calls += 2;          // ← CHANGE FROM ++ to += 2
 	}
 
 	// ========== CRITICAL: FIXED-FUNCTION TEXTURE STAGE SETUP ==========
@@ -1011,7 +1009,7 @@ void DX8Wrapper::Reset_Pass_Render_States()
 	// Ronin @bugfix 07/11/2025: DX9 requires explicit NULL
 	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
 	if (pDev) {
-		pDev->SetPixelShader(nullptr);
+		DX8CALL(SetPixelShader(NULL));
 		DX8_RECORD_DX8_CALLS();
 	}
 
@@ -1052,16 +1050,6 @@ void DX8Wrapper::Reset_Pass_Render_States()
 #endif
 }
 
-//MW: I added this for 'Generals'.
-bool DX8Wrapper::Validate_Device()
-{	DWORD numPasses=0;
-	HRESULT hRes;
-
-	hRes= DX8Wrapper::_Get_D3D_Device8()->ValidateDevice(&numPasses);
-
-	return (hRes == D3D_OK);
-}
-
 void DX8Wrapper::Invalidate_Cached_Render_States()
 {
 	render_state_changed=0;
@@ -1100,9 +1088,8 @@ void DX8Wrapper::Invalidate_Cached_Render_States()
 	// Ronin @bugfix 06/11/2025: DX9 requires explicit pixel shader cleanup during state invalidation
 	//IDirect3DDevice9* pDev = _Get_D3D_Device8();
 	if (pDev) {
-		pDev->SetPixelShader(nullptr);
-		pDev->SetVertexShader(nullptr);
-		number_of_DX8_calls += 2;
+		DX8CALL(SetPixelShader(NULL));
+		DX8CALL(SetVertexShader(NULL));
 
 		// Update wrapper tracking to match device state
 		render_state.currentVS = nullptr;
@@ -5798,9 +5785,8 @@ void DX8Wrapper::BindLayoutFVF(DWORD fvf, const char* owner)
 	// - clear VS + decl
 	// - set FVF
 	// Pixel shader is intentionally preserved (river/trapezoid use PS with FVF pipeline).
-	pDev->SetVertexShader(nullptr);
-	pDev->SetVertexDeclaration(nullptr);
-	number_of_DX8_calls += 2;
+	DX8CALL(SetVertexShader(NULL));
+	DX8CALL(SetVertexDeclaration(NULL));
 
 	HRESULT hr = pDev->SetFVF(fvf);
 	DX8_RECORD_DX8_CALLS();

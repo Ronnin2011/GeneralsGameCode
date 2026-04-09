@@ -55,6 +55,7 @@
 #ifndef USE_FLAT_HEIGHT_MAP // Flat height map uses flattened textures. jba. [3/20/2003]
 
 #include <stdlib.h>
+#include <vector>
 #include <assetmgr.h>
 #include <texture.h>
 #include <tri.h>
@@ -2001,16 +2002,121 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 			DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_BLUE|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_RED);
 	}
 
-	Int pass;
+		Int pass;
+	const Bool useMultiPageTerrain = !m_disableTextures && m_map != nullptr && m_map->getTerrainTexturePageCount() > 1;
+
+	const auto drawPagedTerrainVB =
+		[&](Int vbTileX, Int vbTileY, W3DShaderManager::ShaderTypes shaderType, Int shaderPass)
+		{
+			struct TerrainPageDrawGroup
+			{
+				Int basePage;
+				Int alphaPage;
+				std::vector<UnsignedShort> indices;
+			};
+
+			DX8VertexBufferClass* pVB = getVertexBufferTile(vbTileX, vbTileY);
+			if (pVB == nullptr || m_map == nullptr) {
+				return;
+			}
+
+			Int cellCountX = VERTEX_BUFFER_TILE_LENGTH;
+			Int cellCountY = VERTEX_BUFFER_TILE_LENGTH;
+			if (vbTileX == m_numVBTilesX - 1 && m_numBlockColumnsInLastVB > 0) {
+				cellCountX = m_numBlockColumnsInLastVB;
+			}
+			if (vbTileY == m_numVBTilesY - 1 && m_numBlockRowsInLastVB > 0) {
+				cellCountY = m_numBlockRowsInLastVB;
+			}
+
+			const Int originX = vbTileX * VERTEX_BUFFER_TILE_LENGTH;
+			const Int originY = vbTileY * VERTEX_BUFFER_TILE_LENGTH;
+			const Int vertsPerRow = VERTEX_BUFFER_TILE_LENGTH * 4;
+
+			std::vector<TerrainPageDrawGroup> drawGroups;
+			drawGroups.reserve(4);
+
+			for (Int localY = 0; localY < cellCountY; ++localY) {
+				for (Int localX = 0; localX < cellCountX; ++localX) {
+					const Int mapX = getXWithOrigin(originX + localX);
+					const Int mapY = getYWithOrigin(originY + localY);
+					const Int basePage = m_map->getTerrainTexturePageForCell(mapX, mapY);
+					const Int alphaPage = m_map->getAlphaTexturePageForCell(mapX, mapY);
+
+					TerrainPageDrawGroup* pGroup = nullptr;
+					for (Int groupNdx = 0; groupNdx < (Int)drawGroups.size(); ++groupNdx) {
+						TerrainPageDrawGroup& candidate = drawGroups[groupNdx];
+						if (candidate.basePage == basePage && candidate.alphaPage == alphaPage) {
+							pGroup = &candidate;
+							break;
+						}
+					}
+
+					if (pGroup == nullptr) {
+						drawGroups.push_back(TerrainPageDrawGroup());
+						pGroup = &drawGroups.back();
+						pGroup->basePage = basePage;
+						pGroup->alphaPage = alphaPage;
+					}
+
+					const UnsignedShort vertexBase = (UnsignedShort)(localY * vertsPerRow + localX * 4);
+					pGroup->indices.push_back(vertexBase + 0);
+					pGroup->indices.push_back(vertexBase + 2);
+					pGroup->indices.push_back(vertexBase + 3);
+					pGroup->indices.push_back(vertexBase + 0);
+					pGroup->indices.push_back(vertexBase + 1);
+					pGroup->indices.push_back(vertexBase + 2);
+				}
+			}
+
+			for (Int groupNdx = 0; groupNdx < (Int)drawGroups.size(); ++groupNdx) {
+				TerrainPageDrawGroup& drawGroup = drawGroups[groupNdx];
+				const Int indexCount = (Int)drawGroup.indices.size();
+				if (indexCount == 0) {
+					continue;
+				}
+
+				TextureClass* pBaseTexture = m_map->getTerrainTexture(drawGroup.basePage);
+				TextureClass* pAlphaTexture = m_map->getAlphaTerrainTexture(drawGroup.alphaPage);
+				if (pBaseTexture == nullptr || pAlphaTexture == nullptr) {
+					continue;
+				}
+
+				DynamicIBAccessClass ibAccess(BUFFER_TYPE_DYNAMIC_DX8, indexCount);
+				{
+					DynamicIBAccessClass::WriteLockClass lockib(&ibAccess);
+					UnsignedShort* pIndices = lockib.Get_Index_Array();
+					if (pIndices == nullptr) {
+						continue;
+					}
+					memcpy(pIndices, &drawGroup.indices[0], indexCount * sizeof(UnsignedShort));
+				}
+
+				W3DShaderManager::resetShader(shaderType);
+				W3DShaderManager::setTexture(0, pBaseTexture);
+				W3DShaderManager::setTexture(1, pAlphaTexture);
+				W3DShaderManager::setShader(shaderType, shaderPass);
+
+				DX8Wrapper::Set_Vertex_Buffer(pVB);
+				DX8Wrapper::Set_Index_Buffer(ibAccess, 0);
+
+				if (Is_Hidden() == 0) {
+					DX8Wrapper::Draw_Triangles(0, indexCount / 3, 0, HEIGHTMAP_VERTEX_NUM);
+				}
+			}
+		};
+
  	for (pass=0; pass<devicePasses; pass++) {
 #ifdef TIMING_TESTS
 #endif
+		const Bool usePagedDrawThisPass = useMultiPageTerrain && (devicePasses == 1 || pass < 2);
+
 		if (!doMultiPassWireFrame)	//multi-pass wireframe doesn't use regular shaders.
 		{
  			if (m_disableTextures ) {
  				DX8Wrapper::Set_Shader(ShaderClass::_PresetOpaque2DShader);
  				DX8Wrapper::Set_Texture(0,nullptr);
-   			} else {
+   			} else if (!usePagedDrawThisPass) {
  				W3DShaderManager::setShader(st, pass);
 			}
 		}
@@ -2018,7 +2124,6 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 		for (j=0; j<m_numVBTilesY; j++)
 			for (i=0; i<m_numVBTilesX; i++)
 			{
-				DX8Wrapper::Set_Vertex_Buffer(getVertexBufferTile(i, j));
 #ifdef PRE_TRANSFORM_VERTEX
 				if (m_xformedVertexBuffer && pass==0) {
 					// Note - m_xformedVertexBuffer should only be used for non T&L hardware.  jba.
@@ -2035,10 +2140,14 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 					DX8Wrapper::_Get_D3D_Device8()->SetFVF(D3DFVF_XYZRHW |D3DFVF_DIFFUSE|D3DFVF_TEX2);
 				}
 #endif
-				if (Is_Hidden() == 0) {
-					DX8Wrapper::Draw_Triangles(0, HEIGHTMAP_POLYGON_NUM, 0, HEIGHTMAP_VERTEX_NUM);
+				if (usePagedDrawThisPass) {
+					drawPagedTerrainVB(i, j, st, pass);
+				} else {
+					DX8Wrapper::Set_Vertex_Buffer(getVertexBufferTile(i, j));
+					if (Is_Hidden() == 0) {
+						DX8Wrapper::Draw_Triangles(0, HEIGHTMAP_POLYGON_NUM, 0, HEIGHTMAP_VERTEX_NUM);
+					}
 				}
-
 			}
 	}
 
@@ -2177,207 +2286,252 @@ void HeightMapRenderObjClass::renderTerrainPass(CameraClass *pCamera)
 blended together.  Used primarily for corner cases where 3 different textures meet.*/
 void HeightMapRenderObjClass::renderExtraBlendTiles()
 {
-	Int vertexCount = 0;
-	Int indexCount = 0;
 	Int xExtent = m_map->getXExtent();
 	Int border = m_map->getBorderSizeInline();
 	static Int maxBlendTiles = DEFAULT_MAX_FRAME_EXTRABLEND_TILES;
 
 	m_numVisibleExtraBlendTiles = 0;
 
-	if (!m_numExtraBlendTiles)
-		return;	//nothing to draw
-
-	if (maxBlendTiles > 10000)	//we can only fit about 10000 tiles into a single VB.
-		maxBlendTiles = 10000;
-
-	DynamicVBAccessClass vb_access(BUFFER_TYPE_DYNAMIC_DX8,DX8_FVF_XYZNDUV2,maxBlendTiles*4);
-	DynamicIBAccessClass ib_access(BUFFER_TYPE_DYNAMIC_DX8,maxBlendTiles*6);
-	{
-
-		DynamicVBAccessClass::WriteLockClass lock(&vb_access);
-		VertexFormatXYZNDUV2* vb= lock.Get_Formatted_Vertex_Array();
-		DynamicIBAccessClass::WriteLockClass lockib(&ib_access);
-		UnsignedShort *ib=lockib.Get_Index_Array();
-
-		if (!vb || !ib) return;
-
-		const UnsignedByte* data = m_map->getDataPtr();
-
-		//Loop over visible terrain and extract all the tiles that need extra blend
-		Int drawEdgeY=m_map->getDrawOrgY()+m_map->getDrawHeight()-1;
-		Int drawEdgeX=m_map->getDrawOrgX()+m_map->getDrawWidth()-1;
-		if (drawEdgeX > (m_map->getXExtent()-1))
-			drawEdgeX = m_map->getXExtent()-1;
-		if (drawEdgeY > (m_map->getYExtent()-1))
-			drawEdgeY = m_map->getYExtent()-1;
-		Int drawStartX=m_map->getDrawOrgX();
-		Int drawStartY=m_map->getDrawOrgY();
-
-		for (Int j=0; j<m_numExtraBlendTiles; j++)
-		{
-			if (vertexCount >= (maxBlendTiles*4))
-				break;	//no room in vertex buffer
-
-			Real U[4],V[4];
-			UnsignedByte alpha[4];
-			Bool flipState,cliffState;
-			Int x = m_extraBlendTilePositions[j] & 0xffff;
-			Int y = m_extraBlendTilePositions[j] >> 16;
-
-			if (x >= drawStartX && x < drawEdgeX &&
-				y >= drawStartY && y < drawEdgeY &&
-				m_map->getExtraAlphaUVData(x,y,U,V,alpha,&flipState, &cliffState))
-			{	//this tile is inside visible region and has 3rd blend layer.
-
-				Int idx = x+y*xExtent;
-
-				Real p0=data[idx]*MAP_HEIGHT_SCALE;
-				Real p1=data[idx+1]*MAP_HEIGHT_SCALE;
-				Real p2=data[idx + 1 + xExtent]*MAP_HEIGHT_SCALE;
-				Real p3=data[idx + xExtent]*MAP_HEIGHT_SCALE;
-				if (cliffState && abs(p0-p2) > abs(p1-p3))	//cliffs sometimes force a flip
-					flipState = TRUE;
-
-				vb->x=(x-border)*MAP_XY_FACTOR;
-				vb->y=(y-border)*MAP_XY_FACTOR;
-				vb->z=p0;
-				vb->nx=0;
-				vb->ny=0;
-				vb->nz=0;
-				vb->diffuse=(alpha[0]<<24)|(getStaticDiffuse(x,y) & 0x00ffffff);
-				vb->u1=U[0];
-				vb->v1=V[0];
-				vb->u2=0;
-				vb->v2=0;
-				vb++;
-
-				vb->x=(x+1-border)*MAP_XY_FACTOR;
-				vb->y=(y-border)*MAP_XY_FACTOR;
-				vb->z=p1;
-				vb->nx=0;
-				vb->ny=0;
-				vb->nz=0;
-				vb->diffuse=(alpha[1]<<24)|(getStaticDiffuse(x+1,y) & 0x00ffffff);
-				vb->u1=U[1];
-				vb->v1=V[1];
-				vb->u2=0;
-				vb->v2=0;
-				vb++;
-
-				vb->x=(x+1-border)*MAP_XY_FACTOR;
-				vb->y=(y+1-border)*MAP_XY_FACTOR;
-				vb->z=p2;
-				vb->nx=0;
-				vb->ny=0;
-				vb->nz=0;
-				vb->diffuse=(alpha[2]<<24)|(getStaticDiffuse(x+1,y+1) & 0x00ffffff);
-				vb->u1=U[2];
-				vb->v1=V[2];
-				vb->u2=0;
-				vb->v2=0;
-				vb++;
-
-				vb->x=(x-border)*MAP_XY_FACTOR;
-				vb->y=(y+1-border)*MAP_XY_FACTOR;
-				vb->z=p3;
-				vb->nx=0;
-				vb->ny=0;
-				vb->nz=0;
-				vb->diffuse=(alpha[3]<<24)|(getStaticDiffuse(x,y+1) & 0x00ffffff);
-				vb->u1=U[3];
-				vb->v1=V[3];
-				vb->u2=0;
-				vb->v2=0;
-				vb++;
-
-				if (flipState)
-				{
-					ib[0]=1+vertexCount;
-					ib[1]=3+vertexCount;
-					ib[2]=0+vertexCount;
-					ib[3]=1+vertexCount;
-					ib[4]=2+vertexCount;
-					ib[5]=3+vertexCount;
-				}
-				else
-				{
-					ib[0]=0+vertexCount;
-					ib[1]=2+vertexCount;
-					ib[2]=3+vertexCount;
-					ib[3]=0+vertexCount;
-					ib[4]=1+vertexCount;
-					ib[5]=2+vertexCount;
-				}
-				ib += 6;
-				vertexCount +=4;
-				indexCount +=6;
-			}
-		}
+	if (!m_map || !m_numExtraBlendTiles) {
+		return;
 	}
 
-	if (vertexCount)
+	if (maxBlendTiles > 10000) {
+		maxBlendTiles = 10000;
+	}
+
+	Int drawEdgeY = m_map->getDrawOrgY() + m_map->getDrawHeight() - 1;
+	Int drawEdgeX = m_map->getDrawOrgX() + m_map->getDrawWidth() - 1;
+	if (drawEdgeX > (m_map->getXExtent() - 1)) {
+		drawEdgeX = m_map->getXExtent() - 1;
+	}
+	if (drawEdgeY > (m_map->getYExtent() - 1)) {
+		drawEdgeY = m_map->getYExtent() - 1;
+	}
+	Int drawStartX = m_map->getDrawOrgX();
+	Int drawStartY = m_map->getDrawOrgY();
+
+	Int pageCount = m_map->getTerrainTexturePageCount();
+	if (pageCount < 1) {
+		pageCount = 1;
+	}
+
+	const Bool doCloud = useCloud();
+
+	for (Int texturePage = 0; texturePage < pageCount; ++texturePage)
 	{
-		//Check if we couldn't fit all blend tiles into vertex buffer so we can enlarge it for next frame.
-		if (vertexCount == (maxBlendTiles*4))
-			maxBlendTiles += 16;	//enlarge by 16 to reduce trashing.
+		std::vector<Int> pageTileIndices;
+		pageTileIndices.reserve(m_numExtraBlendTiles);
 
-		ShaderClass::Invalidate();	//invalidate to force shader to reset since we directly changed states
-		DX8Wrapper::Set_Index_Buffer(ib_access,0);
-		DX8Wrapper::Set_Vertex_Buffer(vb_access);
-		VertexMaterialClass *vmat=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
-		DX8Wrapper::Set_Material(vmat);
-		REF_PTR_RELEASE(vmat);
-		ShaderClass shader=ShaderClass::_PresetOpaqueShader;
-		shader.Set_Depth_Mask(ShaderClass::DEPTH_WRITE_DISABLE);	//disable writes to z
-		DX8Wrapper::Set_Shader(shader);
-
-		if (TheGlobalData->m_use3WayTerrainBlends == 2)
+		for (Int j = 0; j < m_numExtraBlendTiles; ++j)
 		{
-			shader.Set_Primary_Gradient(ShaderClass::GRADIENT_DISABLE);	//disable lighting.
-			shader.Set_Texturing(ShaderClass::TEXTURING_DISABLE);		//disable texturing.
-			DX8Wrapper::Set_Shader(shader);
-			DX8Wrapper::Set_Texture(0,nullptr);	//debug mode which draws terrain tiles in white.
-			if (Is_Hidden() == 0) {
-				DX8Wrapper::Draw_Triangles(	0,indexCount/3, 0,	vertexCount);	//draw a quad, 2 triangles, 4 verts
-				m_numVisibleExtraBlendTiles += indexCount/6;
+			const Int x = m_extraBlendTilePositions[j] & 0xffff;
+			const Int y = m_extraBlendTilePositions[j] >> 16;
+
+			if (x < drawStartX || x >= drawEdgeX || y < drawStartY || y >= drawEdgeY) {
+				continue;
 			}
+
+			const Int drawLocalX = x - drawStartX;
+			const Int drawLocalY = y - drawStartY;
+			if (m_map->getExtraAlphaTexturePageForCell(drawLocalX, drawLocalY) != texturePage) {
+				continue;
+			}
+
+			pageTileIndices.push_back(j);
 		}
-		else
+
+		if (pageTileIndices.empty()) {
+			continue;
+		}
+
+		TextureClass* pBlendTexture = m_map->getAlphaTerrainTexture(texturePage);
+		if (pBlendTexture == nullptr && TheGlobalData->m_use3WayTerrainBlends != 2) {
+			continue;
+		}
+
+		size_t tileCursor = 0;
+		while (tileCursor < pageTileIndices.size())
 		{
-			W3DShaderManager::setTexture(0,m_stageOneTexture);
-			W3DShaderManager::setTexture(1,m_stageTwoTexture);	//cloud
-			W3DShaderManager::setTexture(2,m_stageThreeTexture);	//noise/lightmap
+			Int vertexCount = 0;
+			Int indexCount = 0;
 
-			W3DShaderManager::ShaderTypes st = W3DShaderManager::ST_ROAD_BASE;
+			DynamicVBAccessClass vb_access(BUFFER_TYPE_DYNAMIC_DX8, DX8_FVF_XYZNDUV2, maxBlendTiles * 4);
+			DynamicIBAccessClass ib_access(BUFFER_TYPE_DYNAMIC_DX8, maxBlendTiles * 6);
 
-			const Bool doCloud = useCloud();
-
-			if (TheGlobalData->m_useLightMap && doCloud)
- 			{
-				st = W3DShaderManager::ST_ROAD_BASE_NOISE12;
- 			}
- 			else if (TheGlobalData->m_useLightMap)
- 			{	//lightmap only
- 				st = W3DShaderManager::ST_ROAD_BASE_NOISE2;
- 			}
- 			else if (doCloud)
- 			{	//cloudmap only
- 				st = W3DShaderManager::ST_ROAD_BASE_NOISE1;
- 			}
-
-			Int devicePasses=W3DShaderManager::getShaderPasses(st);
-
-			for (Int pass=0; pass < devicePasses; pass++)
 			{
-				W3DShaderManager::setShader(st, pass);
-				if (Is_Hidden() == 0) {
-					DX8Wrapper::Draw_Triangles(	0,indexCount/3, 0,	vertexCount);	//draw a quad, 2 triangles, 4 verts
-					m_numVisibleExtraBlendTiles += indexCount/6;
+				DynamicVBAccessClass::WriteLockClass lock(&vb_access);
+				VertexFormatXYZNDUV2* vb = lock.Get_Formatted_Vertex_Array();
+				DynamicIBAccessClass::WriteLockClass lockib(&ib_access);
+				UnsignedShort* ib = lockib.Get_Index_Array();
+
+				if (!vb || !ib) {
+					return;
+				}
+
+				const UnsignedByte* data = m_map->getDataPtr();
+
+				while (tileCursor < pageTileIndices.size() && vertexCount < (maxBlendTiles * 4))
+				{
+					Real U[4], V[4];
+					UnsignedByte alpha[4];
+					Bool flipState, cliffState;
+
+					const Int tileIndex = pageTileIndices[tileCursor++];
+					const Int x = m_extraBlendTilePositions[tileIndex] & 0xffff;
+					const Int y = m_extraBlendTilePositions[tileIndex] >> 16;
+
+					if (!m_map->getExtraAlphaUVData(x, y, U, V, alpha, &flipState, &cliffState)) {
+						continue;
+					}
+
+					const Int idx = x + y * xExtent;
+
+					Real p0 = data[idx] * MAP_HEIGHT_SCALE;
+					Real p1 = data[idx + 1] * MAP_HEIGHT_SCALE;
+					Real p2 = data[idx + 1 + xExtent] * MAP_HEIGHT_SCALE;
+					Real p3 = data[idx + xExtent] * MAP_HEIGHT_SCALE;
+					if (cliffState && abs(p0 - p2) > abs(p1 - p3)) {
+						flipState = TRUE;
+					}
+
+					vb->x = (x - border) * MAP_XY_FACTOR;
+					vb->y = (y - border) * MAP_XY_FACTOR;
+					vb->z = p0;
+					vb->nx = 0;
+					vb->ny = 0;
+					vb->nz = 0;
+					vb->diffuse = (alpha[0] << 24) | (getStaticDiffuse(x, y) & 0x00ffffff);
+					vb->u1 = U[0];
+					vb->v1 = V[0];
+					vb->u2 = 0;
+					vb->v2 = 0;
+					vb++;
+
+					vb->x = (x + 1 - border) * MAP_XY_FACTOR;
+					vb->y = (y - border) * MAP_XY_FACTOR;
+					vb->z = p1;
+					vb->nx = 0;
+					vb->ny = 0;
+					vb->nz = 0;
+					vb->diffuse = (alpha[1] << 24) | (getStaticDiffuse(x + 1, y) & 0x00ffffff);
+					vb->u1 = U[1];
+					vb->v1 = V[1];
+					vb->u2 = 0;
+					vb->v2 = 0;
+					vb++;
+
+					vb->x = (x + 1 - border) * MAP_XY_FACTOR;
+					vb->y = (y + 1 - border) * MAP_XY_FACTOR;
+					vb->z = p2;
+					vb->nx = 0;
+					vb->ny = 0;
+					vb->nz = 0;
+					vb->diffuse = (alpha[2] << 24) | (getStaticDiffuse(x + 1, y + 1) & 0x00ffffff);
+					vb->u1 = U[2];
+					vb->v1 = V[2];
+					vb->u2 = 0;
+					vb->v2 = 0;
+					vb++;
+
+					vb->x = (x - border) * MAP_XY_FACTOR;
+					vb->y = (y + 1 - border) * MAP_XY_FACTOR;
+					vb->z = p3;
+					vb->nx = 0;
+					vb->ny = 0;
+					vb->nz = 0;
+					vb->diffuse = (alpha[3] << 24) | (getStaticDiffuse(x, y + 1) & 0x00ffffff);
+					vb->u1 = U[3];
+					vb->v1 = V[3];
+					vb->u2 = 0;
+					vb->v2 = 0;
+					vb++;
+
+					if (flipState)
+					{
+						ib[0] = 1 + vertexCount;
+						ib[1] = 3 + vertexCount;
+						ib[2] = 0 + vertexCount;
+						ib[3] = 1 + vertexCount;
+						ib[4] = 2 + vertexCount;
+						ib[5] = 3 + vertexCount;
+					}
+					else
+					{
+						ib[0] = 0 + vertexCount;
+						ib[1] = 2 + vertexCount;
+						ib[2] = 3 + vertexCount;
+						ib[3] = 0 + vertexCount;
+						ib[4] = 1 + vertexCount;
+						ib[5] = 2 + vertexCount;
+					}
+
+					ib += 6;
+					vertexCount += 4;
+					indexCount += 6;
 				}
 			}
-			W3DShaderManager::resetShader(st);
+
+			if (!vertexCount) {
+				continue;
+			}
+
+			if (vertexCount == (maxBlendTiles * 4)) {
+				maxBlendTiles += 16;
+			}
+
+			ShaderClass::Invalidate();
+			DX8Wrapper::Set_Index_Buffer(ib_access, 0);
+			DX8Wrapper::Set_Vertex_Buffer(vb_access);
+			VertexMaterialClass* vmat = VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
+			DX8Wrapper::Set_Material(vmat);
+			REF_PTR_RELEASE(vmat);
+
+			ShaderClass shader = ShaderClass::_PresetOpaqueShader;
+			shader.Set_Depth_Mask(ShaderClass::DEPTH_WRITE_DISABLE);
+			DX8Wrapper::Set_Shader(shader);
+
+			if (TheGlobalData->m_use3WayTerrainBlends == 2)
+			{
+				shader.Set_Primary_Gradient(ShaderClass::GRADIENT_DISABLE);
+				shader.Set_Texturing(ShaderClass::TEXTURING_DISABLE);
+				DX8Wrapper::Set_Shader(shader);
+				DX8Wrapper::Set_Texture(0, nullptr);
+
+				if (Is_Hidden() == 0) {
+					DX8Wrapper::Draw_Triangles(0, indexCount / 3, 0, vertexCount);
+				}
+			}
+			else
+			{
+				W3DShaderManager::setTexture(0, pBlendTexture);
+				W3DShaderManager::setTexture(1, m_stageTwoTexture);
+				W3DShaderManager::setTexture(2, m_stageThreeTexture);
+
+				W3DShaderManager::ShaderTypes st = W3DShaderManager::ST_ROAD_BASE;
+				if (TheGlobalData->m_useLightMap && doCloud) {
+					st = W3DShaderManager::ST_ROAD_BASE_NOISE12;
+				}
+				else if (TheGlobalData->m_useLightMap) {
+					st = W3DShaderManager::ST_ROAD_BASE_NOISE2;
+				}
+				else if (doCloud) {
+					st = W3DShaderManager::ST_ROAD_BASE_NOISE1;
+				}
+
+				const Int devicePasses = W3DShaderManager::getShaderPasses(st);
+				for (Int pass = 0; pass < devicePasses; ++pass)
+				{
+					W3DShaderManager::setShader(st, pass);
+					if (Is_Hidden() == 0) {
+						DX8Wrapper::Draw_Triangles(0, indexCount / 3, 0, vertexCount);
+					}
+				}
+				W3DShaderManager::resetShader(st);
+			}
+
+			m_numVisibleExtraBlendTiles += indexCount / 6;
 		}
-  }
+	}
 }
 #endif

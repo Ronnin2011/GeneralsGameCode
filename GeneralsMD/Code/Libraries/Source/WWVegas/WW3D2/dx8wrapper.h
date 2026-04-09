@@ -304,7 +304,7 @@ WWINLINE void DX8_ErrorCode(unsigned res)
 	{ \
 		DX8_Assert(); \
 		res = DX8Wrapper::_Get_D3D_Device8()->x; \
-		number_of_DX8_calls++; \
+		DX8Wrapper::Increment_DX8_CallCount(); \
 		if (FAILED(res)) { \
 			WWDEBUG_SAY(("DX8CALL_HRES FAILED: %s returned 0x%08X (%s) at %s:%d", \
 				#x, res, DXGetErrorString9A(res), __FILE__, __LINE__)); \
@@ -319,7 +319,7 @@ WWINLINE void DX8_ErrorCode(unsigned res)
 	{ \
 		DX8_Assert(); \
 		HRESULT __hr = DX8Wrapper::_Get_D3D_Device8()->x; \
-		number_of_DX8_calls++; \
+		DX8Wrapper::Increment_DX8_CallCount(); \
 		if (FAILED(__hr)) { \
 			WWDEBUG_SAY(("DX8CALL FAILED: %s returned 0x%08X (%s) at %s:%d", \
 				#x, __hr, DXGetErrorString9A(__hr), __FILE__, __LINE__)); \
@@ -334,7 +334,7 @@ WWINLINE void DX8_ErrorCode(unsigned res)
 	{ \
 		DX8_Assert(); \
 		HRESULT __hr = DX8Wrapper::_Get_D3D8()->x; \
-		number_of_DX8_calls++; \
+		DX8Wrapper::Increment_DX8_CallCount(); \
 		if (FAILED(__hr)) { \
 			WWDEBUG_SAY(("DX8CALL_D3D FAILED: %s returned 0x%08X (%s) at %s:%d", \
 				#x, __hr, DXGetErrorString9A(__hr), __FILE__, __LINE__)); \
@@ -1001,6 +1001,7 @@ protected:
 	static unsigned						RenderStates[256];
 	static unsigned						TextureStageStates[MAX_TEXTURE_STAGES][33];
 	static unsigned						SamplerStates[MAX_TEXTURE_STAGES][14];  // @build Ronin 29/10/2025 DX9: Sampler states added to wrapper tracking	static IDirect3DBaseTexture8 *	Textures[MAX_TEXTURE_STAGES];
+	static IDirect3DBaseTexture8* Textures[MAX_TEXTURE_STAGES];
 
 	// These fog settings are constant for all objects in a given scene,
 	// unlike the matching renderstates which vary based on shader settings.
@@ -1009,8 +1010,6 @@ protected:
 
 	static DX8FrameStatistics			FrameStatistics;
 	static bool								CurrentDX8LightEnables[MAX_LIGHTS];
-
-	static unsigned long FrameCount;
 
 	static DX8Caps*						CurrentCaps;
 
@@ -1065,7 +1064,7 @@ WWINLINE void DX8Wrapper::Set_FVF(unsigned fvf)
 	if (currentDecl) {
 		pDev->SetVertexDeclaration(nullptr);
 		currentDecl->Release();
-		number_of_DX8_calls++;
+		DX8_RECORD_DX8_CALLS();
 #ifdef _DEBUG
 		WWDEBUG_SAY(("Wrapper: cleared decl=%p before setting FVF=0x%08X", currentDecl, fvf));
 #endif
@@ -1078,7 +1077,7 @@ WWINLINE void DX8Wrapper::Set_FVF(unsigned fvf)
 	if (currentVS) {
 		pDev->SetVertexShader(nullptr);
 		currentVS->Release();
-		number_of_DX8_calls++;
+		DX8_RECORD_DX8_CALLS();
 	}
 	
 	//We don't clear pixel shader cause many FVF paths use one. DX9 allows FVF and pixel shader to co-exist.
@@ -1089,7 +1088,7 @@ WWINLINE void DX8Wrapper::Set_FVF(unsigned fvf)
 		WWDEBUG_SAY(("❌ SetFVF(0x%08X) FAILED: 0x%08X", fvf, hr));
 		return;
 	}
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 
 	// Update tracking
 	//render_state.currentDecl = nullptr;
@@ -1147,13 +1146,13 @@ WWINLINE void DX8Wrapper::Set_Vertex_Shader(DWORD vertex_shader)
 		// DX8: SetVertexShader(0) = disable shader, revert to fixed-function
 		// DX9: Just disable the programmable shader, don't touch FVF
 		pDev->SetVertexShader(nullptr);
-		number_of_DX8_calls++;
+		DX8_RECORD_DX8_CALLS();
 		return;
 	}
 
 	// Assume it's an FVF code
 	pDev->SetFVF(vertex_shader);
-	number_of_DX8_calls++;
+	DX8_RECORD_DX8_CALLS();
 }
 
 WWINLINE void DX8Wrapper::Set_Pixel_Shader(DWORD pixel_shader)

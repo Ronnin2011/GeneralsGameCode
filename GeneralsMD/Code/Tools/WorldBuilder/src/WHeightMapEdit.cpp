@@ -43,6 +43,234 @@
 
 #include "Common/DataChunk.h"
 
+typedef struct {
+	UnsignedByte	idLength;
+	UnsignedByte	colorMapType;
+	UnsignedByte	imageType;
+	UnsignedByte	colorMapInfo[5];
+	Short			xOrigin;
+	Short			yOrigin;
+	Short			imageWidth;
+	Short			imageHeight;
+	UnsignedByte	pixelDepth;
+	UnsignedByte	flags;
+} TWBTargaHeader;
+
+static Bool isPowerOfTwoForTerrainSheet(Int value)
+{
+	return value > 0 && (value & (value - 1)) == 0;
+}
+
+static Bool readWBTextureHeader(CachedFileInputStream& stream, TWBTargaHeader* hdr)
+{
+	stream.rewind();
+	return stream.read(hdr, sizeof(*hdr)) == sizeof(*hdr);
+}
+
+static Int findLogicalWidthHintInPath(const char* path)
+{
+	if (path == nullptr) {
+		return 0;
+	}
+
+	const char* baseName = path;
+	for (const char* p = path; *p; ++p) {
+		if (*p == '\\' || *p == '/') {
+			baseName = p + 1;
+		}
+	}
+
+	const Int maxWidth = WorldHeightMap::getMaxTextureSheetWidthInTiles();
+	Int bestWidth = 0;
+
+	for (const char* p = baseName; *p; ++p) {
+		if (*p < '0' || *p > '9') {
+			continue;
+		}
+
+		Int lhs = 0;
+		const char* cursor = p;
+		while (*cursor >= '0' && *cursor <= '9') {
+			lhs = lhs * 10 + (*cursor - '0');
+			++cursor;
+		}
+
+		if (*cursor != 'x' && *cursor != 'X') {
+			continue;
+		}
+		++cursor;
+
+		if (*cursor < '0' || *cursor > '9') {
+			continue;
+		}
+
+		Int rhs = 0;
+		while (*cursor >= '0' && *cursor <= '9') {
+			rhs = rhs * 10 + (*cursor - '0');
+			++cursor;
+		}
+
+		if (lhs == rhs && lhs >= 1 && lhs <= maxWidth) {
+			bestWidth = lhs;
+		}
+	}
+
+	return bestWidth;
+}
+
+static Bool getTextureClassLayout(CachedFileInputStream& stream, const char* sourcePath,
+	Int* logicalWidth, Int* tilePixelExtent, Int* numTiles)
+{
+	TWBTargaHeader hdr;
+	if (!readWBTextureHeader(stream, &hdr)) {
+		return false;
+	}
+
+	if (hdr.colorMapType != 0) {
+		return false;
+	}
+	if (hdr.imageType != 0x2 && hdr.imageType != 0xA) {
+		return false;
+	}
+	if (hdr.pixelDepth < 24 || hdr.pixelDepth > 32) {
+		return false;
+	}
+
+	const Int hintedWidth = findLogicalWidthHintInPath(sourcePath);
+	if (hintedWidth > 0) {
+		if ((hdr.imageWidth % hintedWidth) == 0 && (hdr.imageHeight % hintedWidth) == 0) {
+			const Int hintedTileExtentX = hdr.imageWidth / hintedWidth;
+			const Int hintedTileExtentY = hdr.imageHeight / hintedWidth;
+			if (hintedTileExtentX == hintedTileExtentY && isPowerOfTwoForTerrainSheet(hintedTileExtentX)) {
+				*logicalWidth = hintedWidth;
+				*tilePixelExtent = hintedTileExtentX;
+				*numTiles = hintedWidth * hintedWidth;
+				stream.rewind();
+				return true;
+			}
+		}
+	}
+
+	stream.rewind();
+	const Int detectedNumTiles = WorldHeightMap::countTiles(&stream);
+	if (detectedNumTiles < 1) {
+		return false;
+	}
+
+	const Int detectedWidth = getTextureClassWidthFromTileCount(detectedNumTiles);
+	if (detectedWidth < 1) {
+		return false;
+	}
+
+	*logicalWidth = detectedWidth;
+	*tilePixelExtent = TILE_PIXEL_EXTENT;
+	*numTiles = detectedWidth * detectedWidth;
+	stream.rewind();
+	return true;
+}
+
+static Real getTextureClassExtentInTextureSpace(const TGlobalTextureClass& textureClass)
+{
+	return (Real)(textureClass.width * textureClass.tilePixelExtent) / TEXTURE_WIDTH;
+}
+
+
+
+// @feature Ronin 08/04/2026 Allow WB to reload texture classes using logical width hints in the filename, if present, to preserve original terrain coverage when users replace source bitmaps with same-name HD versions.
+static Bool getTextureClassLayoutForLogicalWidth(CachedFileInputStream& stream, Int logicalWidth,
+	Int* tilePixelExtent, Int* numTiles)
+{
+	TWBTargaHeader hdr;
+	if (!readWBTextureHeader(stream, &hdr)) {
+		return false;
+	}
+
+	if (hdr.colorMapType != 0) {
+		return false;
+	}
+	if (hdr.imageType != 0x2 && hdr.imageType != 0xA) {
+		return false;
+	}
+	if (hdr.pixelDepth < 24 || hdr.pixelDepth > 32) {
+		return false;
+	}
+	if (logicalWidth < 1) {
+		return false;
+	}
+	if ((hdr.imageWidth % logicalWidth) != 0 || (hdr.imageHeight % logicalWidth) != 0) {
+		return false;
+	}
+
+	const Int derivedTileExtentX = hdr.imageWidth / logicalWidth;
+	const Int derivedTileExtentY = hdr.imageHeight / logicalWidth;
+	if (derivedTileExtentX != derivedTileExtentY) {
+		return false;
+	}
+	if (!isPowerOfTwoForTerrainSheet(derivedTileExtentX)) {
+		return false;
+	}
+
+	*tilePixelExtent = derivedTileExtentX;
+	*numTiles = logicalWidth * logicalWidth;
+	stream.rewind();
+	return true;
+}
+
+static void releaseTextureClassTiles(TileData** tiles)
+{
+	for (Int i = 0; i < MAX_TILES_PER_CLASS; ++i) {
+		REF_PTR_RELEASE(tiles[i]);
+	}
+}
+
+static Bool reloadGlobalTextureClassUsingLogicalWidth(TGlobalTextureClass* textureClass, Int logicalWidth)
+{
+	if (textureClass == nullptr || logicalWidth < 1) {
+		return false;
+	}
+
+	const char* filePath = textureClass->filePath.str();
+	if (filePath == nullptr || filePath[0] == 0) {
+		return false;
+	}
+
+	CachedFileInputStream stream;
+	if (!stream.open(textureClass->filePath)) {
+		return false;
+	}
+
+	Int tilePixelExtent = TILE_PIXEL_EXTENT;
+	Int numTiles = 0;
+	if (!getTextureClassLayoutForLogicalWidth(stream, logicalWidth, &tilePixelExtent, &numTiles)) {
+		return false;
+	}
+
+	TileData* reloadedTiles[MAX_TILES_PER_CLASS];
+	for (Int i = 0; i < MAX_TILES_PER_CLASS; ++i) {
+		reloadedTiles[i] = nullptr;
+	}
+
+	InputStream* pStrm = &stream;
+	if (!WorldHeightMap::readTiles(pStrm, reloadedTiles, logicalWidth, tilePixelExtent)) {
+		releaseTextureClassTiles(reloadedTiles);
+		return false;
+	}
+
+	releaseTextureClassTiles(textureClass->tiles);
+	for (Int i = 0; i < MAX_TILES_PER_CLASS; ++i) {
+		textureClass->tiles[i] = reloadedTiles[i];
+		reloadedTiles[i] = nullptr;
+	}
+
+	// @bugfix Ronin 08/04/2026 Preserve saved logical terrain coverage when WB sees same-name HD replacements.
+	textureClass->numTiles = numTiles;
+	textureClass->width = logicalWidth;
+	textureClass->tilePixelExtent = tilePixelExtent;
+	textureClass->texturePage = 0;
+	return true;
+}
+
+//---------------------------------------------------------------------------------------------------------
 
 int WorldHeightMapEdit::m_numGlobalTextureClasses=0;
 TGlobalTextureClass WorldHeightMapEdit::m_globalTextureClasses[NUM_TEXTURE_CLASSES];
@@ -63,6 +291,8 @@ void WorldHeightMapEdit::shutdown(void)
 			m_globalTextureClasses[i].filePath.clear();
 			m_globalTextureClasses[i].uiName.clear();
 		}
+		m_globalTextureClasses[i].tilePixelExtent = TILE_PIXEL_EXTENT;
+		m_globalTextureClasses[i].texturePage = 0;
 	}
 	freeListOfMapObjects();
 	PolygonTrigger::deleteTriggers();
@@ -76,9 +306,10 @@ void WorldHeightMapEdit::init(void)
 			m_globalTextureClasses[i].tiles[j] = nullptr;
 		}
 		m_globalTextureClasses[i].terrainType = nullptr;
+		m_globalTextureClasses[i].tilePixelExtent = TILE_PIXEL_EXTENT;
+		m_globalTextureClasses[i].texturePage = 0;
 	}
 	loadBaseImages();
-
 }
 
 //
@@ -256,41 +487,58 @@ m_warnTooManyBlend(false)
  Just calls WorldHeightMap::WorldHeightMap(FILE *pStrm),
  then loads the texture classes.
 */
-WorldHeightMapEdit::WorldHeightMapEdit(ChunkInputStream *pStrm):
+WorldHeightMapEdit::WorldHeightMapEdit(ChunkInputStream* pStrm) :
 	WorldHeightMap(pStrm),
 	m_warnTooManyTex(false),
 	m_warnTooManyBlend(false)
 {
 	Bool didMajorRemap = false;
 	Int i, j;
-	for (i=0; i<m_numGlobalTextureClasses; i++) {
-		for (j=0; j<m_numTextureClasses; j++) {
+	for (i = 0; i < m_numGlobalTextureClasses; i++) {
+		for (j = 0; j < m_numTextureClasses; j++) {
 			if (m_globalTextureClasses[i].name == m_textureClasses[j].name) {
 				DEBUG_ASSERTCRASH(m_textureClasses[j].globalTextureClass == -1, ("oops")); // should be uninitialized at this point.
-				if (m_globalTextureClasses[i].width != m_textureClasses[i].width) {
-					didMajorRemap = true;	// This will handle the differing tile widths in setBlendUsingCanonicalTile
+
+				const Int savedLogicalWidth = m_textureClasses[j].width;
+				const Int savedNumTiles = m_textureClasses[j].numTiles;
+				const Int savedTilePixelExtent = m_textureClasses[j].tilePixelExtent;
+
+				// @bugfix Ronin 08/04/2026 Fix i/j mismatch and force WB to honor the map-saved logical width
+				// for same-name HD replacements instead of reinterpreting them as larger logical sheets.
+				if (m_globalTextureClasses[i].width != savedLogicalWidth ||
+					m_globalTextureClasses[i].numTiles != savedNumTiles ||
+					m_globalTextureClasses[i].tilePixelExtent != savedTilePixelExtent) {
+					const Bool reloaded = reloadGlobalTextureClassUsingLogicalWidth(&m_globalTextureClasses[i], savedLogicalWidth);
+					if (!reloaded) {
+						DEBUG_LOG(("WorldBuilderTerrainTexture: class=%s path=%s savedLogicalWidth=%d savedNumTiles=%d load=logical_reconcile_failed",
+							m_textureClasses[j].name.str(),
+							m_globalTextureClasses[i].filePath.str(),
+							savedLogicalWidth,
+							savedNumTiles));
+					}
 				}
+
 				m_textureClasses[j].globalTextureClass = i;
 			}
 		}
 	}
 
-
 	Bool didCancel = false;
 
 	// check for missing texture classes.
-	for (i=0; i<m_numTextureClasses; i++) {
+	for (i = 0; i < m_numTextureClasses; i++) {
 		if (m_textureClasses[i].globalTextureClass < 0) {
 			TerrainModal modalTerrainDlg(m_textureClasses[i].name, this);
-			if (IDOK==modalTerrainDlg.DoModal()) {
+			if (IDOK == modalTerrainDlg.DoModal()) {
 				Int globalTex = modalTerrainDlg.getNewNdx();
 				m_textureClasses[i].globalTextureClass = globalTex;
 				m_textureClasses[i].name = m_globalTextureClasses[globalTex].name;
 				didMajorRemap = true;
-			} else {
+			}
+			else {
 				didCancel = true;
-				for (j=0; j<m_textureClasses[i].numTiles; j++) {
-					REF_PTR_RELEASE(m_sourceTiles[m_textureClasses[i].firstTile+j]);
+				for (j = 0; j < m_textureClasses[i].numTiles; j++) {
+					REF_PTR_RELEASE(m_sourceTiles[m_textureClasses[i].firstTile + j]);
 				}
 			}
 		}
@@ -303,16 +551,16 @@ WorldHeightMapEdit::WorldHeightMapEdit(ChunkInputStream *pStrm):
 	if (didCancel) {
 		return; // won't check out right.
 	}
-//	Int curTile = 0;
-	for (i=0; i<m_numTextureClasses; i++) {
+	//	Int curTile = 0;
+	for (i = 0; i < m_numTextureClasses; i++) {
 		DEBUG_ASSERTCRASH(m_textureClasses[i].globalTextureClass >= 0, ("oops"));
 	}
 
-	for (i=0; i<m_dataSize; i++) {
+	for (i = 0; i < m_dataSize; i++) {
 		Int texNdx = this->m_tileNdxes[i];
-		DEBUG_ASSERTCRASH( (texNdx>>2) < m_numBitmapTiles,("oops"));
+		DEBUG_ASSERTCRASH((texNdx >> 2) < m_numBitmapTiles, ("oops"));
 		Int texClass = getTextureClassFromNdx(texNdx);
-		DEBUG_ASSERTCRASH(texClass>=0,("oops"));
+		DEBUG_ASSERTCRASH(texClass >= 0, ("oops"));
 	}
 #endif
 }
@@ -350,19 +598,13 @@ void WorldHeightMapEdit::loadBitmap(char *path, const char *uiName)
 	}
 	InputStream* pStrm = &stream;
 
-	Int numTiles = WorldHeightMap::countTiles(pStrm);
-	Bool ok = false;
-	if (numTiles < 1) {
+	Int numTiles = 0;
+	Int width = 0;
+	Int tilePixelExtent = TILE_PIXEL_EXTENT;
+	Bool ok = getTextureClassLayout(stream, path, &width, &tilePixelExtent, &numTiles);
+	if (!ok || numTiles < 1) {
 		return;
 	}
-
-	const Int width = getTextureClassWidthFromTileCount(numTiles);
-	if (width < 1) {
-		return;
-	}
-	numTiles = width * width;
-
-	stream.rewind();
 
 	Int texToUse = m_numGlobalTextureClasses;
 	Int j;
@@ -371,10 +613,12 @@ void WorldHeightMapEdit::loadBitmap(char *path, const char *uiName)
 	}
 
 #define BLEND_TILE_PREFIX "TE"
-	ok = readTiles(pStrm, m_globalTextureClasses[texToUse].tiles, width);
+	ok = readTiles(pStrm, m_globalTextureClasses[texToUse].tiles, width, tilePixelExtent);
 	if (!ok) return;
 	m_globalTextureClasses[texToUse].numTiles = numTiles;
 	m_globalTextureClasses[texToUse].width = width;
+	m_globalTextureClasses[texToUse].tilePixelExtent = tilePixelExtent;
+	m_globalTextureClasses[texToUse].texturePage = 0;
 	m_globalTextureClasses[texToUse].name = path;
 	m_globalTextureClasses[texToUse].uiName = uiName;
 	Bool isBlend = (0 == strncmp(BLEND_TILE_PREFIX, uiName, strlen(BLEND_TILE_PREFIX)));
@@ -443,7 +687,7 @@ void WorldHeightMapEdit::loadDirectoryOfImages(const char *pFilePath)
 
 /** Loads all the all terrain information for the WorldBuilder given the logical
 	* TerrainType entity (i.e. tga file)*/
-void WorldHeightMapEdit::loadImagesFromTerrainType( TerrainType *terrain )
+void WorldHeightMapEdit::loadImagesFromTerrainType(TerrainType* terrain)
 {
 	if (terrain == nullptr)
 		return;
@@ -458,30 +702,26 @@ void WorldHeightMapEdit::loadImagesFromTerrainType( TerrainType *terrain )
 
 	InputStream* pStrm = &stream;
 
-	Int numTiles = WorldHeightMap::countTiles(pStrm);
-	if (numTiles < 1)
+	Int numTiles = 0;
+	Int width = 0;
+	Int tilePixelExtent = TILE_PIXEL_EXTENT;
+	if (!getTextureClassLayout(stream, texturePath.str(), &width, &tilePixelExtent, &numTiles))
 		return;
-
-	const Int width = getTextureClassWidthFromTileCount(numTiles);
-	if (width < 1) {
-		return;
-	}
-	numTiles = width * width;
-
-	stream.rewind();
 
 	Int texToUse = m_numGlobalTextureClasses;
 	Int j;
 	for (j = 0; j < MAX_TILES_PER_CLASS; j++)
 		REF_PTR_RELEASE(m_globalTextureClasses[texToUse].tiles[j]);
 
-	Bool ok = readTiles(pStrm, m_globalTextureClasses[texToUse].tiles, width);
+	Bool ok = readTiles(pStrm, m_globalTextureClasses[texToUse].tiles, width, tilePixelExtent);
 	if (!ok)
 		return;
 
 	m_globalTextureClasses[texToUse].name = terrain->getName();
 	m_globalTextureClasses[texToUse].numTiles = numTiles;
 	m_globalTextureClasses[texToUse].width = width;
+	m_globalTextureClasses[texToUse].tilePixelExtent = tilePixelExtent;
+	m_globalTextureClasses[texToUse].texturePage = 0;
 	m_globalTextureClasses[texToUse].filePath = texturePath;
 	m_globalTextureClasses[texToUse].uiName = terrain->getName();
 	m_globalTextureClasses[texToUse].terrainType = terrain;
@@ -856,7 +1096,7 @@ Int WorldHeightMapEdit::getTileIndexFromTerrainType( TerrainType *terrain )
 
 Int WorldHeightMapEdit::allocateTiles(Int textureClass)
 {
-//	int tileNdx = 0;
+	//	int tileNdx = 0;
 	if (textureClass >= 0 && textureClass <m_numGlobalTextureClasses) {
 		Int firstTile = getFirstTile(textureClass);
 		if (firstTile >= 0) return firstTile;
@@ -871,6 +1111,8 @@ Int WorldHeightMapEdit::allocateTiles(Int textureClass)
 		firstTile = m_numBitmapTiles;
 		m_textureClasses[m_numTextureClasses].numTiles = m_globalTextureClasses[textureClass].numTiles;
 		m_textureClasses[m_numTextureClasses].width = m_globalTextureClasses[textureClass].width;
+		m_textureClasses[m_numTextureClasses].tilePixelExtent = m_globalTextureClasses[textureClass].tilePixelExtent;
+		m_textureClasses[m_numTextureClasses].texturePage = 0;
 		m_textureClasses[m_numTextureClasses].name = m_globalTextureClasses[textureClass].name;
 		m_textureClasses[m_numTextureClasses].isBlendEdgeTile = m_globalTextureClasses[textureClass].isBlendEdgeTile;
 		m_numTextureClasses++;
@@ -894,7 +1136,6 @@ Int WorldHeightMapEdit::allocateTiles(Int textureClass)
 
 	return -1;
 }
-
 Int WorldHeightMapEdit::allocateEdgeTiles(Int globalTextureClass)
 {
 	if (globalTextureClass >= 0 && globalTextureClass <m_numGlobalTextureClasses) {
@@ -919,6 +1160,8 @@ Int WorldHeightMapEdit::allocateEdgeTiles(Int globalTextureClass)
 		firstTile = m_numBitmapTiles;
 		m_edgeTextureClasses[m_numEdgeTextureClasses].numTiles = m_globalTextureClasses[globalTextureClass].numTiles;
 		m_edgeTextureClasses[m_numEdgeTextureClasses].width = m_globalTextureClasses[globalTextureClass].width;
+		m_edgeTextureClasses[m_numEdgeTextureClasses].tilePixelExtent = m_globalTextureClasses[globalTextureClass].tilePixelExtent;
+		m_edgeTextureClasses[m_numEdgeTextureClasses].texturePage = 0;
 		m_edgeTextureClasses[m_numEdgeTextureClasses].name = m_globalTextureClasses[globalTextureClass].name;
 		m_edgeTextureClasses[m_numEdgeTextureClasses].isBlendEdgeTile = m_globalTextureClasses[globalTextureClass].isBlendEdgeTile;
 		m_numEdgeTextureClasses++;
@@ -987,6 +1230,8 @@ Bool WorldHeightMapEdit::canFitTexture(Int textureClass)
 		m_textureClasses[m_numTextureClasses].firstTile = 0;
 		m_textureClasses[m_numTextureClasses].numTiles = m_globalTextureClasses[textureClass].numTiles;
 		m_textureClasses[m_numTextureClasses].width = m_globalTextureClasses[textureClass].width;
+		m_textureClasses[m_numTextureClasses].tilePixelExtent = m_globalTextureClasses[textureClass].tilePixelExtent;
+		m_textureClasses[m_numTextureClasses].texturePage = 0;
 		m_numTextureClasses++;
 
 		updateTileTexturePositions(nullptr);
@@ -1452,6 +1697,7 @@ Bool WorldHeightMapEdit::floodFill(Int xIndex, Int yIndex, Int textureClass, Boo
 			if (localClass<0) return false;
 			m_textureClasses[localClass].globalTextureClass = textureClass;
 			m_textureClasses[localClass].width = m_globalTextureClasses[textureClass].width;
+			m_textureClasses[localClass].tilePixelExtent = m_globalTextureClasses[textureClass].tilePixelExtent;
 			m_textureClasses[localClass].name = m_globalTextureClasses[textureClass].name;
 			m_textureClasses[localClass].isBlendEdgeTile = m_globalTextureClasses[textureClass].isBlendEdgeTile;
 			REF_PTR_RELEASE(m_terrainTex); // need to update the texture.
@@ -1567,12 +1813,12 @@ void WorldHeightMapEdit::reloadTextures(void)
 		if (!stream.open(m_globalTextureClasses[i].filePath)) {
 			continue;
 		}
-		Int numTiles = WorldHeightMap::countTiles(&stream);
-		if (numTiles < m_globalTextureClasses[i].numTiles) {
-			continue;
-		}
+
 		stream.rewind();
-		/*Bool ok =*/ readTiles(&stream, m_globalTextureClasses[i].tiles, m_globalTextureClasses[i].width);
+		/*Bool ok =*/ readTiles(&stream,
+			m_globalTextureClasses[i].tiles,
+			m_globalTextureClasses[i].width,
+			m_globalTextureClasses[i].tilePixelExtent);
 		stream.close();
 	}
 	if (TheTerrainRenderObject) {
@@ -2210,8 +2456,7 @@ Bool WorldHeightMapEdit::doCliffAdjustment(Int xIndex, Int yIndex)
 	if (curTileClass < 0) {
 		return(false);
 	}
-	Real textureClassExtent = m_globalTextureClasses[curTileClass].width*TILE_PIXEL_EXTENT;
-	textureClassExtent /= TEXTURE_WIDTH;
+	Real textureClassExtent = getTextureClassExtentInTextureSpace(m_globalTextureClasses[curTileClass]);
 	Real startU = textureClassExtent/2;	// Center in the texture.
 	Real startV = 0; // We'll adjust the V values later.
 
@@ -3095,8 +3340,7 @@ void WorldHeightMapEdit::updateFlatCellForAdjacentCliffs(Int xIndex, Int yIndex,
 		}
 	}
 	if (!okToProcess) return;
-	Real textureClassExtent = m_globalTextureClasses[curTileClass].width*TILE_PIXEL_EXTENT;
-	textureClassExtent /= TEXTURE_WIDTH;
+	Real textureClassExtent = getTextureClassExtentInTextureSpace(m_globalTextureClasses[curTileClass]);
 	Int i, j;
 	for (i=xIndex-1; i<xIndex+2; i+=1) {
 		if (i<0) continue;

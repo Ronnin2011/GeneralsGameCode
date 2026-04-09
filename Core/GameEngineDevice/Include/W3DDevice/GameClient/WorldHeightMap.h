@@ -38,7 +38,6 @@
 #include "Common/STLTypedefs.h"
 typedef std::vector<ICoord2D> VecICoord2D;
 
-
 /** MapObject class
 Not ref counted.  Do not store pointers to this class.  */
 
@@ -58,19 +57,30 @@ Not ref counted.  Do not store pointers to this class.  */
 // For backwards compatiblity.
 #define TEX_PATH_LEN 256
 
-
 /// Struct in memory.
 typedef struct {
 	Int globalTextureClass;
 	Int firstTile;
 	Int numTiles;
 	Int width;
+	// @feature Ronin 05/04/2026 Actual source pixels per logical terrain tile.
+	Int tilePixelExtent;
+	// @feature Ronin 07/04/2026 Atlas page index for future multi-page terrain atlases.
+	Int texturePage;
 	Int isBlendEdgeTile; ///< True if the texture contains blend edges.
 	AsciiString name;
 	ICoord2D positionInTexture;
 } TXTextureClass;
 
-typedef enum {POS_X, POS_Y, NEG_X, NEG_Y} TVDirection;
+// @feature Ronin 07/04/2026 Persist page-level terrain atlas metadata alongside legacy single-page fields.
+#define MAX_TEXTURE_ATLAS_PAGES NUM_TEXTURE_CLASSES
+
+/// Struct in memory.
+typedef struct {
+	Int textureHeight;
+} TTextureAtlasPageInfo;
+
+typedef enum { POS_X, POS_Y, NEG_X, NEG_Y } TVDirection;
 /// Struct in memory.
 typedef struct {
 	Real	u0, v0;	 // Upper left uv
@@ -83,7 +93,6 @@ typedef struct {
 } TCliffInfo;
 
 #define NUM_TEXTURE_CLASSES 256
-
 
 class TextureClass;
 class ChunkInputStream;
@@ -98,7 +107,7 @@ class AlphaEdgeTextureClass;
 #define NUM_ALPHA_TILES 12
 
 class WorldHeightMap : public RefCountClass,
-                       public WorldHeightMapInterfaceClass
+	public WorldHeightMapInterfaceClass
 {
 	friend class TerrainTextureClass;
 	friend class AlphaTerrainTextureClass;
@@ -109,13 +118,13 @@ class WorldHeightMap : public RefCountClass,
 
 public:
 #ifdef EVAL_TILING_MODES
-	enum {TILE_4x4, TILE_6x6, TILE_8x8} m_tileMode;
+	enum { TILE_4x4, TILE_6x6, TILE_8x8 } m_tileMode;
 #endif
 	enum {
-		NORMAL_DRAW_WIDTH = 1 + 4*VERTEX_BUFFER_TILE_LENGTH,
-		NORMAL_DRAW_HEIGHT = 1 + 4*VERTEX_BUFFER_TILE_LENGTH,
-		STRETCH_DRAW_WIDTH = 1 + 2*VERTEX_BUFFER_TILE_LENGTH,
-		STRETCH_DRAW_HEIGHT = 1 + 2*VERTEX_BUFFER_TILE_LENGTH,
+		NORMAL_DRAW_WIDTH = 1 + 4 * VERTEX_BUFFER_TILE_LENGTH,
+		NORMAL_DRAW_HEIGHT = 1 + 4 * VERTEX_BUFFER_TILE_LENGTH,
+		STRETCH_DRAW_WIDTH = 1 + 2 * VERTEX_BUFFER_TILE_LENGTH,
+		STRETCH_DRAW_HEIGHT = 1 + 2 * VERTEX_BUFFER_TILE_LENGTH,
 	};
 
 protected:
@@ -124,30 +133,28 @@ protected:
 	Int m_borderSize;		///< Non-playable border area.
 	VecICoord2D m_boundaries;	///< the in-game boundaries
 	Int m_dataSize;			///< size of m_data.
-	UnsignedByte *m_data;	///< array of z(height) values in the height map.
+	UnsignedByte* m_data;	///< array of z(height) values in the height map.
 
-  UnsignedByte *m_seismicUpdateFlag;  ///< array of bits to prevent ovelapping physics-update regions from doubling effects on shared cells
-  UnsignedInt   m_seismicUpdateWidth; ///< width of the array holding SeismicUpdateFlags
-  Real         *m_seismicZVelocities; ///< how fast is the dirt rising/falling at this location
+	UnsignedByte* m_seismicUpdateFlag;  ///< array of bits to prevent ovelapping physics-update regions from doubling effects on shared cells
+	UnsignedInt   m_seismicUpdateWidth; ///< width of the array holding SeismicUpdateFlags
+	Real* m_seismicZVelocities; ///< how fast is the dirt rising/falling at this location
 
-  UnsignedByte *m_cellFlipState;	///< array of bits to indicate the flip state of each cell.
+	UnsignedByte* m_cellFlipState;	///< array of bits to indicate the flip state of each cell.
 	Int m_flipStateWidth;			///< with of the array holding cellFlipState
-	UnsignedByte *m_cellCliffState;	///< array of bits to indicate the cliff state of each cell.
-
+	UnsignedByte* m_cellCliffState;	///< array of bits to indicate the cliff state of each cell.
 
 	/// Texture indices.
-	Short  *m_tileNdxes;  ///< matches m_Data, indexes into m_SourceTiles.
-	Short  *m_blendTileNdxes;  ///< matches m_Data, indexes into m_blendedTiles.  0 means no blend info.
-	Short  *m_cliffInfoNdxes;  ///< matches m_Data, indexes into m_cliffInfo.	 0 means no cliff info.
-	Short  *m_extraBlendTileNdxes;  ///< matches m_Data, indexes into m_extraBlendedTiles.  0 means no blend info.
-
+	Short* m_tileNdxes;  ///< matches m_Data, indexes into m_SourceTiles.
+	Short* m_blendTileNdxes;  ///< matches m_Data, indexes into m_blendedTiles.  0 means no blend info.
+	Short* m_cliffInfoNdxes;  ///< matches m_Data, indexes into m_cliffInfo.	 0 means no cliff info.
+	Short* m_extraBlendTileNdxes;  ///< matches m_Data, indexes into m_extraBlendedTiles.  0 means no blend info.
 
 	Int m_numBitmapTiles;	// Number of tiles initialized from bitmaps in m_SourceTiles.
 	Int m_numEdgeTiles;	// Number of tiles initialized from bitmaps in m_SourceTiles.
 	Int m_numBlendedTiles;	// Number of blended tiles created from bitmap tiles.
 
-	TileData			*m_sourceTiles[NUM_SOURCE_TILES];	///< Tiles for m_textureClasses
-	TileData			*m_edgeTiles[NUM_SOURCE_TILES];	///< Tiles for m_textureClasses
+	TileData* m_sourceTiles[NUM_SOURCE_TILES];	///< Tiles for m_textureClasses
+	TileData* m_edgeTiles[NUM_SOURCE_TILES];	///< Tiles for m_textureClasses
 
 	TBlendTileInfo	m_blendedTiles[NUM_BLEND_TILES];
 	TBlendTileInfo	m_extraBlendedTiles[NUM_BLEND_TILES];
@@ -170,16 +177,29 @@ protected:
 	 basically m_SourceTiles laid out in rows, so by itself it is not useful.
 	 Use GetUVData to get the mapping info for height cells to map into the
 	 texture. */
-	TerrainTextureClass *m_terrainTex;
+	TerrainTextureClass* m_terrainTex;
 	Int	m_terrainTexHeight; /// Height of m_terrainTex allocated.
+	// @feature Ronin 08/04/2026 Store per-page diffuse terrain textures while preserving legacy page-0 aliases.
+	TerrainTextureClass* m_terrainTextures[MAX_TEXTURE_ATLAS_PAGES];
+	// @feature Ronin 07/04/2026 Future page-aware terrain atlas metadata.
+	Int m_numTerrainTexturePages;
+	TTextureAtlasPageInfo m_terrainTexturePages[MAX_TEXTURE_ATLAS_PAGES];
 	/** The texture that contains the alpha edge tiles that get blended on
 			top of the base texture. getAlphaUVData does the mapping. */
-	AlphaTerrainTextureClass *m_alphaTerrainTex;
+	AlphaTerrainTextureClass* m_alphaTerrainTex;
 	Int	m_alphaTexHeight; /// Height of m_alphaTerrainTex allocated.
+	// @feature Ronin 08/04/2026 Store per-page terrain alpha textures while preserving legacy page-0 aliases.
+	AlphaTerrainTextureClass* m_alphaTerrainTextures[MAX_TEXTURE_ATLAS_PAGES];
+
 
 	/** The texture that contains custom blend edge tiles. */
-	AlphaEdgeTextureClass *m_alphaEdgeTex;
+	AlphaEdgeTextureClass* m_alphaEdgeTex;
 	Int	m_alphaEdgeHeight; /// Height of m_alphaEdgeTex allocated.
+	// @feature Ronin 08/04/2026 Store per-page edge terrain textures while preserving legacy page-0 aliases.
+	AlphaEdgeTextureClass* m_alphaEdgeTextures[MAX_TEXTURE_ATLAS_PAGES];
+	// @feature Ronin 07/04/2026 Future page-aware edge atlas metadata.
+	Int m_numEdgeTexturePages;
+	TTextureAtlasPageInfo m_edgeTexturePages[MAX_TEXTURE_ATLAS_PAGES];
 
 	/// Drawing info - re the part of the map that is being drawn.
 	Int m_drawOriginX;
@@ -188,140 +208,171 @@ protected:
 	Int m_drawHeightY;
 
 	/// Tiles that hold the alpha channel info.
-	static TileData *m_alphaTiles[NUM_ALPHA_TILES];
-
+	static TileData* m_alphaTiles[NUM_ALPHA_TILES];
 
 protected:
-	TileData *getSourceTile(UnsignedInt ndx) { if (ndx<NUM_SOURCE_TILES) return(m_sourceTiles[ndx]); return(nullptr); };
-	TileData *getEdgeTile(UnsignedInt ndx) { if (ndx<NUM_SOURCE_TILES) return(m_edgeTiles[ndx]); return(nullptr); };
+	TileData* getSourceTile(UnsignedInt ndx) { if (ndx < NUM_SOURCE_TILES) return(m_sourceTiles[ndx]); return(nullptr); };
+	TileData* getEdgeTile(UnsignedInt ndx) { if (ndx < NUM_SOURCE_TILES) return(m_edgeTiles[ndx]); return(nullptr); };
 	/// UV mapping data for a cell to map into the terrain texture.
-	void getUVForNdx(Int ndx, float *minU, float *minV, float *maxU, float*maxV);
+	void getUVForNdx(Int ndx, float* minU, float* minV, float* maxU, float* maxV);
 	Bool getUVForTileIndex(Int ndx, Short tileNdx, float U[4], float V[4]);
 	Int getTextureClassFromNdx(Int tileNdx);
-	void readTexClass(TXTextureClass *texClass, TileData **tileData);
-	Int updateTileTexturePositions(Int *edgeHeight); ///< Places each tile in the texture.
+	void readTexClass(TXTextureClass* texClass, TileData** tileData);
+	Int updateTileTexturePositions(Int* edgeHeight); ///< Places each tile in the texture.
 	void initCliffFlagsFromHeights();
 	void setCellCliffFlagFromHeights(Int xIndex, Int yIndex);
 
 protected:	 // file reader callbacks.
-	static Bool ParseHeightMapDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
-	Bool ParseHeightMapData(DataChunkInput &file, DataChunkInfo *info, void *userData);
-	static Bool ParseSizeOnlyInChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
-	Bool ParseSizeOnly(DataChunkInput &file, DataChunkInfo *info, void *userData);
-	static Bool ParseBlendTileDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
-	Bool ParseBlendTileData(DataChunkInput &file, DataChunkInfo *info, void *userData);
-	static Bool ParseWorldDictDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
-	static Bool ParseObjectsDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
-	static Bool ParseObjectDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
-	Bool ParseObjectData(DataChunkInput &file, DataChunkInfo *info, void *userData, Bool readDict);
-	static Bool ParseLightingDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
+	static Bool ParseHeightMapDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
+	Bool ParseHeightMapData(DataChunkInput& file, DataChunkInfo* info, void* userData);
+	static Bool ParseSizeOnlyInChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
+	Bool ParseSizeOnly(DataChunkInput& file, DataChunkInfo* info, void* userData);
+	static Bool ParseBlendTileDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
+	Bool ParseBlendTileData(DataChunkInput& file, DataChunkInfo* info, void* userData);
+	static Bool ParseWorldDictDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
+	static Bool ParseObjectsDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
+	static Bool ParseObjectDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
+	Bool ParseObjectData(DataChunkInput& file, DataChunkInfo* info, void* userData, Bool readDict);
+	static Bool ParseLightingDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
 
 protected:
 	WorldHeightMap();			///< Simple constructor for WorldHeightMapEdit class.
 
 public: // constructors/destructors
-	WorldHeightMap(ChunkInputStream *pFile, Bool bHMapOnly=false);	// read from file.
+	WorldHeightMap(ChunkInputStream* pFile, Bool bHMapOnly = false);	// read from file.
 	virtual ~WorldHeightMap() override;			// destroy.
 
 public:  // Boundary info
 	const VecICoord2D& getAllBoundaries() const { return m_boundaries; }
 
 public:  // height map info.
-	static Int getMinHeightValue() {return K_MIN_HEIGHT;}
-	static Int getMaxHeightValue() {return K_MAX_HEIGHT;}
+	static Int getMinHeightValue() { return K_MIN_HEIGHT; }
+	static Int getMaxHeightValue() { return K_MAX_HEIGHT; }
 
-	UnsignedByte *getDataPtr() {return m_data;}
+	UnsignedByte* getDataPtr() { return m_data; }
 
+	Int getXExtent() { return m_width; }	///<number of vertices in x
+	Int getYExtent() { return m_height; }	///<number of vertices in y
 
-	Int getXExtent() {return m_width;}	///<number of vertices in x
-	Int getYExtent() {return m_height;}	///<number of vertices in y
+	Int getDrawOrgX() { return m_drawOriginX; }
+	Int getDrawOrgY() { return m_drawOriginY; }
 
-	Int getDrawOrgX() {return m_drawOriginX;}
-	Int getDrawOrgY() {return m_drawOriginY;}
-
-	Int getDrawWidth() {return m_drawWidthX;}
-	Int getDrawHeight() {return m_drawHeightY;}
-	void setDrawWidth(Int width) {m_drawWidthX = width; if (m_drawWidthX>m_width) m_drawWidthX = m_width;}
-	void setDrawHeight(Int height) {m_drawHeightY = height; if (m_drawHeightY>m_height) m_drawHeightY = m_height;}
-	virtual Int getBorderSize() override {return m_borderSize;}
-  Int getBorderSizeInline() const { return m_borderSize; }
+	Int getDrawWidth() { return m_drawWidthX; }
+	Int getDrawHeight() { return m_drawHeightY; }
+	void setDrawWidth(Int width) { m_drawWidthX = width; if (m_drawWidthX > m_width) m_drawWidthX = m_width; }
+	void setDrawHeight(Int height) { m_drawHeightY = height; if (m_drawHeightY > m_height) m_drawHeightY = m_height; }
+	virtual Int getBorderSize() override { return m_borderSize; }
+	Int getBorderSizeInline() const { return m_borderSize; }
 	/// Get height with the offset that HeightMapRenderObjClass uses built in.
-	UnsignedByte getDisplayHeight(Int x, Int y) { return m_data[x+m_drawOriginX+m_width*(y+m_drawOriginY)];}
+	UnsignedByte getDisplayHeight(Int x, Int y) { return m_data[x + m_drawOriginX + m_width * (y + m_drawOriginY)]; }
 
 	/// Get height in normal coordinates.
 	UnsignedByte getHeight(Int xIndex, Int yIndex)
 	{
-		Int ndx = (yIndex*m_width)+xIndex;
-		if ((ndx>=0) && (ndx<m_dataSize) && m_data)
+		Int ndx = (yIndex * m_width) + xIndex;
+		if ((ndx >= 0) && (ndx < m_dataSize) && m_data)
 			return(m_data[ndx]);
 		else
 			return(0);
 	};
 
-	void getUVForBlend(Int edgeClass, Region2D *range);
+	void getUVForBlend(Int edgeClass, Region2D* range);
 
 	Bool setDrawOrg(Int xOrg, Int yOrg);
 
 	static void freeListOfMapObjects();
 
-	Int getTextureClassNoBlend(Int xIndex, Int yIndex, Bool baseClass=false);
-	Int getTextureClass(Int xIndex, Int yIndex, Bool baseClass=false);
-	TXTextureClass getTextureFromIndex( Int textureIndex );
+	Int getTextureClassNoBlend(Int xIndex, Int yIndex, Bool baseClass = false);
+	Int getTextureClass(Int xIndex, Int yIndex, Bool baseClass = false);
+	TXTextureClass getTextureFromIndex(Int textureIndex);
 
 public:  // tile and texture info.
+
+	// @feature Ronin 07/04/2026 Added compatibility accessors for legacy single-page terrain atlas metadata.
+	Int getTerrainTexturePageCount() const { return m_numTerrainTexturePages; }
+	Int getEdgeTexturePageCount() const { return m_numEdgeTexturePages; }
+
+	Int getTerrainTextureHeightForPage(Int page) const
+	{
+		if (page < 0 || page >= m_numTerrainTexturePages) {
+			return 0;
+		}
+		return m_terrainTexturePages[page].textureHeight;
+	}
+
+	Int getEdgeTextureHeightForPage(Int page) const
+	{
+		if (page < 0 || page >= m_numEdgeTexturePages) {
+			return 0;
+		}
+		return m_edgeTexturePages[page].textureHeight;
+	}
+
+	// @feature Ronin 08/04/2026 Draw-local page ownership queries used by page-grouped terrain submission.
+	Int getTerrainTexturePageForCell(Int xIndex, Int yIndex) const;
+	Int getAlphaTexturePageForCell(Int xIndex, Int yIndex) const;
+	Int getExtraAlphaTexturePageForCell(Int xIndex, Int yIndex) const;
+
+
+	// @feature Ronin 08/04/2026 Page-aware terrain texture accessors for future multi-page terrain rendering.
+	TextureClass* getTerrainTexture(Int page);
+	TextureClass* getAlphaTerrainTexture(Int page);
+	TextureClass* getEdgeTerrainTexture(Int page);
+
+	// @feature Ronin 08/04/2026 Page ownership queries used by multi-page terrain atlas rendering.
+	Int getTerrainTexturePageForTileNdx(Short tileNdx) const;
+	Int getEdgeTexturePageForBlendClass(Int edgeClass) const;
+
 	void setTextureLOD(Int lod);	///< set maximum lod level sent to the hardware.
-	TextureClass *getTerrainTexture();  //< generates if needed and returns the terrain texture
-	TextureClass *getAlphaTerrainTexture(); //< generates if needed and returns alpha terrain texture
-	TextureClass *getEdgeTerrainTexture(); //< generates if needed and returns blend edge texture
+	TextureClass* getTerrainTexture();  //< generates if needed and returns the terrain texture
+	TextureClass* getAlphaTerrainTexture(); //< generates if needed and returns alpha terrain texture
+	TextureClass* getEdgeTerrainTexture(); //< generates if needed and returns blend edge texture
 	/// UV mapping data for a cell to map into the terrain texture.  Returns true if the textures had to be stretched for cliffs.
 	Bool getUVData(Int xIndex, Int yIndex, float U[4], float V[4]);
 	Bool getFlipState(Int xIndex, Int yIndex) const;
 	///Faster version of above function without all the safety checks - For people that do checks externally.
 	Bool getQuickFlipState(Int xIndex, Int yIndex) const
 	{
-		return m_cellFlipState[yIndex*m_flipStateWidth + (xIndex >> 3)] & (1<<(xIndex&0x7));
+		return m_cellFlipState[yIndex * m_flipStateWidth + (xIndex >> 3)] & (1 << (xIndex & 0x7));
 	}
 
 	void setFlipState(Int xIndex, Int yIndex, Bool value);
 	void clearFlipStates();
 	Bool getCliffState(Int xIndex, Int yIndex) const;
-	Bool getExtraAlphaUVData(Int xIndex, Int yIndex, float U[4], float V[4], UnsignedByte alpha[4], Bool *flip, Bool *cliff);
+	Bool getExtraAlphaUVData(Int xIndex, Int yIndex, float U[4], float V[4], UnsignedByte alpha[4], Bool* flip, Bool* cliff);
 	/// UV mapping data for a cell to map into the alpha terrain texture.
-	void getAlphaUVData(Int xIndex, Int yIndex, float U[4], float V[4], UnsignedByte alpha[4], Bool *flip);
-	void getTerrainColorAt(Real x, Real y, RGBColor *pColor);
+	void getAlphaUVData(Int xIndex, Int yIndex, float U[4], float V[4], UnsignedByte alpha[4], Bool* flip);
+	void getTerrainColorAt(Real x, Real y, RGBColor* pColor);
 	AsciiString getTerrainNameAt(Real x, Real y);
 	Bool isCliffMappedTexture(Int xIndex, Int yIndex);
 
-
-  Bool getSeismicUpdateFlag(Int xIndex, Int yIndex) const;
-  void setSeismicUpdateFlag(Int xIndex, Int yIndex, Bool value);
-  void clearSeismicUpdateFlags() ;
-  virtual Real getSeismicZVelocity(Int xIndex, Int yIndex) const override;
-  virtual void setSeismicZVelocity(Int xIndex, Int yIndex, Real value) override;
-  void fillSeismicZVelocities( Real value );
-  virtual Real getBilinearSampleSeismicZVelocity( Int x, Int y) override;
-
-
+	Bool getSeismicUpdateFlag(Int xIndex, Int yIndex) const;
+	void setSeismicUpdateFlag(Int xIndex, Int yIndex, Bool value);
+	void clearSeismicUpdateFlags();
+	virtual Real getSeismicZVelocity(Int xIndex, Int yIndex) const override;
+	virtual void setSeismicZVelocity(Int xIndex, Int yIndex, Real value) override;
+	void fillSeismicZVelocities(Real value);
+	virtual Real getBilinearSampleSeismicZVelocity(Int x, Int y) override;
 
 public:  // Flat tile texture info.
-	TerrainTextureClass *getFlatTexture(Int xCell, Int yCell, Int cellWidth, Int pixelsPerCell);  //< generates and returns the terrain texture
+	TerrainTextureClass* getFlatTexture(Int xCell, Int yCell, Int cellWidth, Int pixelsPerCell);  //< generates and returns the terrain texture
 
 	static void setupAlphaTiles();
-	UnsignedByte *getPointerToTileData(Int xIndex, Int yIndex, Int width);
-	Bool getRawTileData(Short tileNdx, Int width, UnsignedByte *buffer, Int bufLen);
-	UnsignedByte *getRGBAlphaDataForWidth(Int width, TBlendTileInfo *pBlend);
+	UnsignedByte* getPointerToTileData(Int xIndex, Int yIndex, Int width);
+	Bool getRawTileData(Short tileNdx, Int width, UnsignedByte* buffer, Int bufLen);
+	UnsignedByte* getRGBAlphaDataForWidth(Int width, TBlendTileInfo* pBlend);
 
 public:  // modify height value
 	void setRawHeight(Int xIndex, Int yIndex, UnsignedByte height) {
-		Int ndx = (yIndex*m_width)+xIndex;
-		if ((ndx>=0) && (ndx<m_dataSize) && m_data) m_data[ndx]=height;
+		Int ndx = (yIndex * m_width) + xIndex;
+		if ((ndx >= 0) && (ndx < m_dataSize) && m_data) m_data[ndx] = height;
 	};
+
 public: // Read tile utilities. jba [7/9/2003]
 	static Int getMaxTextureSheetWidthInTiles();
-	static Bool readTiles(InputStream *pStrm, TileData **tiles, Int numRows);
-	static Int countTiles(InputStream *pStrm, Bool *halfTile=nullptr);
+	static Bool readTiles(InputStream* pStrm, TileData** tiles, Int numRows, Int tilePixelExtent = TILE_PIXEL_EXTENT);
+	static Int countTiles(InputStream* pStrm, Bool* halfTile = nullptr);
 
 protected:
 	void setCliffState(Int xIndex, Int yIndex, Bool state);
-
 };

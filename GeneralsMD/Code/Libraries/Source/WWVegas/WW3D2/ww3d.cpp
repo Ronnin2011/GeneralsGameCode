@@ -988,7 +988,7 @@ WW3DErrorType WW3D::Render(SceneClass * scene,CameraClass * cam,bool clear,bool 
 	WWASSERT(cam);
 
 #ifdef WWDEBUG
-	WWDEBUG_SAY(("🎥 WW3D::Render(scene,camera): scene=%p cam=%p clear=%d clearz=%d",
+	WWDEBUG_SAY(("WW3D::Render(scene,camera): scene=%p cam=%p clear=%d clearz=%d",
 		scene, cam, clear ? 1 : 0, clearz ? 1 : 0));
 #endif
 
@@ -1109,14 +1109,14 @@ void WW3D::Flush(RenderInfoClass & rinfo)
 	static int flushCount = 0;
 	flushCount++;
 	if (flushCount <= 2000) {
-		WWDEBUG_SAY(("🔄 WW3D::Flush #%d: rinfo.Camera=%p (DX8MeshRenderer camera will be %p)",
+		WWDEBUG_SAY(("WW3D::Flush #%d: rinfo.Camera=%p (DX8MeshRenderer camera will be %p)",
 			flushCount, &rinfo.Camera, TheDX8MeshRenderer.Peek_Camera()));
 	}
 #endif
 	TheDX8MeshRenderer.Flush();
 
 #ifdef WWDEBUG
-	WWDEBUG_SAY(("↩️ WW3D::Flush: returned from DX8MeshRenderer::Flush (frame=%u)", WW3D::Get_Frame_Count()));
+	WWDEBUG_SAY(("WW3D::Flush: returned from DX8MeshRenderer::Flush (frame=%u)", WW3D::Get_Frame_Count()));
 #endif
 
 	SHD_FLUSH;

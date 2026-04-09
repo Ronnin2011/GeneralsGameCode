@@ -46,17 +46,19 @@ public:
 typedef struct
 {
 #ifdef DEBUG_CRASHING
-	Int forDebugOnly_fileTextureClass;
+		Int forDebugOnly_fileTextureClass;
 #endif
-	Int numTiles;
-	Int width;
-	Bool isBlendEdgeTile;
-	AsciiString name;
-	AsciiString filePath;
-	AsciiString uiName;
-	TileData *tiles[MAX_TILES_PER_CLASS];
-	TerrainType *terrainType;
-} TGlobalTextureClass;
+		Int numTiles;
+		Int width;
+		Int tilePixelExtent;
+		Int texturePage;
+		Bool isBlendEdgeTile;
+		AsciiString name;
+		AsciiString filePath;
+		AsciiString uiName;
+		TileData *tiles[MAX_TILES_PER_CLASS];
+		TerrainType *terrainType;
+	} TGlobalTextureClass;
 
 
 class WorldHeightMapEdit : public WorldHeightMap
