@@ -54,7 +54,6 @@
 #include "dx8caps.h"
 #include "missingtexture.h"
 #include "TARGA.h"
-#include <d3dx9tex.h>  // Native DX9 textures
 #include "wwmemlog.h"
 #include "formconv.h"
 #include "texturethumbnail.h"

@@ -45,7 +45,6 @@
 #include "dx8fvf.h"
 #include "dx8caps.h"
 #include "thread.h"
-#include <d3dx9.h>  // Native DX9 extensions
 
 #define DEFAULT_VB_SIZE 5000
 

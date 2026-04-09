@@ -114,7 +114,6 @@
 #include "w3dexclusionlist.h"
 #include <INI.h>
 #include <windows.h>
-#include <d3dx9.h>  // Native DX9 extensions
 #include "wwprofile.h"
 #include "assetstatus.h"
 #include "ringobj.h"

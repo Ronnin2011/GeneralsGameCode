@@ -58,7 +58,6 @@
 #include <coltest.h>
 #include <rinfo.h>
 #include <camera.h>
-#include <d3dx9core.h>  // Native DX9 core
 #include "Common/GlobalData.h"
 #include "Common/PerfTimer.h"
 
