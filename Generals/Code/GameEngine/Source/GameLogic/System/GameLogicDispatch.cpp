@@ -277,9 +277,10 @@ void GameLogic::clearGameData( Bool showScoreScreen )
 //	if(shellGame)
 
 
-	if (TheGlobalData->m_initialFile.isEmpty() == FALSE)
+	if (TheGlobalData->m_initialFile.isEmpty() == FALSE || m_quitToDesktopAfterMatch)
 	{
 		TheGameEngine->setQuitting(TRUE);
+		m_quitToDesktopAfterMatch = FALSE;
 	}
 
 	HideControlBar();
@@ -1929,11 +1930,13 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 					const Real angle = msg->getArgument( 1 )->real;
 					const Real pitch = msg->getArgument( 2 )->real;
 					const Real zoom = msg->getArgument( 3 )->real;
+					const Mouse::MouseCursor mouseCursor = static_cast<Mouse::MouseCursor>(msg->getArgument( 4 )->integer);
+					const ICoord2D mousePos = msg->getArgument( 5 )->pixel;
 
 					// TheSuperHackers @info Definitely call in user mode to ensure the camera operates with auto-zoom
 					// over terrain elevations, because the Replay Camera does not store the absolute camera location,
 					// but key parameters relative to the terrain height at the camera pivot.
-					TheTacticalView->userSetPosition(&pos);
+					TheTacticalView->userSetPosition(pos);
 					TheTacticalView->userSetAngle(angle);
 					TheTacticalView->userSetPitch(pitch);
 					TheTacticalView->userSetZoom(zoom);
@@ -1942,13 +1945,26 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 					const Coord2D scroll = {0, 0};
 					TheTacticalView->userScrollBy(&scroll);
 
-					// TheSuperHackers @fix xezon 18/09/2025 Lock the new location to avoid user input from changing the camera in this frame.
+					if (msg->getArgumentCount() >= 8)
+					{
+						// TheSuperHackers @feature Override all the settings above with real camera position and view direction.
+						// This ensures that the camera looks EXACTLY like it was at the time of recording, no matter how the
+						// View is configured or tweaked. Note that the above settings are still required to set regardless, because
+						// when the replay camera is exited, then the pivot position and angles will be needed to build the camera
+						// where it was left off.
+						const Coord3D camPos = msg->getArgument( 6 )->location;
+						const Coord3D camDir = msg->getArgument( 7 )->location;
+
+						TheTacticalView->setUserControlled(false);
+						TheTacticalView->set3DCameraLookAt(camPos, camDir, 0.0f);
+					}
+
+					// TheSuperHackers @fix Lock the new location to avoid user input from changing the camera in this frame.
 					TheTacticalView->lockUserControlUntilFrame( getFrame() + 1 );
 
 					if (!TheLookAtTranslator->hasMouseMovedRecently())
 					{
-						TheMouse->setCursor( (Mouse::MouseCursor)(msg->getArgument( 4 )->integer) );
-						ICoord2D mousePos = msg->getArgument( 5 )->pixel;
+						TheMouse->setCursor( mouseCursor );
 						TheMouse->setPosition( mousePos.x, mousePos.y );
 						TheLookAtTranslator->setCurrentPos( mousePos );
 					}
@@ -1987,7 +2003,7 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 		case GameMessage::MSG_SELECT_TEAM8:
 		case GameMessage::MSG_SELECT_TEAM9:
 		{
-			msgPlayer->processSelectTeamGameMessage(msg->getType() - GameMessage::MSG_SELECT_TEAM0, msg);
+			msgPlayer->processSelectTeamGameMessage(msg->getType() - GameMessage::MSG_SELECT_TEAM0);
 			break;
 		}
 
@@ -2002,7 +2018,7 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 		case GameMessage::MSG_ADD_TEAM8:
 		case GameMessage::MSG_ADD_TEAM9:
 		{
-			msgPlayer->processAddTeamGameMessage(msg->getType() - GameMessage::MSG_ADD_TEAM0, msg);
+			msgPlayer->processAddTeamGameMessage(msg->getType() - GameMessage::MSG_ADD_TEAM0);
 			break;
 		}
 

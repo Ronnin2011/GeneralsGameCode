@@ -276,11 +276,11 @@ int WorldHeightMapEdit::m_numGlobalTextureClasses=0;
 TGlobalTextureClass WorldHeightMapEdit::m_globalTextureClasses[NUM_TEXTURE_CLASSES];
 /** Destructor -.
 */
-WorldHeightMapEdit::~WorldHeightMapEdit(void)
+WorldHeightMapEdit::~WorldHeightMapEdit()
 {
 }
 
-void WorldHeightMapEdit::shutdown(void)
+void WorldHeightMapEdit::shutdown()
 {
 	Int i, j;
 	for (i=0; i<m_numGlobalTextureClasses; i++) {
@@ -298,7 +298,7 @@ void WorldHeightMapEdit::shutdown(void)
 	PolygonTrigger::deleteTriggers();
 }
 
-void WorldHeightMapEdit::init(void)
+void WorldHeightMapEdit::init()
 {
 	Int i, j;
 	for (i=0; i<NUM_TEXTURE_CLASSES; i++) {
@@ -569,7 +569,7 @@ WorldHeightMapEdit::WorldHeightMapEdit(ChunkInputStream* pStrm) :
 	remapTextures
 		Remaps the textures in the map.
 */
-Bool WorldHeightMapEdit::remapTextures(void)
+Bool WorldHeightMapEdit::remapTextures()
 {
 	Int i;
 	Bool anyChanges;
@@ -628,7 +628,7 @@ void WorldHeightMapEdit::loadBitmap(char *path, const char *uiName)
 }
 
 /// Load the available bitmap images.
-void WorldHeightMapEdit::loadBaseImages(void)
+void WorldHeightMapEdit::loadBaseImages()
 {
 
  	/// @todo - take this out when we are done evaluating terrain textures.
@@ -1012,7 +1012,7 @@ void WorldHeightMapEdit::saveToFile(DataChunkOutput &chunkWriter)
 // duplicate - Makes a copy.
 // Returns null if allocation failed.
 
-WorldHeightMapEdit *WorldHeightMapEdit::duplicate(void)
+WorldHeightMapEdit *WorldHeightMapEdit::duplicate()
 {
 	WorldHeightMapEdit *newMap = new WorldHeightMapEdit(this);
 	if (newMap->m_data == nullptr) {
@@ -1794,7 +1794,7 @@ Bool WorldHeightMapEdit::floodFill(Int xIndex, Int yIndex, Int textureClass, Boo
 	resetResources
 		releases textures so things like device reset can be done.
 */
-void WorldHeightMapEdit::resetResources(void)
+void WorldHeightMapEdit::resetResources()
 {
 	REF_PTR_RELEASE(m_terrainTex);
 	REF_PTR_RELEASE(m_alphaEdgeTex);
@@ -1804,7 +1804,7 @@ void WorldHeightMapEdit::resetResources(void)
 	reloadTextures
 		reloads textures from files.
 */
-void WorldHeightMapEdit::reloadTextures(void)
+void WorldHeightMapEdit::reloadTextures()
 {
 	Int i;
 	for (i=0; i<m_numGlobalTextureClasses; i++) {
@@ -1834,7 +1834,7 @@ void WorldHeightMapEdit::reloadTextures(void)
 	showTileStatusInfo
 		provides human readable tile statistics.
 */
-void WorldHeightMapEdit::showTileStatusInfo(void)
+void WorldHeightMapEdit::showTileStatusInfo()
 {
 	CString message;
 	Int tilesPerRow = TEXTURE_WIDTH/(2*TILE_PIXEL_EXTENT+TILE_OFFSET);
@@ -1871,7 +1871,7 @@ void WorldHeightMapEdit::setHeight(Int xIndex, Int yIndex, UnsignedByte height) 
 		This optimizes the tiles and blend tiles, recalculating them
 		and removing any unused ones.
 */
-Bool WorldHeightMapEdit::optimizeTiles(void)
+Bool WorldHeightMapEdit::optimizeTiles()
 {
 	// Run through all the tile indexes changing to tile classes.
 	Int i;
@@ -2145,7 +2145,7 @@ Int WorldHeightMapEdit::getFirstTile(Int textureClass)
 /**
  dbgVerifyAfterUndo - Verifies that the structure is consistent.
 */
-void WorldHeightMapEdit::dbgVerifyAfterUndo(void)
+void WorldHeightMapEdit::dbgVerifyAfterUndo()
 {
 #ifdef DEBUG_CRASHING
 	Int i, j;
@@ -2207,7 +2207,7 @@ void WorldHeightMapEdit::addObject(MapObject *pMapObj)
 	MapObject::TheMapObjectListPtr = newObj;
 }
 
-void WorldHeightMapEdit::removeFirstObject(void)
+void WorldHeightMapEdit::removeFirstObject()
 {
 	MapObject *firstObj = MapObject::TheMapObjectListPtr;
 	MapObject::TheMapObjectListPtr = firstObj->getNext();
@@ -2220,7 +2220,7 @@ void WorldHeightMapEdit::removeFirstObject(void)
 //=============================================================================
 /** Selects any duplicate objects. */
 //=============================================================================
-Bool WorldHeightMapEdit::selectDuplicates(void)
+Bool WorldHeightMapEdit::selectDuplicates()
 {
 	const float DELTA =  0.05f;
 	MapObject *firstObj = MapObject::TheMapObjectListPtr;
@@ -2289,7 +2289,7 @@ Bool WorldHeightMapEdit::selectDuplicates(void)
 //=============================================================================
 /** Selects any similar objects. */
 //=============================================================================
-Bool WorldHeightMapEdit::selectSimilar(void)
+Bool WorldHeightMapEdit::selectSimilar()
 {
 //	const float DELTA =  0.05f;
 	MapObject *firstObj = MapObject::TheMapObjectListPtr;
@@ -2334,7 +2334,7 @@ Bool WorldHeightMapEdit::selectSimilar(void)
 //=============================================================================
 /** Selects any objects with invalid teams. */
 //=============================================================================
-Bool WorldHeightMapEdit::selectInvalidTeam(void)
+Bool WorldHeightMapEdit::selectInvalidTeam()
 {
 	Int i;
 	AsciiString name;
@@ -2778,7 +2778,7 @@ Bool WorldHeightMapEdit::doCliffAdjustment(Int xIndex, Int yIndex)
 	removeCliffMapping
 		Removes all cliff adjustments.
 */
-Bool WorldHeightMapEdit::removeCliffMapping(void)
+Bool WorldHeightMapEdit::removeCliffMapping()
 {
 
 	Int ndx;
@@ -3550,7 +3550,7 @@ Int WorldHeightMapEdit::addCliffInfo(TCliffInfo *pCliffInfo)
 
 }
 
-Int WorldHeightMapEdit::getNumBoundaries(void) const
+Int WorldHeightMapEdit::getNumBoundaries() const
 {
 	return m_boundaries.size();
 }
@@ -3585,7 +3585,7 @@ void WorldHeightMapEdit::changeBoundary(Int ndx, ICoord2D *border)
 	m_boundaries[ndx] = (*border);
 }
 
-void WorldHeightMapEdit::removeLastBoundary(void)
+void WorldHeightMapEdit::removeLastBoundary()
 {
 	if (m_boundaries.empty()) {
 		DEBUG_CRASH(("Invalid border remove request. jkmcd"));

@@ -38,6 +38,7 @@
 #include "Common/STLTypedefs.h"
 typedef std::vector<ICoord2D> VecICoord2D;
 
+
 /** MapObject class
 Not ref counted.  Do not store pointers to this class.  */
 
@@ -56,6 +57,7 @@ Not ref counted.  Do not store pointers to this class.  */
 
 // For backwards compatiblity.
 #define TEX_PATH_LEN 256
+
 
 /// Struct in memory.
 typedef struct {
@@ -94,6 +96,7 @@ typedef struct {
 
 #define NUM_TEXTURE_CLASSES 256
 
+
 class TextureClass;
 class ChunkInputStream;
 class InputStream;
@@ -107,7 +110,7 @@ class AlphaEdgeTextureClass;
 #define NUM_ALPHA_TILES 12
 
 class WorldHeightMap : public RefCountClass,
-	public WorldHeightMapInterfaceClass
+                       public WorldHeightMapInterfaceClass
 {
 	friend class TerrainTextureClass;
 	friend class AlphaTerrainTextureClass;
@@ -117,14 +120,25 @@ class WorldHeightMap : public RefCountClass,
 #define NO_EVAL_TILING_MODES
 
 public:
+
+	struct DrawArea
+	{
+		Int originX;
+		Int originY;
+		Int sizeX;
+		Int sizeY;
+	};
+
 #ifdef EVAL_TILING_MODES
-	enum { TILE_4x4, TILE_6x6, TILE_8x8 } m_tileMode;
+	enum {TILE_4x4, TILE_6x6, TILE_8x8} m_tileMode;
 #endif
 	enum {
-		NORMAL_DRAW_WIDTH = 1 + 4 * VERTEX_BUFFER_TILE_LENGTH,
-		NORMAL_DRAW_HEIGHT = 1 + 4 * VERTEX_BUFFER_TILE_LENGTH,
-		STRETCH_DRAW_WIDTH = 1 + 2 * VERTEX_BUFFER_TILE_LENGTH,
-		STRETCH_DRAW_HEIGHT = 1 + 2 * VERTEX_BUFFER_TILE_LENGTH,
+		NORMAL_DRAW_WIDTH = 1 + 4*VERTEX_BUFFER_TILE_LENGTH,
+		NORMAL_DRAW_HEIGHT = 1 + 4*VERTEX_BUFFER_TILE_LENGTH,
+		STRETCH_DRAW_WIDTH = 1 + 2*VERTEX_BUFFER_TILE_LENGTH,
+		STRETCH_DRAW_HEIGHT = 1 + 2*VERTEX_BUFFER_TILE_LENGTH,
+		LOW_ANGLE_DRAW_WIDTH = 1 + (NORMAL_DRAW_WIDTH-1) * 2,
+		LOW_ANGLE_DRAW_HEIGHT = 1 + (NORMAL_DRAW_HEIGHT-1) * 2,
 	};
 
 protected:
@@ -221,29 +235,29 @@ protected:
 	static Int s_instanceCount;
 
 protected:
-	TileData* getSourceTile(UnsignedInt ndx) { if (ndx < NUM_SOURCE_TILES) return(m_sourceTiles[ndx]); return(nullptr); };
-	TileData* getEdgeTile(UnsignedInt ndx) { if (ndx < NUM_SOURCE_TILES) return(m_edgeTiles[ndx]); return(nullptr); };
+	TileData *getSourceTile(UnsignedInt ndx) { if (ndx<NUM_SOURCE_TILES) return(m_sourceTiles[ndx]); return(nullptr); };
+	TileData *getEdgeTile(UnsignedInt ndx) { if (ndx<NUM_SOURCE_TILES) return(m_edgeTiles[ndx]); return(nullptr); };
 	/// UV mapping data for a cell to map into the terrain texture.
-	void getUVForNdx(Int ndx, float* minU, float* minV, float* maxU, float* maxV);
+	void getUVForNdx(Int ndx, float *minU, float *minV, float *maxU, float*maxV);
 	Bool getUVForTileIndex(Int ndx, Short tileNdx, float U[4], float V[4]);
 	Int getTextureClassFromNdx(Int tileNdx);
-	void readTexClass(TXTextureClass* texClass, TileData** tileData);
-	Int updateTileTexturePositions(Int* edgeHeight); ///< Places each tile in the texture.
+	void readTexClass(TXTextureClass *texClass, TileData **tileData);
+	Int updateTileTexturePositions(Int *edgeHeight); ///< Places each tile in the texture.
 	void initCliffFlagsFromHeights();
 	void setCellCliffFlagFromHeights(Int xIndex, Int yIndex);
 
 protected:	 // file reader callbacks.
-	static Bool ParseHeightMapDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
-	Bool ParseHeightMapData(DataChunkInput& file, DataChunkInfo* info, void* userData);
-	static Bool ParseSizeOnlyInChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
-	Bool ParseSizeOnly(DataChunkInput& file, DataChunkInfo* info, void* userData);
-	static Bool ParseBlendTileDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
-	Bool ParseBlendTileData(DataChunkInput& file, DataChunkInfo* info, void* userData);
-	static Bool ParseWorldDictDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
-	static Bool ParseObjectsDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
-	static Bool ParseObjectDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
-	Bool ParseObjectData(DataChunkInput& file, DataChunkInfo* info, void* userData, Bool readDict);
-	static Bool ParseLightingDataChunk(DataChunkInput& file, DataChunkInfo* info, void* userData);
+	static Bool ParseHeightMapDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
+	Bool ParseHeightMapData(DataChunkInput &file, DataChunkInfo *info, void *userData);
+	static Bool ParseSizeOnlyInChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
+	Bool ParseSizeOnly(DataChunkInput &file, DataChunkInfo *info, void *userData);
+	static Bool ParseBlendTileDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
+	Bool ParseBlendTileData(DataChunkInput &file, DataChunkInfo *info, void *userData);
+	static Bool ParseWorldDictDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
+	static Bool ParseObjectsDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
+	static Bool ParseObjectDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
+	Bool ParseObjectData(DataChunkInput &file, DataChunkInfo *info, void *userData, Bool readDict);
+	static Bool ParseLightingDataChunk(DataChunkInput &file, DataChunkInfo *info, void *userData);
 
 protected:
 	WorldHeightMap();			///< Simple constructor for WorldHeightMapEdit class.
@@ -261,18 +275,18 @@ public:  // height map info.
 
 	UnsignedByte* getDataPtr() { return m_data; }
 
-	Int getXExtent() { return m_width; }	///<number of vertices in x
-	Int getYExtent() { return m_height; }	///<number of vertices in y
+	Int getXExtent() {return m_width;}	///<number of vertices in x
+	Int getYExtent() {return m_height;}	///<number of vertices in y
 
-	Int getDrawOrgX() { return m_drawOriginX; }
-	Int getDrawOrgY() { return m_drawOriginY; }
+	Int getDrawOrgX() {return m_drawOriginX;}
+	Int getDrawOrgY() {return m_drawOriginY;}
 
-	Int getDrawWidth() { return m_drawWidthX; }
-	Int getDrawHeight() { return m_drawHeightY; }
-	void setDrawWidth(Int width) { m_drawWidthX = width; if (m_drawWidthX > m_width) m_drawWidthX = m_width; }
-	void setDrawHeight(Int height) { m_drawHeightY = height; if (m_drawHeightY > m_height) m_drawHeightY = m_height; }
-	virtual Int getBorderSize() override { return m_borderSize; }
-	Int getBorderSizeInline() const { return m_borderSize; }
+	Int getDrawWidth() {return m_drawWidthX;}
+	Int getDrawHeight() {return m_drawHeightY;}
+	void setDrawWidth(Int width) {DEBUG_ASSERTCRASH(width <= m_width, ("Draw width must not exceed map width")); m_drawWidthX = width;}
+	void setDrawHeight(Int height) {DEBUG_ASSERTCRASH(height <= m_height, ("Draw height must not exceed map height")); m_drawHeightY = height;}
+	virtual Int getBorderSize() override {return m_borderSize;}
+  Int getBorderSizeInline() const { return m_borderSize; }
 	/// Get height with the offset that HeightMapRenderObjClass uses built in.
 	UnsignedByte getDisplayHeight(Int x, Int y) { return m_data[x + m_drawOriginX + m_width * (y + m_drawOriginY)]; }
 
@@ -286,8 +300,10 @@ public:  // height map info.
 			return(0);
 	};
 
-	void getUVForBlend(Int edgeClass, Region2D* range);
+	void getUVForBlend(Int edgeClass, Region2D *range);
 
+	DrawArea createDrawArea(Int xOrg, Int yOrg);
+	Bool setDrawArea(const DrawArea& drawArea);
 	Bool setDrawOrg(Int xOrg, Int yOrg);
 
 	static void freeListOfMapObjects();

@@ -122,6 +122,7 @@
 #include "static_sort_list.h"
 #include "shdlib.h"
 #include "framgrab.h"
+#include "Lib/BaseType.h"
 
 
 const char* DAZZLE_INI_FILENAME="DAZZLE.INI";
@@ -282,8 +283,9 @@ WW3DErrorType WW3D::Init(void *hwnd, char *defaultpal, bool lite)
 		WWDEBUG_SAY(("Allocate Debug Resources"));
 		Allocate_Debug_Resources();
 
-		MMRESULT r = timeBeginPeriod(1);
-		WWASSERT(r == TIMERR_NOERROR);
+	MAYBE_UNUSED MMRESULT r=timeBeginPeriod(1);
+	WWASSERT(r==TIMERR_NOERROR);
+	(void)r;
 
 	/*
 	** Initialize the dazzle system
@@ -341,8 +343,9 @@ WW3DErrorType WW3D::Shutdown()
 #endif //WW3D_DX8
 
 	//restore the previous timer resolution
-	MMRESULT r=timeEndPeriod(1);
+	MAYBE_UNUSED MMRESULT r=timeEndPeriod(1);
 	WWASSERT(r==TIMERR_NOERROR);
+	(void)r;
 	/*
 	** Free memory in predictive LOD optimizer
 	*/

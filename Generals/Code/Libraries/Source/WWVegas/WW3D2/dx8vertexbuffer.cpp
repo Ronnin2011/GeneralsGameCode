@@ -26,12 +26,13 @@
  *                                                                                             *
  *              Original Author:: Jani Penttinen                                               *
  *                                                                                             *
- *                      $Author:: Jani_p                                                      $*
+ *                      $Author:: Kenny Mitchell                                               *
  *                                                                                             *
- *                     $Modtime:: 7/10/01 1:33p                                               $*
+ *                     $Modtime:: 06/26/02 5:06p                                             $*
  *                                                                                             *
- *                    $Revision:: 34                                                          $*
+ *                    $Revision:: 39                                                          $*
  *                                                                                             *
+ * 06/26/02 KM VB Vertex format size update for shaders                                       *
  *---------------------------------------------------------------------------------------------*
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
@@ -45,6 +46,7 @@
 #include "dx8fvf.h"
 #include "dx8caps.h"
 #include "thread.h"
+#include "wwmemlog.h"
 #include <d3dx9.h>  // Native DX9 extensions
 
 #define DEFAULT_VB_SIZE 5000
@@ -80,8 +82,10 @@ VertexBufferClass::VertexBufferClass(unsigned type_, unsigned FVF, unsigned shor
 	type(type_),
 	engine_refs(0)
 {
+	WWMEMLOG(MEM_RENDERER);
 	WWASSERT(VertexCount);
 	WWASSERT(type==BUFFER_TYPE_DX8 || type==BUFFER_TYPE_SORTING);
+	WWASSERT(FVF != 0);
 	fvf_info=W3DNEW FVFInfoClass(FVF);
 
 	_VertexBufferCount++;
@@ -285,6 +289,7 @@ SortingVertexBufferClass::SortingVertexBufferClass(unsigned short VertexCount)
 	:
 	VertexBufferClass(BUFFER_TYPE_SORTING, dynamic_fvf_type, VertexCount)
 {
+	WWMEMLOG(MEM_RENDERER);
 	VertexBuffer=W3DNEWARRAY VertexFormatXYZNDUV2[VertexCount];
 }
 
@@ -421,10 +426,10 @@ void DX8VertexBufferClass::Create_Vertex_Buffer(UsageType usage)
 	WWDEBUG_SAY(("CreateVertexBuffer(fvfsize=%d, vertex_count=%d, D3DUSAGE_WRITEONLY|%s|%s, fvf: %s, %s)",
 		FVF_Info().Get_FVF_Size(),
 		VertexCount,
-		usage&USAGE_DYNAMIC ? "D3DUSAGE_DYNAMIC" : "-",
-		usage&USAGE_SOFTWAREPROCESSING ? "D3DUSAGE_SOFTWAREPROCESSING" : "-",
+		(usage&USAGE_DYNAMIC) ? "D3DUSAGE_DYNAMIC" : "-",
+		(usage&USAGE_SOFTWAREPROCESSING) ? "D3DUSAGE_SOFTWAREPROCESSING" : "-",
 		fvf_name,
-		dynamic ? "D3DPOOL_DEFAULT" : "D3DPOOL_MANAGED"));
+		(usage&USAGE_DYNAMIC) ? "D3DPOOL_DEFAULT" : "D3DPOOL_MANAGED"));
 	_DX8VertexBufferCount++;
 	WWDEBUG_SAY(("Current vertex buffer count: %d",_DX8VertexBufferCount));
 #endif
@@ -434,7 +439,6 @@ void DX8VertexBufferClass::Create_Vertex_Buffer(UsageType usage)
 		((usage&USAGE_DYNAMIC) ? D3DUSAGE_DYNAMIC : 0)|
 		((usage&USAGE_NPATCHES) ? D3DUSAGE_NPATCHES : 0)|
 		((usage&USAGE_SOFTWAREPROCESSING) ? D3DUSAGE_SOFTWAREPROCESSING : 0);
-
 	// New Code
 	if (!DX8Wrapper::Get_Current_Caps()->Support_TnL()) {
 		usage_flags|=D3DUSAGE_SOFTWAREPROCESSING;
@@ -453,14 +457,16 @@ void DX8VertexBufferClass::Create_Vertex_Buffer(UsageType usage)
 
 	WWDEBUG_SAY(("Vertex buffer creation failed, trying to release assets..."));
 
-	// Vertex buffer creation failed.  Must be out of memory. Try releasing all our D3D assets and re-creating
-	// them.
+	// Vertex buffer creation failed, so try releasing least used textures and flushing the mesh cache.
+
+	// Free all textures that haven't been used in the last 5 seconds
+	TextureClass::Invalidate_Old_Unused_Textures(5000);
 
 	// Invalidate the mesh cache
 	WW3D::_Invalidate_Mesh_Cache();
 
 	//@todo: Find some way to invalidate the textures too
-// Ronin @build 27/10/2025 DX9: Removed`r`n// 	ret = DX8Wrapper::_Get_D3D_Device8()->ResourceManagerDiscardBytes(0);
+	ret = DX8Wrapper::_Get_D3D_Device8()->ResourceManagerDiscardBytes(0);
 
 	// Try again...
 	ret=DX8Wrapper::_Get_D3D_Device8()->CreateVertexBuffer(
@@ -762,6 +768,7 @@ void DynamicVBAccessClass::_Deinit()
 
 void DynamicVBAccessClass::Allocate_DX8_Dynamic_Buffer()
 {
+	WWMEMLOG(MEM_RENDERER);
 	WWASSERT(!_DynamicDX8VertexBufferInUse);
 	_DynamicDX8VertexBufferInUse=true;
 
@@ -798,6 +805,7 @@ void DynamicVBAccessClass::Allocate_DX8_Dynamic_Buffer()
 
 void DynamicVBAccessClass::Allocate_Sorting_Dynamic_Buffer()
 {
+	WWMEMLOG(MEM_RENDERER);
 	WWASSERT(!_DynamicSortingVertexArrayInUse);
 	_DynamicSortingVertexArrayInUse=true;
 

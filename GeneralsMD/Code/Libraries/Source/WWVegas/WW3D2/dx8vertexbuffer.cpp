@@ -115,7 +115,7 @@ static int _VertexBufferTotalSize;
 //
 // ----------------------------------------------------------------------------
 
-VertexBufferClass::VertexBufferClass(unsigned type_, unsigned FVF, unsigned short vertex_count_, unsigned vertex_size)
+VertexBufferClass::VertexBufferClass(unsigned type_, unsigned FVF, unsigned short vertex_count_)
 	:
 	VertexCount(vertex_count_),
 	type(type_),
@@ -124,8 +124,8 @@ VertexBufferClass::VertexBufferClass(unsigned type_, unsigned FVF, unsigned shor
 	WWMEMLOG(MEM_RENDERER);
 	WWASSERT(VertexCount);
 	WWASSERT(type==BUFFER_TYPE_DX8 || type==BUFFER_TYPE_SORTING);
-	WWASSERT((FVF!=0 && vertex_size==0) || (FVF==0 && vertex_size!=0));
-	fvf_info=W3DNEW FVFInfoClass(FVF,vertex_size);
+	WWASSERT(FVF != 0);
+	fvf_info=W3DNEW FVFInfoClass(FVF);
 
 	_VertexBufferCount++;
 	_VertexBufferTotalVertices+=VertexCount;
@@ -348,9 +348,9 @@ SortingVertexBufferClass::~SortingVertexBufferClass()
 
 //	bool dynamic=false,bool softwarevp=false);
 
-DX8VertexBufferClass::DX8VertexBufferClass(unsigned FVF, unsigned short vertex_count_, UsageType usage, unsigned vertex_size)
+DX8VertexBufferClass::DX8VertexBufferClass(unsigned FVF, unsigned short vertex_count_, UsageType usage)
 	:
-	VertexBufferClass(BUFFER_TYPE_DX8, FVF, vertex_count_, vertex_size),
+	VertexBufferClass(BUFFER_TYPE_DX8, FVF, vertex_count_),
 	VertexBuffer(nullptr)
 {
 	Create_Vertex_Buffer(usage);
@@ -478,10 +478,6 @@ void DX8VertexBufferClass::Create_Vertex_Buffer(UsageType usage)
 		((usage&USAGE_DYNAMIC) ? D3DUSAGE_DYNAMIC : 0)|
 		((usage&USAGE_NPATCHES) ? D3DUSAGE_NPATCHES : 0)|
 		((usage&USAGE_SOFTWAREPROCESSING) ? D3DUSAGE_SOFTWAREPROCESSING : 0);
-	if (!DX8Wrapper::Get_Current_Caps()->Support_TnL()) {
-		usage_flags|=D3DUSAGE_SOFTWAREPROCESSING;
-	}
-
 	// New Code
 	if (!DX8Wrapper::Get_Current_Caps()->Support_TnL()) {
 		usage_flags|=D3DUSAGE_SOFTWAREPROCESSING;
@@ -883,6 +879,7 @@ void DynamicVBAccessClass::Allocate_DX8_Dynamic_Buffer()
 	VertexBufferOffset = pool->offset;
 }
 
+
 void DynamicVBAccessClass::Allocate_Sorting_Dynamic_Buffer()
 {
 	WWMEMLOG(MEM_RENDERER);
@@ -916,18 +913,17 @@ DynamicVBAccessClass::WriteLockClass::WriteLockClass(DynamicVBAccessClass* dynam
 	switch (DynamicVBAccess->Get_Type()) {
 	case BUFFER_TYPE_DYNAMIC_DX8:
 #ifdef VERTEX_BUFFER_LOG
-		/*		{
-				WWASSERT(!dx8_lock);
-				dx8_lock++;
-				StringClass fvf_name;
-				DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF_Name(fvf_name);
-				WWDEBUG_SAY(("DynamicVertexBuffer->Lock(start_index: %d, index_range: %d, fvf_size: %d, fvf: %s)",
-					DynamicVBAccess->VertexBufferOffset,
-					DynamicVBAccess->Get_Vertex_Count(),
-					DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF_Size(),
-					fvf_name));
-				}
-		*/
+		{
+		WWASSERT(!dx8_lock);
+		dx8_lock++;
+		StringClass fvf_name;
+		DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF_Name(fvf_name);
+		WWDEBUG_SAY(("DynamicVertexBuffer->Lock(start_index: %d, index_range: %d, fvf_size: %d, fvf: %s)",
+			DynamicVBAccess->VertexBufferOffset,
+			DynamicVBAccess->Get_Vertex_Count(),
+			DynamicVBAccess->VertexBuffer->FVF_Info().Get_FVF_Size(),
+			fvf_name));
+		}
 #endif
 		// Ronin @bugfix 12/12/2025: Use pool system instead of global buffer
 		WWASSERT(DynamicVBAccess->VertexBuffer);
@@ -960,10 +956,9 @@ DynamicVBAccessClass::WriteLockClass::~WriteLockClass()
 	switch (DynamicVBAccess->Get_Type()) {
 	case BUFFER_TYPE_DYNAMIC_DX8:
 #ifdef VERTEX_BUFFER_LOG
-/*		dx8_lock--;
+		dx8_lock--;
 		WWASSERT(!dx8_lock);
 		WWDEBUG_SAY(("DynamicVertexBuffer->Unlock()"));
-*/
 #endif
 		DX8_Assert();
 		DX8_ErrorCode(static_cast<DX8VertexBufferClass*>(DynamicVBAccess->VertexBuffer)->Get_DX8_Vertex_Buffer()->Unlock());

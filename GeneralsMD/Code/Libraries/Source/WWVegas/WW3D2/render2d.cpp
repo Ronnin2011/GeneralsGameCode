@@ -79,9 +79,8 @@ Render2DClass::Render2DClass(TextureClass* tex) :
 	UVCoordinates(sizeof(PreAllocatedUVCoordinates) / sizeof(Vector2), PreAllocatedUVCoordinates),
 	Colors(sizeof(PreAllocatedColors) / sizeof(unsigned long), PreAllocatedColors)
 {
-	Set_Texture(tex);
-	Shader = Get_Default_Shader();
-	return;
+	Set_Texture( tex );
+   Shader = Get_Default_Shader();
 }
 
 Render2DClass::~Render2DClass()
@@ -580,8 +579,7 @@ void	Render2DClass::Add_Rect(const RectClass& rect, float border_width, uint32 b
 		fill_rect.Right -= border_width - 1;
 		fill_rect.Bottom -= border_width - 1;
 	}
-	Add_Quad(fill_rect, fill_color);
-	return;
+	Add_Quad (fill_rect, fill_color);
 }
 
 void	Render2DClass::Add_Outline(const RectClass& rect, float width, unsigned long color)

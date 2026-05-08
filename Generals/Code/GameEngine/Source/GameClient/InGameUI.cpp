@@ -1346,7 +1346,10 @@ void InGameUI::init()
 		// make the tactical display the full screen width and height
 		TheTacticalView->setWidth( TheDisplay->getWidth() );
 		TheTacticalView->setHeight( TheDisplay->getHeight() );
-		TheTacticalView->setDefaultView(0.0f, 0.0f, 1.0f);
+		TheTacticalView->setDefaultView(
+			DEG_TO_RADF(TheGlobalData->m_cameraPitch),
+			DEG_TO_RADF(TheGlobalData->m_cameraYaw),
+			1.0f);
 	}
 
 	/** @todo this may be the wrong place to create the sidebar, but for now
@@ -2091,7 +2094,10 @@ void InGameUI::reset()
 	// reset the command bar
 	TheControlBar->reset();
 
-	TheTacticalView->setDefaultView(0.0f, 0.0f, 1.0f);
+	TheTacticalView->setDefaultView(
+		DEG_TO_RADF(TheGlobalData->m_cameraPitch),
+		DEG_TO_RADF(TheGlobalData->m_cameraYaw),
+		1.0f);
 
 	ResetInGameChat();
 
@@ -3487,10 +3493,8 @@ void InGameUI::deselectAllDrawables( Bool postMsg )
 	the order of operations of things happening in the code (CBD) */
 	if( postMsg )
 	{
-		GameMessage *groupMsg = TheMessageStream->appendMessage( GameMessage::MSG_DESTROY_SELECTED_GROUP );
-
-		//True deletes entire group.
-		groupMsg->appendBooleanArgument( true );
+		// TheSuperHackers @tweak Originally this message had one boolean argument, but it wasn't used for anything.
+		TheMessageStream->appendMessage( GameMessage::MSG_DESTROY_SELECTED_GROUP );
 	}
 }
 
@@ -5659,7 +5663,6 @@ void InGameUI::removeIdleWorker( Object *obj, Int playerNumber )
 		}
 		++it;
 	}
-	return;
 }
 
 void InGameUI::selectNextIdleWorker()

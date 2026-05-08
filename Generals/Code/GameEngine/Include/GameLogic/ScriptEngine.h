@@ -50,7 +50,7 @@ class Player;
 class PolygonTrigger;
 class ObjectTypes;
 
-#ifdef RTS_PROFILE
+#ifdef RTS_PROFILE_LEGACY
 #define SPECIAL_SCRIPT_PROFILING
 #endif
 

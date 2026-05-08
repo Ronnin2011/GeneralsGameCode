@@ -385,8 +385,6 @@ void RingRenderObjClass::Generate_Shared_Mesh_Arrays ()
 
 		Ring_Array_Valid = true;
 	}
-
-	return ;
 }
 
 
@@ -1124,8 +1122,6 @@ void RingRenderObjClass::Update_On_Visibility()
 	} else if ((Is_Not_Hidden_At_All () == false) && Is_Animating ()) {
 		Stop_Animating ();
 	}
-
-	return ;
 }
 
 /***********************************************************************************************
@@ -1182,8 +1178,6 @@ void RingRenderObjClass::animate()
 			}
 		}
 	}
-
-	return ;
 }
 
 
@@ -1203,7 +1197,6 @@ PrototypeClass * RingLoaderClass::Load_W3D(ChunkLoadClass & cload)
 RingPrototypeClass::RingPrototypeClass ()
 {
 	::memset (&Definition, 0, sizeof (Definition));
-	return ;
 }
 
 RingPrototypeClass::RingPrototypeClass(RingRenderObjClass *ring)
@@ -1250,12 +1243,10 @@ RingPrototypeClass::RingPrototypeClass(RingRenderObjClass *ring)
 	AlphaChannel		= ring->Peek_Alpha_Channel ();
 	InnerScaleChannel	= ring->Peek_Inner_Scale_Channel ();
 	OuterScaleChannel	= ring->Peek_Outer_Scale_Channel ();
-	return ;
 }
 
 RingPrototypeClass::~RingPrototypeClass ()
 {
-	return ;
 }
 
 const char * RingPrototypeClass::Get_Name() const
@@ -1473,8 +1464,6 @@ void RingMeshClass::Set_Tiling (int count)
 			u_value += u_inc;
 		}
 	}
-
-	return ;
 }
 
 
@@ -1510,8 +1499,6 @@ void RingMeshClass::Scale (const Vector2 &inner_scale, const Vector2 &outer_scal
 
 		OuterScale = outer_scale;
 	}
-
-	return ;
 }
 
 
@@ -1595,8 +1582,6 @@ void RingMeshClass::Generate(float radius, int slices)
 		tri_poly[index].J = index+1;
 		tri_poly[index].K = index+2;
 	}
-
-	return ;
 }
 
 

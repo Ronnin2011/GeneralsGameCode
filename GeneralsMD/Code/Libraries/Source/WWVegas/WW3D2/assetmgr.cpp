@@ -1622,8 +1622,6 @@ void WW3DAssetManager::Remove_Prototype(PrototypeClass *proto)
 		// Now remove this from our vector-array of prototypes
 		Prototypes.Delete (proto);
 	}
-
-	return;
 }
 
 
@@ -1653,8 +1651,6 @@ void WW3DAssetManager::Remove_Prototype(const char *name)
 			proto->DeleteSelf();
 		}
 	}
-
-	return;
 }
 
 

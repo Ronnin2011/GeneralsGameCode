@@ -716,8 +716,6 @@ void SurfaceClass::Attach (IDirect3DSurface8 *surface)
 	if (D3DSurface != nullptr) {
 		D3DSurface->AddRef ();
 	}
-
-	return ;
 }
 
 
@@ -746,7 +744,6 @@ void SurfaceClass::Detach ()
 	}
 
 	D3DSurface = nullptr;
-	return ;
 }
 
 

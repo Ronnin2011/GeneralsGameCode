@@ -150,7 +150,7 @@ public:
 
 #if defined(RTS_DEBUG)
 	// Disconnect screen testing
-	virtual void toggleNetworkOn();
+	virtual void toggleNetworkOn() override;
 #endif
 
 	// Exposing some info contained in the Connection Manager
@@ -360,8 +360,6 @@ void Network::init()
 #if defined(RTS_DEBUG)
 	m_networkOn = TRUE;
 #endif
-
-	return;
 }
 
 void Network::setSawCRCMismatch()
