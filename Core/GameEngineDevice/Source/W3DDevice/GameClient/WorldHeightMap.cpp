@@ -517,6 +517,9 @@ const ThingTemplate *MapObject::getThingTemplate() const
 
 TileData *WorldHeightMap::m_alphaTiles[NUM_ALPHA_TILES]={0};
 
+// @bugfix Ronin 26/04/2026 See WorldHeightMap.h for rationale.
+Int WorldHeightMap::s_instanceCount = 0;
+
 //
 // WorldHeightMap destructor .
 //
@@ -554,8 +557,14 @@ WorldHeightMap::~WorldHeightMap()
 		REF_PTR_RELEASE(m_sourceTiles[i]);
 		REF_PTR_RELEASE(m_edgeTiles[i]);
 	}
-	for (i=0; i<NUM_ALPHA_TILES; i++) {
-		REF_PTR_RELEASE(m_alphaTiles[i]);
+
+	// @bugfix Ronin 26/04/2026 Release the shared static alpha-mask tiles when the LAST
+	// WorldHeightMap dies. Decrement first so a partially-constructed instance that
+	// threw before the matching ++ in the ctor cannot cause an underflow here.
+	if (s_instanceCount > 0 && --s_instanceCount == 0) {
+		for (Int alphaNdx = 0; alphaNdx < NUM_ALPHA_TILES; ++alphaNdx) {
+			REF_PTR_RELEASE(m_alphaTiles[alphaNdx]);
+		}
 	}
 
 	for (i = 0; i < MAX_TEXTURE_ATLAS_PAGES; ++i) {
@@ -565,6 +574,12 @@ WorldHeightMap::~WorldHeightMap()
 		REF_PTR_RELEASE(m_alphaEdgeTextures[i]);
 	}
 
+	// @feature Ronin 27/04/2026 Splat S20-A2a: release per-material weight atlas pages.
+	for (Int wpage = 0; wpage < MAX_S20_WEIGHT_ATLAS_PAGES; ++wpage) {
+		REF_PTR_RELEASE(m_perMaterialWeightAtlas[wpage]);
+	}
+
+	m_numPerMaterialWeightAtlasPages = 0;
 	REF_PTR_RELEASE(m_terrainTex);
 	REF_PTR_RELEASE(m_alphaTerrainTex);
 	REF_PTR_RELEASE(m_alphaEdgeTex);
@@ -592,12 +607,13 @@ WorldHeightMap::WorldHeightMap():
 	m_numTextureClasses(0),
 	m_drawWidthX(NORMAL_DRAW_WIDTH), m_drawHeightY(NORMAL_DRAW_HEIGHT),
 	m_tileNdxes(nullptr), m_blendTileNdxes(nullptr), m_extraBlendTileNdxes(nullptr), m_cliffInfoNdxes(nullptr),
-	m_terrainTexHeight(1), m_alphaTexHeight(1),	m_cellCliffState(nullptr),
 #ifdef EVAL_TILING_MODES
 	m_tileMode(TILE_4x4),
 #endif
 	m_numCliffInfo(1),
-	m_terrainTex(nullptr), m_alphaTerrainTex(nullptr), m_numBitmapTiles(0), m_numBlendedTiles(1)
+	m_terrainTex(nullptr), m_alphaTerrainTex(nullptr), m_numBitmapTiles(0), m_numBlendedTiles(1),
+	m_primaryBlendTexelsPerCell(16),
+	m_primaryBlendControlTextureDirty(TRUE)
 {
 	Int i;
 	for (i=0; i<NUM_SOURCE_TILES; i++) {
@@ -623,6 +639,11 @@ WorldHeightMap::WorldHeightMap():
 
 	TheSidesList->validateSides();
 	setupAlphaTiles();
+
+	// @bugfix Ronin 26/04/2026 Increment AFTER setupAlphaTiles() succeeds so a throw
+	// during construction does not leave the static alpha tiles orphaned with no
+	// matching destructor decrement. See ~WorldHeightMap().
+	++s_instanceCount;
 }
 
 #ifdef EVAL_TILING_MODES
@@ -648,11 +669,13 @@ WorldHeightMap::WorldHeightMap(ChunkInputStream *pStrm, Bool logicalDataOnly):
 	m_drawWidthX(NORMAL_DRAW_WIDTH), m_drawHeightY(NORMAL_DRAW_HEIGHT),
 	m_tileNdxes(nullptr), m_blendTileNdxes(nullptr), m_extraBlendTileNdxes(nullptr), m_cliffInfoNdxes(nullptr),
 	m_terrainTexHeight(1), m_alphaTexHeight(1),
-#ifdef EVAL_TILING_MODES
+	#ifdef EVAL_TILING_MODES
 	m_tileMode(TILE_4x4),
 #endif
 	m_numCliffInfo(1),
-	m_terrainTex(nullptr), m_alphaTerrainTex(nullptr), m_numBitmapTiles(0), m_numBlendedTiles(1)
+	m_terrainTex(nullptr), m_alphaTerrainTex(nullptr), m_numBitmapTiles(0), m_numBlendedTiles(1),
+	m_primaryBlendTexelsPerCell(4),
+	m_primaryBlendControlTextureDirty(TRUE)
 {
 
 	int i;
@@ -732,6 +755,11 @@ WorldHeightMap::WorldHeightMap(ChunkInputStream *pStrm, Bool logicalDataOnly):
 
 	TheSidesList->validateSides();
 	setupAlphaTiles();
+
+	// @bugfix Ronin 26/04/2026 Increment AFTER setupAlphaTiles() succeeds so a throw
+	// during construction does not leave the static alpha tiles orphaned with no
+	// matching destructor decrement. See ~WorldHeightMap().
+	++s_instanceCount;
 }
 
 /** Optimized version of method to get triangle flip state of a terrain cell.  Use this
@@ -2453,6 +2481,698 @@ void WorldHeightMap::getAlphaUVData(Int xIndex, Int yIndex, float U[4], float V[
 #endif
 }
 
+
+// =============================================================================
+// @feature Ronin 26/04/2026 Splat S20-A1: per-material weight texture bake.
+// =============================================================================
+//
+// Encoding: one byte-channel per active material, packed as a planar [active][y][x]
+// 3D buffer (m_perMaterialWeightBytes, stride m_perMaterialWeightPitch). Sum of all
+// channels per texel == 255 (representing 1.0) by construction.
+//
+// Algorithm:
+//   1. Scan m_tileNdxes / m_blendTileNdxes / m_extraBlendTileNdxes to discover the
+//      active material set (deduplicated local class indices).
+//   2. Allocate width*height bytes per active material.
+//   3. For each cell, compute the 4 corner weights for each material that the cell
+//      contributes to (base/blend1/blend2), bilerp across the cell's texelsPerCell
+//      block.
+//   4. Per-channel separable box blur with radius `blurRadiusCells * texelsPerCell`
+//      (independent per channel).
+//   5. Renormalize so sum-of-channels-per-texel == 255 (correct for box-blur drift).
+//
+// What this does:
+//   - Builds per-material CPU weight planes for the live terrain splat path.
+//   - Feeds the GPU atlas upload performed by ensurePerMaterialWeightAtlasTextures().
+// =============================================================================
+
+namespace
+{
+	// File-local helper: separable box blur on a single byte channel buffer of size
+	// validW * validH at row-pitch `pitch`. Operates on a tightly-packed single-channel
+	// buffer (one byte per texel, no stride). Used by buildPerMaterialWeightTextures
+	// Step 4 to smooth each active material weight plane independently.
+	static void splat_blurSingleChannel(
+		UnsignedByte* buf, Int pitch, Int validW, Int validH, Int radius)
+	{
+		if (buf == nullptr || validW <= 0 || validH <= 0 || radius <= 0) return;
+		const Int kernelSize = 2 * radius + 1;
+		UnsignedByte* scratch =
+			MSGNEW("WorldHeightMap_S20A1_blurScratch") UnsignedByte[validW * validH];
+		if (scratch == nullptr) return;
+
+		// Horizontal pass: buf -> scratch (tightly packed, validW per row in scratch).
+		for (Int y = 0; y < validH; ++y) {
+			UnsignedByte* srcRow = buf + y * pitch;
+			UnsignedByte* dstRow = scratch + y * validW;
+			Int sum = 0;
+			for (Int k = -radius; k <= radius; ++k) {
+				Int sx = k; if (sx < 0) sx = 0; else if (sx >= validW) sx = validW - 1;
+				sum += srcRow[sx];
+			}
+			dstRow[0] = (UnsignedByte)(sum / kernelSize);
+			for (Int x = 1; x < validW; ++x) {
+				Int xOut = x + radius;     if (xOut >= validW) xOut = validW - 1;
+				Int xIn = x - radius - 1; if (xIn < 0)       xIn = 0;
+				sum += srcRow[xOut] - srcRow[xIn];
+				dstRow[x] = (UnsignedByte)(sum / kernelSize);
+			}
+		}
+
+		// Vertical pass: scratch -> buf.
+		for (Int x = 0; x < validW; ++x) {
+			Int sum = 0;
+			for (Int k = -radius; k <= radius; ++k) {
+				Int sy = k; if (sy < 0) sy = 0; else if (sy >= validH) sy = validH - 1;
+				sum += scratch[sy * validW + x];
+			}
+			buf[0 * pitch + x] = (UnsignedByte)(sum / kernelSize);
+			for (Int y = 1; y < validH; ++y) {
+				Int yOut = y + radius;     if (yOut >= validH) yOut = validH - 1;
+				Int yIn = y - radius - 1; if (yIn < 0)       yIn = 0;
+				sum += scratch[yOut * validW + x] - scratch[yIn * validW + x];
+				buf[y * pitch + x] = (UnsignedByte)(sum / kernelSize);
+			}
+		}
+
+		delete[] scratch;
+	}
+}
+
+Bool WorldHeightMap::buildPerMaterialWeightTextures(
+	Int texelsPerCell, Int blurRadiusCells)
+{
+	if (m_tileNdxes == nullptr || m_blendTileNdxes == nullptr) return FALSE;
+	if (texelsPerCell <= 0) texelsPerCell = 4;
+	if (blurRadiusCells < 0) blurRadiusCells = 1;
+
+	const Int cellsX = m_width - 1;
+	const Int cellsY = m_height - 1;
+	if (cellsX <= 0 || cellsY <= 0) return FALSE;
+
+	const Int W = cellsX * texelsPerCell;
+	const Int H = cellsY * texelsPerCell;
+
+	// ---- Step 1: discover active material set. ---------------------------------
+	auto getLocalClass = [this](Short tileNdx) -> Int {
+		const Short baseNdx = tileNdx >> 2;
+		for (Int i = 0; i < m_numTextureClasses; ++i) {
+			if (m_textureClasses[i].firstTile < 0) continue;
+			if (baseNdx >= m_textureClasses[i].firstTile &&
+				baseNdx < m_textureClasses[i].firstTile + m_textureClasses[i].numTiles)
+				return i;
+		}
+		return 0;
+		};
+
+	Bool isActive[SPLAT_MAX_ACTIVE_MATERIALS] = { FALSE };
+	auto markActive = [&](Int classIdx) {
+		if (classIdx >= 0 && classIdx < SPLAT_MAX_ACTIVE_MATERIALS) isActive[classIdx] = TRUE;
+		};
+
+	for (Int i = 0; i < m_dataSize; ++i) {
+		markActive(getLocalClass(m_tileNdxes[i]));
+		const Short bp = m_blendTileNdxes[i];
+		if (bp > 0 && bp < m_numBlendedTiles)
+			markActive(getLocalClass(m_blendedTiles[bp].blendNdx));
+		if (m_extraBlendTileNdxes != nullptr) {
+			const Short be = m_extraBlendTileNdxes[i];
+			if (be > 0 && be < m_numBlendedTiles)
+				markActive(getLocalClass(m_blendedTiles[be].blendNdx));
+		}
+	}
+
+	m_numActiveMaterials = 0;
+	for (Int i = 0; i < SPLAT_MAX_ACTIVE_MATERIALS; ++i) {
+		if (isActive[i]) {
+			m_activeMaterialIndices[m_numActiveMaterials++] = i;
+		}
+	}
+	if (m_numActiveMaterials == 0) return FALSE;
+
+	// @debug Ronin 26/04/2026 Splat S20-A1: warn if the SPLAT_MAX_ACTIVE_MATERIALS cap
+	// silently dropped any classes from the bake. Walks the cell array a second time
+	// counting DISTINCT base classes (no cap), then compares against the cap. If you
+	// see this WARNING in the log on a given map, that map has more terrain materials
+	// than the active bake can represent and some materials will be missing from the
+	// per-material weight set.
+
+	{
+		Bool seenAny[NUM_TEXTURE_CLASSES] = { FALSE };
+		Int totalClassesSeen = 0;
+		for (Int i = 0; i < m_dataSize; ++i) {
+			const Int c = getLocalClass(m_tileNdxes[i]);
+			if (c >= 0 && c < NUM_TEXTURE_CLASSES && !seenAny[c]) {
+				seenAny[c] = TRUE;
+				++totalClassesSeen;
+			}
+		}
+		if (totalClassesSeen > SPLAT_MAX_ACTIVE_MATERIALS) {
+			DEBUG_LOG(("[S20-A1] WARNING: map uses %d distinct base classes but cap is %d -- %d classes will be DROPPED from the bake.\n",
+				totalClassesSeen,
+				(Int)SPLAT_MAX_ACTIVE_MATERIALS,
+				totalClassesSeen - (Int)SPLAT_MAX_ACTIVE_MATERIALS));
+		}
+		else {
+			DEBUG_LOG(("[S20-A1] map uses %d distinct base classes (cap %d) -- all classes baked.\n",
+				totalClassesSeen, (Int)SPLAT_MAX_ACTIVE_MATERIALS));
+		}
+	}
+
+	// @bugfix Ronin 26/04/2026 Splat S20-A1: classToActive must be indexed by class index
+	// (0..NUM_TEXTURE_CLASSES-1), NOT by slot (0..SPLAT_MAX_ACTIVE_MATERIALS-1). The
+	// previous SPLAT_MAX_ACTIVE_MATERIALS-sized array crashed on maps with > 16 texture
+	// classes: getLocalClass() returns the raw class index from m_textureClasses (can be
+	// 17, 18, ... on the desert map), the cell loop did classToActive[17] which read
+	// past the stack array -> returned garbage int -> plane(garbage)[p] wrote out of
+	// bounds. Sizing the lookup by NUM_TEXTURE_CLASSES makes every legal class index
+	// safe to look up; classes outside the active set still map to -1 and skip.
+	Int classToActive[NUM_TEXTURE_CLASSES];
+	for (Int i = 0; i < NUM_TEXTURE_CLASSES; ++i) classToActive[i] = -1;
+	for (Int s = 0; s < m_numActiveMaterials; ++s) {
+		const Int classIdx = m_activeMaterialIndices[s];
+		if (classIdx >= 0 && classIdx < NUM_TEXTURE_CLASSES) {
+			classToActive[classIdx] = s;
+		}
+	}
+
+	// Defensive lookup helper -- belts & braces against future getLocalClass() changes
+	// returning a class index that is somehow outside [0, NUM_TEXTURE_CLASSES).
+	auto activeSlotOf = [&](Int classIdx) -> Int {
+		if (classIdx < 0 || classIdx >= NUM_TEXTURE_CLASSES) return -1;
+		return classToActive[classIdx];
+		};
+
+	// ---- Step 2: allocate the planar buffer. ------------------------------------
+	const Int pitch = W; // tight pack; A2 will adapt to D3D row pitch when uploading.
+	const Int planeBytes = pitch * H;
+	const Int totalBytes = planeBytes * m_numActiveMaterials;
+
+	delete[] m_perMaterialWeightBytes;
+	m_perMaterialWeightBytes = MSGNEW("WorldHeightMap_S20A1_weights") UnsignedByte[totalBytes];
+	if (m_perMaterialWeightBytes == nullptr) return FALSE;
+	memset(m_perMaterialWeightBytes, 0, totalBytes);
+
+	m_perMaterialWeightWidth = W;
+	m_perMaterialWeightHeight = H;
+	m_perMaterialWeightPitch = pitch;
+
+	auto plane = [&](Int activeIdx) -> UnsignedByte* {
+		return m_perMaterialWeightBytes + activeIdx * planeBytes;
+		};
+
+	// ---- Step 3: per-cell weight rasterization. --------------------------------
+	// For each cell:
+	//   - baseClass gets weight (1 - smoothA1) * (1 - smoothA2)  bilerped across cell
+	//   - blend1Class gets weight smoothA1 * (1 - smoothA2)
+	//   - blend2Class gets weight smoothA2
+	// where smoothA1/smoothA2 are the corner-alpha bilerps that S1/Pass3 already
+	// compute. Sum at each texel == 1.0 by construction.
+	//
+	// The 4-corner alpha decode below mirrors the blend-info decode used in
+	// getAlphaUVData / getExtraAlphaUVData, so the weight bake matches the existing
+	// alpha pipeline byte-for-byte at texelsPerCell before blur. (After blur, the
+	// per-material channels diverge from the legacy single-control path -- that's the point.)
+	for (Int cy = 0; cy < cellsY; ++cy) {
+		for (Int cx = 0; cx < cellsX; ++cx) {
+			const Int ndx = cy * m_width + cx;
+			if (ndx < 0 || ndx >= m_dataSize) continue;
+
+			const Int baseClass = getLocalClass(m_tileNdxes[ndx]);
+			Int blend1Class = baseClass;
+			Int blend2Class = baseClass;
+
+			UnsignedByte cornerA1[4] = { 0,0,0,0 };
+			UnsignedByte cornerA2[4] = { 0,0,0,0 };
+
+			const Short bp = m_blendTileNdxes[ndx];
+			if (bp > 0 && bp < m_numBlendedTiles &&
+				m_blendedTiles[bp].customBlendEdgeClass < 0) {
+				const TBlendTileInfo& info = m_blendedTiles[bp];
+				blend1Class = getLocalClass(info.blendNdx);
+				// Corner-alpha decode for blend1 -- mirrors the blend-info decode in getAlphaUVData.
+				if (info.horiz) {
+					if (info.inverted & INVERTED_MASK) { cornerA1[0] = cornerA1[3] = 255; }
+					else { cornerA1[1] = cornerA1[2] = 255; }
+				}
+				if (info.vert) {
+					if (info.inverted & INVERTED_MASK) { cornerA1[0] = cornerA1[1] = 255; }
+					else { cornerA1[2] = cornerA1[3] = 255; }
+				}
+				if (info.rightDiagonal) {
+					if (info.inverted & INVERTED_MASK) {
+						cornerA1[1] = 255;
+						if (info.longDiagonal) { cornerA1[0] = 255; cornerA1[2] = 255; }
+					}
+					else {
+						cornerA1[2] = 255;
+						if (info.longDiagonal) { cornerA1[1] = 255; cornerA1[3] = 255; }
+					}
+				}
+				if (info.leftDiagonal) {
+					if (info.inverted & INVERTED_MASK) {
+						cornerA1[0] = 255;
+						if (info.longDiagonal) { cornerA1[1] = 255; cornerA1[3] = 255; }
+					}
+					else {
+						cornerA1[3] = 255;
+						if (info.longDiagonal) { cornerA1[0] = 255; cornerA1[2] = 255; }
+					}
+				}
+			}
+
+			if (m_extraBlendTileNdxes != nullptr) {
+				const Short be = m_extraBlendTileNdxes[ndx];
+				if (be > 0 && be < m_numBlendedTiles &&
+					m_blendedTiles[be].customBlendEdgeClass < 0) {
+					const TBlendTileInfo& info = m_blendedTiles[be];
+					blend2Class = getLocalClass(info.blendNdx);
+					// @bugfix Ronin 29/04/2026 Splat S20-A1: 3-way corner alpha decode.
+					// Decode mirrors the cornerA1 block above (and the blend-info decode in
+					// getExtraAlphaUVData) verbatim, writing cornerA2.
+					if (info.horiz) {
+						if (info.inverted & INVERTED_MASK) { cornerA2[0] = cornerA2[3] = 255; }
+						else { cornerA2[1] = cornerA2[2] = 255; }
+					}
+					if (info.vert) {
+						if (info.inverted & INVERTED_MASK) { cornerA2[0] = cornerA2[1] = 255; }
+						else { cornerA2[2] = cornerA2[3] = 255; }
+					}
+					if (info.rightDiagonal) {
+						if (info.inverted & INVERTED_MASK) {
+							cornerA2[1] = 255;
+							if (info.longDiagonal) { cornerA2[0] = 255; cornerA2[2] = 255; }
+						}
+						else {
+							cornerA2[2] = 255;
+							if (info.longDiagonal) { cornerA2[1] = 255; cornerA2[3] = 255; }
+						}
+					}
+					if (info.leftDiagonal) {
+						if (info.inverted & INVERTED_MASK) {
+							cornerA2[0] = 255;
+							if (info.longDiagonal) { cornerA2[1] = 255; cornerA2[3] = 255; }
+						}
+						else {
+							cornerA2[3] = 255;
+							if (info.longDiagonal) { cornerA2[0] = 255; cornerA2[2] = 255; }
+						}
+					}
+				}
+			}
+
+			const Int slotBase = activeSlotOf(baseClass);
+			const Int slotBlend1 = activeSlotOf(blend1Class);
+			const Int slotBlend2 = activeSlotOf(blend2Class);
+			if (slotBase < 0) continue;
+
+			const float A1[4] = { cornerA1[0] / 255.0f, cornerA1[1] / 255.0f, cornerA1[2] / 255.0f, cornerA1[3] / 255.0f };
+			const float A2[4] = { cornerA2[0] / 255.0f, cornerA2[1] / 255.0f, cornerA2[2] / 255.0f, cornerA2[3] / 255.0f };
+
+			const Int rowBase = cy * texelsPerCell;
+			const Int colBase = cx * texelsPerCell;
+			for (Int ty = 0; ty < texelsPerCell; ++ty) {
+				const float v = (ty + 0.5f) / (float)texelsPerCell;
+				for (Int tx = 0; tx < texelsPerCell; ++tx) {
+					const float u = (tx + 0.5f) / (float)texelsPerCell;
+					const float a1 =
+						(A1[0] + (A1[1] - A1[0]) * u) +
+						((A1[3] + (A1[2] - A1[3]) * u) - (A1[0] + (A1[1] - A1[0]) * u)) * v;
+					const float a2 =
+						(A2[0] + (A2[1] - A2[0]) * u) +
+						((A2[3] + (A2[2] - A2[3]) * u) - (A2[0] + (A2[1] - A2[0]) * u)) * v;
+
+					const float wBase = (1.0f - a1) * (1.0f - a2);
+					const float wBlend1 = a1 * (1.0f - a2);
+					const float wBlend2 = a2;
+
+					const Int x = colBase + tx;
+					const Int y = rowBase + ty;
+					const Int p = y * pitch + x;
+
+					plane(slotBase)[p] = (UnsignedByte)(wBase * 255.0f + 0.5f);
+					if (slotBlend1 >= 0 && slotBlend1 != slotBase)
+						plane(slotBlend1)[p] = (UnsignedByte)(wBlend1 * 255.0f + 0.5f);
+					if (slotBlend2 >= 0 && slotBlend2 != slotBase && slotBlend2 != slotBlend1)
+						plane(slotBlend2)[p] = (UnsignedByte)(wBlend2 * 255.0f + 0.5f);
+				}
+			}
+		}
+	}
+
+	// ---- Step 4: per-channel separable box blur. -------------------------------
+	const Int blurRadius = blurRadiusCells * texelsPerCell;
+	if (blurRadius > 0) {
+		for (Int s = 0; s < m_numActiveMaterials; ++s) {
+			splat_blurSingleChannel(plane(s), pitch, W, H, blurRadius);
+		}
+	}
+
+	// ---- Step 5: renormalize per-texel sum to 255. -----------------------------
+	// Box blur preserves the sum if every channel is blurred with identical kernels
+	// and the original sum was constant -- which is true here. But integer rounding
+	// drift accumulates ~1-2 LSBs per texel, so renormalize defensively.
+	for (Int y = 0; y < H; ++y) {
+		for (Int x = 0; x < W; ++x) {
+			Int sum = 0;
+			for (Int s = 0; s < m_numActiveMaterials; ++s) {
+				sum += plane(s)[y * pitch + x];
+			}
+			if (sum <= 0) continue;
+			// Scale so sum -> 255. Most-saturated channel gets the rounding remainder.
+			Int newSum = 0;
+			Int maxSlot = 0; Int maxVal = 0;
+			for (Int s = 0; s < m_numActiveMaterials; ++s) {
+				const Int v = plane(s)[y * pitch + x];
+				const Int scaled = (v * 255 + sum / 2) / sum;
+				plane(s)[y * pitch + x] = (UnsignedByte)scaled;
+				newSum += scaled;
+				if (scaled > maxVal) { maxVal = scaled; maxSlot = s; }
+			}
+			const Int delta = 255 - newSum;
+			plane(maxSlot)[y * pitch + x] =
+				(UnsignedByte)((Int)plane(maxSlot)[y * pitch + x] + delta);
+		}
+	}
+
+	DEBUG_LOG(("[S20-A1] Built %d weight channels at %dx%d (texelsPerCell=%d, blur=%d cells).\n",
+		m_numActiveMaterials, W, H, texelsPerCell, blurRadiusCells));
+	return TRUE;
+}
+
+// @feature Ronin 27/04/2026 Splat S20-A2a: allocate / upload per-material weight atlas
+// pages from the A1 planar buffer.
+//
+// Layout per page (BGRA8, D3DFMT_A8R8G8B8, little-endian byte order in the locked rect):
+//   byte 0 (B) = weight of active slot (page*4 + 0)
+//   byte 1 (G) = weight of active slot (page*4 + 1)   (or 0 if past numActive)
+//   byte 2 (R) = weight of active slot (page*4 + 2)   (or 0)
+//   byte 3 (A) = weight of active slot (page*4 + 3)   (or 0)
+//
+// POW2-padded; padding rows/cols are zeroed (any sampling outside the active region
+// returns zero weight for every slot, which the PS will treat as "no contribution").
+//
+// Recreates pages if width/height/numPages changed. Idempotent: safe to call after every
+// successful buildPerMaterialWeightTextures().
+//
+// A2-a does NOT bind these to any sampler. A2-c wires them into the new PS.
+// See docs/Terrain_Splat_Map_Design.md S20 A2-a.
+Bool WorldHeightMap::ensurePerMaterialWeightAtlasTextures()
+{
+	if (m_perMaterialWeightBytes == nullptr || m_numActiveMaterials <= 0) {
+		return FALSE;
+	}
+	if (m_perMaterialWeightWidth <= 0 || m_perMaterialWeightHeight <= 0) {
+		return FALSE;
+	}
+
+	const Int requiredPages =
+		(m_numActiveMaterials + 3) / 4;
+	if (requiredPages <= 0 || requiredPages > MAX_S20_WEIGHT_ATLAS_PAGES) {
+		DEBUG_LOG(("[S20-A2a] requiredPages=%d out of range (numActive=%d, max=%d)",
+			requiredPages, m_numActiveMaterials, (Int)MAX_S20_WEIGHT_ATLAS_PAGES));
+		return FALSE;
+	}
+
+	Int pow2W = 1; while (pow2W < m_perMaterialWeightWidth)  pow2W *= 2;
+	Int pow2H = 1; while (pow2H < m_perMaterialWeightHeight) pow2H *= 2;
+
+	// Recreate pages if size or count changed (or first call).
+	const Bool sizeChanged =
+		(pow2W != m_perMaterialWeightAtlasWidth) ||
+		(pow2H != m_perMaterialWeightAtlasHeight) ||
+		(requiredPages != m_numPerMaterialWeightAtlasPages);
+
+	if (sizeChanged) {
+		for (Int p = 0; p < MAX_S20_WEIGHT_ATLAS_PAGES; ++p) {
+			REF_PTR_RELEASE(m_perMaterialWeightAtlas[p]);
+		}
+		m_numPerMaterialWeightAtlasPages = requiredPages;
+		m_perMaterialWeightAtlasWidth = pow2W;
+		m_perMaterialWeightAtlasHeight = pow2H;
+
+		for (Int p = 0; p < requiredPages; ++p) {
+			m_perMaterialWeightAtlas[p] = MSGNEW("WorldHeightMap_S20A2a_weightAtlas")
+				TextureClass(pow2W, pow2H, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_3);
+			if (m_perMaterialWeightAtlas[p] == nullptr) {
+				DEBUG_LOG(("[S20-A2a] failed to allocate weight atlas page %d (%dx%d)",
+					p, pow2W, pow2H));
+				return FALSE;
+			}
+		}
+	}
+
+	const Int srcW = m_perMaterialWeightWidth;
+	const Int srcH = m_perMaterialWeightHeight;
+	const Int srcPitch = m_perMaterialWeightPitch;
+	const Int planeBytes = srcPitch * srcH;
+
+	auto srcPlane = [this, planeBytes](Int activeIdx) -> const UnsignedByte* {
+		return m_perMaterialWeightBytes + activeIdx * planeBytes;
+		};
+
+	for (Int page = 0; page < requiredPages; ++page) {
+		TextureClass* tex = m_perMaterialWeightAtlas[page];
+		if (tex == nullptr || tex->Peek_D3D_Texture() == nullptr) {
+			continue;
+		}
+
+		IDirect3DSurface8* surf = nullptr;
+		DX8_ErrorCode(tex->Peek_D3D_Texture()->GetSurfaceLevel(0, &surf));
+		if (surf == nullptr) {
+			continue;
+		}
+
+		D3DSURFACE_DESC desc;
+		DX8_ErrorCode(surf->GetDesc(&desc));
+		if (desc.Format != D3DFMT_A8R8G8B8) {
+			surf->Release();
+			DEBUG_LOG(("[S20-A2a] page %d: unexpected format 0x%x, skipping", page, desc.Format));
+			continue;
+		}
+
+		D3DLOCKED_RECT lr;
+		DX8_ErrorCode(surf->LockRect(&lr, nullptr, 0));
+
+		// Per-page channel sources (null = past numActive -> writes 0).
+		const Int slotB = page * 4 + 0;
+		const Int slotG = page * 4 + 1;
+		const Int slotR = page * 4 + 2;
+		const Int slotA = page * 4 + 3;
+		const UnsignedByte* pB = (slotB < m_numActiveMaterials) ? srcPlane(slotB) : nullptr;
+		const UnsignedByte* pG = (slotG < m_numActiveMaterials) ? srcPlane(slotG) : nullptr;
+		const UnsignedByte* pR = (slotR < m_numActiveMaterials) ? srcPlane(slotR) : nullptr;
+		const UnsignedByte* pA = (slotA < m_numActiveMaterials) ? srcPlane(slotA) : nullptr;
+
+		for (Int y = 0; y < (Int)desc.Height; ++y) {
+			UnsignedByte* dstRow = (UnsignedByte*)lr.pBits + y * lr.Pitch;
+			const Bool inSrcY = (y < srcH);
+			for (Int x = 0; x < (Int)desc.Width; ++x) {
+				const Bool inSrc = inSrcY && (x < srcW);
+				const Int srcOff = inSrc ? (y * srcPitch + x) : 0;
+				dstRow[x * 4 + 0] = (inSrc && pB) ? pB[srcOff] : 0;
+				dstRow[x * 4 + 1] = (inSrc && pG) ? pG[srcOff] : 0;
+				dstRow[x * 4 + 2] = (inSrc && pR) ? pR[srcOff] : 0;
+				dstRow[x * 4 + 3] = (inSrc && pA) ? pA[srcOff] : 0;
+			}
+		}
+
+		surf->UnlockRect();
+		surf->Release();
+
+		// Box-filter mips. Weight channels are smooth scalars per-channel, so the
+		// standard box filter produces correct lower mips (unlike the discrete-ID
+		// channels in the legacy splat control texture).
+		DX8_ErrorCode(D3DXFilterTexture(tex->Peek_D3D_Texture(), nullptr, 0, D3DX_FILTER_BOX));
+	}
+
+	DEBUG_LOG(("[S20-A2a] allocated %d weight atlas page(s) at %dx%d (active=%d, src=%dx%d)",
+		requiredPages, pow2W, pow2H, m_numActiveMaterials, srcW, srcH));
+
+	return TRUE;
+}
+
+// @feature Ronin 27/04/2026 Splat S20-A2b: per-active-slot variant of getSplatAtlasRegions.
+// Reuses the same UV math (1 cell == 1 quadrant of 1 tile == tilePixelExtent/2 atlas pixels;
+// super-tile world period = width * 2 * MAP_XY_FACTOR) but emits entries indexed by
+// active slot (m_activeMaterialIndices[s]) instead of by m_textureClasses index. This is
+// the table the new per-material splat PS will iterate over -- regionA[s] / regionB[s]
+// align byte-for-byte with the weight stored in atlas page (s/4) channel (s%4).
+//
+// Defensive zero-fill on every slot up to SPLAT_MAX_ACTIVE_MATERIALS so unused tail slots
+// produce a known reproducible (0,0) atlas read in the PS rather than uninitialized garbage.
+// See docs/Terrain_Splat_Map_Design.md S20 A2-b.
+Int WorldHeightMap::getSplatAtlasRegionsForActiveSet(float* outRegionA, float* outRegionB)
+{
+	if (outRegionA == nullptr || outRegionB == nullptr) {
+		return 0;
+	}
+
+	// Zero-fill all SPLAT_MAX_ACTIVE_MATERIALS slots so unused tail entries are well-defined.
+	for (Int i = 0; i < SPLAT_MAX_ACTIVE_MATERIALS * 4; ++i) {
+		outRegionA[i] = 0.0f;
+		outRegionB[i] = 0.0f;
+	}
+
+	if (m_numActiveMaterials <= 0) {
+		return 0;
+	}
+
+	const Int atlasW = TEXTURE_WIDTH;
+	Int atlasH = getTerrainTextureHeightForPage(0);
+	if (atlasH <= 0) {
+		atlasH = m_terrainTexHeight;
+	}
+	if (atlasH <= 0) {
+		return 0;
+	}
+
+	const float invAtlasW = 1.0f / (float)atlasW;
+	const float invAtlasH = 1.0f / (float)atlasH;
+
+	const Int n = (m_numActiveMaterials < SPLAT_MAX_ACTIVE_MATERIALS)
+		? m_numActiveMaterials : SPLAT_MAX_ACTIVE_MATERIALS;
+
+	for (Int s = 0; s < n; ++s) {
+		const Int classIdx = m_activeMaterialIndices[s];
+		if (classIdx < 0 || classIdx >= m_numTextureClasses) {
+			continue;   // leave slot at zero-fill; PS will read (0,0)
+		}
+
+		const TXTextureClass& tc = m_textureClasses[classIdx];
+		const Int width = (tc.width > 0) ? tc.width : 1;
+		const Int pixExt = (tc.tilePixelExtent > 0) ? tc.tilePixelExtent : TILE_PIXEL_EXTENT;
+
+		const float originU = (float)tc.positionInTexture.x * invAtlasW;
+		const float originV = (float)tc.positionInTexture.y * invAtlasH;
+		const float extentU = (float)(width * pixExt) * invAtlasW;
+		const float extentV = (float)(width * pixExt) * invAtlasH;
+
+		// Each tile of the super-tile spans 2 world cells (quadrant pick), so the full
+		// super-tile (width tiles) spans 2*width cells = 2*width*MAP_XY_FACTOR world units.
+		const float worldPeriod = (float)(width * 2) * MAP_XY_FACTOR;
+		const float invPeriod = (worldPeriod > 0.0f) ? (1.0f / worldPeriod) : 0.0f;
+
+		outRegionA[s * 4 + 0] = originU;
+		outRegionA[s * 4 + 1] = originV;
+		outRegionA[s * 4 + 2] = extentU;
+		outRegionA[s * 4 + 3] = extentV;
+
+		outRegionB[s * 4 + 0] = invPeriod;
+		outRegionB[s * 4 + 1] = invPeriod;
+		outRegionB[s * 4 + 2] = 0.0f;
+		outRegionB[s * 4 + 3] = 0.0f;
+	}
+	return n;
+}
+
+// @feature Ronin 03/05/2026 Splat S20 multi-atlas: page-aware per-active-slot atlas
+// region table for the live per-material terrain shader. Slots whose material lives on
+// `terrainPage` get normal region data plus enableMask=1; all other active slots stay
+// zero-filled with enableMask=0 so HeightMap.cpp can render one terrain atlas page at a
+// time and accumulate the result across multi-page maps.
+Int WorldHeightMap::getSplatAtlasRegionsForActiveSetPage(
+	Int terrainPage, float* outRegionA, float* outRegionB, float* outSlotEnableMask)
+{
+	if (outRegionA == nullptr || outRegionB == nullptr || outSlotEnableMask == nullptr) {
+		return 0;
+	}
+
+	for (Int i = 0; i < SPLAT_MAX_ACTIVE_MATERIALS * 4; ++i) {
+		outRegionA[i] = 0.0f;
+		outRegionB[i] = 0.0f;
+	}
+	for (Int i = 0; i < SPLAT_MAX_ACTIVE_MATERIALS; ++i) {
+		outSlotEnableMask[i] = 0.0f;
+	}
+
+	if (terrainPage < 0 || terrainPage >= m_numTerrainTexturePages) {
+		return 0;
+	}
+	if (m_numActiveMaterials <= 0) {
+		return 0;
+	}
+
+	const Int atlasW = TEXTURE_WIDTH;
+	Int atlasH = getTerrainTextureHeightForPage(terrainPage);
+	if (atlasH <= 0) {
+		return 0;
+	}
+
+	const float invAtlasW = 1.0f / (float)atlasW;
+	const float invAtlasH = 1.0f / (float)atlasH;
+
+	const Int n = (m_numActiveMaterials < SPLAT_MAX_ACTIVE_MATERIALS)
+		? m_numActiveMaterials : SPLAT_MAX_ACTIVE_MATERIALS;
+
+	for (Int s = 0; s < n; ++s) {
+		const Int classIdx = m_activeMaterialIndices[s];
+		if (classIdx < 0 || classIdx >= m_numTextureClasses) {
+			continue;
+		}
+
+		const TXTextureClass& tc = m_textureClasses[classIdx];
+		if (tc.texturePage != terrainPage) {
+			continue;
+		}
+
+		const Int width = (tc.width > 0) ? tc.width : 1;
+		const Int pixExt = (tc.tilePixelExtent > 0) ? tc.tilePixelExtent : TILE_PIXEL_EXTENT;
+
+		const float originU = (float)tc.positionInTexture.x * invAtlasW;
+		const float originV = (float)tc.positionInTexture.y * invAtlasH;
+		const float extentU = (float)(width * pixExt) * invAtlasW;
+		const float extentV = (float)(width * pixExt) * invAtlasH;
+
+		const float worldPeriod = (float)(width * 2) * MAP_XY_FACTOR;
+		const float invPeriod = (worldPeriod > 0.0f) ? (1.0f / worldPeriod) : 0.0f;
+
+		outRegionA[s * 4 + 0] = originU;
+		outRegionA[s * 4 + 1] = originV;
+		outRegionA[s * 4 + 2] = extentU;
+		outRegionA[s * 4 + 3] = extentV;
+
+		outRegionB[s * 4 + 0] = invPeriod;
+		outRegionB[s * 4 + 1] = invPeriod;
+		outRegionB[s * 4 + 2] = 0.0f;
+		outRegionB[s * 4 + 3] = 0.0f;
+
+		outSlotEnableMask[s] = 1.0f;
+	}
+
+	return n;
+}
+
+// @feature Ronin 06/05/2026 Splat S20-A3: mark the per-material weight atlas as dirty.
+void WorldHeightMap::invalidateSplatTextures()
+{
+	m_primaryBlendControlTextureDirty = TRUE;
+}
+
+// @feature Ronin 06/05/2026 Splat S20-A3: lazily (re)build the per-material weight atlas.
+// Idempotent: cheap when m_primaryBlendControlTextureDirty == FALSE.
+void WorldHeightMap::ensureSplatTextures()
+{
+	if (m_tileNdxes == nullptr || m_blendTileNdxes == nullptr) {
+		return;
+	}
+	if (m_perMaterialWeightBytes != nullptr && !m_primaryBlendControlTextureDirty) {
+		return;
+	}
+
+	const Int texelsPerCell = (m_primaryBlendTexelsPerCell > 0) ? m_primaryBlendTexelsPerCell : 4;
+	const Int cellsX = m_width - 1;
+	const Int cellsY = m_height - 1;
+	if (cellsX <= 0 || cellsY <= 0) {
+		return;
+	}
+
+	buildPerMaterialWeightTextures(/*texelsPerCell*/ texelsPerCell, /*blurRadiusCells*/ 1);
+	ensurePerMaterialWeightAtlasTextures();
+
+	m_primaryBlendControlTextureDirty = FALSE;
+}
+
 void WorldHeightMap::setTextureLOD(Int lod)
 {
 	if (m_terrainTex)
@@ -2600,6 +3320,9 @@ Bool WorldHeightMap::setDrawOrg(Int xOrg, Int yOrg)
 		m_drawOriginY=newY;
 		m_drawWidthX=newWidth;
 		m_drawHeightY=newHeight;
+
+		// @feature Ronin 06/05/2026 (S20-A3) Splat data is whole-map
+		// absolute and indexed in world XY; draw-window panning never invalidates it.
 		return(true);
 	}
 	return(false);
@@ -2790,24 +3513,64 @@ UnsignedByte* WorldHeightMap::getPointerToTileData(Int xIndex, Int yIndex, Int w
 #define K_DIR_MOD 0x05
 #define K_INV 6
 
-UnsignedByte *WorldHeightMap::getRGBAlphaDataForWidth(Int width, TBlendTileInfo *pBlend)
+static Int getAlphaMaskTileNdxForBlendInfo(const TBlendTileInfo* pBlend)
 {
+	if (pBlend == nullptr) {
+		return -1;
+	}
+
 	Int alphaTileNdx = 0;
 	if (pBlend->horiz) {
 		alphaTileNdx = K_HORIZ;
-	} else if (pBlend->vert) {
-		alphaTileNdx = K_VERT;
-	} else if (pBlend->rightDiagonal) {
-		alphaTileNdx = K_RDIAG;
-		if (pBlend->longDiagonal) alphaTileNdx=K_LRDIAG;
-	} else if (pBlend->leftDiagonal) {
-		alphaTileNdx = K_LDIAG;
-		if (pBlend->longDiagonal) alphaTileNdx=K_LLDIAG;
 	}
-	if (pBlend->inverted) {
+	else if (pBlend->vert) {
+		alphaTileNdx = K_VERT;
+	}
+	else if (pBlend->rightDiagonal) {
+		alphaTileNdx = pBlend->longDiagonal ? K_LRDIAG : K_RDIAG;
+	}
+	else if (pBlend->leftDiagonal) {
+		alphaTileNdx = pBlend->longDiagonal ? K_LLDIAG : K_LDIAG;
+	}
+
+	if (pBlend->inverted & INVERTED_MASK) {
 		alphaTileNdx += K_INV;
 	}
-	return m_alphaTiles[alphaTileNdx]->getRGBDataForWidth(width);
+
+	if (alphaTileNdx < 0 || alphaTileNdx >= NUM_ALPHA_TILES) {
+		return -1;
+	}
+
+	return alphaTileNdx;
+}
+
+// @feature Ronin 13/04/2026 Accept const blend descriptions for control-texture generation helpers.(Probably to never be used)
+UnsignedByte* WorldHeightMap::getRGBAlphaDataForWidth(Int width, const TBlendTileInfo* pBlend)
+{
+	// @bugfix Ronin 15/04/2026 Defend against shared alpha-mask tiles being null after another WorldHeightMap instance tears them down.
+	if (pBlend == nullptr || width <= 0) {
+		return nullptr;
+	}
+
+	const Int alphaTileNdx = getAlphaMaskTileNdxForBlendInfo(pBlend);
+	if (alphaTileNdx < 0 || alphaTileNdx >= NUM_ALPHA_TILES) {
+		return nullptr;
+	}
+
+	if (m_alphaTiles[alphaTileNdx] == nullptr) {
+		setupAlphaTiles();
+	}
+
+	TileData* pAlphaTile = m_alphaTiles[alphaTileNdx];
+	if (pAlphaTile == nullptr) {
+		return nullptr;
+	}
+
+	if (!pAlphaTile->hasRGBDataForWidth(width)) {
+		return nullptr;
+	}
+
+	return pAlphaTile->getRGBDataForWidth(width);
 }
 
 void WorldHeightMap::setupAlphaTiles()

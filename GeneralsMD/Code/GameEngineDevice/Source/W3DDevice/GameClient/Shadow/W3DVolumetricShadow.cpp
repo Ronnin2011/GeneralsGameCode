@@ -1297,7 +1297,7 @@ void W3DVolumetricShadow::getRenderCost(RenderCost & rc) const
 		}
 	}
 
-	rc.addShadowDrawCalls(drawCount);  // Ronin @performance DD/MM/YYYY DX9 two-sided stencil: single pass
+	rc.addShadowDrawCalls(drawCount);  // Ronin @performance 23/02/2026 DX9 two-sided stencil: single pass
 }
 #endif
 

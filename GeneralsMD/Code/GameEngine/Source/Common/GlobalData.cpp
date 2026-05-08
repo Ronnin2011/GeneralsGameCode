@@ -88,6 +88,9 @@ GlobalData* GlobalData::m_theOriginal = nullptr;
 	{ "MultiPassTerrain",					INI::parseBool,				nullptr,			offsetof( GlobalData, m_multiPassTerrain ) },
 	{ "AdjustCliffTextures",			INI::parseBool,				nullptr,			offsetof( GlobalData, m_adjustCliffTextures ) },
 	{ "Use3WayTerrainBlends",			INI::parseInt,				nullptr,			offsetof( GlobalData, m_use3WayTerrainBlends ) },
+	// @feature Ronin 28/04/2026 Splat S20-A2d1: enables the per-material weighted splat PS.
+	// See GlobalData.h and docs/Terrain_Splat_Map_Design.md S20 A2-d.
+	{ "UseS20PerMaterialSplat",		INI::parseBool,				nullptr,			offsetof(GlobalData, m_useS20PerMaterialSplat) },
 	{ "StretchTerrain",						INI::parseBool,				nullptr,			offsetof( GlobalData, m_stretchTerrain ) },
 	{ "UseHalfHeightMap",					INI::parseBool,				nullptr,			offsetof( GlobalData, m_useHalfHeightMap ) },
 
@@ -639,6 +642,8 @@ GlobalData::GlobalData()
 	m_maxShellScreens = 0;
 	m_useCloudMap = FALSE;
 	m_use3WayTerrainBlends = 1;
+	// @feature Ronin 28/04/2026 Splat S20-A2d1: per-material splat path is opt-in.
+	m_useS20PerMaterialSplat = FALSE;
 	m_useLightMap = FALSE;
 	m_bilinearTerrainTex = FALSE;
 	m_trilinearTerrainTex = FALSE;

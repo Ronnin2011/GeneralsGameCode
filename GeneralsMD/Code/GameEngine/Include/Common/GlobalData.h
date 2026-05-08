@@ -127,6 +127,15 @@ public:
 	Int m_maxShellScreens;  ///< this many shells layouts can be loaded at once
 	Bool m_useCloudMap;
 	Int  m_use3WayTerrainBlends;	///< 0 is none, 1 is normal, 2 is debug.
+	// @feature Ronin 28/04/2026 Splat S20-A2d1: opt-in toggle for the per-material weighted
+	// splat path (terrainpermaterial.pso). Defaults FALSE so existing maps render through the
+	// legacy 'ST_TERRAIN_BASE*' chevron path. Flipped TRUE in INI to take the
+	// continuous per-material weight pipeline. The runtime gate in
+	// HeightMapRenderObjClass::renderPrimaryBlendControlPass also requires the per-material
+	// weight atlases to be present (A2-a) and 'ST_TERRAIN_PER_MATERIAL' to be registered
+	// (A2-c2); if either prerequisite is missing the legacy path is used regardless of this
+	// toggle. See docs/Terrain_Splat_Map_Design.md S20 A2-d.
+	Bool m_useS20PerMaterialSplat;
 	Bool m_useLightMap;
 	Bool m_bilinearTerrainTex;
 	Bool m_trilinearTerrainTex;

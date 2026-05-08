@@ -116,6 +116,14 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/distortion_vs.vso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/distortion_vs.vso"
+        # Ronin @build 14/04/2026 Deploy terrain per-material pixel shader to shaders subfolder.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/terrainpermaterial.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/terrainpermaterial.pso"
+        # Ronin @build 14/04/2026 Deploy terrain per-material vertex shader to shaders subfolder.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/terrainpermaterial_vs.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/terrainpermaterial_vs.vso"
         COMMENT "Auto-deploying to Zero Hour installation folder"
 
     )

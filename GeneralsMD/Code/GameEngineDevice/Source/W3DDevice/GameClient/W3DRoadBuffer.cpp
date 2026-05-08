@@ -163,6 +163,9 @@ void RoadType::applyTexture()
  	W3DShaderManager::setTexture(0,m_roadTexture);
 	DX8Wrapper::Set_Index_Buffer(m_indexRoad,0, "RoadType::applyTexture");
 	DX8Wrapper::Set_Vertex_Buffer(m_vertexRoad);
+
+	//ALLOW_LAYOUT_BINDING();
+	BIND_LAYOUT_FVF(DX8_FVF_XYZDUV1);
 }
 
 

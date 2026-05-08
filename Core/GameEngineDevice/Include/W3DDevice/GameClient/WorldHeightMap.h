@@ -201,6 +201,12 @@ protected:
 	Int m_numEdgeTexturePages;
 	TTextureAtlasPageInfo m_edgeTexturePages[MAX_TEXTURE_ATLAS_PAGES];
 
+	// @feature Ronin 06/05/2026 Splat S20-A3: cell->texel ratio + dirty flag for the per-material splat bake.
+	// (Legacy m_primaryBlendControlTexture and its width/height fields were removed; the per-material
+	// weight atlas in m_perMaterialWeightAtlas is now the only sampled splat resource.)
+	Int  m_primaryBlendTexelsPerCell;
+	Bool m_primaryBlendControlTextureDirty;
+
 	/// Drawing info - re the part of the map that is being drawn.
 	Int m_drawOriginX;
 	Int m_drawOriginY;
@@ -209,6 +215,10 @@ protected:
 
 	/// Tiles that hold the alpha channel info.
 	static TileData* m_alphaTiles[NUM_ALPHA_TILES];
+
+	// @bugfix Ronin 26/04/2026 Reference count of live WorldHeightMap instances;
+	// the last destructor releases the shared static m_alphaTiles.
+	static Int s_instanceCount;
 
 protected:
 	TileData* getSourceTile(UnsignedInt ndx) { if (ndx < NUM_SOURCE_TILES) return(m_sourceTiles[ndx]); return(nullptr); };
@@ -319,6 +329,108 @@ public:  // tile and texture info.
 	TextureClass* getAlphaTerrainTexture(Int page);
 	TextureClass* getEdgeTerrainTexture(Int page);
 
+	// @feature Ronin 26/04/2026 Splat S20-A1/A2: per-material weight texture bake.
+	// One weight channel per active material on the map. Active set computed at bake time
+	// (`m_activeMaterialIndices`). Sum of all channels per texel == 1.0 by construction.
+	// The baked data now feeds the live per-material terrain path;
+	enum { SPLAT_MAX_ACTIVE_MATERIALS = 32 };
+	// @feature Ronin 27/04/2026 Splat S20-A2a: 4 weight channels per BGRA8 page,
+	// SPLAT_MAX_ACTIVE_MATERIALS / 4 pages == 8 covers every legal active set.
+	enum { MAX_S20_WEIGHT_ATLAS_PAGES = SPLAT_MAX_ACTIVE_MATERIALS / 4 };
+
+
+	Bool buildPerMaterialWeightTextures(
+		Int texelsPerCell,
+		Int blurRadiusCells);
+
+	// @feature Ronin 27/04/2026 Splat S20-A2a: allocate / refresh the GPU weight-atlas
+	// pages from m_perMaterialWeightBytes. Must be called AFTER
+	// buildPerMaterialWeightTextures(). The resulting pages are consumed by the live
+	// per-material terrain shader path in HeightMap.cpp::renderPrimaryBlendControlPass().
+	Bool ensurePerMaterialWeightAtlasTextures();
+
+
+	Int  getActiveMaterialCount() const { return m_numActiveMaterials; }
+	Int  getActiveMaterialClass(Int activeIdx) const {
+		return (activeIdx >= 0 && activeIdx < m_numActiveMaterials)
+			? m_activeMaterialIndices[activeIdx] : -1;
+	}
+
+	// @feature Ronin 29/04/2026 Splat S20-A2d2: public read-only accessors for the
+	// weight-atlas pages allocated by ensurePerMaterialWeightAtlasTextures().
+	// HeightMap.cpp::renderPrimaryBlendControlPass binds these to PS samplers s1..s8
+	// for the live per-material terrain path. Page count is the count actually
+	// allocated this bake (== ceil(numActive/4)), not the compile-time
+	// MAX_S20_WEIGHT_ATLAS_PAGES ceiling.
+	Int getPerMaterialWeightAtlasPageCount() const { return m_numPerMaterialWeightAtlasPages; }
+	TextureClass* getPerMaterialWeightAtlasPage(Int page) const {
+		return (page >= 0 && page < m_numPerMaterialWeightAtlasPages)
+			? m_perMaterialWeightAtlas[page] : nullptr;
+	}
+
+private:
+	// Bake state. Cleared by freeMapResources(); allocated by buildPerMaterialWeightTextures().
+	Int            m_numActiveMaterials = 0;
+	Int            m_activeMaterialIndices[SPLAT_MAX_ACTIVE_MATERIALS] = {};
+	UnsignedByte* m_perMaterialWeightBytes = nullptr;   // [activeIdx][texelY*pitch + texelX], one byte per texel
+	Int            m_perMaterialWeightWidth = 0;
+	Int            m_perMaterialWeightHeight = 0;
+	Int            m_perMaterialWeightPitch = 0;         // bytes per row (== width, alignment-padded if needed)
+
+	// @feature Ronin 27/04/2026 Splat S20-A2a: GPU weight atlas pages. Each page is a
+	// BGRA8 2D texture packing up to 4 active material weight channels (slot s lives
+	// in page s/4, BGRA channel s%4 -> B,G,R,A). Allocated by
+	// ensurePerMaterialWeightAtlasTextures(), released in ~WorldHeightMap.
+	TextureClass* m_perMaterialWeightAtlas[MAX_S20_WEIGHT_ATLAS_PAGES] = {};
+	Int            m_numPerMaterialWeightAtlasPages = 0;
+	Int            m_perMaterialWeightAtlasWidth = 0;
+	Int            m_perMaterialWeightAtlasHeight = 0;
+
+public:
+	// @feature Ronin 27/04/2026 Splat S20-A2b: per-ACTIVE-slot atlas region table for the
+	// new per-material splat PS. Same regionA / regionB layout as getSplatAtlasRegions(),
+	// but indexed by active slot (0..m_numActiveMaterials-1) so it lines up with the
+	// weight-atlas pages produced by ensurePerMaterialWeightAtlasTextures():
+	//   active slot s -> weight atlas page (s/4), BGRA channel (s%4)
+	//                 -> regionA[s] / regionB[s] for the atlas UV math.
+	// Caller passes buffers sized SPLAT_MAX_ACTIVE_MATERIALS * 4 floats each.
+	// Slots past m_numActiveMaterials are zero-filled (extent=0 -> any sample reads (0,0)).
+	// Returns the number of valid slots written (== m_numActiveMaterials).
+	// No D3D state touched; pure CPU-side table emission.
+	// See docs/Terrain_Splat_Map_Design.md S20 A2-b.
+	Int getSplatAtlasRegionsForActiveSet(float* outRegionA, float* outRegionB);
+
+	// @feature Ronin 03/05/2026 Splat S20 multi-atlas: page-aware variant of the
+	// active-slot atlas region table.
+	// Emits regionA / regionB for all active slots exactly like
+	// getSplatAtlasRegionsForActiveSet(), but only slots whose source material lives on
+	// `terrainPage` are enabled. `outSlotEnableMask[s]` is 1.0f for slots on this page
+	// and 0.0f otherwise. Caller passes buffers sized:
+	//   - outRegionA:       SPLAT_MAX_ACTIVE_MATERIALS * 4 floats
+	//   - outRegionB:       SPLAT_MAX_ACTIVE_MATERIALS * 4 floats
+	//   - outSlotEnableMask SPLAT_MAX_ACTIVE_MATERIALS floats
+	// Returns the total active-slot count (`m_numActiveMaterials` clamped to the API cap),
+	// not the enabled-slot count for this page.
+	Int getSplatAtlasRegionsForActiveSetPage(
+		Int terrainPage,
+		float* outRegionA,
+		float* outRegionB,
+		float* outSlotEnableMask);
+
+	// @feature Ronin 29/04/2026 Splat S20-A3: mark the per-material weight atlas as needing a rebuild.
+	// (Was invalidatePrimaryBlendControlTexture(); same dirty flag, honest name.)
+	void invalidateSplatTextures();
+
+	// @feature Ronin 29/04/2026 Splat S20-A3: per-material weight atlas geometry, used by HeightMap.cpp
+	// to compute the world->control-UV scale for the per-material PS.
+	Int getPerMaterialWeightAtlasWidth()  const { return m_perMaterialWeightAtlasWidth; }
+	Int getPerMaterialWeightAtlasHeight() const { return m_perMaterialWeightAtlasHeight; }
+	Int getPrimaryBlendControlTexelsPerCell() const { return m_primaryBlendTexelsPerCell; }
+
+	// @feature Ronin 29/04/2026 Splat S20-A3: lazily (re)build the per-material weight atlas.
+	// Replaces ensurePrimaryBlendControlTexture(); cheap when m_primaryBlendControlTextureDirty == FALSE.
+	void ensureSplatTextures();
+
 	// @feature Ronin 08/04/2026 Page ownership queries used by multi-page terrain atlas rendering.
 	Int getTerrainTexturePageForTileNdx(Short tileNdx) const;
 	Int getEdgeTexturePageForBlendClass(Int edgeClass) const;
@@ -360,7 +472,7 @@ public:  // Flat tile texture info.
 	static void setupAlphaTiles();
 	UnsignedByte* getPointerToTileData(Int xIndex, Int yIndex, Int width);
 	Bool getRawTileData(Short tileNdx, Int width, UnsignedByte* buffer, Int bufLen);
-	UnsignedByte* getRGBAlphaDataForWidth(Int width, TBlendTileInfo* pBlend);
+  UnsignedByte* getRGBAlphaDataForWidth(Int width, const TBlendTileInfo* pBlend);
 
 public:  // modify height value
 	void setRawHeight(Int xIndex, Int yIndex, UnsignedByte height) {

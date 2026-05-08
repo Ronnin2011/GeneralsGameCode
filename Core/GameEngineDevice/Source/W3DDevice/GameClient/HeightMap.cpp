@@ -1,4 +1,4 @@
-/*
+﻿/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -2002,8 +2002,19 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 			DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_BLUE|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_RED);
 	}
 
-		Int pass;
+	Int pass = 0;
 	const Bool useMultiPageTerrain = !m_disableTextures && m_map != nullptr && m_map->getTerrainTexturePageCount() > 1;
+	const Bool perMaterialTerrainReady =
+		(W3DShaderManager::getShaderPasses(W3DShaderManager::ST_TERRAIN_PER_MATERIAL) >= 1);
+
+	// @feature Ronin 03/05/2026 Gate the original `ST_TERRAIN_BASE*` terrain loop
+	// off only when the live per-material terrain path is selected and usable.
+	const Bool usePerMaterialTerrainPass =
+		!ShaderClass::Is_Backface_Culling_Inverted() &&
+		!m_disableTextures &&
+		!doMultiPassWireFrame &&
+		TheGlobalData->m_useS20PerMaterialSplat &&
+		perMaterialTerrainReady;
 
 	const auto drawPagedTerrainVB =
 		[&](Int vbTileX, Int vbTileY, W3DShaderManager::ShaderTypes shaderType, Int shaderPass)
@@ -2106,7 +2117,13 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 			}
 		};
 
- 	for (pass=0; pass<devicePasses; pass++) {
+		// @feature Ronin 21/04/2026 Splat S5a: skip the entire legacy terrain pass loop
+		// when our splat pass will own the terrain color. We still iterate `pass` once so
+		// the post-loop `if (pass)` check (which calls resetShader) behaves correctly.
+		if (usePerMaterialTerrainPass) {
+			pass = devicePasses;
+		}
+		else for (pass = 0; pass < devicePasses; pass++) {
 #ifdef TIMING_TESTS
 #endif
 		const Bool usePagedDrawThisPass = useMultiPageTerrain && (devicePasses == 1 || pass < 2);
@@ -2156,11 +2173,24 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 		if (pass)	//shader was applied at least once?
  			W3DShaderManager::resetShader(st);
 
+		// @feature Ronin 29/04/2026 Splat S5a: usePerMaterialTerrainPass was hoisted above the
+		// legacy pass loop so the loop could be skipped when this is true.
+		if (usePerMaterialTerrainPass) {
+			renderPrimaryBlendControlPass();
+		}
+
 		//Draw feathered shorelines
 		renderShoreLines(&rinfo.Camera);
 
-		//Do additional pass over any tiles that have 3 textures blended together.
-		if (TheGlobalData->m_use3WayTerrainBlends)
+		// @feature Ronin 29/04/2026 Splat S20-A2d2: when per-material splat owns terrain,
+		// suppress the legacy 3-way overlay pass to prevent its squared-decal artifacts.
+		// drawRoads now gets a clean m_Textures[] handoff from the per-material reset
+		// (S20-A2d9) so it no longer needs renderExtraBlendTiles to run as a side-effect
+		// of populating the shader manager's texture table.
+		const Bool perMaterialOwnsTerrain =
+			TheGlobalData->m_useS20PerMaterialSplat &&
+			(W3DShaderManager::getShaderPasses(W3DShaderManager::ST_TERRAIN_PER_MATERIAL) >= 1);
+		if (TheGlobalData->m_use3WayTerrainBlends && !perMaterialOwnsTerrain)
 			renderExtraBlendTiles();
 
 		Int yCoordMin = m_map->getDrawOrgY();
@@ -2277,6 +2307,331 @@ void HeightMapRenderObjClass::renderTerrainPass(CameraClass *pCamera)
 				DX8Wrapper::Draw_Triangles(0, HEIGHTMAP_POLYGON_NUM, 0, HEIGHTMAP_VERTEX_NUM);
 			}
 		}
+}
+
+// =====================================================================
+// @feature Ronin 29/04/2026 Splat S20-A2d2 (dispatch): live per-material
+// weighted splat path. Replaces the legacy `ST_TERRAIN_BASE*`
+// discrete-ID pipeline with the continuous weight-atlas pipeline from
+// `terrainpermaterial_ps`.
+//
+// Resource layout (must match `terrainpermaterial_ps.hlsl`):
+//   s0       = current terrain atlas page
+//   s1..s8   = weight atlas pages 0..N-1 (BGRA8, 4 active slots per page)
+//   s9       = cloud texture (optional)
+//   s10      = light/noise texture (optional)
+//   c0       = (uvScaleX, uvScaleY, uvOriginX, uvOriginY)
+//   c1..c32  = g_atlasRegionA[32]
+//   c33..c64 = g_atlasRegionB[32]
+//   c65      = (numActiveMaterials, 0, 0, 0)
+//   c68..c75 = slot-enable mask for multi-page terrain accumulation
+//
+// Atlas-page bake (A2-a) and active-slot region tables (A2-b) are produced
+// by `WorldHeightMap::ensureSplatTextures()` and are guaranteed
+// live for the current map by the time we reach this branch.
+// =====================================================================
+
+// @feature Ronin 29/04/2026 Splat S20-A2d2: render the live per-material terrain
+// splat pass. This pass is entered only when `UseS20PerMaterialSplat` is enabled
+// and `ST_TERRAIN_PER_MATERIAL` is available.
+// When the per-material path is not active, terrain stays
+// on the original `ST_TERRAIN_BASE*` renderer in `Render()`.
+void HeightMapRenderObjClass::renderPrimaryBlendControlPass()
+{
+	if (!m_map || !m_indexBuffer) {
+		return;
+	}
+
+	m_map->ensureSplatTextures();
+
+	const Int weightPageCount = m_map->getPerMaterialWeightAtlasPageCount();
+	const Int activeMatCount = m_map->getActiveMaterialCount();
+	const Int perMatPasses =
+		W3DShaderManager::getShaderPasses(W3DShaderManager::ST_TERRAIN_PER_MATERIAL);
+
+	if (weightPageCount <= 0 || activeMatCount <= 0 || perMatPasses < 1) {
+		return;
+	}
+
+	// @debug Ronin 03/05/2026 Splat S20: when running the PS in any DEBUG_VIZ_MODE,
+	// the per-page additive accumulation in the multi-page branch causes channels to
+	// saturate (3 pages * heatmap = white; 3 pages * sum = yellow), masking the real
+	// PS output. Force a single-page-style draw with all slots enabled and OPAQUE
+	// blending so the heatmap / weight-sum we see is the true PS evaluation.
+	// MUST be kept in sync with the DEBUG_VIZ_MODE define in terrainpermaterial_ps.hlsl.
+	static const Int s_vizModeMirror = 0; // 0 = production, 1 = winner heatmap, 2 = wSum
+	const Bool forceSinglePassForViz = (s_vizModeMirror != 0);
+
+	// @debug Ronin 03/05/2026 Splat S20 diagnostics: dump per-page enabled slots AND
+// their region UVs, so we can see whether enabled slots on pages 1+ point at the
+// right tile inside the right terrain atlas page.
+	{
+		static const WorldHeightMap* s_loggedMap = nullptr;
+		if (s_loggedMap != m_map) {
+			s_loggedMap = m_map;
+			DEBUG_LOG(("[S20-PM] === map changed, dumping slot+region diagnostics ===\n"));
+			DEBUG_LOG(("[S20-PM] terrainPages=%d activeMats=%d weightPages=%d perMatPasses=%d\n",
+				m_map->getTerrainTexturePageCount(),
+				activeMatCount,
+				weightPageCount,
+				perMatPasses));
+
+			const Int terrainPageCountDbg =
+				(m_map->getTerrainTexturePageCount() > 0) ? m_map->getTerrainTexturePageCount() : 1;
+
+			// Dump page-0 baseline regions (single-page path) so we can compare.
+			float baseRegionA[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS * 4];
+			float baseRegionB[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS * 4];
+			const Int baseSlots = m_map->getSplatAtlasRegionsForActiveSet(baseRegionA, baseRegionB);
+			DEBUG_LOG(("[S20-PM] -- single-page baseline (getSplatAtlasRegionsForActiveSet) --\n"));
+			for (Int s = 0; s < baseSlots && s < activeMatCount; ++s) {
+				DEBUG_LOG(("[S20-PM]   baseline slot %2d: A=(%.4f,%.4f,%.4f,%.4f) B=(%.4f,%.4f,%.4f,%.4f)\n",
+					s,
+					baseRegionA[s * 4 + 0], baseRegionA[s * 4 + 1], baseRegionA[s * 4 + 2], baseRegionA[s * 4 + 3],
+					baseRegionB[s * 4 + 0], baseRegionB[s * 4 + 1], baseRegionB[s * 4 + 2], baseRegionB[s * 4 + 3]));
+			}
+
+			for (Int dbgPage = 0; dbgPage < terrainPageCountDbg; ++dbgPage) {
+				float dbgRegionA[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS * 4];
+				float dbgRegionB[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS * 4];
+				float dbgMask[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS];
+				Int dbgSlots = 0;
+
+				if (terrainPageCountDbg > 1) {
+					dbgSlots = m_map->getSplatAtlasRegionsForActiveSetPage(
+						dbgPage, dbgRegionA, dbgRegionB, dbgMask);
+				}
+				else {
+					dbgSlots = baseSlots;
+					for (Int s = 0; s < WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS; ++s) {
+						dbgRegionA[s * 4 + 0] = baseRegionA[s * 4 + 0];
+						dbgRegionA[s * 4 + 1] = baseRegionA[s * 4 + 1];
+						dbgRegionA[s * 4 + 2] = baseRegionA[s * 4 + 2];
+						dbgRegionA[s * 4 + 3] = baseRegionA[s * 4 + 3];
+						dbgRegionB[s * 4 + 0] = baseRegionB[s * 4 + 0];
+						dbgRegionB[s * 4 + 1] = baseRegionB[s * 4 + 1];
+						dbgRegionB[s * 4 + 2] = baseRegionB[s * 4 + 2];
+						dbgRegionB[s * 4 + 3] = baseRegionB[s * 4 + 3];
+						dbgMask[s] = (s < dbgSlots) ? 1.0f : 0.0f;
+					}
+				}
+
+				TextureClass* pPageTex = m_map->getTerrainTexture(dbgPage);
+				DEBUG_LOG(("[S20-PM] -- terrain page %d (atlas tex=%p) --\n",
+					dbgPage, (void*)pPageTex));
+
+				for (Int s = 0; s < dbgSlots && s < activeMatCount; ++s) {
+					if (dbgMask[s] <= 0.5f) {
+						continue;
+					}
+					const Bool sameAsBaseline =
+						(dbgRegionA[s * 4 + 0] == baseRegionA[s * 4 + 0]) &&
+						(dbgRegionA[s * 4 + 1] == baseRegionA[s * 4 + 1]) &&
+						(dbgRegionA[s * 4 + 2] == baseRegionA[s * 4 + 2]) &&
+						(dbgRegionA[s * 4 + 3] == baseRegionA[s * 4 + 3]) &&
+						(dbgRegionB[s * 4 + 0] == baseRegionB[s * 4 + 0]) &&
+						(dbgRegionB[s * 4 + 1] == baseRegionB[s * 4 + 1]) &&
+						(dbgRegionB[s * 4 + 2] == baseRegionB[s * 4 + 2]) &&
+						(dbgRegionB[s * 4 + 3] == baseRegionB[s * 4 + 3]);
+					DEBUG_LOG(("[S20-PM]   page=%d slot=%2d ENABLED  A=(%.4f,%.4f,%.4f,%.4f) B=(%.4f,%.4f,%.4f,%.4f)%s\n",
+						dbgPage, s,
+						dbgRegionA[s * 4 + 0], dbgRegionA[s * 4 + 1], dbgRegionA[s * 4 + 2], dbgRegionA[s * 4 + 3],
+						dbgRegionB[s * 4 + 0], dbgRegionB[s * 4 + 1], dbgRegionB[s * 4 + 2], dbgRegionB[s * 4 + 3],
+						sameAsBaseline ? "  [== baseline]" : "  [!= baseline]"));
+				}
+			}
+		}
+	}
+
+	const Bool doCloud = useCloud();
+
+	for (Int p = 0; p < weightPageCount; ++p) {
+		W3DShaderManager::setTexture(1 + p, m_map->getPerMaterialWeightAtlasPage(p));
+	}
+	for (Int p = weightPageCount; p < WorldHeightMap::MAX_S20_WEIGHT_ATLAS_PAGES; ++p) {
+		W3DShaderManager::setTexture(1 + p, nullptr);
+	}
+	W3DShaderManager::setTexture(9, doCloud ? m_stageTwoTexture : nullptr);
+	W3DShaderManager::setTexture(10, TheGlobalData->m_useLightMap ? m_stageThreeTexture : nullptr);
+
+	DX8Wrapper::Set_Index_Buffer(m_indexBuffer, 0);
+
+	const Int pmPow2W = m_map->getPerMaterialWeightAtlasWidth();
+	const Int pmPow2H = m_map->getPerMaterialWeightAtlasHeight();
+	const Int pmTexelsPerCell = m_map->getPrimaryBlendControlTexelsPerCell();
+	const float pmUvScaleX =
+		(pmPow2W > 0) ? ((float)pmTexelsPerCell / ((float)pmPow2W * MAP_XY_FACTOR)) : 0.0f;
+	const float pmUvScaleY =
+		(pmPow2H > 0) ? ((float)pmTexelsPerCell / ((float)pmPow2H * MAP_XY_FACTOR)) : 0.0f;
+	const float pmBorderWorld = (float)m_map->getBorderSizeInline() * MAP_XY_FACTOR;
+	const float pmControlParams[4] = { pmUvScaleX, pmUvScaleY, -pmBorderWorld, -pmBorderWorld };
+
+	const Int terrainPageCountRaw = m_map->getTerrainTexturePageCount();
+	const Int terrainPageCount =
+		forceSinglePassForViz ? 1 : ((terrainPageCountRaw > 0) ? terrainPageCountRaw : 1);
+	const Bool useMultiPageAccumulation = (terrainPageCount > 1);
+
+	Bool drewAnyContribution = FALSE;
+
+	for (Int terrainPage = 0; terrainPage < terrainPageCount; ++terrainPage) {
+		TextureClass* pTerrainAtlas =
+			useMultiPageAccumulation ? m_map->getTerrainTexture(terrainPage) : m_stageZeroTexture;
+		if (pTerrainAtlas == nullptr) {
+			continue;
+		}
+
+		float pmRegionA[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS * 4];
+		float pmRegionB[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS * 4];
+		float pmSlotEnableMask[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS];
+
+		Int pmNumSlots = 0;
+		if (useMultiPageAccumulation) {
+			pmNumSlots = m_map->getSplatAtlasRegionsForActiveSetPage(
+				terrainPage, pmRegionA, pmRegionB, pmSlotEnableMask);
+		}
+		else {
+			pmNumSlots = m_map->getSplatAtlasRegionsForActiveSet(pmRegionA, pmRegionB);
+			for (Int s = 0; s < WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS; ++s) {
+				pmSlotEnableMask[s] = (s < pmNumSlots) ? 1.0f : 0.0f;
+			}
+		}
+
+		// @debug Ronin 03/05/2026 Splat S20: viz modes need to see ALL active slots so
+		// the heatmap / wSum reflects the full material set, not just one page's subset.
+		if (forceSinglePassForViz) {
+			for (Int s = 0; s < WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS; ++s) {
+				pmSlotEnableMask[s] = (s < pmNumSlots) ? 1.0f : 0.0f;
+			}
+		}
+
+		if (pmNumSlots <= 0) {
+			continue;
+		}
+
+		Int pageEnabledSlots = 0;
+		for (Int s = 0; s < pmNumSlots; ++s) {
+			if (pmSlotEnableMask[s] > 0.5f) {
+				++pageEnabledSlots;
+			}
+		}
+		if (pageEnabledSlots <= 0) {
+			continue;
+		}
+
+		const float pmActiveCount[4] = { (float)pmNumSlots, 0.0f, 0.0f, 0.0f };
+
+		W3DShaderManager::setTexture(0, pTerrainAtlas);
+
+		for (Int pmPass = 0; pmPass < perMatPasses; ++pmPass) {
+			const Int okPm =
+				W3DShaderManager::setShader(W3DShaderManager::ST_TERRAIN_PER_MATERIAL, pmPass);
+			if (!okPm) {
+				continue;
+			}
+
+			IDirect3DDevice9* pPmDev = DX8Wrapper::_Get_D3D_Device8();
+			if (pPmDev) {
+				pPmDev->SetPixelShaderConstantF(0, pmControlParams, 1);
+				pPmDev->SetPixelShaderConstantF(1, pmRegionA, WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS);
+				pPmDev->SetPixelShaderConstantF(
+					1 + WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS,
+					pmRegionB,
+					WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS);
+				pPmDev->SetPixelShaderConstantF(65, pmActiveCount, 1);
+				pPmDev->SetPixelShaderConstantF(
+					68,
+					pmSlotEnableMask,
+					WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS / 4);
+
+				{
+					IDirect3DBaseTexture9* atlasD3DTex =
+						(pTerrainAtlas != nullptr) ? pTerrainAtlas->Peek_D3D_Texture() : nullptr;
+					pPmDev->SetTexture(0, atlasD3DTex);
+				}
+
+				for (Int p = 0; p < weightPageCount; ++p) {
+					TextureClass* weightPage = m_map->getPerMaterialWeightAtlasPage(p);
+					IDirect3DBaseTexture9* d3dTex =
+						(weightPage != nullptr) ? weightPage->Peek_D3D_Texture() : nullptr;
+					pPmDev->SetTexture(1 + p, d3dTex);
+					pPmDev->SetSamplerState(1 + p, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+					pPmDev->SetSamplerState(1 + p, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+					pPmDev->SetSamplerState(1 + p, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+					pPmDev->SetSamplerState(1 + p, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+					pPmDev->SetSamplerState(1 + p, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+				}
+
+				{
+					IDirect3DBaseTexture9* cloudTex =
+						(doCloud && m_stageTwoTexture != nullptr)
+						? m_stageTwoTexture->Peek_D3D_Texture()
+						: nullptr;
+					pPmDev->SetTexture(9, cloudTex);
+					pPmDev->SetSamplerState(9, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+					pPmDev->SetSamplerState(9, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+					pPmDev->SetSamplerState(9, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+					pPmDev->SetSamplerState(9, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+					pPmDev->SetSamplerState(9, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+				}
+
+				{
+					IDirect3DBaseTexture9* lightTex =
+						(TheGlobalData->m_useLightMap && m_stageThreeTexture != nullptr)
+						? m_stageThreeTexture->Peek_D3D_Texture()
+						: nullptr;
+					pPmDev->SetTexture(10, lightTex);
+					pPmDev->SetSamplerState(10, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+					pPmDev->SetSamplerState(10, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+					pPmDev->SetSamplerState(10, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+					pPmDev->SetSamplerState(10, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+					pPmDev->SetSamplerState(10, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+				}
+
+				if (useMultiPageAccumulation) {
+					if (!drewAnyContribution) {
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, FALSE);
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_ONE);
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_ZERO);
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_ZWRITEENABLE, TRUE);
+					}
+					else {
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, TRUE);
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_ONE);
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_ONE);
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_ZWRITEENABLE, FALSE);
+					}
+					DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+				}
+			}
+
+			for (Int pmJ = 0; pmJ < m_numVBTilesY; ++pmJ) {
+				for (Int pmI = 0; pmI < m_numVBTilesX; ++pmI) {
+					DX8Wrapper::Set_Vertex_Buffer(getVertexBufferTile(pmI, pmJ));
+					if (Is_Hidden() == 0) {
+						DX8Wrapper::Draw_Triangles(0, HEIGHTMAP_POLYGON_NUM, 0, HEIGHTMAP_VERTEX_NUM);
+						drewAnyContribution = TRUE;
+					}
+				}
+			}
+		}
+	}
+
+	W3DShaderManager::resetShader(W3DShaderManager::ST_TERRAIN_PER_MATERIAL);
+
+	DX8Wrapper::Set_Texture(0, nullptr);
+	DX8Wrapper::Set_Texture(1, nullptr);
+	DX8Wrapper::Set_Texture(2, nullptr);
+	ShaderClass::Invalidate();
+
+	{
+		VertexMaterialClass* pmVMat =
+			VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
+		DX8Wrapper::Set_Material(pmVMat);
+		REF_PTR_RELEASE(pmVMat);
+	}
+
+	DX8Wrapper::Set_Shader(ShaderClass::_PresetOpaqueShader);
+	DX8Wrapper::Apply_Render_State_Changes();
 }
 
 //=============================================================================

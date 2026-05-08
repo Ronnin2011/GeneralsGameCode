@@ -64,6 +64,11 @@ public:
 		ST_TERRAIN_BASE_NOISE1,	//shader to apply base texture and cloud/noise 1.
 		ST_TERRAIN_BASE_NOISE2,	//shader to apply base texture and cloud/noise 2.
 		ST_TERRAIN_BASE_NOISE12,//shader to apply base texture and both cloud/noise
+		// @feature Ronin 27/04/2026 Splat S20-A2c: per-material weighted splat shader.
+		// Samples a stack of BGRA8 weight atlas pages produced by
+		// WorldHeightMap::ensurePerMaterialWeightAtlasTextures (S20-A2a) and accumulates weighted material colors in the PS.
+		// See docs/Terrain_Splat_Map_Design.md S20 A2-c.
+		ST_TERRAIN_PER_MATERIAL,
 		ST_SHROUD_TEXTURE,		//shader to apply shroud texture projection.
 		ST_MASK_TEXTURE,		//shader to apply alpha mask texture projection.
 		ST_ROAD_BASE,	//shader to apply base terrain texture only
@@ -136,7 +141,7 @@ protected:
 	// Maps shader handles to their required vertex declarations
 	static std::map<void*, IDirect3DVertexDeclaration9*> m_shaderDeclarations;
 
-	static TextureClass *m_Textures[8];	///textures assigned to each of the possible stages
+	static TextureClass *m_Textures[16];	///textures assigned to each of the possible stages
 	static ChipsetType m_currentChipset;	///<last video card chipset that was detected.
 	static GraphicsVenderID m_currentVendor;	///<last video card vendor
 	static __int64 m_driverVersion;			///<driver version of last chipset.

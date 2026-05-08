@@ -106,7 +106,7 @@ IDirect3DSurface8* W3DShaderManager::m_rttDepthSurface = nullptr;	///<dedicated 
 static W3DFilterInterface *W3DFilters[FT_MAX];
 static W3DShaderInterface *W3DShaders[W3DShaderManager::ST_MAX];
 static Int W3DShadersPassCount[W3DShaderManager::ST_MAX];	//number of passes for each of the above shaders
-TextureClass *W3DShaderManager::m_Textures[8];
+TextureClass *W3DShaderManager::m_Textures[16];
 W3DShaderManager::ShaderTypes W3DShaderManager::m_currentShader;
 FilterTypes W3DShaderManager::m_currentFilter=FT_NULL_FILTER; ///< Last filter that was set.
 Int W3DShaderManager::m_currentShaderPass;
@@ -1578,6 +1578,21 @@ public:
 	virtual Int shutdown() override;			///<release resources used by shader
 } flatTerrainShaderPixelShader;
 
+// Per-material weighted terrain splat shader.
+// Uses the `terrainpermaterial_vs.vso` vertex shader and the
+// `terrainpermaterial.pso` pixel shader. This is the active custom terrain
+// splat shader path;
+class TerrainPerMaterialShader : public W3DShaderInterface
+{
+	IDirect3DVertexShader9* m_dwPerMaterialVertexShader;	///<handle to per-material splat D3D vertex shader (loaded in A2-c2; uses terrainpermaterial_vs.vso)
+	IDirect3DPixelShader9* m_dwPerMaterialPixelShader;	///<handle to per-material splat D3D pixel shader (loaded in A2-c2)
+
+	virtual Int set(Int pass) override;		///<setup shader for the specified rendering pass.
+	virtual void reset() override;		///<do any custom resetting necessary to bring W3D in sync.
+	virtual Int init() override;			///<perform any one time initialization and validation
+	virtual Int shutdown() override;			///<release resources used by shader
+} terrainPerMaterialShader;
+
 ///8 stage terrain shader which only works on certain Nvidia cards.
 class TerrainShader8Stage : public W3DShaderInterface
 {
@@ -1608,6 +1623,15 @@ W3DShaderInterface *TerrainShaderList[]=
 	&terrainShaderPixelShader,
 	&terrainShader8Stage,
 	&terrainShader2Stage,
+	nullptr
+};
+
+// @feature Ronin 27/04/2026 Splat S20-A2c2: per-material weighted splat shader list.
+// Single entry today; if a fallback (e.g. fewer-page packed variant for low-VRAM cards)
+// is ever needed it goes before terrainPerMaterialShader.
+W3DShaderInterface* TerrainPerMaterialShaderList[] =
+{
+	&terrainPerMaterialShader,
 	nullptr
 };
 
@@ -2199,6 +2223,266 @@ void TerrainShaderPixelShader::reset()
 	DX8Wrapper::Invalidate_Cached_Render_States();
 }
 
+// Load the live per-material terrain splat shader.
+// Uses `terrainpermaterial_vs.vso` as the terrain VS and pairs it
+// with `terrainpermaterial.pso` for the weighted-material PS.
+//
+// Failure is a clean no-bind: the shader-manager slot is left unregistered and
+// the renderer stays on the original `ST_TERRAIN_BASE*` terrain path.
+Int TerrainPerMaterialShader::init()
+{
+	Int res;
+
+#ifdef DISABLE_PIXEL_SHADERS
+	return FALSE;
+#endif
+
+	m_dwPerMaterialVertexShader = nullptr;
+	m_dwPerMaterialPixelShader = nullptr;
+
+	if (DX8Wrapper::Get_Current_Caps() == nullptr)
+		return FALSE;
+
+	// SM3.0 gate -- Older cards keep the legacy multipass path.
+	if (DX8Wrapper::Get_Current_Caps()->Get_Vertex_Shader_Major_Version() < 3 ||
+		DX8Wrapper::Get_Current_Caps()->Get_Pixel_Shader_Major_Version() < 3)
+		return FALSE;
+
+	if ((res = W3DShaderManager::getChipset()) >= DC_GENERIC_PIXEL_SHADER_1_1)
+	{
+		// Vertex declaration with: pos + color + 2 UV sets.
+		D3DVERTEXELEMENT9 Declaration[] = {
+			{0,  0, D3DDECLTYPE_FLOAT3,   D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0},
+			{0, 12, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR,    0},
+			{0, 16, D3DDECLTYPE_FLOAT2,   D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0},
+			{0, 24, D3DDECLTYPE_FLOAT2,   D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1},
+			D3DDECL_END()
+		};
+
+		HRESULT hr = W3DShaderManager::LoadAndCreateD3DShader(
+			"shaders\\terrainpermaterial_vs.vso",
+			Declaration,
+			0,
+			true,
+			(void**)&m_dwPerMaterialVertexShader);
+
+		if (FAILED(hr)) {
+			DEBUG_LOG(("[S20-A2c2] TerrainPerMaterialShader::init: failed to load terrainpermaterial_vs.vso (0x%08X). Slot stays unbound; renderer remains on the base terrain path.\n", (unsigned)hr));
+			return FALSE;
+		}
+
+		hr = W3DShaderManager::LoadAndCreateD3DShader(
+			"shaders\\terrainpermaterial.pso",
+			Declaration,
+			0,
+			false,
+			(void**)&m_dwPerMaterialPixelShader);
+
+		if (FAILED(hr)) {
+			DEBUG_LOG(("[S20-A2c2] TerrainPerMaterialShader::init: failed to load terrainpermaterial.pso (0x%08X). Releasing VS; renderer remains on the base terrain path.\n", (unsigned)hr));
+			m_dwPerMaterialVertexShader->Release();
+			m_dwPerMaterialVertexShader = nullptr;
+			return FALSE;
+		}
+
+		W3DShaders[W3DShaderManager::ST_TERRAIN_PER_MATERIAL] = &terrainPerMaterialShader;
+		W3DShadersPassCount[W3DShaderManager::ST_TERRAIN_PER_MATERIAL] = 1;
+
+		DEBUG_LOG(("[S20-A2c2] TerrainPerMaterialShader::init: loaded terrainpermaterial_vs.vso + terrainpermaterial.pso, ST_TERRAIN_PER_MATERIAL ready (1 pass).\n"));
+	}
+
+	return FALSE;
+}
+
+// @feature Ronin 29/04/2026 Splat S20-A2c2 (set): real bind sequence for the per-material
+// weighted splat PS. Uses the permaterial shaders, world-VP upload to vs c0,
+// same BIND_LAYOUT_DECL pattern that prevents Set_FVF from clearing our
+// VS during Apply_Render_State_Changes. Differences from the legacy splat set():
+//   - s0 = terrain atlas (same).
+//   - s1..s8 = weight atlas pages (instead of s1=control bilinear, s2=control point).
+//     One page per 4 active material slots; up to MAX_S20_WEIGHT_ATLAS_PAGES (8) pages.
+//     Caller (HeightMap.cpp::renderPrimaryBlendControlPass) populated W3DShaderManager
+//     shader slots 1..1+pageCount-1 via setTexture(); empty slots (no upload by caller)
+//     bind nullptr here -- the PS's slot < activeCount gate makes those pages unread.
+//   - s0 sampler:  bilinear + wrap (terrain atlas, world-tiled by frac() in PS).
+//   - s1..s8 sampler: bilinear + clamp (weight planes are smooth scalars; outside the
+//     valid region the POW2 padding is zero so clamp == wrap mathematically, but clamp
+//     is the conservative choice in case future bakes leave non-zero padding).
+// PS constants c0..c65 are uploaded by the caller AFTER setShader returns -- same split
+// as the legacy splat shader so this set() has no WorldHeightMap dependency.
+// See docs/Terrain_Splat_Map_Design.md S20 A2-c.
+Int TerrainPerMaterialShader::set(Int pass)
+{
+	if (pass != 0)
+		return FALSE;
+
+	TextureClass* atlasTexture = W3DShaderManager::getShaderTexture(0);
+	if (!atlasTexture || !atlasTexture->Peek_D3D_Texture())
+		return FALSE;
+
+	if (!m_dwPerMaterialVertexShader || !m_dwPerMaterialPixelShader)
+		return FALSE;
+
+	IDirect3DVertexDeclaration9* pDecl =
+		W3DShaderManager::GetShaderDeclaration(m_dwPerMaterialVertexShader);
+	if (pDecl == nullptr)
+		return FALSE;
+
+	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
+	if (pDev == nullptr)
+		return FALSE;
+
+	DX8Wrapper::Apply_Render_State_Changes();
+
+	// Atlas on s0.
+	pDev->SetTexture(0, atlasTexture->Peek_D3D_Texture());
+	DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+	DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+	if (TheGlobalData && (TheGlobalData->m_bilinearTerrainTex || TheGlobalData->m_trilinearTerrainTex)) {
+		DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	}
+	else {
+		DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+		DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+	}
+	if (TheGlobalData && TheGlobalData->m_trilinearTerrainTex) {
+		DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+	}
+	else {
+		DX8Wrapper::Set_DX8_Sampler_State(0, D3DSAMP_MIPFILTER, D3DTEXF_POINT);
+	}
+
+	// Weight atlas pages on s1..s8.
+	enum { kPmMaxWeightPages = 8 };
+	static_assert(kPmMaxWeightPages == WorldHeightMap::MAX_S20_WEIGHT_ATLAS_PAGES,
+		"TerrainPerMaterialShader::set: kPmMaxWeightPages must equal "
+		"WorldHeightMap::MAX_S20_WEIGHT_ATLAS_PAGES.");
+
+	enum { kMgrSlotCount = 16 };
+	for (DWORD wp = 0; wp < (DWORD)kPmMaxWeightPages; ++wp) {
+		const DWORD samplerSlot = 1 + wp;
+		IDirect3DBaseTexture9* d3dTex = nullptr;
+
+		if (samplerSlot < (DWORD)kMgrSlotCount) {
+			TextureClass* weightTex = W3DShaderManager::getShaderTexture((Int)samplerSlot);
+			if (weightTex) {
+				d3dTex = weightTex->Peek_D3D_Texture();
+			}
+		}
+
+		pDev->SetTexture(samplerSlot, d3dTex);
+		DX8Wrapper::Set_DX8_Sampler_State(samplerSlot, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		DX8Wrapper::Set_DX8_Sampler_State(samplerSlot, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		DX8Wrapper::Set_DX8_Sampler_State(samplerSlot, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		DX8Wrapper::Set_DX8_Sampler_State(samplerSlot, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		DX8Wrapper::Set_DX8_Sampler_State(samplerSlot, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+	}
+
+	// Optional cloud layer on s9.
+	TextureClass* cloudTexture = W3DShaderManager::getShaderTexture(9);
+	pDev->SetTexture(9, cloudTexture ? cloudTexture->Peek_D3D_Texture() : nullptr);
+	pDev->SetSamplerState(9, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+	pDev->SetSamplerState(9, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+	pDev->SetSamplerState(9, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+	pDev->SetSamplerState(9, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	pDev->SetSamplerState(9, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+
+	// Optional light/noise layer on s10.
+	TextureClass* lightTexture = W3DShaderManager::getShaderTexture(10);
+	pDev->SetTexture(10, lightTexture ? lightTexture->Peek_D3D_Texture() : nullptr);
+	pDev->SetSamplerState(10, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+	pDev->SetSamplerState(10, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+	pDev->SetSamplerState(10, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+	pDev->SetSamplerState(10, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	pDev->SetSamplerState(10, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+
+	// Opaque write -- per-material splat owns final terrain color.
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, FALSE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_ONE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_ZERO);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZWRITEENABLE, TRUE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+
+	D3DXMATRIX world;
+	D3DXMATRIX view;
+	D3DXMATRIX proj;
+	D3DXMATRIX worldView;
+	D3DXMATRIX worldViewProj;
+	D3DXMATRIX worldViewProjTranspose;
+
+	pDev->GetTransform(D3DTS_WORLD, &world);
+	pDev->GetTransform(D3DTS_VIEW, &view);
+	pDev->GetTransform(D3DTS_PROJECTION, &proj);
+
+	worldView = world * view;
+	worldViewProj = worldView * proj;
+	D3DXMatrixTranspose(&worldViewProjTranspose, &worldViewProj);
+
+	pDev->SetVertexShader(nullptr);
+	BIND_LAYOUT_DECL(pDecl);
+	pDev->SetVertexShader(m_dwPerMaterialVertexShader);
+	pDev->SetVertexShaderConstantF(0, (const float*)&worldViewProjTranspose, 4);
+	pDev->SetPixelShader(m_dwPerMaterialPixelShader);
+
+	// Match legacy terrain cloud/light UV generation:
+	// updateNoise1/2 ultimately reduce to worldXY * STRETCH_FACTOR, with cloud
+	// additionally adding the animated scroll offset.
+	const float stretchFactor = (float)(1.0f / (63.0f * MAP_XY_FACTOR / 2.0f));
+	const float noiseParams0[4] = {
+		stretchFactor,
+		stretchFactor,
+		terrainShader2Stage.m_xOffset,
+		terrainShader2Stage.m_yOffset
+	};
+	const float noiseParams1[4] = {
+		stretchFactor,
+		stretchFactor,
+		cloudTexture ? 1.0f : 0.0f,
+		lightTexture ? 1.0f : 0.0f
+	};
+
+	pDev->SetPixelShaderConstantF(66, noiseParams0, 1);
+	pDev->SetPixelShaderConstantF(67, noiseParams1, 1);
+
+	return TRUE;
+}
+
+void TerrainPerMaterialShader::reset()
+{
+	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
+	if (pDev) {
+		pDev->SetVertexShader(nullptr);
+		pDev->SetPixelShader(nullptr);
+		pDev->SetTexture(0, nullptr);
+
+		for (DWORD wp = 0; wp < (DWORD)WorldHeightMap::MAX_S20_WEIGHT_ATLAS_PAGES; ++wp) {
+			pDev->SetTexture(1 + wp, nullptr);
+		}
+
+		pDev->SetTexture(9, nullptr);
+		pDev->SetTexture(10, nullptr);
+	}
+
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_TEXTURETRANSFORMFLAGS, D3DTTFF_DISABLE);
+	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_TEXCOORDINDEX, D3DTSS_TCI_PASSTHRU | 0);
+
+	DX8Wrapper::Invalidate_Cached_Render_States();
+}
+
+Int TerrainPerMaterialShader::shutdown()
+{
+	if (m_dwPerMaterialVertexShader) {
+		m_dwPerMaterialVertexShader->Release();
+		m_dwPerMaterialVertexShader = nullptr;
+	}
+	if (m_dwPerMaterialPixelShader) {
+		m_dwPerMaterialPixelShader->Release();
+		m_dwPerMaterialPixelShader = nullptr;
+	}
+	return TRUE;
+}
+
 ///Cloud layer rendering shader - used for objects similar to terrain which only need the cloud layer.
 class CloudTextureShader : public W3DShaderInterface
 {
@@ -2606,6 +2890,9 @@ void RoadShader2Stage::reset()
 W3DShaderInterface **MasterShaderList[]=
 {
 	TerrainShaderList,
+	// @feature Ronin 27/04/2026 Splat S20-A2c2: register per-material weighted splat list.
+	// init() loads terrainpermaterial.pso; failure mode is silent fallback to legacy splat.
+	TerrainPerMaterialShaderList,
 	ShroudShaderList,
 	FlatShroudShaderList,
 	RoadShaderList,
@@ -2647,7 +2934,7 @@ W3DShaderManager::W3DShaderManager()
 	for (i=0; i<FT_MAX; i++)
 	{	W3DFilters[i]=nullptr;
 	}
-	for (i=0; i<8; i++)
+	for (i=0; i<16; i++)
 	{
 		m_Textures[i]=nullptr;
 	}
@@ -3250,13 +3537,13 @@ HRESULT W3DShaderManager::LoadAndCreateD3DShader(const char* strFilePath, const 
 #ifdef _DEBUG
 		if (FAILED(hr))
 		{
-			WWDEBUG_SAY(("  ❌ FAILED: %s (HRESULT: 0x%08X)", strFilePath, hr));
+			WWDEBUG_SAY(("FAILED: %s (HRESULT: 0x%08X)", strFilePath, hr));
 			if (pHandle) {
 				WWDEBUG_SAY(("  Output shader pointer: %p", *pHandle));
 			}
 		}
 		else {
-			WWDEBUG_SAY(("  ✅ SUCCESS: %s", strFilePath));
+			WWDEBUG_SAY(("SUCCESS: %s", strFilePath));
 			if (pHandle) {
 				WWDEBUG_SAY(("  Shader handle: %p", *pHandle));
 			}
