@@ -942,7 +942,7 @@ GlobalData::GlobalData()
 
 	m_standardPublicBones.clear();
 
-	m_antiAliasLevel = WW3D::MultiSampleModeEnum::MULTISAMPLE_MODE_NONE;
+	m_antiAliasLevel = 0;
 	m_textureFilteringMode = TextureFilterClass::TextureFilterMode::TEXTURE_FILTER_BILINEAR;
 	m_textureAnisotropyLevel = TextureFilterClass::AnisotropicFilterMode::TEXTURE_FILTER_ANISOTROPIC_2X;
 
@@ -1198,7 +1198,6 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 
 	// override INI values with user preferences
 	OptionPreferences optionPref;
-	TheWritableGlobalData->m_antiAliasBoxValue = optionPref.getAntiAliasingMode();
 	TheWritableGlobalData->m_useAlternateMouse = optionPref.getAlternateMouseModeEnabled();
 	TheWritableGlobalData->m_clientRetaliationModeEnabled = optionPref.getRetaliationModeEnabled();
 	TheWritableGlobalData->m_doubleClickAttackMove = optionPref.getDoubleClickAttackMoveEnabled();
@@ -1223,8 +1222,6 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_showMoneyPerMinute = optionPref.getShowMoneyPerMinute();
 
 	TheWritableGlobalData->m_antiAliasLevel = optionPref.getAntiAliasing();
-	TheWritableGlobalData->m_textureFilteringMode = optionPref.getTextureFilterMode();
-	TheWritableGlobalData->m_textureAnisotropyLevel = optionPref.getTextureAnisotropyLevel();
 
 	Int val=optionPref.getGammaValue();
 	//generate a value between 0.6 and 2.0.

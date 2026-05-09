@@ -58,9 +58,7 @@ public:
 
 	Bool loadFromIniFile();
 
-	WW3D::MultiSampleModeEnum getAntiAliasing() const;
-	TextureFilterClass::TextureFilterMode getTextureFilterMode() const;
-	TextureFilterClass::AnisotropicFilterMode getTextureAnisotropyLevel() const;
+	Int getAntiAliasing() const;
 	UnsignedInt getLANIPAddress();
 	UnsignedInt getOnlineIPAddress();
 	void setLANIPAddress(AsciiString IP);

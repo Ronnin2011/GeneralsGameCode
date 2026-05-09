@@ -1100,11 +1100,11 @@ void WaterTracksRenderSystem::loadTracks()
 			}
 		}
 		file->close();
-		WWDEBUG_SAY(("Loaded %d water tracks from %s", trackCount, path));
+		WWDEBUG_SAY(("Loaded %d water tracks from %s", trackCount, fileName.str()));
 	}
 	else
 	{
-		WWDEBUG_SAY(("WARNING: No .wak file found at: %s", path));
+		WWDEBUG_SAY(("WARNING: No .wak file found at: %s", fileName.str()));
 	}
 
 #if 0	//Obsolete code used before there was another editor to place waves.

@@ -129,8 +129,7 @@ public:
 	void Set_V_Addr_Mode(TxtAddrMode mode) { VAddressMode=mode; }
 
 	// These need to be called after device has been created
-	static void _Init_Filters(TextureFilterMode texture_filter, AnisotropicFilterMode anisotropy_level);
-	static void _Set_Max_Anisotropy(AnisotropicFilterMode mode);
+	static void _Init_Filters(TextureFilterMode texture_filter);
 
 	static void _Set_Default_Min_Filter(FilterType filter);
 	static void _Set_Default_Mag_Filter(FilterType filter);

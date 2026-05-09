@@ -556,7 +556,7 @@ void W3DDisplay::setGamma(Real gamma, Real bright, Real contrast, Bool calibrate
 Bool W3DDisplay::setDisplayMode( UnsignedInt xres, UnsignedInt yres, UnsignedInt bitdepth, Bool windowed )
 {
 	// Ronin @feature 10/03/2026 DX9: Apply current AA selection before any device reset.
-	WW3D::Set_Anti_Aliasing_Level(TheGlobalData->m_antiAliasBoxValue);
+	WW3D::Set_Anti_Aliasing_Level(TheGlobalData->m_antiAliasLevel);
 
 
 	const UnsignedInt oldWidth = getWidth();
@@ -839,7 +839,7 @@ void W3DDisplay::init()
 		DEBUG_ASSERTCRASH( m_2DRender, ("Cannot create Render2DClass") );
 
 		// Ronin @feature 10/03/2026 DX9: Apply saved AA option before initial device creation.
-		WW3D::Set_Anti_Aliasing_Level(TheGlobalData->m_antiAliasBoxValue);
+		WW3D::Set_Anti_Aliasing_Level(TheGlobalData->m_antiAliasLevel);
 
 		WW3DErrorType renderDeviceError;
 		Int attempt = 0;

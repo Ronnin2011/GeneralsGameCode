@@ -515,7 +515,8 @@ static void Track_Decl_Bound_While_Wrapper_Expects_FVF(const char* where)
 #endif // _DEBUG
 
 // @feature Ronin 01/03/2026 DX9: Query and configure multisampling for antialiasing.
-// Call this to fill in _PresentParameters.MultiSample* before CreateDevice/Reset.
+// @feature Ronin 01/03/2026 DX9: Query and configure multisampling for antialiasing.
+// Raw AA values are sample counts: 0 / 2 / 4 / 8.
 static void Configure_Multisampling(D3DPRESENT_PARAMETERS& pp, IDirect3D9* d3d, UINT adapter, D3DDEVTYPE devType)
 {
 	pp.MultiSampleType = D3DMULTISAMPLE_NONE;
@@ -525,30 +526,45 @@ static void Configure_Multisampling(D3DPRESENT_PARAMETERS& pp, IDirect3D9* d3d, 
 		return;
 	}
 
-	if (DX8Wrapper::Get_Anti_Aliasing_Level() <= 0) {
+	const int aaLevel = DX8Wrapper::Get_Anti_Aliasing_Level();
+	if (aaLevel <= 0) {
 		return;
 	}
 
 	const D3DMULTISAMPLE_TYPE* types = nullptr;
 	int typeCount = 0;
 
-	static const D3DMULTISAMPLE_TYPE lowTypes[] = {
+	static const D3DMULTISAMPLE_TYPE types2x[] = {
 		D3DMULTISAMPLE_2_SAMPLES,
 	};
 
-	static const D3DMULTISAMPLE_TYPE highTypes[] = {
+	static const D3DMULTISAMPLE_TYPE types4x[] = {
+		D3DMULTISAMPLE_4_SAMPLES,
+		D3DMULTISAMPLE_2_SAMPLES,
+	};
+
+	static const D3DMULTISAMPLE_TYPE types8x[] = {
 		D3DMULTISAMPLE_8_SAMPLES,
 		D3DMULTISAMPLE_4_SAMPLES,
 		D3DMULTISAMPLE_2_SAMPLES,
 	};
 
-	if (DX8Wrapper::Get_Anti_Aliasing_Level() == 1) {
-		types = lowTypes;
-		typeCount = sizeof(lowTypes) / sizeof(lowTypes[0]);
-	}
-	else {
-		types = highTypes;
-		typeCount = sizeof(highTypes) / sizeof(highTypes[0]);
+	switch (aaLevel) {
+	case 2:
+		types = types2x;
+		typeCount = sizeof(types2x) / sizeof(types2x[0]);
+		break;
+
+	case 4:
+		types = types4x;
+		typeCount = sizeof(types4x) / sizeof(types4x[0]);
+		break;
+
+	case 8:
+	default:
+		types = types8x;
+		typeCount = sizeof(types8x) / sizeof(types8x[0]);
+		break;
 	}
 
 	for (int i = 0; i < typeCount; ++i) {
@@ -592,8 +608,8 @@ static void Configure_Multisampling(D3DPRESENT_PARAMETERS& pp, IDirect3D9* d3d, 
 		pp.MultiSampleQuality = qualityLevels - 1;
 		pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
 
-		WWDEBUG_SAY(("MSAA: Enabled mode=%d samples=%d quality=%d",
-			DX8Wrapper::Get_Anti_Aliasing_Level(),
+		WWDEBUG_SAY(("MSAA: Enabled request=%d samples=%d quality=%d",
+			aaLevel,
 			(int)msType,
 			(int)pp.MultiSampleQuality));
 
@@ -601,7 +617,7 @@ static void Configure_Multisampling(D3DPRESENT_PARAMETERS& pp, IDirect3D9* d3d, 
 	}
 
 	WWDEBUG_SAY(("MSAA: Requested mode=%d but no supported multisample mode was found",
-		DX8Wrapper::Get_Anti_Aliasing_Level()));
+		aaLevel));
 }
 
 /***********************************************************************************
@@ -6029,8 +6045,14 @@ void DX8Wrapper::Log_Pipeline_State_Diff(const PipelineStateSnapshot* before, co
 
 void DX8Wrapper::Set_Anti_Aliasing_Level(int level)
 {
-	if (level < 0) level = 0;
-	if (level > 2) level = 2;
+	if (level <= 0)
+		level = 0;
+	else if (level <= 2)
+		level = 2;
+	else if (level <= 4)
+		level = 4;
+	else
+		level = 8;
 
 	AntiAliasingLevel = level;
 }

@@ -555,21 +555,40 @@ static void saveOptions()
 	}
 
 	//-------------------------------------------------------------------------------------------------
-	// antialiasing
-  GadgetComboBoxGetSelectedPos(comboBoxAntiAliasing, &index);
-  if( index >= 0 )
-  {
-		Int mode = WW3D::MULTISAMPLE_MODE_NONE;
-
-		// TheSuperHackers @info We are converting comboBox entry position to MultiSampleModeEnum values
+// antialiasing
+	GadgetComboBoxGetSelectedPos(comboBoxAntiAliasing, &index);
+	if (index >= 0)
+	{
 		index = clamp((int)OptionPreferences::AntiAliasingMode_OFF, index, (int)OptionPreferences::AntiAliasingMode_MSAA_8X);
-		mode = (index > 0) ? 1 << index : 0;
 
+		Int mode = 0;
+		switch (index)
+		{
+		case OptionPreferences::AntiAliasingMode_MSAA_2X:
+			mode = 2;
+			break;
+
+		case OptionPreferences::AntiAliasingMode_MSAA_4X:
+			mode = 4;
+			break;
+
+		case OptionPreferences::AntiAliasingMode_MSAA_8X:
+			mode = 8;
+			break;
+
+		case OptionPreferences::AntiAliasingMode_OFF:
+		default:
+			mode = 0;
+			break;
+		}
+
+		antiAliasingChanged = ((Int)TheGlobalData->m_antiAliasLevel != mode);
 		TheWritableGlobalData->m_antiAliasLevel = mode;
-    AsciiString prefString;
+
+		AsciiString prefString;
 		prefString.format("%d", mode);
 		(*pref)["AntiAliasing"] = prefString;
-  }
+	}
 
 
 	//-------------------------------------------------------------------------------------------------
@@ -1145,35 +1164,20 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 	}
 
 	// populate anti aliasing modes
-	AsciiString selectedAliasingMode = (*pref)["AntiAliasing"];
 	GadgetComboBoxReset(comboBoxAntiAliasing);
 	AsciiString temp;
-	Int i=0;
+	Int i = 0;
 	for (; i < OptionPreferences::AntiAliasingMode_Count; ++i)
 	{
 		temp.format("GUI:AntiAliasing%d", i);
-		str = TheGameText->fetch( temp );
+		str = TheGameText->fetch(temp);
 		index = GadgetComboBoxAddEntry(comboBoxAntiAliasing, str, color);
 	}
-	Int val = atoi(selectedAliasingMode.str());
-	Int pos = 0;
 
-	// TheSuperHackers @info We are converting from human readable value to comboBox entry position
-	val = highestBit(val);
+	Int pos = pref->getAntiAliasingMode();
+	pos = clamp((int)OptionPreferences::AntiAliasingMode_OFF, pos, (int)OptionPreferences::AntiAliasingMode_MSAA_8X);
 
-	if (val == WW3D::MULTISAMPLE_MODE_NONE)
-		pos = OptionPreferences::AntiAliasingMode_OFF;
-	else if (val == WW3D::MULTISAMPLE_MODE_2X)
-		pos = OptionPreferences::AntiAliasingMode_MSAA_2X;
-	else if (val == WW3D::MULTISAMPLE_MODE_4X)
-		pos = OptionPreferences::AntiAliasingMode_MSAA_4X;
-	else if (val == WW3D::MULTISAMPLE_MODE_8X)
-		pos = OptionPreferences::AntiAliasingMode_MSAA_8X;
-
-	if (val < 0 || val > WW3D::MULTISAMPLE_MODE_8X)
-	{
-		TheWritableGlobalData->m_antiAliasLevel = pos = 0;
-	}
+	TheWritableGlobalData->m_antiAliasLevel = pref->getAntiAliasing();
 	GadgetComboBoxSetSelectedPos(comboBoxAntiAliasing, pos);
 
 	// get resolution from saved preferences file
