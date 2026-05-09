@@ -53,10 +53,8 @@ class SortingIndexBufferClass;
 
 // ----------------------------------------------------------------------------
 
-class IndexBufferClass : public W3DMPO, public RefCountClass
+class IndexBufferClass : public RefCountClass
 {
-	// nope, it's an ABC
-	//W3DMPO_GLUE(IndexBufferClass)
 protected:
 	virtual ~IndexBufferClass() override;
 public:
@@ -108,9 +106,9 @@ protected:
 
 // HY 2/14/01
 // Created
-class DynamicIBAccessClass : public W3DMPO
+class DynamicIBAccessClass
 {
-	W3DMPO_GLUE(DynamicIBAccessClass)
+	W3DMPO_CODE(DynamicIBAccessClass)
 
 	friend DX8Wrapper;
 	friend SortingRendererClass;
@@ -125,7 +123,7 @@ class DynamicIBAccessClass : public W3DMPO
 
 public:
 	DynamicIBAccessClass(unsigned short type, unsigned short index_count);
-	virtual ~DynamicIBAccessClass() override;
+	~DynamicIBAccessClass();
 
 	//Ronin @build 04/12/2025 Flag for making sure no multiple accessors while one is already active.
 	static bool Is_In_Use();
@@ -165,7 +163,7 @@ public:
 */
 class DX8IndexBufferClass : public IndexBufferClass
 {
-	W3DMPO_GLUE(DX8IndexBufferClass)
+	W3DMPO_CODE(DX8IndexBufferClass)
 
 	friend IndexBufferClass::WriteLockClass;
 	friend IndexBufferClass::AppendLockClass;
@@ -193,7 +191,7 @@ private:
 
 class SortingIndexBufferClass : public IndexBufferClass
 {
-	W3DMPO_GLUE(SortingIndexBufferClass)
+	W3DMPO_CODE(SortingIndexBufferClass)
 
 	friend DX8Wrapper;
 	friend SortingRendererClass;
