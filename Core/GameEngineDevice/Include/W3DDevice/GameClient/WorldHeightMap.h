@@ -365,6 +365,15 @@ public:  // tile and texture info.
 	// per-material terrain shader path in HeightMap.cpp::renderPrimaryBlendControlPass().
 	Bool ensurePerMaterialWeightAtlasTextures();
 
+	// @feature Ronin 10/05/2026 Normal-map N1: allocate one A8R8G8B8 normal atlas page
+	// per diffuse atlas page, populate per source-tile rectangles by attempting to load
+	// <basename>_NRM.dds then <basename>_NRM.tga via WW3DAssetManager, falling back to
+	// flat-normal default (128,128,255,255) when absent or resolution-mismatched. Calls
+	// D3DXFilterTexture(...,D3DX_FILTER_BOX) for mips. Idempotent; safe to call from
+	// ensureSplatTextures() on the same dirty-flag the weight atlas uses. Logs an
+	// [NRM] line summarizing allocated pages, loaded tiles, and flat-default fallbacks.
+	Bool ensurePerMaterialNormalAtlasTextures();
+
 
 	Int  getActiveMaterialCount() const { return m_numActiveMaterials; }
 	Int  getActiveMaterialClass(Int activeIdx) const {
@@ -402,6 +411,19 @@ private:
 	Int            m_perMaterialWeightAtlasWidth = 0;
 	Int            m_perMaterialWeightAtlasHeight = 0;
 
+
+	// @feature Ronin 10/05/2026 Normal-map N1: GPU normal atlas pages. One page per
+	// diffuse atlas page, mirrors m_terrainTextures[] layout exactly so the existing
+	// getSplatAtlasRegionsForActiveSetPage() region tables address the normal atlas
+	// without modification. Each page is an A8R8G8B8 2D texture; per source tile the
+	// rectangle at TXTextureClass::positionInTexture / tilePixelExtent holds the
+	// tangent-space normal sampled from <basename>_NRM.dds / .tga, or the flat-normal
+	// default (128,128,255,255) when the source asset is absent or mismatched.
+	// Allocated by ensurePerMaterialNormalAtlasTextures(), released in ~WorldHeightMap
+	// and on map reload.
+	TextureClass* m_perMaterialNormalAtlas[MAX_TEXTURE_ATLAS_PAGES] = {};
+	Int            m_numPerMaterialNormalAtlasPages = 0;
+
 public:
 	// @feature Ronin 27/04/2026 Splat S20-A2b: per-ACTIVE-slot atlas region table for the
 	// new per-material splat PS. Same regionA / regionB layout as getSplatAtlasRegions(),
@@ -415,6 +437,14 @@ public:
 	// No D3D state touched; pure CPU-side table emission.
 	// See docs/Terrain_Splat_Map_Design.md S20 A2-b.
 	Int getSplatAtlasRegionsForActiveSet(float* outRegionA, float* outRegionB);
+
+	// @feature Ronin 10/05/2026 Normal-map N1: accessors for the per-material normal
+	// atlas pages. Layout mirrors m_terrainTextures[] so getSplatAtlasRegionsForActive
+	// SetPage() addresses both atlases. Returns nullptr / 0 when the normal atlas has
+	// not been built yet (e.g. before ensureSplatTextures() has run, or on hardware
+	// where allocation failed). See docs/Terrain_Normal_Map_Design.md N1.
+	TextureClass* getPerMaterialNormalAtlasPage(Int page) const;
+	Int           getPerMaterialNormalAtlasPageCount() const { return m_numPerMaterialNormalAtlasPages; }
 
 	// @feature Ronin 03/05/2026 Splat S20 multi-atlas: page-aware variant of the
 	// active-slot atlas region table.

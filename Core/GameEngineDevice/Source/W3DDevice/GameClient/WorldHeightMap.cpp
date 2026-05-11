@@ -51,6 +51,13 @@
 #include "W3DDevice/GameClient/TerrainTex.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 
+// @feature Ronin 10/05/2026 Normal-map N1.5b: DDS asset path for the normal atlas.
+// DDSFileClass handles BC1/BC3 decode and BGRA conversion via Copy_Level_To_Surface.
+// Note: this codebase's DDSFileClass is DXT-only (asserts on uncompressed BGRA8 DDS),
+// so the helper below pre-screens the FourCC and fails soft for non-DXT inputs --
+// uncompressed normal maps must ship as TGA, which the existing path already handles.
+#include "ddsfile.h"
+
 #include "Common/file.h"
 
 // @feature Ronin 05/04/2026 Support HD terrain replacements without changing logical terrain coverage.
@@ -580,6 +587,15 @@ WorldHeightMap::~WorldHeightMap()
 	}
 
 	m_numPerMaterialWeightAtlasPages = 0;
+
+	// @feature Ronin 10/05/2026 Normal-map N1: release per-material normal atlas pages.
+	// Lifecycle mirrors the weight atlas above; one page per diffuse atlas page.
+	for (Int npage = 0; npage < MAX_TEXTURE_ATLAS_PAGES; ++npage) {
+		REF_PTR_RELEASE(m_perMaterialNormalAtlas[npage]);
+	}
+	m_numPerMaterialNormalAtlasPages = 0;
+
+
 	REF_PTR_RELEASE(m_terrainTex);
 	REF_PTR_RELEASE(m_alphaTerrainTex);
 	REF_PTR_RELEASE(m_alphaEdgeTex);
@@ -1618,6 +1634,184 @@ static Bool getSourceTilePixelExtentForLogicalWidth(InputStream* pStr, Int logic
 	}
 
 	*tilePixelExtent = pixelExtentX;
+	return true;
+}
+
+// @feature Ronin 10/05/2026 Normal-map N1.5b: decode <basename>_NRM.dds (BC1/BC3) into a
+// sub-rect of an already-locked atlas page. DDSFileClass handles the DXT decode and
+// BGRA conversion (we ask for WW3D_FORMAT_A8R8G8B8 which in the locked rect is byte
+// order B,G,R,A -- identical to the TGA helper convention).
+//
+// Pre-screens the FourCC because DDSFileClass in this codebase ASSERTS on non-DXT
+// pixel formats (uncompressed BGRA8 DDS would trip the assert). Uncompressed normal
+// maps must ship as TGA; this is documented in the design doc and in normal art is a
+// non-issue (production normal maps ship DXT5).
+//
+// Strict size check: image must be square and exactly `expectedExtent` on a side
+// (matches the diffuse rectangle, same contract as the TGA helper). Fail-soft on any
+// error; does not touch the destination rect on failure so the flat-default fill or
+// TGA fallback can take over.
+static Bool loadNormalDdsIntoLockedRect(
+	const char* path,
+	Int destX, Int destY, Int expectedExtent,
+	UnsignedByte* lockBits, Int lockPitch,
+	Int pageW, Int pageH)
+{
+	if (path == nullptr || lockBits == nullptr || expectedExtent <= 0) {
+		return false;
+	}
+	if (destX < 0 || destY < 0 ||
+		destX + expectedExtent > pageW ||
+		destY + expectedExtent > pageH) {
+		return false;
+	}
+
+	// Pre-screen header so DDSFileClass's WWASSERT on non-DXT formats never fires.
+	// We do a tiny independent open via TheFileSystem (consistent with the TGA helper
+	// right below). This also gives us a clean miss for files that aren't there.
+	{
+		File* probe = TheFileSystem->openFile(path, File::READ | File::BINARY);
+		if (probe == nullptr) {
+			return false;
+		}
+		// DDS header: 4-byte magic 'DDS ' + 124-byte LegacyDDSURFACEDESC2.
+		// FourCC lives at offset 84 from the start of the SurfaceDesc, i.e. offset 88
+		// from the start of the file. Read enough to reach it.
+		UnsignedByte hdr[92];
+		const Int got = probe->read(hdr, sizeof(hdr));
+		probe->close();
+		if (got < (Int)sizeof(hdr)) {
+			return false;
+		}
+		if (hdr[0] != 'D' || hdr[1] != 'D' || hdr[2] != 'S' || hdr[3] != ' ') {
+			return false;
+		}
+		const UnsignedByte* fourCC = &hdr[88];
+		const Bool isDxt1 = (fourCC[0] == 'D' && fourCC[1] == 'X' && fourCC[2] == 'T' && fourCC[3] == '1');
+		const Bool isDxt3 = (fourCC[0] == 'D' && fourCC[1] == 'X' && fourCC[2] == 'T' && fourCC[3] == '3');
+		const Bool isDxt5 = (fourCC[0] == 'D' && fourCC[1] == 'X' && fourCC[2] == 'T' && fourCC[3] == '5');
+		if (!(isDxt1 || isDxt3 || isDxt5)) {
+			return false;
+		}
+	}
+
+	// reduction_factor=0: never sub-sample; we need level 0 at native resolution so it
+	// lines up with the diffuse rectangle byte-for-byte.
+	DDSFileClass dds(path, 0);
+	if (!dds.Load() || !dds.Is_Available()) {
+		return false;
+	}
+
+	if ((Int)dds.Get_Width(0) != expectedExtent ||
+		(Int)dds.Get_Height(0) != expectedExtent) {
+		return false;
+	}
+
+	// Sub-rect blit. DDSFileClass::Copy_Level_To_Surface with dest_format =
+	// WW3D_FORMAT_A8R8G8B8 decompresses the DXT block to A8R8G8B8 (locked-rect byte
+	// order = B,G,R,A) and writes into dest_surface + y*dest_pitch + x*4. By passing
+	// destPtr = lockBits + destY*lockPitch + destX*4 and dest_pitch = lockPitch, the
+	// output lands at the (destX, destY, expectedExtent, expectedExtent) sub-rect of
+	// the locked atlas page -- no temp buffer, no row-by-row copy.
+	UnsignedByte* destPtr = lockBits + destY * lockPitch + destX * 4;
+	dds.Copy_Level_To_Surface(
+		/*level*/        0,
+		/*dest_format*/  WW3D_FORMAT_A8R8G8B8,
+		/*dest_width*/   (unsigned)expectedExtent,
+		/*dest_height*/  (unsigned)expectedExtent,
+		/*dest_surface*/ destPtr,
+		/*dest_pitch*/   (unsigned)lockPitch);
+
+	return true;
+}
+
+
+
+// @feature Ronin 10/05/2026 Normal-map N1.5: decode <basename>_NRM.tga directly into a
+// sub-rect of an already-locked atlas page. Supports uncompressed (0x02) and RLE (0x0A)
+// 24/32-bit BGR(A). Honors the TGA top-down flag (bit 0x20). Strict size check: image
+// must be square and exactly `expectedExtent` on a side (matches the diffuse rectangle).
+// On any failure (open, header, format, size, bounds) returns false WITHOUT touching
+// the destination rect, so the flat-normal default written by the caller stays in place.
+// Locked-rect convention matches the rest of N1: byte order is BGRA, A reserved for
+// height/AO. The TGA pixel byte order at pixelDepth 24/32 is also BGR(A) so we copy
+// channels straight through with no swizzle.
+static Bool loadNormalTgaIntoLockedRect(
+	const char* path,
+	Int destX, Int destY, Int expectedExtent,
+	UnsignedByte* lockBits, Int lockPitch,
+	Int pageW, Int pageH)
+{
+	if (path == nullptr || lockBits == nullptr || expectedExtent <= 0) {
+		return false;
+	}
+	if (destX < 0 || destY < 0 ||
+		destX + expectedExtent > pageW ||
+		destY + expectedExtent > pageH) {
+		return false;
+	}
+
+	File* f = TheFileSystem->openFile(path, File::READ | File::BINARY);
+	if (f == nullptr) {
+		return false;
+	}
+	GDIFileStream stream(f);
+	InputStream* pStr = &stream;
+
+	TTargaHeader hdr;
+	if (!readTgaHeader(pStr, &hdr)) { f->close(); return false; }
+	if (hdr.colorMapType != 0) { f->close(); return false; }
+	if (hdr.imageType != 0x2 && hdr.imageType != 0xA) { f->close(); return false; }
+	if (hdr.pixelDepth < 24 || hdr.pixelDepth > 32) { f->close(); return false; }
+	if (hdr.imageWidth != expectedExtent || hdr.imageHeight != expectedExtent) {
+		f->close();
+		return false;
+	}
+
+	// Skip optional image ID block.
+	if (hdr.idLength > 0) {
+		UnsignedByte skip[256];
+		pStr->read(skip, hdr.idLength);
+	}
+
+	const Bool compressed = (hdr.imageType & 0x08) != 0;
+	const Int bpp = (hdr.pixelDepth + 7) / 8;
+	const Bool topDown = (hdr.flags & 0x20) != 0;
+
+	UnsignedByte buf[4] = { 0,0,0,0 };
+	Int repeatCount = 0;
+	Bool running = false;
+
+	for (Int row = 0; row < expectedExtent; ++row) {
+		const Int dstY = topDown ? (destY + row) : (destY + (expectedExtent - 1 - row));
+		UnsignedByte* dstRow = lockBits + dstY * lockPitch + destX * 4;
+
+		for (Int col = 0; col < expectedExtent; ++col) {
+			if (compressed && repeatCount == 0) {
+				UnsignedByte flag;
+				pStr->read(&flag, 1);
+				repeatCount = (flag & 0x7f) + 1;
+				running = (flag & 0x80) != 0;
+				if (running) {
+					pStr->read(buf, bpp);
+				}
+			}
+			if (compressed) {
+				--repeatCount;
+			}
+			if (!running) {
+				pStr->read(buf, bpp);
+			}
+
+			// Source bytes at pixelDepth 24/32 are BGR(A) on disk -- straight copy.
+			dstRow[col * 4 + 0] = buf[0]; // B
+			dstRow[col * 4 + 1] = buf[1]; // G
+			dstRow[col * 4 + 2] = buf[2]; // R
+			dstRow[col * 4 + 3] = (bpp == 4) ? buf[3] : 255;
+		}
+	}
+
+	f->close();
 	return true;
 }
 
@@ -2992,6 +3186,212 @@ Bool WorldHeightMap::ensurePerMaterialWeightAtlasTextures()
 	return TRUE;
 }
 
+// =============================================================================
+// @feature Ronin 10/05/2026 Normal-map N1: per-material normal atlas allocation.
+// =============================================================================
+//
+// Mirrors the diffuse atlas layout exactly -- one A8R8G8B8 page per diffuse atlas
+// page, same dimensions, same per-source-tile rectangles. Consequence: the existing
+// getSplatAtlasRegionsForActiveSet[Page]() tables address this atlas without any
+// modification when the PS binds it on s12..s15 (in N2).
+//
+// v1 scope (this commit): allocate pages, fill every texel with the flat-normal
+// default (128,128,255,255 = tangent-space (0,0,1)). Asset discovery
+// (<basename>_NRM.dds / .tga) and per-source-tile pixel copy is the next
+// sub-commit; until that lands, every source tile contributes the flat default and
+// no perturbation is visible at runtime even after N3 lighting ships.
+//
+// Idempotent. Releases stale pages on size/count change. Safe to call from
+// ensureSplatTextures() on the same dirty flag the weight atlas uses.
+//
+// See docs/Terrain_Normal_Map_Design.md N1.
+// =============================================================================
+Bool WorldHeightMap::ensurePerMaterialNormalAtlasTextures()
+{
+	if (m_numTerrainTexturePages <= 0) {
+		return FALSE;
+	}
+
+	Int allocatedPages = 0;
+	Int loadedTiles = 0;
+	Int flatDefaultTiles = 0;
+
+	for (Int page = 0; page < m_numTerrainTexturePages && page < MAX_TEXTURE_ATLAS_PAGES; ++page) {
+		// Match the corresponding diffuse atlas page dimensions byte-for-byte so the
+		// shared region table addresses both atlases.
+		TextureClass* diffuse = m_terrainTextures[page];
+		if (diffuse == nullptr || diffuse->Peek_D3D_Texture() == nullptr) {
+			continue;
+		}
+
+		IDirect3DSurface8* diffSurf = nullptr;
+		DX8_ErrorCode(diffuse->Peek_D3D_Texture()->GetSurfaceLevel(0, &diffSurf));
+		if (diffSurf == nullptr) {
+			continue;
+		}
+
+		D3DSURFACE_DESC diffDesc;
+		DX8_ErrorCode(diffSurf->GetDesc(&diffDesc));
+		diffSurf->Release();
+
+		const Int pageW = (Int)diffDesc.Width;
+		const Int pageH = (Int)diffDesc.Height;
+
+		REF_PTR_RELEASE(m_perMaterialNormalAtlas[page]);
+		m_perMaterialNormalAtlas[page] = MSGNEW("WorldHeightMap_N1_normalAtlas")
+			TextureClass(pageW, pageH, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_3);
+		if (m_perMaterialNormalAtlas[page] == nullptr) {
+			DEBUG_LOG(("[NRM] failed to allocate normal atlas page %d (%dx%d)",
+				page, pageW, pageH));
+			continue;
+		}
+
+		TextureClass* tex = m_perMaterialNormalAtlas[page];
+		if (tex->Peek_D3D_Texture() == nullptr) {
+			REF_PTR_RELEASE(m_perMaterialNormalAtlas[page]);
+			continue;
+		}
+
+		IDirect3DSurface8* surf = nullptr;
+		DX8_ErrorCode(tex->Peek_D3D_Texture()->GetSurfaceLevel(0, &surf));
+		if (surf == nullptr) {
+			REF_PTR_RELEASE(m_perMaterialNormalAtlas[page]);
+			continue;
+		}
+
+		D3DSURFACE_DESC desc;
+		DX8_ErrorCode(surf->GetDesc(&desc));
+		if (desc.Format != D3DFMT_A8R8G8B8) {
+			surf->Release();
+			REF_PTR_RELEASE(m_perMaterialNormalAtlas[page]);
+			DEBUG_LOG(("[NRM] page %d: unexpected format 0x%x, skipping", page, desc.Format));
+			continue;
+		}
+
+		D3DLOCKED_RECT lr;
+		DX8_ErrorCode(surf->LockRect(&lr, nullptr, 0));
+
+		// Fill the entire page with flat-normal default (128,128,255,255).
+		// Layout matches the weight atlas convention (BGRA in the locked rect):
+		//   byte 0 (B) = Z = 255   byte 1 (G) = Y = 128
+		//   byte 2 (R) = X = 128   byte 3 (A) = 255 (reserved for height/AO)
+		// Sampled in the PS this decodes to tangent-space (0,0,1) -- no perturbation.
+		for (Int y = 0; y < (Int)desc.Height; ++y) {
+			UnsignedByte* dstRow = (UnsignedByte*)lr.pBits + y * lr.Pitch;
+			for (Int x = 0; x < (Int)desc.Width; ++x) {
+				dstRow[x * 4 + 0] = 255;
+				dstRow[x * 4 + 1] = 128;
+				dstRow[x * 4 + 2] = 128;
+				dstRow[x * 4 + 3] = 255;
+			}
+		}
+
+		// @feature Ronin 10/05/2026 Normal-map N1.5: per-source-class asset load.
+		// For each texture class living on this page, try <basename>_NRM.tga and copy
+		// pixels into the class's atlas rectangle. Misses leave the flat-default fill
+		// in place. DDS support (<basename>_NRM.dds, BC1/BC3 + uncompressed BGRA) is
+		// the next sub-commit; intentionally not implemented here to keep the diff
+		// surface-area small for verification.
+		for (Int i = 0; i < m_numTextureClasses; ++i) {
+			if (m_textureClasses[i].texturePage != page) {
+				continue;
+			}
+
+			const TXTextureClass& tc = m_textureClasses[i];
+			const Int tileExtent = (tc.tilePixelExtent > 0) ? tc.tilePixelExtent : TILE_PIXEL_EXTENT;
+			const Int classExtent = tc.width * tileExtent;
+			const Int destX = tc.positionInTexture.x;
+			const Int destY = tc.positionInTexture.y;
+
+			// Resolve the diffuse texture filename via TheTerrainTypes (mirrors readTexClass).
+			TerrainType* terrain = TheTerrainTypes->findTerrain(tc.name);
+			if (terrain == nullptr) {
+				++flatDefaultTiles;
+				continue;
+			}
+
+			// Strip the diffuse extension. Conservative: only strip the last '.' if it
+			// occurs after the last path separator, so paths without an extension just
+			// get the suffix appended.
+			const char* diffuseName = terrain->getTexture().str();
+			char baseName[_MAX_PATH];
+			snprintf(baseName, ARRAY_SIZE(baseName), "%s", diffuseName);
+			char* lastDot = strrchr(baseName, '.');
+			char* lastSep = strrchr(baseName, '\\');
+			char* lastFwd = strrchr(baseName, '/');
+			if (lastFwd > lastSep) lastSep = lastFwd;
+			if (lastDot != nullptr && (lastSep == nullptr || lastDot > lastSep)) {
+				*lastDot = '\0';
+			}
+
+			// @feature Ronin 10/05/2026 Normal-map N1.5b: DDS preferred, TGA fallback,
+			// flat default if neither is found. DDS is preferred because (a) BC1/BC3 are
+			// 4-8x smaller on disk than 24/32-bit TGA and (b) authoring tools that bake
+			// normal maps overwhelmingly emit DDS. The TGA branch is retained so legacy
+			// art that ships TGA-only continues to work.
+			char ddsPath[_MAX_PATH];
+			snprintf(ddsPath, ARRAY_SIZE(ddsPath), "%s%s_NRM.dds", TERRAIN_TGA_DIR_PATH, baseName);
+
+			Bool loaded = loadNormalDdsIntoLockedRect(
+				ddsPath, destX, destY, classExtent,
+				(UnsignedByte*)lr.pBits, lr.Pitch,
+				(Int)desc.Width, (Int)desc.Height);
+
+			const char* loadedFromPath = ddsPath;
+			const char* loadedFromKind = "dds";
+
+			if (!loaded) {
+				char nrmPath[_MAX_PATH];
+				snprintf(nrmPath, ARRAY_SIZE(nrmPath), "%s%s_NRM.tga", TERRAIN_TGA_DIR_PATH, baseName);
+
+				loaded = loadNormalTgaIntoLockedRect(
+					nrmPath, destX, destY, classExtent,
+					(UnsignedByte*)lr.pBits, lr.Pitch,
+					(Int)desc.Width, (Int)desc.Height);
+
+				loadedFromPath = nrmPath;
+				loadedFromKind = "tga";
+			}
+
+			if (loaded) {
+				++loadedTiles;
+				DEBUG_LOG(("[NRM] loaded class=%s kind=%s path=%s page=%d rect=%d,%d ext=%d",
+					tc.name.str(), loadedFromKind, loadedFromPath, page, destX, destY, classExtent));
+			}
+			else {
+				++flatDefaultTiles;
+			}
+		}
+
+		surf->UnlockRect();
+		surf->Release();
+
+		// Box-filter mips. Tangent normals do not box-filter perfectly (high-frequency
+		// detail collapses toward (0,0,1) at coarse mips); follow-up polish is a
+		// normal-aware mip filter. Acceptable for v1 since every page is currently the
+		// flat default anyway.
+		DX8_ErrorCode(D3DXFilterTexture(tex->Peek_D3D_Texture(), nullptr, 0, D3DX_FILTER_BOX));
+
+		++allocatedPages;
+	}
+
+	m_numPerMaterialNormalAtlasPages = allocatedPages;
+
+	DEBUG_LOG(("[NRM] %d normal atlas page(s) allocated, %d source tile(s) loaded with normal art, %d using flat default\n",
+		allocatedPages, loadedTiles, flatDefaultTiles));
+
+	return allocatedPages > 0;
+}
+
+// @feature Ronin 10/05/2026 Normal-map N1: page accessor for the live render path.
+TextureClass* WorldHeightMap::getPerMaterialNormalAtlasPage(Int page) const
+{
+	if (page < 0 || page >= m_numPerMaterialNormalAtlasPages) {
+		return nullptr;
+	}
+	return m_perMaterialNormalAtlas[page];
+}
+
 // @feature Ronin 27/04/2026 Splat S20-A2b: per-active-slot variant of getSplatAtlasRegions.
 // Reuses the same UV math (1 cell == 1 quadrant of 1 tile == tilePixelExtent/2 atlas pixels;
 // super-tile world period = width * 2 * MAP_XY_FACTOR) but emits entries indexed by
@@ -3169,6 +3569,12 @@ void WorldHeightMap::ensureSplatTextures()
 
 	buildPerMaterialWeightTextures(/*texelsPerCell*/ texelsPerCell, /*blurRadiusCells*/ 1);
 	ensurePerMaterialWeightAtlasTextures();
+
+	// @feature Ronin 10/05/2026 Normal-map N1: build the per-material normal atlas in
+	// lockstep with the weight atlas. v1 fills every page with the flat-normal default;
+	// per-source-tile asset load (<basename>_NRM.dds / .tga) lands in the next commit.
+	ensurePerMaterialNormalAtlasTextures();
+
 
 	m_primaryBlendControlTextureDirty = FALSE;
 }

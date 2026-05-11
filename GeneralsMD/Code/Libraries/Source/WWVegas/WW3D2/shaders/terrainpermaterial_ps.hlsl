@@ -8,6 +8,7 @@
 //   s9       = cloud texture (optional)
 //   s10      = light/noise texture (optional)
 //   s11      = low-frequency macro variation texture (optional, Route 2 / Appendix C.2)
+//   s12..s15 = per-material normal atlas pages 0..3 (Normal-map N2)
 //
 // Constant layout:
 //   c0       = (uvScaleX, uvScaleY, uvOriginX, uvOriginY)
@@ -36,6 +37,7 @@
 // 1 = winning-slot heatmap
 // 2 = sum-of-weights
 // 3 = worldXY-continuity probe (frac of worldXY * 0.05 in R/G)
+// 4 = normal-map preview (Normal-map N2; weighted-sum tangent-space normal as RGB)
 #define DEBUG_VIZ_MODE 0
 
 float4 g_controlParams : register(c0);
@@ -46,6 +48,15 @@ float4 g_noiseParams0 : register(c66);
 float4 g_noiseParams1 : register(c67);
 float4 g_slotEnableMask[8] : register(c68);
 float4 g_variationParams : register(c76);
+// @feature Ronin 10/05/2026 Normal-map N2: c77 = (numNormalPages, strength, 0, 0).
+//   .x  > 0 => sample the normal atlas at all
+//   .y      => Lambert-delta strength scalar (1.0 = full effect, 0 = no perturbation)
+float4 g_normalParams : register(c77);
+
+// @feature Ronin 11/05/2026 Normal-map N3: c78 = primary terrain light direction in
+// world space (.xyz, unit length). Same vector the CPU-side updateVB path uses for
+// per-vertex Lambert; pushed every frame by HeightMap.cpp::renderPrimaryBlendControlPass.
+float4 g_lightDir : register(c78);
 
 sampler2D atlasSampler : register(s0);
 sampler2D weightPage0 : register(s1);
@@ -59,6 +70,13 @@ sampler2D weightPage7 : register(s8);
 sampler2D cloudSampler : register(s9);
 sampler2D lightSampler : register(s10);
 sampler2D variationSampler : register(s11);
+// @feature Ronin 10/05/2026 Normal-map N2: per-material normal atlas pages. One page
+// per diffuse atlas page; same dimensions, same per-source-tile rectangles, so the
+// existing g_atlasRegionA/B tables address these without modification.
+sampler2D normalPage0 : register(s12);
+sampler2D normalPage1 : register(s13);
+sampler2D normalPage2 : register(s14);
+sampler2D normalPage3 : register(s15);
 
 struct PSInput
 {
@@ -200,6 +218,54 @@ float3 applyTerrainNoiseLayers(float3 color, float2 worldXY)
     return color;
 }
 
+// @feature Ronin 10/05/2026 Normal-map N2: per-page sampler dispatch for the normal
+// atlas. Mirrors sampleWeightPage() pattern; cap is MAX_TEXTURE_ATLAS_PAGES (4).
+float4 sampleNormalPage(int page, float2 uv)
+{
+    if (page == 0)
+        return tex2D(normalPage0, uv);
+    if (page == 1)
+        return tex2D(normalPage1, uv);
+    if (page == 2)
+        return tex2D(normalPage2, uv);
+    return tex2D(normalPage3, uv);
+}
+
+// @feature Ronin 10/05/2026 Normal-map N2: sample the per-material normal atlas for
+// active slot `slot` at the same atlas coordinates the diffuse sampler uses. Identical
+// UV math to sampleAtlasForSlot() so byte-for-byte the two atlases line up. Decodes
+// the BGRA-in-locked-rect layout: byte 0 (B) = Z, byte 1 (G) = Y, byte 2 (R) = X.
+// Returns a unit-length tangent-space normal in [-1,1]; flat default decodes to
+// (0, 0, 1) -- no perturbation.
+float3 sampleNormalForSlot(int slot, int terrainPage, float2 worldXY, float2 dWorldXYdx, float2 dWorldXYdy)
+{
+    float4 regA = g_atlasRegionA[slot];
+    float4 regB = g_atlasRegionB[slot];
+
+    float2 uvScale = regB.xy * regA.zw;
+    float2 dudx = dWorldXYdx * uvScale;
+    float2 dudy = dWorldXYdy * uvScale;
+
+    float2 fracUV = frac(worldXY * regB.xy);
+    const float kEdgeInset = 0.008f;
+    fracUV = lerp(kEdgeInset.xx, (1.0f - kEdgeInset).xx, fracUV);
+
+    float2 uv = regA.xy + fracUV * regA.zw;
+
+    // tex2Dgrad on the dynamic page index isn't legal in PS_2_0; use plain tex2D for
+    // the normal sampler. The diffuse path uses tex2Dgrad to defeat ddx/ddy seams at
+    // wrap boundaries, but the normal contributes only to lighting (not albedo) and
+    // any minor seam in the perturbation at exactly the wrap edge is invisible.
+    float4 packed = sampleNormalPage(terrainPage, uv);
+
+    // Locked-rect byte order = B,G,R,A -> HLSL .b=Z, .g=Y, .r=X.
+    float3 n;
+    n.x = packed.r * 2.0f - 1.0f;
+    n.y = packed.g * 2.0f - 1.0f;
+    n.z = packed.b * 2.0f - 1.0f;
+    return n;
+}
+
 float4 main(PSInput input) : COLOR0
 {
     float2 controlUV = (input.worldXY - g_controlParams.zw) * g_controlParams.xy;
@@ -209,6 +275,23 @@ float4 main(PSInput input) : COLOR0
     float2 dWorldXYdy = ddy(input.worldXY);
 
     float3 color = float3(0, 0, 0);
+
+    // @feature Ronin 10/05/2026 Normal-map N2: weighted-sum tangent-space normal across
+    // active slots. Default (flat) decodes to (0,0,1); the weighted-average of unit
+    // normals isn't itself unit but is renormalized at the end, which is the standard
+    // weighted-blend approach for splatted normal maps and is good enough for v1.
+    float3 nSum = float3(0, 0, 0);
+    bool sampleNormals = (g_normalParams.x > 0.5f);
+
+    // Active terrain page = the same page the diffuse atlas is bound for. The current
+    // pass renders one terrain page at a time (HeightMap.cpp's outer loop), and for the
+    // normal atlas we use the matching page index. Because slots that don't live on
+    // this page are masked out by g_slotEnableMask, we can pass terrainPage = 0 for
+    // any slot that is enabled (the per-slot region table already addresses the right
+    // sub-rect). For multi-page support the host code should pass a per-pass page
+    // index in g_normalParams.z (reserved); v1 only supports normal page 0 actively
+    // sampling and assumes 1:1 with the bound diffuse page.
+    int activeNormalPage = 0;
 
 #if DEBUG_VIZ_MODE == 2
     float wSum = 0.0f;
@@ -240,6 +323,12 @@ float4 main(PSInput input) : COLOR0
                 if (w > (1.0f / 255.0f))
                 {
                     color += w * sampleAtlasForSlot(s, input.worldXY, dWorldXYdx, dWorldXYdy);
+
+                    if (sampleNormals)
+                    {
+                        nSum += w * sampleNormalForSlot(s, activeNormalPage,
+                            input.worldXY, dWorldXYdx, dWorldXYdy);
+                    }
                 }
             }
         }
@@ -251,13 +340,61 @@ float4 main(PSInput input) : COLOR0
 #elif DEBUG_VIZ_MODE == 2
     return float4(saturate(1.0f - wSum), saturate(wSum), 0.0f, 1.0f);
 #elif DEBUG_VIZ_MODE == 3
-    // worldXY continuity probe. Should show smooth 0->1 sawtooth ramps with snap lines
-    // at the wrap boundaries -- expected with sawtooth wrap. If the snap pattern looks
-    // wrong, worldXY itself has discontinuities (different bug, look in VS / VB writes).
     float2 phase = frac(input.worldXY * 0.05f);
     return float4(phase.x, phase.y, 0.0f, 1.0f);
+#elif DEBUG_VIZ_MODE == 4
+    // Normal-map N2 preview: weighted-sum tangent normal mapped to RGB.
+    // Flat default (0,0,1) -> solid blue-purple (0.5, 0.5, 1.0).
+    // Tiles with a real _NRM asset show colored variation that follows surface detail.
+    // If you see ALL solid blue-purple, no normal art is being sampled -- check
+    // [NRM] log lines confirm `kind=tga` or `kind=dds` for at least one class.
+    float3 nViz = normalize(nSum + float3(0.0001f, 0.0001f, 1.0f));
+    return float4(nViz * 0.5f + 0.5f, 1.0f);
 #else
     float3 finalColor = color * input.color.rgb;
+
+    // @feature Ronin 11/05/2026 Normal-map N3: per-pixel Lambert correction from the
+    // weighted tangent-space normal accumulated above. Treat tangent space as world
+    // space (terrain is mostly XY-aligned, Z up) -- cheap and good enough for v1.
+    //
+    // Approach: vertex color already contains FLAT-normal Lambert from the CPU
+    // updateVB path. Compute the ratio of perturbed-normal Lambert to flat-normal
+    // Lambert and apply as a multiplicative correction. This means:
+    //   * tiles WITHOUT normal art (nSum stays ~0, normalize -> (0,0,1)) get
+    //     ratio == 1.0 -> identical to current build
+    //   * tiles WITH normal art get brightened where the normal tilts toward the
+    //     light, darkened where it tilts away
+    //
+    // No double-lighting and no tone change on existing maps; the diff is purely
+    // the high-frequency detail the normal map introduces.
+    if (sampleNormals && g_normalParams.y > 0.001f)
+    {
+        // The +(0,0,1) bias makes this safe even when nSum is identically zero
+        // (which happens in two cases: no normal art on this pixel, OR the weighted
+        // sum collapses on a slot boundary). It also acts as a mild bias toward the
+        // unperturbed normal, which damps the splat-blend boundaries.
+        float3 N = normalize(nSum + float3(0.0f, 0.0f, 1.0f));
+        float3 Nflat = float3(0.0f, 0.0f, 1.0f);
+
+        // g_lightDir.xyz is the direction TOWARD the light (engine convention --
+        // see HeightMap.cpp updateVB where lightRay = -lightPos for the vertex pass).
+        float NdotL_flat = saturate(dot(Nflat, g_lightDir.xyz));
+        float NdotL_pert = saturate(dot(N, g_lightDir.xyz));
+
+        // Floor on the divisor so a flat normal pointing away from the light
+        // doesn't blow the ratio up. 0.15 corresponds to ~80 deg from the light.
+        float ratio = NdotL_pert / max(NdotL_flat, 0.15f);
+
+        // Clamp the correction range: 0.5x..1.6x. Keeps the effect visible without
+        // crushing shadows to black or blowing highlights to pure white.
+        ratio = clamp(ratio, 0.5f, 1.6f);
+
+        // Strength control: 0 = no effect (ratio = 1), 1 = full effect.
+        ratio = lerp(1.0f, ratio, saturate(g_normalParams.y));
+
+        finalColor *= ratio;
+    }
+
     finalColor = applyTerrainNoiseLayers(finalColor, input.worldXY);
     return float4(saturate(finalColor), 1.0f);
 #endif
