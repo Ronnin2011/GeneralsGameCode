@@ -2702,7 +2702,7 @@ void HeightMapRenderObjClass::renderPrimaryBlendControlPass()
 				{
 					const float pmNormalParams[4] = {
 						(float)normalPageCount,
-						0.6f,
+						1.0f,
 						0.0f,
 						0.0f
 					};
@@ -2725,6 +2725,52 @@ void HeightMapRenderObjClass::renderPrimaryBlendControlPass()
 					const float pmLightDir[4] = { -L.x, -L.y, -L.z, 0.0f };
 					pPmDev->SetPixelShaderConstantF(78, pmLightDir, 1);
 				}
+
+				// @feature Ronin 12/05/2026 Normal-map N6: c82 = camera world position
+				// (xyz; .w unused). Consumed by the PS POM raymarch to compute the
+				// view direction V = normalize(input.worldPos - cameraPos). Cached on
+				// the BaseHeightMap base class by updateCenter(); guaranteed valid by
+				// the time we get here because updateCenter is part of the standard
+				// per-frame render path (called before terrain submission).
+				{
+					const float pmCameraPos[4] = {
+						m_lastCameraPos.X,
+						m_lastCameraPos.Y,
+						m_lastCameraPos.Z,
+						0.0f
+					};
+					pPmDev->SetPixelShaderConstantF(82, pmCameraPos, 1);
+				}
+
+				// @feature Ronin 12/05/2026 Normal-map N6: c83 = POM tunables.
+				//   .x = heightScale  (raymarch depth in MAP_XY_FACTOR units, 0.5..2.0)
+				//   .y = fadeStart    (world units; POM at full strength up to here)
+				//   .z = fadeEnd      (world units; POM fully off beyond here)
+				//   .w = enableFlag   (>0.5 => raymarch; <=0.5 => skip entirely)
+				// Enable also requires normalPageCount > 0 -- POM uses the normal atlas
+				// alpha channel as the height source, so without _NRM assets there is
+				// nothing to raymarch against. Folding both gates into c83.w lets the
+				// PS take a single-branch fast path with no per-pixel CPU-side juggling.
+				
+					{
+						const Bool pomGate =
+							TheGlobalData->m_useTerrainPOM &&
+							(normalPageCount > 0);
+						const float pmPomParams[4] = {
+							TheGlobalData->m_terrainPOMHeightScale,
+							TheGlobalData->m_terrainPOMFadeStart,
+							TheGlobalData->m_terrainPOMFadeEnd,
+							pomGate ? 1.0f : 0.0f
+						};
+						pPmDev->SetPixelShaderConstantF(83, pmPomParams, 1);
+				}
+
+				// @feature Ronin 12/05/2026 Normal-map N3 (revised): no longer pushing
+				// c79 (sun) / c80 (ambient). The revised PS rides the per-vertex Gouraud
+				// in input.color.rgb (which TOD-modulates via the CPU updateVB path) and
+				// uses the sampled normal only for a per-pixel multiplicative delta on
+				// top of that. The TOD-aware terms are therefore already in the vertex
+				// color stream; no PS-side sun/ambient constant needed.
 
 				if (useMultiPageAccumulation) {
 					if (!drewAnyContribution) {

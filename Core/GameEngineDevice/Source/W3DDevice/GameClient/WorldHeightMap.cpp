@@ -3354,6 +3354,39 @@ Bool WorldHeightMap::ensurePerMaterialNormalAtlasTextures()
 			}
 
 			if (loaded) {
+				// @feature Ronin 12/05/2026 Normal-map N6 (P1): detect near-zero alpha
+				// channel. Some authoring tools write A=0 when no height data is
+				// intended, which would make POM apply maximum displacement for every
+				// pixel of that material -- visually very wrong. If the A-channel mean
+				// across the loaded tile region is < 8/255, the author almost certainly
+				// left A at the tool's default of 0 rather than the engine's expected
+				// default of 255 (= full surface = no displacement). Force A=255
+				// throughout the tile rect, log once, and continue.
+				{
+					Int alphaSum = 0;
+					Int pixelCount = 0;
+					for (Int ay = destY; ay < destY + classExtent && ay < (Int)desc.Height; ++ay) {
+						const UnsignedByte* row =
+							(const UnsignedByte*)lr.pBits + ay * lr.Pitch;
+						for (Int ax = destX; ax < destX + classExtent && ax < (Int)desc.Width; ++ax) {
+							alphaSum += row[ax * 4 + 3];
+							++pixelCount;
+						}
+					}
+					const Int alphaMean = (pixelCount > 0) ? (alphaSum / pixelCount) : 255;
+					if (alphaMean < 8) {
+						DEBUG_LOG(("[NRM] class=%s: A-channel mean=%d (<8/255) -- alpha authored as 0 "
+							"(tool default); forcing A=255 to suppress unwanted POM displacement\n",
+							tc.name.str(), alphaMean));
+						for (Int ay = destY; ay < destY + classExtent && ay < (Int)desc.Height; ++ay) {
+							UnsignedByte* row =
+								(UnsignedByte*)lr.pBits + ay * lr.Pitch;
+							for (Int ax = destX; ax < destX + classExtent && ax < (Int)desc.Width; ++ax) {
+								row[ax * 4 + 3] = 255;
+							}
+						}
+					}
+				}
 				++loadedTiles;
 				DEBUG_LOG(("[NRM] loaded class=%s kind=%s path=%s page=%d rect=%d,%d ext=%d",
 					tc.name.str(), loadedFromKind, loadedFromPath, page, destX, destY, classExtent));

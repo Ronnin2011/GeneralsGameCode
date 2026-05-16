@@ -27,6 +27,10 @@ struct VSOutput
     float2 uvBase : TEXCOORD0;
     float2 uvBlend : TEXCOORD1;
     float2 worldXY : TEXCOORD2;
+    // @feature Ronin 11/05/2026 Normal-map N3: full world position (xyz) so the PS
+    // can ddx/ddy it to derive the analytical heightfield normal per pixel. No VB or
+    // FVF change -- the position is already in the input stream as input.pos.
+    float3 worldPos : TEXCOORD3;
 };
 
 VSOutput main(VSInput input)
@@ -38,6 +42,7 @@ VSOutput main(VSInput input)
     output.uvBase = input.uvBase;
     output.uvBlend = input.uvBlend;
     output.worldXY = input.pos.xy;
+    output.worldPos = input.pos.xyz;
 
     return output;
 }

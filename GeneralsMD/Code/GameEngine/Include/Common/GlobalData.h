@@ -136,6 +136,26 @@ public:
 	// (A2-c2); if either prerequisite is missing the legacy path is used regardless of this
 	// toggle. See docs/Terrain_Splat_Map_Design.md S20 A2-d.
 	Bool m_useS20PerMaterialSplat;
+	// @feature Ronin 12/05/2026 Normal-map N6: Parallax Occlusion Mapping (POM) toggle and
+	// tunables. Unlike the normal-map feature -- which is gated for free by
+	// m_useS20PerMaterialSplat (kills the per-material PS entirely) AND by per-asset _NRM
+	// presence (g_normalParams.x = normalPageCount, collapses the Lambert delta when zero) --
+	// POM has measurable PS cost (~30..80 ALU + up to 20 height-tap texture reads), so this
+	// IS player-relevant and gets its own toggle. Defaults TRUE; flip FALSE in INI or via
+	// future Options UI to skip the raymarch at near-zero cost. The PS reads c83.w as the
+	// gate, so toggling this on/off does not require a PSO rebuild.
+	// HeightScale is in MAP_XY_FACTOR units (0.5..2.0 typical; 1.0 default). FadeStart /
+	// FadeEnd are in world units; POM linearly fades to zero between them, fully off beyond
+	// FadeEnd. See docs/Terrain_Normal_Map_Design_NEW.md section 4 N6.
+	Bool m_useTerrainPOM;
+	// @feature Ronin 12/05/2026 Normal-map N6: POM tunables. Kept in GameData.ini
+	// (not Options.ini) because they are artist/dev knobs, not user-facing options.
+	// Defaults set in GlobalData::GlobalData(). See docs/Terrain_Normal_Map_Design_NEW.md
+	// section 4 N6.2 for tuning guidance.
+	Real m_terrainPOMHeightScale;  ///< raymarch depth in MAP_XY_FACTOR units (0.5..2.0 typical)
+	Real m_terrainPOMFadeStart;    ///< world units; POM at full strength up to here
+	Real m_terrainPOMFadeEnd;      ///< world units; POM fully off beyond here
+
 	Bool m_useLightMap;
 	Bool m_bilinearTerrainTex;
 	Bool m_trilinearTerrainTex;

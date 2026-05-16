@@ -269,6 +269,13 @@ protected:
 	Bool m_disableTextures;
 	Bool m_needFullUpdate; ///< True if lighting changed, and we need to update all instead of what moved.
 	Bool m_doXNextTime; ///< True if we updated y scroll, and need to do x scroll next frame.
+
+	// @feature Ronin 12/05/2026 Normal-map N6: cache last camera world-space position so
+	// renderPrimaryBlendControlPass can push it as PS constant c82 for POM raymarching.
+	// Updated every updateCenter() call. Defaults to (0,0,0) -- safe because POM gate
+	// (g_pomParams.w) is independently checked in the PS.
+	Vector3 m_lastCameraPos;
+
 	Real	m_minHeight;	///<minimum value of height samples in heightmap
 	Real	m_maxHeight;	///<maximum value of height samples in heightmap
 	Bool m_showImpassableAreas; ///< If true, shade impassable areas.

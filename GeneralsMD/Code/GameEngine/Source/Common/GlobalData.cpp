@@ -91,8 +91,6 @@ GlobalData* GlobalData::m_theOriginal = nullptr;
 	{ "MultiPassTerrain",					INI::parseBool,				nullptr,			offsetof( GlobalData, m_multiPassTerrain ) },
 	{ "AdjustCliffTextures",			INI::parseBool,				nullptr,			offsetof( GlobalData, m_adjustCliffTextures ) },
 	{ "Use3WayTerrainBlends",			INI::parseInt,				nullptr,			offsetof( GlobalData, m_use3WayTerrainBlends ) },
-	// @feature Ronin 28/04/2026 Splat S20-A2d1: enables the per-material weighted splat PS.
-	// See GlobalData.h and docs/Terrain_Splat_Map_Design.md S20 A2-d.
 	{ "UseS20PerMaterialSplat",		INI::parseBool,				nullptr,			offsetof(GlobalData, m_useS20PerMaterialSplat) },
 	{ "StretchTerrain",						INI::parseBool,				nullptr,			offsetof( GlobalData, m_stretchTerrain ) },
 	{ "UseHalfHeightMap",					INI::parseBool,				nullptr,			offsetof( GlobalData, m_useHalfHeightMap ) },
@@ -647,6 +645,14 @@ GlobalData::GlobalData()
 	m_use3WayTerrainBlends = 1;
 	// @feature Ronin 28/04/2026 Splat S20-A2d1: per-material splat path is opt-in.
 	m_useS20PerMaterialSplat = FALSE;
+	// @feature Ronin 12/05/2026 Normal-map N6: POM defaults. ON by default -- the visual win
+	// at close camera is large and the cost is bounded (raymarch is faded out beyond
+	// m_terrainPOMFadeEnd, completely skipped if g_normalParams.x == 0 i.e. no _NRM assets).
+	// Players on coal burning GPUs can flip UseTerrainPOM=No in INI.
+	m_useTerrainPOM = TRUE;
+	m_terrainPOMHeightScale = 3.0f;     // raymarch depth in MAP_XY_FACTOR units
+	m_terrainPOMFadeStart = 0.0f;   // world units; tune empirically
+	m_terrainPOMFadeEnd = 1300.0f;
 	m_useLightMap = FALSE;
 	m_bilinearTerrainTex = FALSE;
 	m_trilinearTerrainTex = FALSE;
@@ -1222,6 +1228,14 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_showMoneyPerMinute = optionPref.getShowMoneyPerMinute();
 
 	TheWritableGlobalData->m_antiAliasLevel = optionPref.getAntiAliasing();
+	// @feature Ronin 12/05/2026 Splat S20 / Normal-map N6: terrain-rendering toggles are
+	// user prefs (Options.ini), not GameData.ini fields. Override after the GameData parse
+	// just like AntiAliasing does. Defaults live in the GlobalData constructor; the
+	// OptionPreferences getters fall back to those defaults when the key is absent, so
+	// pre-existing installs without these keys keep their previous behavior.
+	TheWritableGlobalData->m_useS20PerMaterialSplat = optionPref.getSplatPerMaterialEnabled();
+	TheWritableGlobalData->m_useTerrainPOM = optionPref.getTerrainPOMEnabled();
+
 
 	Int val=optionPref.getGammaValue();
 	//generate a value between 0.6 and 2.0.

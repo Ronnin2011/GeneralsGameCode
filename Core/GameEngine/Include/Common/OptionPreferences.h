@@ -113,6 +113,12 @@ public:
 	Bool getDynamicLODEnabled();
 	Bool getFPSLimitEnabled();
 	Bool getBuildingOcclusionEnabled();
+	// @feature Ronin 12/05/2026 Splat S20 / Normal-map N6: route the per-material weighted
+	// terrain splat toggle (originally GameData.ini's UseS20PerMaterialSplat) and the new
+	// Parallax Occlusion Mapping toggle through Options.ini, mirroring the AntiAliasing pattern. 
+	Bool getSplatPerMaterialEnabled() const;
+	Bool getTerrainPOMEnabled() const;
+
 	Int getParticleCap();
 
 	Int getCampaignDifficulty();

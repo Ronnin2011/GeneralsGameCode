@@ -699,6 +699,35 @@ Bool OptionPreferences::getBuildingOcclusionEnabled()
 	return FALSE;
 }
 
+// @feature Ronin 12/05/2026 Splat S20 / Normal-map N6: Options.ini gates for the two
+// terrain-rendering toggles that have measurable user-visible impact. Default fallback
+// is the corresponding GlobalData field (set in GlobalData::GlobalData() constructor),
+// so an absent Options.ini key behaves identically to "use the engine default".
+
+Bool OptionPreferences::getSplatPerMaterialEnabled() const
+{
+	OptionPreferences::const_iterator it = find("UseS20PerMaterialSplat");
+	if (it == end())
+		return TheGlobalData->m_useS20PerMaterialSplat;
+
+	if (stricmp(it->second.str(), "yes") == 0) {
+		return TRUE;
+	}
+	return FALSE;
+}
+
+Bool OptionPreferences::getTerrainPOMEnabled() const
+{
+	OptionPreferences::const_iterator it = find("UseTerrainPOM");
+	if (it == end())
+		return TheGlobalData->m_useTerrainPOM;
+
+	if (stricmp(it->second.str(), "yes") == 0) {
+		return TRUE;
+	}
+	return FALSE;
+}
+
 Int OptionPreferences::getParticleCap()
 {
 	OptionPreferences::const_iterator it = find("MaxParticleCount");

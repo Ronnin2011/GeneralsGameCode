@@ -273,6 +273,8 @@ BaseHeightMapRenderObjClass::BaseHeightMapRenderObjClass()
 	m_depthFade.Z = 0.0f;
 	m_useDepthFade = false;
 	m_disableTextures = false;
+	// @feature Ronin 12/05/2026 Normal-map N6: cached camera world pos for PS POM constant.
+	m_lastCameraPos.Set(0.0f, 0.0f, 0.0f);
 	TheTerrainRenderObject = this;
 
 	m_treeBuffer = nullptr;
@@ -2392,6 +2394,14 @@ void BaseHeightMapRenderObjClass::updateCenter(CameraClass *camera, const Vector
 	}
 	if (m_updating) {
 		return;
+	}
+
+	// @feature Ronin 12/05/2026 Normal-map N6: cache camera world pos so the per-material
+	// terrain PS path (renderPrimaryBlendControlPass) can push it as constant c82 for the
+	// POM raymarch. Captured here because updateCenter is the canonical place this class
+	// has access to the active CameraClass*.
+	if (camera != nullptr) {
+		m_lastCameraPos = camera->Get_Position();
 	}
 
 	if (m_treeBuffer) {
