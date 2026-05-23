@@ -3142,6 +3142,24 @@ Int W3DShaderManager::setShader(ShaderTypes shader, Int pass)
 	return FALSE;
 }
 
+// @feature Ronin 16/05/2026 DX9: expose the same cloud projection parameters used
+// by TerrainShader2Stage::updateNoise1 so rigid-mesh instancing shaders can sample
+// the terrain cloud field in world space and stay visually locked to terrain.
+void W3DShaderManager::getCloudMapState(float* pScale, float* pOffsetX, float* pOffsetY)
+{
+	if (pScale != nullptr) {
+		*pScale = 1.0f / (63.0f * MAP_XY_FACTOR / 2.0f);
+	}
+
+	if (pOffsetX != nullptr) {
+		*pOffsetX = terrainShader2Stage.m_xOffset;
+	}
+
+	if (pOffsetY != nullptr) {
+		*pOffsetY = terrainShader2Stage.m_yOffset;
+	}
+}
+
 // W3DShaderManager::resetShader =======================================================
 /** Must call this method after all polygons and rendering passes have been submitted.
 	This method allows D3D to reset itself to a default state that doesn't conflict

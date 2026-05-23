@@ -31,3 +31,9 @@ target_link_libraries(z_wwvegas INTERFACE
     z_ww3d2
     z_wwdownload
 )
+
+target_include_directories(z_ww3d2 PUBLIC
+    ../../../GameEngine/Include
+    ../../../GameEngineDevice/Include
+
+)

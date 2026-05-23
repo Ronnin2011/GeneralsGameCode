@@ -27,6 +27,11 @@
 #include "dx8fvf.h"
 #include "dx8caps.h"
 
+#include "Common/GlobalData.h"
+#include "W3DDevice/GameClient/W3DShaderManager.h"
+#include "assetmgr.h"
+#include "vertmaterial.h"
+
 // Global instance
 DX8InstanceManagerClass TheDX8InstanceManager;
 
@@ -71,8 +76,8 @@ bool DX8InstanceManagerClass::Init()
 		return false;
 	}
 
-	// Ronin @feature 08/03/2026 DX9: The instancing test path now uses a tiny programmable
-	// pixel shader to bypass fixed-function pixel combiner differences on AMD.
+	// Ronin @feature 08/03/2026 DX9: The instancing path uses a small programmable
+	// pixel shader instead of the fixed-function pixel combiner path.
 	if (caps.PixelShaderVersion < D3DPS_VERSION(2, 0)) {
 		WWDEBUG_SAY(("DX8InstanceManager: PS 2.0 not available, instancing disabled"));
 		m_available = false;
@@ -422,7 +427,11 @@ bool DX8InstanceManagerClass::Load_Instance_Shader()
 
 // ----------------------------------------------------------------------------
 
-void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, DWORD geometryFVF)
+void DX8InstanceManagerClass::Draw_Instanced(
+	DX8PolygonRendererClass* renderer,
+	DWORD geometryFVF,
+	LightEnvironmentClass* lightEnv,
+	VertexMaterialClass* material)
 {
 	if (m_collectedCount < 2 || !renderer) return;
 
@@ -447,16 +456,15 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 		return;
 	}
 
-	// Ronin @feature 08/03/2026 DX9: Bind a tiny programmable pixel shader for the instanced
-	// path to remove fixed-function pixel combiner behavior from the AMD investigation.
+	// Ronin @feature 08/03/2026 DX9: Bind a small programmable pixel shader for the
+	// instanced path instead of relying on fixed-function pixel combiners.
 	IDirect3DPixelShader9* selectedPS = m_instancePS;
 	if (!selectedPS) {
 		WWDEBUG_SAY(("DX8InstanceManager: Missing instancing pixel shader"));
 		return;
 	}
 
-	// 1. Lock and fill the instance VB with collected transforms
-	void* pData = nullptr;
+	// 1. Lock and fill the instance VB with collected transforms	void* pData = nullptr;
 	HRESULT hr = m_instanceVB->Lock(0, m_collectedCount * sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
 	if (FAILED(hr)) {
 		WWDEBUG_SAY(("Instance VB Lock failed: 0x%08X", hr));
@@ -514,11 +522,6 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 	}
 	dev->SetStreamSource(1, m_instanceVB, 0, sizeof(InstanceData));
 
-	// Ronin @bugfix 06/03/2026 DX9: Re-bind index buffer AFTER SetVertexDeclaration.
-	// Commented out to check if actually needed. AMD seems to require index buffer bound before draw, but not necessarily immediately after decl.
-	/*if (savedIB) {
-		dev->SetIndices(savedIB);
-	}*/
 
 	// 6. Set world transform to identity (transforms are per-instance in the shader)
 	D3DMATRIX identityMat;
@@ -542,7 +545,6 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 	{
 		float ambientR = 0.0f, ambientG = 0.0f, ambientB = 0.0f;
 
-		LightEnvironmentClass* lightEnv = DX8Wrapper::Get_Light_Environment();
 		if (lightEnv) {
 			const Vector3& eqAmb = lightEnv->Get_Equivalent_Ambient();
 			ambientR = eqAmb.X;
@@ -623,11 +625,22 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 		dev->SetVertexShaderConstantF(11, c11, 1);
 		dev->SetVertexShaderConstantF(12, c12, 1);
 
-		D3DMATERIAL9 mat;
-		dev->GetMaterial(&mat);
-		float c7[4] = { mat.Diffuse.r, mat.Diffuse.g, mat.Diffuse.b, mat.Diffuse.a };
-		float c8[4] = { mat.Emissive.r, mat.Emissive.g, mat.Emissive.b, 0.0f };
-		float c10[4] = { mat.Ambient.r, mat.Ambient.g, mat.Ambient.b, 0.0f };
+		Vector3 matDiffuse(1.0f, 1.0f, 1.0f);
+		Vector3 matEmissive(0.0f, 0.0f, 0.0f);
+		Vector3 matAmbient(1.0f, 1.0f, 1.0f);
+		float matOpacity = 1.0f;
+
+		if (material != nullptr) {
+			material->Get_Diffuse(&matDiffuse);
+			material->Get_Emissive(&matEmissive);
+			material->Get_Ambient(&matAmbient);
+			matOpacity = material->Get_Opacity();
+		}
+
+		float c7[4] = { matDiffuse.X, matDiffuse.Y, matDiffuse.Z, matOpacity };
+		float c8[4] = { matEmissive.X, matEmissive.Y, matEmissive.Z, 0.0f };
+		float c10[4] = { matAmbient.X, matAmbient.Y, matAmbient.Z, 0.0f };
+
 		dev->SetVertexShaderConstantF(7, c7, 1);
 		dev->SetVertexShaderConstantF(8, c8, 1);
 		dev->SetVertexShaderConstantF(10, c10, 1);
@@ -649,6 +662,54 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 			0.0f
 		};
 		dev->SetVertexShaderConstantF(13, c13, 1);
+	}
+
+	// Ronin @feature 17/05/2026 DX9: project the terrain cloud field onto rigid
+	// instanced meshes. The instancing path owns sampler 1 explicitly; we do NOT
+	// rely on the fixed-function rigid path having left anything on stage 1.
+	{
+		const bool cloudEnabled =
+			(TheGlobalData != nullptr) &&
+			TheGlobalData->m_useCloudMap &&
+			(geometryFVF & D3DFVF_DIFFUSE) == 0; // first cut: skip vertex-color meshes if you want — or just drop this clause
+
+		TextureClass* rigidCloudTex = nullptr;
+		if (cloudEnabled) {
+			static TextureClass* s_rigidCloudTexture = nullptr;
+			if (s_rigidCloudTexture == nullptr) {
+				WW3DAssetManager* am = WW3DAssetManager::Get_Instance();
+				if (am != nullptr) {
+					s_rigidCloudTexture = am->Get_Texture("TSCloudMed.tga", MIP_LEVELS_ALL);
+				}
+			}
+			rigidCloudTex = s_rigidCloudTexture;
+		}
+
+		const bool cloudActive = cloudEnabled && (rigidCloudTex != nullptr);
+
+		float cloudScale = 0.0f, cloudOffsetX = 0.0f, cloudOffsetY = 0.0f;
+		if (cloudActive) {
+			W3DShaderManager::getCloudMapState(&cloudScale, &cloudOffsetX, &cloudOffsetY);
+		}
+
+		const float c14[4] = { cloudActive ? 1.0f : 0.0f, cloudScale, cloudOffsetX, cloudOffsetY };
+		dev->SetVertexShaderConstantF(14, c14, 1);
+
+		const float psC0[4] = { cloudActive ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(0, psC0, 1);
+
+		if (cloudActive) {
+			IDirect3DBaseTexture9* d3dCloud = rigidCloudTex->Peek_D3D_Texture();
+			dev->SetTexture(1, d3dCloud);
+			dev->SetSamplerState(1, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(1, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(1, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(1, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+			dev->SetSamplerState(1, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+		}
+		else {
+			dev->SetTexture(1, nullptr);
+		}
 	}
 
 	// 9. Issue the instanced draw call
@@ -693,6 +754,10 @@ void DX8InstanceManagerClass::Draw_Instanced(DX8PolygonRendererClass* renderer, 
 	if (savedDecl) savedDecl->Release();
 	if (savedVS) savedVS->Release();
 	if (savedPS) savedPS->Release();
+
+	// Ronin @feature 16/05/2026 DX9: release our cloud binding so subsequent
+	// fixed-function draws don't accidentally sample it.
+	dev->SetTexture(1, nullptr);
 
 	// 13. Tell ShaderClass to re-apply its cached state on the next draw.
 	ShaderClass::Invalidate();

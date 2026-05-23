@@ -89,6 +89,9 @@ public:
 	static void init();	///<determine optimal shaders for current device.
 	static void shutdown();	///<release resources used by shaders
 	static void updateCloud();	///<update the cloud position once every render frame.
+	// @feature Ronin 16/05/2026 DX9: expose the live terrain cloud projection
+	// state so rigid-mesh shaders can sample the same moving cloud field.
+	static void getCloudMapState(float* pScale, float* pOffsetX, float* pOffsetY);
 
 	// Info for a render to texture surface for special effects.
 	static Bool m_renderingToTexture;

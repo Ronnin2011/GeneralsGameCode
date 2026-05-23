@@ -1,5 +1,6 @@
 // Ronin @bugfix 07/03/2026 DX9: Hardware instancing vertex shader variant for
 // rigid meshes whose geometry FVF does NOT provide D3DFVF_DIFFUSE / COLOR0.
+// Ronin @feature 16/05/2026 DX9: pass terrain cloud projection UVs through TEXCOORD1.
 // Compile with: fxc /T vs_3_0 /Fo RigidInstance_NoColor.vso RigidInstance_NoColor.hlsl
 
 float4x4 g_ViewProj : register(c0);
@@ -13,6 +14,7 @@ float4 g_MatAmbient : register(c10);
 float4 g_LightDir1 : register(c11);
 float4 g_LightDiffuse1 : register(c12);
 float4 g_MatSrcFlags : register(c13);
+float4 g_CloudParams : register(c14);
 
 struct VS_INPUT
 {
@@ -76,7 +78,7 @@ VS_OUTPUT main(VS_INPUT input)
     output.diffuse.a = lerp(unlitAlpha, litAlpha, lightingEnabled);
 
     output.uv0 = input.uv0;
-    output.uv1 = float2(0, 0);
+    output.uv1 = worldPos.xy * g_CloudParams.y + g_CloudParams.zw;
 
     return output;
 }

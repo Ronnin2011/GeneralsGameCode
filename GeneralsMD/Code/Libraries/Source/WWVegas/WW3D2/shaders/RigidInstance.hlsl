@@ -1,9 +1,10 @@
 // Ronin @feature 18/02/2026 DX9: Hardware instancing vertex shader for rigid meshes
 // Ronin @bugfix 21/02/2026 DX9: Match FFP lighting model (material ambient, multi-light)
 // Ronin @bugfix 21/02/2026 DX9: Respect D3DRS_DIFFUSEMATERIALSOURCE / AMBIENTMATERIALSOURCE
-// Ronin @bugfix 22/02/2026 DX9: Fix light direction convention — InputLights points toward light
+// Ronin @bugfix 22/02/2026 DX9: Fix light direction convention - InputLights points toward light
 // Ronin @bugfix 28/02/2026 DX9: Use TEXCOORD1..3 for instance data to avoid TEXCOORD gaps on AMD
-//
+// Ronin @feature 16/05/2026 DX9: pass terrain cloud projection UVs through TEXCOORD1 so
+// rigid-mesh instancing receives the same moving cloud field as terrain.
 // Compile with: fxc /T vs_3_0 /Fo RigidInstance.vso RigidInstance.hlsl
 //
 // Constant registers:
@@ -18,11 +19,7 @@
 //   c11     = Light1 direction (world-space, pointing TOWARD light source)
 //   c12     = Light1 diffuse color (RGB)
 //   c13     = Material source flags: (diffuseSrcVertex, ambientSrcVertex, emissiveSrcVertex, 0)
-//
-// Instance data on stream 1 is bound to TEXCOORD(N), TEXCOORD(N+1), TEXCOORD(N+2)
-// where N = number of texture coordinate channels in the geometry FVF.
-// For the most common case (1 UV channel), this is TEXCOORD1, TEXCOORD2, TEXCOORD3.
-// The vertex declaration built by DX8InstanceManagerClass ensures contiguous indices.
+//   c14     = Cloud params: (enabled, worldScale, offsetX, offsetY)
 
 float4x4 g_ViewProj : register(c0);
 float4 g_AmbientLight : register(c4);
@@ -35,6 +32,7 @@ float4 g_MatAmbient : register(c10);
 float4 g_LightDir1 : register(c11);
 float4 g_LightDiffuse1 : register(c12);
 float4 g_MatSrcFlags : register(c13);
+float4 g_CloudParams : register(c14);
 
 struct VS_INPUT
 {
@@ -42,12 +40,6 @@ struct VS_INPUT
     float3 normal : NORMAL;
     float4 diffuse : COLOR0;
     float2 uv0 : TEXCOORD0;
-
-    // Ronin @bugfix 28/02/2026 DX9: Instance data now uses contiguous TEXCOORD indices
-    // starting right after the geometry's last TEXCOORD. For the common case of 1 UV
-    // channel (D3DFVF_TEX1), these map to TEXCOORD1, TEXCOORD2, TEXCOORD3.
-    // For 2 UV channels they would be TEXCOORD2, TEXCOORD3, TEXCOORD4, etc.
-    // AMD drivers require no gaps in TEXCOORD usage indices within a vertex declaration.
     float4 worldRow0 : TEXCOORD1;
     float4 worldRow1 : TEXCOORD2;
     float4 worldRow2 : TEXCOORD3;
@@ -84,36 +76,19 @@ VS_OUTPUT main(VS_INPUT input)
     float hasVertexColor = g_Flags.y;
     float numLights = g_Flags.z;
 
-    // Material source selection flags (1.0 = use vertex color, 0.0 = use material)
     float diffuseSrcVertex = g_MatSrcFlags.x;
     float ambientSrcVertex = g_MatSrcFlags.y;
     float emissiveSrcVertex = g_MatSrcFlags.z;
 
-    // Select diffuse color based on D3DRS_DIFFUSEMATERIALSOURCE
     float4 effectiveDiffuse = lerp(g_MatDiffuse, input.diffuse, diffuseSrcVertex * hasVertexColor);
-
-    // Select ambient color based on D3DRS_AMBIENTMATERIALSOURCE
     float3 effectiveAmbient = lerp(g_MatAmbient.rgb, input.diffuse.rgb, ambientSrcVertex * hasVertexColor);
-
-    // Select emissive color based on D3DRS_EMISSIVEMATERIALSOURCE
     float3 effectiveEmissive = lerp(g_MatEmissive.rgb, input.diffuse.rgb, emissiveSrcVertex * hasVertexColor);
 
-    // FFP lighting model:
-    //   color = emissive + ambient * ambientLight
-    //         + sum_i( max(0, dot(N, L_i)) * lightDiffuse_i ) * diffuse
-    //
-    // g_LightDir0/1 point TOWARD the light (from LightEnvironmentClass::InputLights).
-    // dot(N, toLight) > 0 means the surface faces the light. No negation needed.
-
-    // Ambient term: effectiveAmbient * globalAmbientLight
     float3 ambientTerm = effectiveAmbient * g_AmbientLight.rgb;
 
-    // Diffuse term: accumulate per-light contributions
-    // Ronin @bugfix 22/02/2026 DX9: Remove negation — InputLights.Direction already points toward light
     float NdotL0 = max(0.0f, dot(worldNormal, g_LightDir0.xyz));
     float3 diffuseAccum = NdotL0 * g_LightDiffuse0.rgb;
 
-    // Second light (if present)
     if (numLights > 1.0f)
     {
         float NdotL1 = max(0.0f, dot(worldNormal, g_LightDir1.xyz));
@@ -124,7 +99,6 @@ VS_OUTPUT main(VS_INPUT input)
     litColor = saturate(litColor);
     float litAlpha = effectiveDiffuse.a;
 
-    // Unlit path: use vertex color if available, else white
     float3 unlitColor = lerp(float3(1, 1, 1), input.diffuse.rgb, hasVertexColor);
     float unlitAlpha = lerp(1.0f, input.diffuse.a, hasVertexColor);
 
@@ -132,7 +106,7 @@ VS_OUTPUT main(VS_INPUT input)
     output.diffuse.a = lerp(unlitAlpha, litAlpha, lightingEnabled);
 
     output.uv0 = input.uv0;
-    output.uv1 = float2(0, 0);
+    output.uv1 = worldPos.xy * g_CloudParams.y + g_CloudParams.zw;
 
     return output;
 }

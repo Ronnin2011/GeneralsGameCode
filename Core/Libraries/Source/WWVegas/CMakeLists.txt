@@ -55,3 +55,8 @@ target_link_libraries(core_wwvegas INTERFACE
     core_wwmath
     core_wwsaveload
 )
+
+target_include_directories(corei_ww3d2 INTERFACE
+    ../../../GameEngine/Include
+    ../../../GameEngineDevice/Include
+)

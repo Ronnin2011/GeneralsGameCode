@@ -64,6 +64,10 @@
 #include "meshgeometry.h"
 #include "dx8instancing.h"
 
+#include "Common/GlobalData.h"
+#include "W3DDevice/GameClient/W3DShaderManager.h"
+#include "assetmgr.h"
+
 /*
 ** Global Instance of the DX8MeshRender
 */
@@ -179,23 +183,84 @@ DEFINE_AUTO_POOL(MatPassTaskClass, 256);
 
 // ----------------------------------------------------------------------------
 
-// Ronin @bugfix 17/03/2026 DX9: Instanced batches must not mix meshes whose effective
-// lighting differs. Selection flash/tint is folded into LightEnvironmentClass in
-// RTS3DScene::renderOneObject(), so batching selected and unselected units together
-// causes the whole batch to inherit one unit's highlight state.
+// Ronin @bugfix 23/05/2026 DX9: Apply the same projected cloud layer on the
+// non-instanced rigid path so selected meshes do not pop brighter simply by
+// falling out of hardware instancing.
+// This mirrors the instanced path's visual behavior for rigid no-color meshes.
+static TextureClass* Get_Rigid_Cloud_Texture()
+{
+	static TextureClass* s_rigidCloudTexture = nullptr;
+	if (s_rigidCloudTexture == nullptr) {
+		WW3DAssetManager* am = WW3DAssetManager::Get_Instance();
+		if (am != nullptr) {
+			s_rigidCloudTexture = am->Get_Texture("TSCloudMed.tga", MIP_LEVELS_ALL);
+		}
+	}
+
+	return s_rigidCloudTexture;
+}
+
+static void Render_Rigid_Mesh_With_Optional_Fixed_Function_Cloud(
+	DX8PolygonRendererClass* renderer,
+	unsigned baseVertexOffset,
+	DWORD geometryFVF,
+	TextureClass* stage1Texture)
+{
+	if (renderer == nullptr) {
+		return;
+	}
+
+	const bool applyCloud =
+		(TheGlobalData != nullptr) &&
+		TheGlobalData->m_useCloudMap &&
+		((geometryFVF & D3DFVF_DIFFUSE) == 0) &&
+		(stage1Texture == nullptr);
+
+	if (!applyCloud) {
+		renderer->Render(baseVertexOffset);
+		return;
+	}
+
+	TextureClass* rigidCloudTex = Get_Rigid_Cloud_Texture();
+	if (rigidCloudTex == nullptr) {
+		renderer->Render(baseVertexOffset);
+		return;
+	}
+
+	// Make sure the category's normal fixed-function state is on the device before
+	// layering the projected cloud texture onto stage 1.
+	DX8Wrapper::Apply_Render_State_Changes();
+
+	W3DShaderManager::setTexture(1, rigidCloudTex);
+	W3DShaderManager::setShader(W3DShaderManager::ST_CLOUD_TEXTURE, 1);
+
+	renderer->Render(baseVertexOffset);
+
+	W3DShaderManager::resetShader(W3DShaderManager::ST_CLOUD_TEXTURE);
+	W3DShaderManager::setTexture(1, nullptr);
+}
+
+// Ronin @bugfix 17/05/2026 DX9: Stricter lightenv equivalence for instancing.
+// The earlier version returned true for (a==nullptr && b==nullptr) and used
+// pointer-equality as an early-out. Both paths could let meshes whose effective
+// lighting differs end up in the same instanced batch.
+//
+// This version:
+//   * refuses to batch when either side has no lightenv;
+//   * compares LightCount, OutputAmbient, and every InputLight's
+//     (Direction and Diffuse) bit-for-bit;
+//   * never short-circuits via pointer equality so even shared-pointer paths
+//     get a full content compare.
 static bool Light_Environments_Are_Equivalent_For_Instancing(
 	LightEnvironmentClass* a,
 	LightEnvironmentClass* b)
 {
-	if (a == b) {
-		return true;
-	}
-
 	if (a == nullptr || b == nullptr) {
-		return a == b;
+		return false;
 	}
 
-	if (a->Get_Light_Count() != b->Get_Light_Count()) {
+	const int countA = a->Get_Light_Count();
+	if (countA != b->Get_Light_Count()) {
 		return false;
 	}
 
@@ -203,7 +268,7 @@ static bool Light_Environments_Are_Equivalent_For_Instancing(
 		return false;
 	}
 
-	for (int i = 0; i < a->Get_Light_Count(); ++i) {
+	for (int i = 0; i < countA; ++i) {
 		if (!(a->Get_Light_Direction(i) == b->Get_Light_Direction(i))) {
 			return false;
 		}
@@ -1829,6 +1894,9 @@ void DX8TextureCategoryClass::Render()
 
 	DX8Wrapper::Set_Shader(theShader);
 
+	const DWORD geometryFVF = container->Get_FVF();
+	TextureClass* stage1Texture = Peek_Texture(1);
+
 	if (m_gForceMultiply && theShader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO) {
 		theShader.Set_Dst_Blend_Func(ShaderClass::DSTBLEND_SRC_COLOR);
 		theShader.Set_Src_Blend_Func(ShaderClass::SRCBLEND_ZERO);
@@ -1876,6 +1944,8 @@ void DX8TextureCategoryClass::Render()
 			fvfHasNormals &&
 			(fvfTexCount == 1) &&
 			!usesAdditionalTextureStages;
+
+		const unsigned minInstancedBatchSize = 2u;
 
 		// Ronin @bugfix 07/03/2026 DX9: The instancing shader requires geometry TEXCOORD0.
 		// After fixing the vertex declaration to expose only TEXCOORD0 from stream 0 and
@@ -1935,19 +2005,12 @@ void DX8TextureCategoryClass::Render()
 			}
 
 			// If we found >= 2 eligible instances, collect and draw them instanced.
-			if (best_count < 2 || best_renderer == nullptr)
-				break;
+			if (best_count < minInstancedBatchSize || best_renderer == nullptr)
+				break;				
 
-			// Found a batchable group \97 collect transforms and splice them out.
+			// Found a batchable group; collect transforms and splice them out.
 			found_batch = true;
 			TheDX8InstanceManager.Reset_Collection();
-
-			// Ronin @bugfix 23/02/2026 DX9: Count how many tasks we had BEFORE splicing
-			unsigned pre_splice_count = 0;
-			{
-				PolyRenderTaskClass* dbg = render_task_head;
-				while (dbg) { pre_splice_count++; dbg = dbg->Get_Next_Visible(); }
-			}
 
 			PolyRenderTaskClass* prt_i = render_task_head;
 			PolyRenderTaskClass* last_prt_i = nullptr;
@@ -1977,12 +2040,10 @@ void DX8TextureCategoryClass::Render()
 						(const float*)&tm[1],
 						(const float*)&tm[2]);
 
-					// Apply lighting from the first collected instance
+					// Ronin @bugfix 17/05/2026 DX9: The instancing shader now receives
+					// the batch light environment explicitly through Draw_Instanced().
+					// Do not source it from DX8Wrapper global light state here.
 					if (TheDX8InstanceManager.Get_Collected_Count() == 1) {
-						LightEnvironmentClass* lenv = mesh->Get_Lighting_Environment();
-						if (lenv != nullptr) {
-							DX8Wrapper::Set_Light_Environment(lenv);
-						}
 						DX8Wrapper::Apply_Render_State_Changes();
 					}
 
@@ -2002,22 +2063,16 @@ void DX8TextureCategoryClass::Render()
 				prt_i = next_prt_i;
 			}
 
-			// Ronin @bugfix 23/02/2026 DX9: Count how many tasks remain AFTER splicing
-			unsigned post_splice_count = 0;
-			{
-				PolyRenderTaskClass* dbg = render_task_head;
-				while (dbg) { post_splice_count++; dbg = dbg->Get_Next_Visible(); }
-			}
-
 			unsigned collected = TheDX8InstanceManager.Get_Collected_Count();
-			/*WWDEBUG_SAY(("INST BATCH: best_count=%u collected=%u pre=%u post=%u removed=%u renderer=%p",
-				best_count, collected, pre_splice_count, post_splice_count,
-				pre_splice_count - post_splice_count, best_renderer));*/
 
-				// Issue the instanced draw call for this renderer group
-			if (collected >= 2) {
+			// Issue the instanced draw call for this renderer group
+			if (collected >= minInstancedBatchSize) {
 
-				TheDX8InstanceManager.Draw_Instanced(best_renderer, container->Get_FVF());
+					TheDX8InstanceManager.Draw_Instanced(
+						best_renderer,
+						container->Get_FVF(),
+						best_light_env,
+						vmaterial);
 
 				// Restore DX8Wrapper-tracked state after instanced draw
 				DX8Wrapper::BindLayoutFVF(container->Get_FVF(), "DX8TextureCategoryClass::Render post-instancing restore");
@@ -2030,45 +2085,6 @@ void DX8TextureCategoryClass::Render()
 				DX8Wrapper::Apply_Render_State_Changes();
 			}
 		}
-		/*
-		// Ronin @bugfix 24/02/2026 DX9: Diagnostic to identify why remaining tasks aren't eligible for instancing
-#ifdef WWDEBUG
-		if (TheDX8InstanceManager.Is_Enabled() && render_task_head != nullptr) {
-			unsigned total_tasks = 0;
-			unsigned strip_tasks = 0;
-			unsigned skin_tasks = 0;
-			unsigned sort_tasks = 0;
-			unsigned aligned_tasks = 0;
-			unsigned alpha_tasks = 0;
-			unsigned scale_tasks = 0;
-			unsigned overflow_tasks = 0;
-			unsigned userdata_tasks = 0;
-			unsigned singleton_eligible = 0;
-
-			// First pass: count rejection reasons
-			PolyRenderTaskClass* dbg = render_task_head;
-			while (dbg) {
-				total_tasks++;
-				DX8PolygonRendererClass* r = dbg->Peek_Polygon_Renderer();
-				MeshClass* m = dbg->Peek_Mesh();
-				if (m->Get_Base_Vertex_Offset() == VERTEX_BUFFER_OVERFLOW) { overflow_tasks++; }
-				else if (m->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN)) { skin_tasks++; }
-				else if (r->Is_Strip()) { strip_tasks++; }
-				else if (!!m->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) { sort_tasks++; }
-				else if (m->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED) || m->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED)) { aligned_tasks++; }
-				else if (m->Get_Alpha_Override() != 1.0f) { alpha_tasks++; }
-				else if (m->Get_User_Data() && *(int*)m->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE) { userdata_tasks++; }
-				else if (m->Get_ObjectScale() != 1.0f) { scale_tasks++; }
-				else { singleton_eligible++; }
-				dbg = dbg->Get_Next_Visible();
-			}
-
-			if (total_tasks > 0) {
-				WWDEBUG_SAY(("INST FILTER: total=%u strip=%u skin=%u sort=%u aligned=%u alpha=%u userdata=%u scale=%u overflow=%u singleton=%u",
-					total_tasks, strip_tasks, skin_tasks, sort_tasks, aligned_tasks, alpha_tasks, userdata_tasks, scale_tasks, overflow_tasks, singleton_eligible));
-			}
-		}
-#endif*/
 	}
 
 
@@ -2267,7 +2283,11 @@ void DX8TextureCategoryClass::Render()
 					DX8Wrapper::Apply_Render_State_Changes();
 					DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF,(int)((float)0x60*mesh->Get_Alpha_Override()));
 
-					renderer->Render(mesh->Get_Base_Vertex_Offset());
+					Render_Rigid_Mesh_With_Optional_Fixed_Function_Cloud(
+						renderer,
+						mesh->Get_Base_Vertex_Offset(),
+						geometryFVF,
+						stage1Texture);
 
 					DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF,0x60);
 					vmaterial->Set_Opacity(oldOpacity);	//restore previous value
@@ -2275,7 +2295,11 @@ void DX8TextureCategoryClass::Render()
 					DX8Wrapper::Set_Shader(theShader);	//restore previous value
 				}
 				else
-					renderer->Render(mesh->Get_Base_Vertex_Offset());
+					Render_Rigid_Mesh_With_Optional_Fixed_Function_Cloud(
+						renderer,
+						mesh->Get_Base_Vertex_Offset(),
+						geometryFVF,
+						stage1Texture);
 
 				if (oldMapper)	//did we override the uv offset?
 				{	oldMapper->Set_LastUsedSyncTime(oldUVOffsetSyncTime);
@@ -2285,7 +2309,11 @@ void DX8TextureCategoryClass::Render()
 				DX8Wrapper::Set_Material(vmaterial);	//restore previous material.
 			}
 			else
-				renderer->Render(mesh->Get_Base_Vertex_Offset());
+				Render_Rigid_Mesh_With_Optional_Fixed_Function_Cloud(
+					renderer,
+					mesh->Get_Base_Vertex_Offset(),
+					geometryFVF,
+					stage1Texture);
 		}
 //--------------------------------------------------------------------
 		if (mesh->Get_ObjectScale() != 1.0f)

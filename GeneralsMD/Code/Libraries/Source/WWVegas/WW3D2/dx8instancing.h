@@ -22,11 +22,10 @@
 
 #include <d3d9.h>
 #include "always.h"
-#include "wwdebug.h"
 
-class MeshClass;
 class DX8PolygonRendererClass;
-class PolyRenderTaskClass;
+class LightEnvironmentClass;
+class VertexMaterialClass;
 
 /**
 ** DX8InstanceManagerClass
@@ -90,7 +89,11 @@ public:
 	** @param renderer      The polygon renderer that defines the index range
 	** @param geometryFVF   The FVF of the stream 0 vertex buffer (used to build the combined declaration)
 	*/
-	void Draw_Instanced(DX8PolygonRendererClass* renderer, DWORD geometryFVF);
+	void Draw_Instanced(
+		DX8PolygonRendererClass* renderer,
+		DWORD geometryFVF,
+		LightEnvironmentClass* lightEnv,
+		VertexMaterialClass* material);
 
 	/**
 	** Reset the collection buffer for a new batch of instances.
