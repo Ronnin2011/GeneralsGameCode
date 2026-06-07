@@ -35,6 +35,236 @@
 // Global instance
 DX8InstanceManagerClass TheDX8InstanceManager;
 
+// Ronin @feature 23/05/2026 DX9 R2/R3: resolver lives in dx8renderer.cpp.
+extern TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture);
+
+namespace
+{
+	struct RigidShaderLightingConstants
+	{
+		float c4[4];
+		float c5[4];
+		float c6[4];
+		float c7[4];
+		float c8[4];
+		float c9[4];
+		float c10[4];
+		float c11[4];
+		float c12[4];
+		float c13[4];
+		float numLights;
+	};
+
+	static void Upload_Rigid_View_Projection(IDirect3DDevice9* dev, D3DXMATRIX* dxViewOut)
+	{
+		D3DMATRIX viewMat, projMat;
+		dev->GetTransform(D3DTS_VIEW, &viewMat);
+		dev->GetTransform(D3DTS_PROJECTION, &projMat);
+
+		D3DXMATRIX dxView(viewMat), dxProj(projMat), dxViewProj;
+		D3DXMatrixMultiply(&dxViewProj, &dxView, &dxProj);
+
+		D3DXMATRIX dxViewProjT;
+		D3DXMatrixTranspose(&dxViewProjT, &dxViewProj);
+		dev->SetVertexShaderConstantF(0, (const float*)&dxViewProjT, 4);
+
+		if (dxViewOut != nullptr) {
+			*dxViewOut = dxView;
+		}
+	}
+
+	static void Build_Rigid_Shader_Lighting_Constants(
+		IDirect3DDevice9* dev,
+		DWORD geometryFVF,
+		LightEnvironmentClass* lightEnv,
+		VertexMaterialClass* material,
+		const D3DXMATRIX& dxView,
+		RigidShaderLightingConstants* outConstants)
+	{
+		if (outConstants == nullptr) {
+			return;
+		}
+
+		memset(outConstants, 0, sizeof(*outConstants));
+
+		float ambientR = 0.0f, ambientG = 0.0f, ambientB = 0.0f;
+
+		if (lightEnv != nullptr) {
+			const Vector3& eqAmb = lightEnv->Get_Equivalent_Ambient();
+			ambientR = eqAmb.X;
+			ambientG = eqAmb.Y;
+			ambientB = eqAmb.Z;
+		}
+		else {
+			DWORD ambientDW = 0;
+			dev->GetRenderState(D3DRS_AMBIENT, &ambientDW);
+			ambientR = ((ambientDW >> 16) & 0xFF) / 255.0f;
+			ambientG = ((ambientDW >> 8) & 0xFF) / 255.0f;
+			ambientB = ((ambientDW >> 0) & 0xFF) / 255.0f;
+		}
+
+		outConstants->c4[0] = ambientR;
+		outConstants->c4[1] = ambientG;
+		outConstants->c4[2] = ambientB;
+		outConstants->c4[3] = 0.0f;
+
+		float numLights = 0.0f;
+
+		if (lightEnv != nullptr) {
+			const int envLightCount = lightEnv->Get_Light_Count();
+			for (int li = 0; li < envLightCount && numLights < 2.0f; ++li) {
+				const Vector3& worldDir = lightEnv->Get_Light_Direction(li);
+				const Vector3& diffuse = lightEnv->Get_Light_Diffuse(li);
+
+				float* dirOut = (numLights < 1.0f) ? outConstants->c5 : outConstants->c11;
+				float* diffOut = (numLights < 1.0f) ? outConstants->c6 : outConstants->c12;
+
+				dirOut[0] = worldDir.X;
+				dirOut[1] = worldDir.Y;
+				dirOut[2] = worldDir.Z;
+
+				diffOut[0] = diffuse.X;
+				diffOut[1] = diffuse.Y;
+				diffOut[2] = diffuse.Z;
+
+				numLights += 1.0f;
+			}
+		}
+		else {
+			D3DXMATRIX dxViewInv;
+			D3DXMatrixInverse(&dxViewInv, nullptr, &dxView);
+
+			for (int li = 0; li < 2; ++li) {
+				BOOL lightEnabled = FALSE;
+				dev->GetLightEnable(li, &lightEnabled);
+				if (!lightEnabled) {
+					continue;
+				}
+
+				D3DLIGHT9 light;
+				memset(&light, 0, sizeof(light));
+				dev->GetLight(li, &light);
+
+				D3DXVECTOR3 camDir(light.Direction.x, light.Direction.y, light.Direction.z);
+				D3DXVECTOR3 worldDir;
+				D3DXVec3TransformNormal(&worldDir, &camDir, &dxViewInv);
+				D3DXVec3Normalize(&worldDir, &worldDir);
+
+				float* dirOut = (numLights < 1.0f) ? outConstants->c5 : outConstants->c11;
+				float* diffOut = (numLights < 1.0f) ? outConstants->c6 : outConstants->c12;
+
+				dirOut[0] = -worldDir.x;
+				dirOut[1] = -worldDir.y;
+				dirOut[2] = -worldDir.z;
+
+				diffOut[0] = light.Diffuse.r;
+				diffOut[1] = light.Diffuse.g;
+				diffOut[2] = light.Diffuse.b;
+
+				numLights += 1.0f;
+			}
+		}
+
+		Vector3 matDiffuse(1.0f, 1.0f, 1.0f);
+		Vector3 matEmissive(0.0f, 0.0f, 0.0f);
+		Vector3 matAmbient(1.0f, 1.0f, 1.0f);
+		float matOpacity = 1.0f;
+
+		if (material != nullptr) {
+			material->Get_Diffuse(&matDiffuse);
+			material->Get_Emissive(&matEmissive);
+			material->Get_Ambient(&matAmbient);
+			matOpacity = material->Get_Opacity();
+		}
+
+		outConstants->c7[0] = matDiffuse.X;
+		outConstants->c7[1] = matDiffuse.Y;
+		outConstants->c7[2] = matDiffuse.Z;
+		outConstants->c7[3] = matOpacity;
+
+		outConstants->c8[0] = matEmissive.X;
+		outConstants->c8[1] = matEmissive.Y;
+		outConstants->c8[2] = matEmissive.Z;
+		outConstants->c8[3] = 0.0f;
+
+		outConstants->c10[0] = matAmbient.X;
+		outConstants->c10[1] = matAmbient.Y;
+		outConstants->c10[2] = matAmbient.Z;
+		outConstants->c10[3] = 0.0f;
+
+		DWORD lightingRS = FALSE;
+		dev->GetRenderState(D3DRS_LIGHTING, &lightingRS);
+		float hasVertexColorFlag = (geometryFVF & D3DFVF_DIFFUSE) ? 1.0f : 0.0f;
+		outConstants->c9[0] = lightingRS ? 1.0f : 0.0f;
+		outConstants->c9[1] = hasVertexColorFlag;
+		outConstants->c9[2] = numLights;
+		outConstants->c9[3] = 0.0f;
+
+		DWORD diffuseSrc = D3DMCS_MATERIAL, ambientSrc = D3DMCS_MATERIAL, emissiveSrc = D3DMCS_MATERIAL;
+		dev->GetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, &diffuseSrc);
+		dev->GetRenderState(D3DRS_AMBIENTMATERIALSOURCE, &ambientSrc);
+		dev->GetRenderState(D3DRS_EMISSIVEMATERIALSOURCE, &emissiveSrc);
+
+		outConstants->c13[0] = (diffuseSrc == D3DMCS_COLOR1 || diffuseSrc == D3DMCS_COLOR2) ? 1.0f : 0.0f;
+		outConstants->c13[1] = (ambientSrc == D3DMCS_COLOR1 || ambientSrc == D3DMCS_COLOR2) ? 1.0f : 0.0f;
+		outConstants->c13[2] = (emissiveSrc == D3DMCS_COLOR1 || emissiveSrc == D3DMCS_COLOR2) ? 1.0f : 0.0f;
+		outConstants->c13[3] = 0.0f;
+
+		outConstants->numLights = numLights;
+	}
+
+	static void Upload_Rigid_Shader_VS_Lighting_Constants(
+		IDirect3DDevice9* dev,
+		const RigidShaderLightingConstants& constants)
+	{
+		dev->SetVertexShaderConstantF(4, constants.c4, 1);
+		dev->SetVertexShaderConstantF(5, constants.c5, 1);
+		dev->SetVertexShaderConstantF(6, constants.c6, 1);
+		dev->SetVertexShaderConstantF(7, constants.c7, 1);
+		dev->SetVertexShaderConstantF(8, constants.c8, 1);
+		dev->SetVertexShaderConstantF(9, constants.c9, 1);
+		dev->SetVertexShaderConstantF(10, constants.c10, 1);
+		dev->SetVertexShaderConstantF(11, constants.c11, 1);
+		dev->SetVertexShaderConstantF(12, constants.c12, 1);
+		dev->SetVertexShaderConstantF(13, constants.c13, 1);
+	}
+
+	static void Upload_Rigid_Shader_PS_Lighting_Constants(
+		IDirect3DDevice9* dev,
+		const RigidShaderLightingConstants& constants)
+	{
+		dev->SetPixelShaderConstantF(3, constants.c5, 1);
+		dev->SetPixelShaderConstantF(4, constants.c6, 1);
+		dev->SetPixelShaderConstantF(5, constants.c11, 1);
+		dev->SetPixelShaderConstantF(6, constants.c12, 1);
+
+		const float psC7[4] = { constants.numLights, 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(7, psC7, 1);
+	}
+
+	static TextureClass* Get_Valid_Rigid_Cloud_Texture()
+	{
+		static TextureClass* s_rigidCloudTexture = nullptr;
+		if (s_rigidCloudTexture == nullptr) {
+			WW3DAssetManager* am = WW3DAssetManager::Get_Instance();
+			if (am != nullptr) {
+				TextureClass* candidate = am->Get_Texture("TSCloudMed.tga", MIP_LEVELS_ALL);
+				if (candidate != nullptr) {
+					candidate->Init();
+					if (!candidate->Is_Missing_Texture() && candidate->Peek_D3D_Texture() != nullptr) {
+						s_rigidCloudTexture = candidate;
+					}
+					else {
+						candidate->Release_Ref();
+					}
+				}
+			}
+		}
+
+		return s_rigidCloudTexture;
+	}
+}
+
 // ----------------------------------------------------------------------------
 
 DX8InstanceManagerClass::DX8InstanceManagerClass()
@@ -43,8 +273,11 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	, m_instanceVB(nullptr)
 	, m_instanceVS(nullptr)
 	, m_instanceVSNoColor(nullptr)
+	, m_rigidVS(nullptr)
+	, m_rigidVSNoColor(nullptr)
 	, m_instancePS(nullptr)
 	, m_declCacheCount(0)
+	, m_geometryDeclCacheCount(0)
 	, m_collectedCount(0)
 	, m_instancedDrawCalls(0)
 	, m_instancedMeshes(0)
@@ -52,6 +285,345 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	, m_lastFrameInstancedMeshes(0)
 {
 	memset(m_declCache, 0, sizeof(m_declCache));
+	memset(m_geometryDeclCache, 0, sizeof(m_geometryDeclCache));
+}
+
+// ----------------------------------------------------------------------------
+
+void DX8InstanceManagerClass::Release_Resources()
+{
+	if (m_instanceVB) { m_instanceVB->Release(); m_instanceVB = nullptr; }
+	if (m_instanceVS) { m_instanceVS->Release(); m_instanceVS = nullptr; }
+	if (m_instanceVSNoColor) { m_instanceVSNoColor->Release(); m_instanceVSNoColor = nullptr; }
+	if (m_rigidVS) { m_rigidVS->Release(); m_rigidVS = nullptr; }
+	if (m_rigidVSNoColor) { m_rigidVSNoColor->Release(); m_rigidVSNoColor = nullptr; }
+	if (m_instancePS) { m_instancePS->Release(); m_instancePS = nullptr; }
+
+	for (unsigned i = 0; i < m_declCacheCount; ++i) {
+		if (m_declCache[i].decl) {
+			m_declCache[i].decl->Release();
+			m_declCache[i].decl = nullptr;
+		}
+	}
+	m_declCacheCount = 0;
+
+	for (unsigned i = 0; i < m_geometryDeclCacheCount; ++i) {
+		if (m_geometryDeclCache[i].decl) {
+			m_geometryDeclCache[i].decl->Release();
+			m_geometryDeclCache[i].decl = nullptr;
+		}
+	}
+	m_geometryDeclCacheCount = 0;
+}
+
+// ----------------------------------------------------------------------------
+
+IDirect3DVertexDeclaration9* DX8InstanceManagerClass::Get_Or_Create_Geometry_Decl(DWORD geometryFVF)
+{
+	for (unsigned i = 0; i < m_geometryDeclCacheCount; ++i) {
+		if (m_geometryDeclCache[i].fvf == geometryFVF) {
+			return m_geometryDeclCache[i].decl;
+		}
+	}
+
+	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+	if (!dev) return nullptr;
+
+	D3DVERTEXELEMENT9 elements[20];
+	int idx = 0;
+	WORD offset = 0;
+
+	if (geometryFVF & D3DFVF_XYZ) {
+		elements[idx++] = { 0, offset, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0 };
+		offset += 12;
+	}
+	else if (geometryFVF & D3DFVF_XYZRHW) {
+		elements[idx++] = { 0, offset, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITIONT, 0 };
+		offset += 16;
+	}
+
+	if (geometryFVF & D3DFVF_NORMAL) {
+		elements[idx++] = { 0, offset, D3DDECLTYPE_FLOAT3, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_NORMAL, 0 };
+		offset += 12;
+	}
+
+	if (geometryFVF & D3DFVF_DIFFUSE) {
+		elements[idx++] = { 0, offset, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 0 };
+		offset += 4;
+	}
+
+	if (geometryFVF & D3DFVF_SPECULAR) {
+		elements[idx++] = { 0, offset, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR, 1 };
+		offset += 4;
+	}
+
+	const int texCount = (geometryFVF & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+	if (texCount > 0) {
+		elements[idx++] = { 0, offset, D3DDECLTYPE_FLOAT2, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0 };
+		offset += 8;
+	}
+
+	elements[idx] = D3DDECL_END();
+
+	IDirect3DVertexDeclaration9* newDecl = nullptr;
+	HRESULT hr = dev->CreateVertexDeclaration(elements, &newDecl);
+	if (FAILED(hr)) {
+		WWDEBUG_SAY(("DX8InstanceManager: CreateVertexDeclaration (geometry) for FVF 0x%08X failed: 0x%08X", geometryFVF, hr));
+		return nullptr;
+	}
+
+	if (m_geometryDeclCacheCount < MAX_CACHED_DECLS) {
+		m_geometryDeclCache[m_geometryDeclCacheCount].fvf = geometryFVF;
+		m_geometryDeclCache[m_geometryDeclCacheCount].decl = newDecl;
+		m_geometryDeclCacheCount++;
+	}
+	else {
+		if (m_geometryDeclCache[0].decl) {
+			m_geometryDeclCache[0].decl->Release();
+		}
+		memmove(&m_geometryDeclCache[0], &m_geometryDeclCache[1], sizeof(CachedDecl) * (MAX_CACHED_DECLS - 1));
+		m_geometryDeclCache[MAX_CACHED_DECLS - 1].fvf = geometryFVF;
+		m_geometryDeclCache[MAX_CACHED_DECLS - 1].decl = newDecl;
+	}
+
+	return newDecl;
+}
+
+// ----------------------------------------------------------------------------
+
+bool DX8InstanceManagerClass::Load_Instance_Shader()
+{
+	// Ronin @bugfix 07/03/2026 DX9: Load two instancing VS variants:
+	//  - RigidInstance.vso         for FVFs with D3DFVF_DIFFUSE / COLOR0
+	//  - RigidInstance_NoColor.vso for FVFs without vertex diffuse color
+	if (!Load_Vertex_Shader_From_File("shaders\\RigidInstance.vso", &m_instanceVS)) {
+		WWDEBUG_SAY(("DX8InstanceManager: Failed loading shaders\\RigidInstance.vso"));
+		return false;
+	}
+
+	if (!Load_Vertex_Shader_From_File("shaders\\RigidInstance_NoColor.vso", &m_instanceVSNoColor)) {
+		WWDEBUG_SAY(("DX8InstanceManager: Failed loading shaders\\RigidInstance_NoColor.vso"));
+		return false;
+	}
+
+	// Ronin @bugfix 23/05/2026 DX9 R3: Disable the non-instanced programmable
+	// rigid fallback for now. Persistent artifacts remain even after reusing the
+	// instanced shader/declaration path, so the safe behavior is to fall back to
+	// the legacy rigid renderer until the root cause is properly identified.
+	m_rigidVS = nullptr;
+	m_rigidVSNoColor = nullptr;
+
+	// Ronin @feature 08/03/2026 DX9: Use a minimal programmable pixel shader for instanced
+	// draws so AMD does not have to interpret the fixed-function pixel combiner path here.
+	if (!Load_Pixel_Shader_From_File("shaders\\RigidInstance.pso", &m_instancePS)) {
+		WWDEBUG_SAY(("DX8InstanceManager: Failed loading shaders\\RigidInstance.pso"));
+		return false;
+	}
+
+	return true;
+}
+
+// ----------------------------------------------------------------------------
+
+// Ronin @bugfix 23/05/2026 DX9 R3: Reuse the exact instanced programmable rigid path
+// for the single-mesh fallback too. The separate non-instanced VS path diverged from
+// the working instanced shader contract and produced persistent normal-map artifacts on
+// rigid meshes. Feeding one world transform through stream 1 keeps the fallback visually
+// identical to the instanced path.
+bool DX8InstanceManagerClass::Draw_Single_Rigid(
+	DX8PolygonRendererClass* renderer,
+	DWORD geometryFVF,
+	LightEnvironmentClass* lightEnv,
+	VertexMaterialClass* material,
+	TextureClass* diffuseTexture,
+	const Matrix3D& worldTransform,
+	unsigned baseVertexOffset)
+{
+	if (renderer == nullptr) {
+		return false;
+	}
+
+	TextureClass* normalMapTex = Get_Normal_Map_For_Diffuse_Texture(diffuseTexture);
+	if (normalMapTex == nullptr) {
+		return false;
+	}
+
+	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev == nullptr) {
+		return false;
+	}
+
+	IDirect3DVertexDeclaration9* instanceDecl = Get_Or_Create_Instance_Decl(geometryFVF);
+	if (instanceDecl == nullptr) {
+		return false;
+	}
+
+	const bool hasVertexColor = (geometryFVF & D3DFVF_DIFFUSE) != 0;
+	IDirect3DVertexShader9* selectedVS = hasVertexColor ? m_instanceVS : m_instanceVSNoColor;
+	IDirect3DPixelShader9* selectedPS = m_instancePS;
+	if (selectedVS == nullptr || selectedPS == nullptr || m_instanceVB == nullptr) {
+		return false;
+	}
+
+	// Make sure the category's stage-0 texture/material/shader state is already on the device
+	// before we temporarily switch to the programmable rigid fallback.
+	DX8Wrapper::Apply_Render_State_Changes();
+
+	InstanceData singleInstance;
+	memcpy(singleInstance.row0, (const float*)&worldTransform[0], sizeof(singleInstance.row0));
+	memcpy(singleInstance.row1, (const float*)&worldTransform[1], sizeof(singleInstance.row1));
+	memcpy(singleInstance.row2, (const float*)&worldTransform[2], sizeof(singleInstance.row2));
+
+	void* pData = nullptr;
+	HRESULT hr = m_instanceVB->Lock(0, sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
+	if (FAILED(hr)) {
+		WWDEBUG_SAY(("DX8InstanceManager: Single rigid instance VB lock failed: 0x%08X", hr));
+		return false;
+	}
+	memcpy(pData, &singleInstance, sizeof(singleInstance));
+	m_instanceVB->Unlock();
+
+	IDirect3DVertexBuffer9* savedVB0 = nullptr;
+	UINT savedOffset0 = 0, savedStride0 = 0;
+	dev->GetStreamSource(0, &savedVB0, &savedOffset0, &savedStride0);
+
+	IDirect3DIndexBuffer9* savedIB = nullptr;
+	dev->GetIndices(&savedIB);
+
+	DWORD savedFVF = 0;
+	dev->GetFVF(&savedFVF);
+
+	IDirect3DVertexDeclaration9* savedDecl = nullptr;
+	dev->GetVertexDeclaration(&savedDecl);
+
+	IDirect3DVertexShader9* savedVS = nullptr;
+	dev->GetVertexShader(&savedVS);
+
+	IDirect3DPixelShader9* savedPS = nullptr;
+	dev->GetPixelShader(&savedPS);
+
+	BOOL savedSoftwareVP = dev->GetSoftwareVertexProcessing();
+	if (savedSoftwareVP) {
+		dev->SetSoftwareVertexProcessing(FALSE);
+	}
+
+	dev->SetVertexDeclaration(instanceDecl);
+	dev->SetVertexShader(selectedVS);
+	dev->SetPixelShader(selectedPS);
+
+	dev->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | 1);
+	dev->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1);
+
+	if (savedVB0) {
+		dev->SetStreamSource(0, savedVB0, savedOffset0, savedStride0);
+	}
+	dev->SetStreamSource(1, m_instanceVB, 0, sizeof(InstanceData));
+
+	D3DMATRIX identityMat;
+	memset(&identityMat, 0, sizeof(identityMat));
+	identityMat._11 = identityMat._22 = identityMat._33 = identityMat._44 = 1.0f;
+	dev->SetTransform(D3DTS_WORLD, &identityMat);
+
+	D3DXMATRIX dxView;
+	Upload_Rigid_View_Projection(dev, &dxView);
+
+	RigidShaderLightingConstants lightingConstants;
+	Build_Rigid_Shader_Lighting_Constants(dev, geometryFVF, lightEnv, material, dxView, &lightingConstants);
+	Upload_Rigid_Shader_VS_Lighting_Constants(dev, lightingConstants);
+
+	{
+		const bool cloudEnabled =
+			(TheGlobalData != nullptr) &&
+			TheGlobalData->m_useCloudMap &&
+			(geometryFVF & D3DFVF_DIFFUSE) == 0;
+
+		TextureClass* rigidCloudTex = cloudEnabled ? Get_Valid_Rigid_Cloud_Texture() : nullptr;
+		const bool cloudActive = cloudEnabled && (rigidCloudTex != nullptr);
+
+		float cloudScale = 0.0f, cloudOffsetX = 0.0f, cloudOffsetY = 0.0f;
+		if (cloudActive) {
+			W3DShaderManager::getCloudMapState(&cloudScale, &cloudOffsetX, &cloudOffsetY);
+		}
+
+		const float c14[4] = { cloudActive ? 1.0f : 0.0f, cloudScale, cloudOffsetX, cloudOffsetY };
+		dev->SetVertexShaderConstantF(14, c14, 1);
+
+		const float psC0[4] = { cloudActive ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(0, psC0, 1);
+
+		const float psC1[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(1, psC1, 1);
+
+		if (cloudActive) {
+			IDirect3DBaseTexture9* d3dCloud = rigidCloudTex->Peek_D3D_Texture();
+			dev->SetTexture(1, d3dCloud);
+			dev->SetSamplerState(1, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(1, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(1, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(1, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+			dev->SetSamplerState(1, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+		}
+		else {
+			dev->SetTexture(1, nullptr);
+		}
+
+		const float psC2[4] = { 1.0f, 1.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(2, psC2, 1);
+
+		Upload_Rigid_Shader_PS_Lighting_Constants(dev, lightingConstants);
+
+		IDirect3DBaseTexture9* d3dNormal = normalMapTex->Peek_D3D_Texture();
+		dev->SetTexture(2, d3dNormal);
+		dev->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+		dev->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+	}
+
+	renderer->Render_Instanced(0);
+
+	dev->SetStreamSourceFreq(0, 1);
+	dev->SetStreamSourceFreq(1, 1);
+	dev->SetStreamSource(1, nullptr, 0, 0);
+
+	if (savedDecl) {
+		dev->SetVertexDeclaration(savedDecl);
+	}
+	else if (savedFVF != 0) {
+		dev->SetFVF(savedFVF);
+	}
+	else if (DX8Wrapper::Get_Current_FVF() != 0) {
+		dev->SetFVF(DX8Wrapper::Get_Current_FVF());
+	}
+
+	dev->SetVertexShader(savedVS);
+	dev->SetPixelShader(savedPS);
+
+	if (savedSoftwareVP) {
+		dev->SetSoftwareVertexProcessing(savedSoftwareVP);
+	}
+
+	if (savedVB0) {
+		dev->SetStreamSource(0, savedVB0, savedOffset0, savedStride0);
+	}
+	if (savedIB) {
+		dev->SetIndices(savedIB);
+	}
+
+	if (savedVB0) savedVB0->Release();
+	if (savedIB) savedIB->Release();
+	if (savedDecl) savedDecl->Release();
+	if (savedVS) savedVS->Release();
+	if (savedPS) savedPS->Release();
+
+	dev->SetTexture(1, nullptr);
+	dev->SetTexture(2, nullptr);
+
+	ShaderClass::Invalidate();
+	DX8Wrapper::Invalidate_Vertex_Buffer_State();
+
+	return true;
 }
 
 DX8InstanceManagerClass::~DX8InstanceManagerClass()
@@ -118,24 +690,6 @@ void DX8InstanceManagerClass::Shutdown()
 
 // ----------------------------------------------------------------------------
 
-void DX8InstanceManagerClass::Release_Resources()
-{
-	if (m_instanceVB) { m_instanceVB->Release(); m_instanceVB = nullptr; }
-	if (m_instanceVS) { m_instanceVS->Release(); m_instanceVS = nullptr; }
-	if (m_instanceVSNoColor) { m_instanceVSNoColor->Release(); m_instanceVSNoColor = nullptr; }
-	if (m_instancePS) { m_instancePS->Release(); m_instancePS = nullptr; }
-
-	// Ronin @bugfix 18/02/2026 DX9: Release all cached vertex declarations
-	for (unsigned i = 0; i < m_declCacheCount; ++i) {
-		if (m_declCache[i].decl) {
-			m_declCache[i].decl->Release();
-			m_declCache[i].decl = nullptr;
-		}
-	}
-	m_declCacheCount = 0;
-}
-
-// ----------------------------------------------------------------------------
 
 bool DX8InstanceManagerClass::Create_Instance_VB()
 {
@@ -398,40 +952,12 @@ bool DX8InstanceManagerClass::Load_Pixel_Shader_From_File(const char* shaderPath
 
 // ----------------------------------------------------------------------------
 
-bool DX8InstanceManagerClass::Load_Instance_Shader()
-{
-	// Ronin @bugfix 07/03/2026 DX9: Load two instancing VS variants:
-	//  - RigidInstance.vso         for FVFs with D3DFVF_DIFFUSE / COLOR0
-	//  - RigidInstance_NoColor.vso for FVFs without vertex diffuse color
-	if (!Load_Vertex_Shader_From_File("shaders\\RigidInstance.vso", &m_instanceVS)) {
-		WWDEBUG_SAY(("DX8InstanceManager: Failed loading shaders\\RigidInstance.vso"));
-		return false;
-	}
-
-	if (!Load_Vertex_Shader_From_File("shaders\\RigidInstance_NoColor.vso", &m_instanceVSNoColor)) {
-		WWDEBUG_SAY(("DX8InstanceManager: Failed loading shaders\\RigidInstance_NoColor.vso"));
-		return false;
-	}
-
-	// Ronin @feature 08/03/2026 DX9: Use a minimal programmable pixel shader for instanced
-	// draws so AMD does not have to interpret the fixed-function pixel combiner path here.
-	if (!Load_Pixel_Shader_From_File("shaders\\RigidInstance.pso", &m_instancePS)) {
-		WWDEBUG_SAY(("DX8InstanceManager: Failed loading shaders\\RigidInstance.pso"));
-		return false;
-	}
-
-	return true;
-}
-
-// ----------------------------------------------------------------------------
-
-// ----------------------------------------------------------------------------
-
 void DX8InstanceManagerClass::Draw_Instanced(
 	DX8PolygonRendererClass* renderer,
 	DWORD geometryFVF,
 	LightEnvironmentClass* lightEnv,
-	VertexMaterialClass* material)
+	VertexMaterialClass* material,
+	TextureClass* diffuseTexture)
 {
 	if (m_collectedCount < 2 || !renderer) return;
 
@@ -464,7 +990,8 @@ void DX8InstanceManagerClass::Draw_Instanced(
 		return;
 	}
 
-	// 1. Lock and fill the instance VB with collected transforms	void* pData = nullptr;
+	// 1. Lock and fill the instance VB with collected transforms
+	void* pData = nullptr;
 	HRESULT hr = m_instanceVB->Lock(0, m_collectedCount * sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
 	if (FAILED(hr)) {
 		WWDEBUG_SAY(("Instance VB Lock failed: 0x%08X", hr));
@@ -530,160 +1057,28 @@ void DX8InstanceManagerClass::Draw_Instanced(
 	dev->SetTransform(D3DTS_WORLD, &identityMat);
 
 	// 7. Upload ViewProjection matrix into c0..c3
-	D3DMATRIX viewMat, projMat;
-	dev->GetTransform(D3DTS_VIEW, &viewMat);
-	dev->GetTransform(D3DTS_PROJECTION, &projMat);
-
-	D3DXMATRIX dxView(viewMat), dxProj(projMat), dxViewProj;
-	D3DXMatrixMultiply(&dxViewProj, &dxView, &dxProj);
-
-	D3DXMATRIX dxViewProjT;
-	D3DXMatrixTranspose(&dxViewProjT, &dxViewProj);
-	dev->SetVertexShaderConstantF(0, (const float*)&dxViewProjT, 4);
+	D3DXMATRIX dxView;
+	Upload_Rigid_View_Projection(dev, &dxView);
 
 	// 8. Upload lighting state into VS constants c4..c13
-	{
-		float ambientR = 0.0f, ambientG = 0.0f, ambientB = 0.0f;
-
-		if (lightEnv) {
-			const Vector3& eqAmb = lightEnv->Get_Equivalent_Ambient();
-			ambientR = eqAmb.X;
-			ambientG = eqAmb.Y;
-			ambientB = eqAmb.Z;
-		}
-		else {
-			DWORD ambientDW = 0;
-			dev->GetRenderState(D3DRS_AMBIENT, &ambientDW);
-			ambientR = ((ambientDW >> 16) & 0xFF) / 255.0f;
-			ambientG = ((ambientDW >> 8) & 0xFF) / 255.0f;
-			ambientB = ((ambientDW >> 0) & 0xFF) / 255.0f;
-		}
-		float c4[4] = { ambientR, ambientG, ambientB, 0.0f };
-		dev->SetVertexShaderConstantF(4, c4, 1);
-
-		float c5[4] = { 0, 0, 0, 0 };
-		float c6[4] = { 0, 0, 0, 0 };
-		float c11[4] = { 0, 0, 0, 0 };
-		float c12[4] = { 0, 0, 0, 0 };
-		float numLights = 0.0f;
-
-		if (lightEnv) {
-			int envLightCount = lightEnv->Get_Light_Count();
-			for (int li = 0; li < envLightCount && numLights < 2.0f; ++li) {
-				const Vector3& worldDir = lightEnv->Get_Light_Direction(li);
-				const Vector3& diffuse = lightEnv->Get_Light_Diffuse(li);
-
-				float* dirOut = (numLights < 1.0f) ? c5 : c11;
-				float* diffOut = (numLights < 1.0f) ? c6 : c12;
-
-				dirOut[0] = worldDir.X;
-				dirOut[1] = worldDir.Y;
-				dirOut[2] = worldDir.Z;
-
-				diffOut[0] = diffuse.X;
-				diffOut[1] = diffuse.Y;
-				diffOut[2] = diffuse.Z;
-
-				numLights += 1.0f;
-			}
-		}
-		else {
-			D3DXMATRIX dxViewInv;
-			D3DXMatrixInverse(&dxViewInv, nullptr, &dxView);
-
-			for (int li = 0; li < 2; ++li) {
-				BOOL lightEnabled = FALSE;
-				dev->GetLightEnable(li, &lightEnabled);
-				if (!lightEnabled) continue;
-
-				D3DLIGHT9 light;
-				memset(&light, 0, sizeof(light));
-				dev->GetLight(li, &light);
-
-				D3DXVECTOR3 camDir(light.Direction.x, light.Direction.y, light.Direction.z);
-				D3DXVECTOR3 worldDir;
-				D3DXVec3TransformNormal(&worldDir, &camDir, &dxViewInv);
-				D3DXVec3Normalize(&worldDir, &worldDir);
-
-				float* dirOut = (numLights < 1.0f) ? c5 : c11;
-				float* diffOut = (numLights < 1.0f) ? c6 : c12;
-
-				dirOut[0] = -worldDir.x;
-				dirOut[1] = -worldDir.y;
-				dirOut[2] = -worldDir.z;
-
-				diffOut[0] = light.Diffuse.r;
-				diffOut[1] = light.Diffuse.g;
-				diffOut[2] = light.Diffuse.b;
-
-				numLights += 1.0f;
-			}
-		}
-
-		dev->SetVertexShaderConstantF(5, c5, 1);
-		dev->SetVertexShaderConstantF(6, c6, 1);
-		dev->SetVertexShaderConstantF(11, c11, 1);
-		dev->SetVertexShaderConstantF(12, c12, 1);
-
-		Vector3 matDiffuse(1.0f, 1.0f, 1.0f);
-		Vector3 matEmissive(0.0f, 0.0f, 0.0f);
-		Vector3 matAmbient(1.0f, 1.0f, 1.0f);
-		float matOpacity = 1.0f;
-
-		if (material != nullptr) {
-			material->Get_Diffuse(&matDiffuse);
-			material->Get_Emissive(&matEmissive);
-			material->Get_Ambient(&matAmbient);
-			matOpacity = material->Get_Opacity();
-		}
-
-		float c7[4] = { matDiffuse.X, matDiffuse.Y, matDiffuse.Z, matOpacity };
-		float c8[4] = { matEmissive.X, matEmissive.Y, matEmissive.Z, 0.0f };
-		float c10[4] = { matAmbient.X, matAmbient.Y, matAmbient.Z, 0.0f };
-
-		dev->SetVertexShaderConstantF(7, c7, 1);
-		dev->SetVertexShaderConstantF(8, c8, 1);
-		dev->SetVertexShaderConstantF(10, c10, 1);
-
-		DWORD lightingRS = FALSE;
-		dev->GetRenderState(D3DRS_LIGHTING, &lightingRS);
-		float hasVertexColorFlag = (geometryFVF & D3DFVF_DIFFUSE) ? 1.0f : 0.0f;
-		float c9[4] = { lightingRS ? 1.0f : 0.0f, hasVertexColorFlag, numLights, 0.0f };
-		dev->SetVertexShaderConstantF(9, c9, 1);
-
-		DWORD diffuseSrc = D3DMCS_MATERIAL, ambientSrc = D3DMCS_MATERIAL, emissiveSrc = D3DMCS_MATERIAL;
-		dev->GetRenderState(D3DRS_DIFFUSEMATERIALSOURCE, &diffuseSrc);
-		dev->GetRenderState(D3DRS_AMBIENTMATERIALSOURCE, &ambientSrc);
-		dev->GetRenderState(D3DRS_EMISSIVEMATERIALSOURCE, &emissiveSrc);
-		float c13[4] = {
-			(diffuseSrc == D3DMCS_COLOR1 || diffuseSrc == D3DMCS_COLOR2) ? 1.0f : 0.0f,
-			(ambientSrc == D3DMCS_COLOR1 || ambientSrc == D3DMCS_COLOR2) ? 1.0f : 0.0f,
-			(emissiveSrc == D3DMCS_COLOR1 || emissiveSrc == D3DMCS_COLOR2) ? 1.0f : 0.0f,
-			0.0f
-		};
-		dev->SetVertexShaderConstantF(13, c13, 1);
-	}
+	RigidShaderLightingConstants lightingConstants;
+	Build_Rigid_Shader_Lighting_Constants(dev, geometryFVF, lightEnv, material, dxView, &lightingConstants);
+	Upload_Rigid_Shader_VS_Lighting_Constants(dev, lightingConstants);
+	
 
 	// Ronin @feature 17/05/2026 DX9: project the terrain cloud field onto rigid
 	// instanced meshes. The instancing path owns sampler 1 explicitly; we do NOT
 	// rely on the fixed-function rigid path having left anything on stage 1.
+	// Ronin @feature 23/05/2026 DX9 R2: also resolve and bind an optional per-diffuse
+	// normal map on sampler 2 and push the PS constants the rigid PS needs to evaluate
+	// a screen-space TBN Lambert delta on top of the existing Gouraud lighting.
 	{
 		const bool cloudEnabled =
 			(TheGlobalData != nullptr) &&
 			TheGlobalData->m_useCloudMap &&
-			(geometryFVF & D3DFVF_DIFFUSE) == 0; // first cut: skip vertex-color meshes if you want — or just drop this clause
+			(geometryFVF & D3DFVF_DIFFUSE) == 0;
 
-		TextureClass* rigidCloudTex = nullptr;
-		if (cloudEnabled) {
-			static TextureClass* s_rigidCloudTexture = nullptr;
-			if (s_rigidCloudTexture == nullptr) {
-				WW3DAssetManager* am = WW3DAssetManager::Get_Instance();
-				if (am != nullptr) {
-					s_rigidCloudTexture = am->Get_Texture("TSCloudMed.tga", MIP_LEVELS_ALL);
-				}
-			}
-			rigidCloudTex = s_rigidCloudTexture;
-		}
+		TextureClass* rigidCloudTex = cloudEnabled ? Get_Valid_Rigid_Cloud_Texture() : nullptr;
 
 		const bool cloudActive = cloudEnabled && (rigidCloudTex != nullptr);
 
@@ -695,8 +1090,13 @@ void DX8InstanceManagerClass::Draw_Instanced(
 		const float c14[4] = { cloudActive ? 1.0f : 0.0f, cloudScale, cloudOffsetX, cloudOffsetY };
 		dev->SetVertexShaderConstantF(14, c14, 1);
 
+		// PS c0: cloud enable
 		const float psC0[4] = { cloudActive ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
 		dev->SetPixelShaderConstantF(0, psC0, 1);
+
+		// PS c1: debug mode (kept for parity with existing PS)
+		const float psC1[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(1, psC1, 1);
 
 		if (cloudActive) {
 			IDirect3DBaseTexture9* d3dCloud = rigidCloudTex->Peek_D3D_Texture();
@@ -709,6 +1109,40 @@ void DX8InstanceManagerClass::Draw_Instanced(
 		}
 		else {
 			dev->SetTexture(1, nullptr);
+		}
+
+		// Ronin @feature 23/05/2026 DX9 R2: resolve <diffuse>_NRM and bind on sampler 2.
+		TextureClass* normalMapTex = Get_Normal_Map_For_Diffuse_Texture(diffuseTexture);
+		const bool normalMapActive = (normalMapTex != nullptr);
+
+		// PS c2: normal-map params (enable, intensity, reserved, reserved).
+		// Intensity 1.0f matches the sampled normal exactly; lower values soften the perturbation.
+		const float psC2[4] = { normalMapActive ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(2, psC2, 1);
+
+		// PS c3..c6: forward the same two lights the VS used, so the PS can evaluate
+		// a per-pixel Lambert delta against the perturbed normal without re-querying state.
+		// Mirrors the values pushed into VS c5/c6/c11/c12 above.
+		//const float* vsLightDir0 = nullptr;
+		//const float* vsLightDiff0 = nullptr;
+		//const float* vsLightDir1 = nullptr;
+		//const float* vsLightDiff1 = nullptr;
+
+		// We already wrote these into VS constants; re-emit them as PS constants.
+		// Simpler than re-querying lightEnv with two code paths.
+		Upload_Rigid_Shader_PS_Lighting_Constants(dev, lightingConstants);
+
+		if (normalMapActive) {
+			IDirect3DBaseTexture9* d3dNormal = normalMapTex->Peek_D3D_Texture();
+			dev->SetTexture(2, d3dNormal);
+			dev->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+			dev->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+		}
+		else {
+			dev->SetTexture(2, nullptr);
 		}
 	}
 
@@ -758,6 +1192,8 @@ void DX8InstanceManagerClass::Draw_Instanced(
 	// Ronin @feature 16/05/2026 DX9: release our cloud binding so subsequent
 	// fixed-function draws don't accidentally sample it.
 	dev->SetTexture(1, nullptr);
+	// Ronin @feature 23/05/2026 DX9 R2: release rigid normal-map binding for the same reason.
+	dev->SetTexture(2, nullptr);
 
 	// 13. Tell ShaderClass to re-apply its cached state on the next draw.
 	ShaderClass::Invalidate();

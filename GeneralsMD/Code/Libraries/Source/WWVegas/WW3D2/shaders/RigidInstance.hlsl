@@ -1,25 +1,11 @@
-// Ronin @feature 18/02/2026 DX9: Hardware instancing vertex shader for rigid meshes
 // Ronin @bugfix 21/02/2026 DX9: Match FFP lighting model (material ambient, multi-light)
 // Ronin @bugfix 21/02/2026 DX9: Respect D3DRS_DIFFUSEMATERIALSOURCE / AMBIENTMATERIALSOURCE
 // Ronin @bugfix 22/02/2026 DX9: Fix light direction convention - InputLights points toward light
 // Ronin @bugfix 28/02/2026 DX9: Use TEXCOORD1..3 for instance data to avoid TEXCOORD gaps on AMD
-// Ronin @feature 16/05/2026 DX9: pass terrain cloud projection UVs through TEXCOORD1 so
-// rigid-mesh instancing receives the same moving cloud field as terrain.
+// Ronin @feature 16/05/2026 DX9: pass terrain cloud projection UVs through TEXCOORD1.
+// Ronin @feature 23/05/2026 DX9 R2: also pass world-space normal (TEXCOORD2) and world-space
+// position (TEXCOORD3) so the PS can build a screen-space TBN for rigid normal mapping.
 // Compile with: fxc /T vs_3_0 /Fo RigidInstance.vso RigidInstance.hlsl
-//
-// Constant registers:
-//   c0..c3  = ViewProjection matrix (transposed for mul(vector, matrix))
-//   c4      = Ambient light color (RGB) from LightEnv OutputAmbient
-//   c5      = Light0 direction (world-space, pointing TOWARD light source)
-//   c6      = Light0 diffuse color (RGB)
-//   c7      = Material diffuse color (RGBA)
-//   c8      = Material emissive color (RGB)
-//   c9      = Flags: (lightingEnabled, hasVertexColor, numLights, 0)
-//   c10     = Material ambient color (RGB)
-//   c11     = Light1 direction (world-space, pointing TOWARD light source)
-//   c12     = Light1 diffuse color (RGB)
-//   c13     = Material source flags: (diffuseSrcVertex, ambientSrcVertex, emissiveSrcVertex, 0)
-//   c14     = Cloud params: (enabled, worldScale, offsetX, offsetY)
 
 float4x4 g_ViewProj : register(c0);
 float4 g_AmbientLight : register(c4);
@@ -51,6 +37,8 @@ struct VS_OUTPUT
     float4 diffuse : COLOR0;
     float2 uv0 : TEXCOORD0;
     float2 uv1 : TEXCOORD1;
+    float3 worldNormal : TEXCOORD2; // R2: for PS-side normal mapping
+    float3 worldPos : TEXCOORD3; // R2: for ddx/ddy TBN reconstruction
 };
 
 VS_OUTPUT main(VS_INPUT input)
@@ -107,6 +95,8 @@ VS_OUTPUT main(VS_INPUT input)
 
     output.uv0 = input.uv0;
     output.uv1 = worldPos.xy * g_CloudParams.y + g_CloudParams.zw;
+    output.worldNormal = worldNormal;
+    output.worldPos = worldPos;
 
     return output;
 }

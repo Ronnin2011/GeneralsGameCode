@@ -68,6 +68,8 @@
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "assetmgr.h"
 
+#include "mapper.h"
+
 /*
 ** Global Instance of the DX8MeshRender
 */
@@ -183,6 +185,22 @@ DEFINE_AUTO_POOL(MatPassTaskClass, 256);
 
 // ----------------------------------------------------------------------------
 
+// Ronin @bugfix 23/05/2026 DX9 R3: The programmable rigid shader paths
+// (single-rigid fallback and hardware instancing) still sample plain UV0 and do
+// not reproduce legacy fixed-function material mappers / texture transforms.
+// Keep mapped materials on the vanilla fixed-function path until mapper parity
+// exists, otherwise reflective / scrolling / transformed UV assets render with
+// the wrong coordinates.
+static bool Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(
+	VertexMaterialClass* material)
+{
+	if (material == nullptr) {
+		return false;
+	}
+
+	return material->Peek_Mapper() != nullptr;
+}
+
 // Ronin @bugfix 23/05/2026 DX9: Apply the same projected cloud layer on the
 // non-instanced rigid path so selected meshes do not pop brighter simply by
 // falling out of hardware instancing.
@@ -193,21 +211,166 @@ static TextureClass* Get_Rigid_Cloud_Texture()
 	if (s_rigidCloudTexture == nullptr) {
 		WW3DAssetManager* am = WW3DAssetManager::Get_Instance();
 		if (am != nullptr) {
-			s_rigidCloudTexture = am->Get_Texture("TSCloudMed.tga", MIP_LEVELS_ALL);
+			TextureClass* candidate = am->Get_Texture("TSCloudMed.tga", MIP_LEVELS_ALL);
+			if (candidate != nullptr) {
+				candidate->Init();
+				if (!candidate->Is_Missing_Texture() && candidate->Peek_D3D_Texture() != nullptr) {
+					s_rigidCloudTexture = candidate;
+				}
+				else {
+					candidate->Release_Ref();
+				}
+			}
 		}
 	}
 
 	return s_rigidCloudTexture;
 }
 
-static void Render_Rigid_Mesh_With_Optional_Fixed_Function_Cloud(
+// Ronin @feature 23/05/2026 DX9: Resolve the optional rigid normal map by
+// filename convention:
+//
+//   <diffuse_basename>_NRM.dds
+//   <diffuse_basename>_NRM.tga
+//
+// The lookup is shared by both programmable rigid paths:
+//   * DX8InstanceManagerClass::Draw_Instanced()
+//   * DX8InstanceManagerClass::Draw_Single_Rigid()
+//
+// Results are cached per diffuse texture name, including negative lookups, so
+// assets without authored normal maps do not hit the asset system every draw.
+
+TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture)
+{
+	if (diffuseTexture == nullptr) {
+		return nullptr;
+	}
+
+	struct NormalMapCacheEntry
+	{
+		TextureClass* normalTex;
+	};
+
+	static std::map<StringClass, NormalMapCacheEntry> s_normalMapCache;
+
+	const StringClass& diffuseName = diffuseTexture->Get_Texture_Name();
+	if (diffuseName.Get_Length() == 0) {
+		return nullptr;
+	}
+
+	std::map<StringClass, NormalMapCacheEntry>::iterator it = s_normalMapCache.find(diffuseName);
+	if (it != s_normalMapCache.end()) {
+		return it->second.normalTex;
+	}
+
+	// Split base name from extension. If the diffuse name has no extension
+	// (synthetic textures, dynamic targets, etc.) we treat the whole string
+	// as the base name.
+	StringClass baseName = diffuseName;
+	const char* dotPtr = strrchr(baseName.str(), '.');
+	if (dotPtr != nullptr) {
+		const int dotIndex = static_cast<int>(dotPtr - baseName.str());
+		baseName.Erase(dotIndex, baseName.Get_Length() - dotIndex);
+	}
+
+	TextureClass* normalTex = nullptr;
+	WW3DAssetManager* am = WW3DAssetManager::Get_Instance();
+	if (am != nullptr) {
+		StringClass attempt;
+
+		attempt = baseName;
+		attempt += "_NRM.dds";
+		normalTex = am->Get_Texture(attempt.str(), MIP_LEVELS_ALL);
+
+		if (normalTex != nullptr) {
+			normalTex->Init();
+			if (normalTex->Is_Missing_Texture() || normalTex->Peek_D3D_Texture() == nullptr) {
+				normalTex->Release_Ref();
+				normalTex = nullptr;
+			}
+		}
+
+		if (normalTex == nullptr) {
+			attempt = baseName;
+			attempt += "_NRM.tga";
+			normalTex = am->Get_Texture(attempt.str(), MIP_LEVELS_ALL);
+
+			if (normalTex != nullptr) {
+				normalTex->Init();
+				if (normalTex->Is_Missing_Texture() || normalTex->Peek_D3D_Texture() == nullptr) {
+					normalTex->Release_Ref();
+					normalTex = nullptr;
+				}
+			}
+		}
+	}
+
+	NormalMapCacheEntry entry;
+	entry.normalTex = normalTex;
+	s_normalMapCache[diffuseName] = entry;
+	return normalTex;
+}
+
+enum RigidRenderPathType
+{
+	RIGID_RENDER_PATH_LEGACY = 0,
+	RIGID_RENDER_PATH_LEGACY_CLOUD,
+	RIGID_RENDER_PATH_SINGLE_RIGID,
+	RIGID_RENDER_PATH_INSTANCED,
+	RIGID_RENDER_PATH_SORTED,
+};
+
+static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 	DX8PolygonRendererClass* renderer,
 	unsigned baseVertexOffset,
 	DWORD geometryFVF,
-	TextureClass* stage1Texture)
+	TextureClass* stage0Texture,
+	TextureClass* stage1Texture,
+	bool allowProgrammableRigidFallback,
+	LightEnvironmentClass* lightEnv,
+	VertexMaterialClass* material,
+	const ShaderClass& activeShader,
+	const Matrix3D& worldTransform)
 {
 	if (renderer == nullptr) {
-		return;
+		return RIGID_RENDER_PATH_LEGACY;
+	}
+
+	const int fvfTexCount = (geometryFVF & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+
+	// Ronin @bugfix 25/05/2026 DX9 R3: Keep the programmable single-rigid fallback
+	// on the same restricted shader contract as instancing. This path is meant to
+	// preserve programmable rigid parity when a mesh falls out of batching, not to
+	// replace every legacy rigid draw. For now it stays limited to opaque, TEX1,
+	// stage0-only rigid draws without legacy-only mapper behavior.
+	const bool shaderUsesOpaqueBlend =
+		activeShader.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE &&
+		activeShader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO;
+
+	const bool canUseProgrammableFallback =
+		allowProgrammableRigidFallback &&
+		shaderUsesOpaqueBlend &&
+		((geometryFVF & D3DFVF_NORMAL) != 0) &&
+		(fvfTexCount == 1) &&
+		(stage1Texture == nullptr);
+
+	if (canUseProgrammableFallback &&
+		TheDX8InstanceManager.Draw_Single_Rigid(
+			renderer,
+			geometryFVF,
+			lightEnv,
+			material,
+			stage0Texture,
+			worldTransform,
+			baseVertexOffset)) {
+
+		DX8Wrapper::BindLayoutFVF(geometryFVF, "Render_Rigid_Mesh_With_Optional_Programmable_Effects post-R3 restore");
+		DX8Wrapper::Set_Texture(0, stage0Texture);
+		DX8Wrapper::Set_Texture(1, stage1Texture);
+		DX8Wrapper::Set_Material(material);
+		DX8Wrapper::Set_Shader(activeShader);
+		DX8Wrapper::Apply_Render_State_Changes();
+		return RIGID_RENDER_PATH_SINGLE_RIGID;
 	}
 
 	const bool applyCloud =
@@ -218,17 +381,15 @@ static void Render_Rigid_Mesh_With_Optional_Fixed_Function_Cloud(
 
 	if (!applyCloud) {
 		renderer->Render(baseVertexOffset);
-		return;
+		return RIGID_RENDER_PATH_LEGACY;
 	}
 
 	TextureClass* rigidCloudTex = Get_Rigid_Cloud_Texture();
 	if (rigidCloudTex == nullptr) {
 		renderer->Render(baseVertexOffset);
-		return;
+		return RIGID_RENDER_PATH_LEGACY;
 	}
 
-	// Make sure the category's normal fixed-function state is on the device before
-	// layering the projected cloud texture onto stage 1.
 	DX8Wrapper::Apply_Render_State_Changes();
 
 	W3DShaderManager::setTexture(1, rigidCloudTex);
@@ -238,6 +399,8 @@ static void Render_Rigid_Mesh_With_Optional_Fixed_Function_Cloud(
 
 	W3DShaderManager::resetShader(W3DShaderManager::ST_CLOUD_TEXTURE);
 	W3DShaderManager::setTexture(1, nullptr);
+
+	return RIGID_RENDER_PATH_LEGACY_CLOUD;
 }
 
 // Ronin @bugfix 17/05/2026 DX9: Stricter lightenv equivalence for instancing.
@@ -1936,12 +2099,28 @@ void DX8TextureCategoryClass::Render()
 			}
 		}
 
-		// Ronin @bugfix 07/03/2026 DX9: Instancing now supports both FVF variants
-		// with and without D3DFVF_DIFFUSE via separate vertex shader bytecode.
-		// Keep the temporary TEX1 / stage0-only restriction until a multi-UV or
-		// multi-stage instancing shader variant is added.
+		// Ronin @bugfix 25/05/2026 DX9 R3: Instancing must stay on the same
+		// programmable contract as the single-rigid fallback. Exclude categories
+		// that still rely on legacy-only features:
+		//   * non-opaque blends, because legacy multi-pass composition has not yet
+		//     been matched in shader code;
+		//   * material mappers / texture transforms, because the programmable rigid
+		//     shaders still sample plain UV0.
+		const bool categoryUsesUnsupportedProgrammableMapping =
+			Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(vmaterial);
+
+		const bool categoryUsesOpaqueBlend =
+			theShader.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE &&
+			theShader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO;
+
+		// Ronin @bugfix 07/03/2026 DX9: Instancing is currently restricted to the
+		// rigid shader subset that has parity with the single-rigid programmable path:
+		// normals present, exactly one geometry UV set, no additional texture stages,
+		// opaque blending only, and no legacy-only mapper usage.
 		const bool instancingShaderSupported =
 			fvfHasNormals &&
+			categoryUsesOpaqueBlend &&
+			!categoryUsesUnsupportedProgrammableMapping &&
 			(fvfTexCount == 1) &&
 			!usesAdditionalTextureStages;
 
@@ -2072,7 +2251,8 @@ void DX8TextureCategoryClass::Render()
 						best_renderer,
 						container->Get_FVF(),
 						best_light_env,
-						vmaterial);
+						vmaterial,
+						Peek_Texture(0));   // Ronin @feature 23/05/2026 DX9 R2: forward diffuse texture for normal-map lookup
 
 				// Restore DX8Wrapper-tracked state after instanced draw
 				DX8Wrapper::BindLayoutFVF(container->Get_FVF(), "DX8TextureCategoryClass::Render post-instancing restore");
@@ -2172,6 +2352,20 @@ void DX8TextureCategoryClass::Render()
 		}
 #endif
 
+		// Ronin @bugfix 24/05/2026 DX9 R3: The single-rigid programmable fallback
+		// must obey the same mesh contract as the instanced rigid path, minus only
+		// the instance-count requirement. (selection/material override, object scale,
+		// sorted/aligned/oriented, etc.) 
+		const bool allowProgrammableRigidFallback =
+			!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) &&
+			!(!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) &&
+			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED) &&
+			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
+			mesh->Get_Alpha_Override() == 1.0f &&
+			!(mesh->Get_User_Data() && *(int*)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE) &&
+			mesh->Get_ObjectScale() == 1.0f &&
+			!Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(vmaterial);
+
 		/*
 		** If the user is not installing LightEnvironmentClasses, we leave the lighting render
 		** states untouched.  This way they can set a couple global lights that affect the entire scene.
@@ -2270,51 +2464,74 @@ void DX8TextureCategoryClass::Render()
 				else
 					oldMapper=nullptr;
 
-				if (mesh->Get_Alpha_Override() != 1.0)
-				{
-					if (mesh->Is_Additive())
-					{	//additvie blended mesh can't switch to alpha or we will get a black outline.
-						//so adjust diffuse color instead.
-						vmaterial->Set_Diffuse(mesh->Get_Alpha_Override(),mesh->Get_Alpha_Override(),mesh->Get_Alpha_Override());
-						theAlphaShader = theShader;	//keep using additive blending.
+					if (mesh->Get_Alpha_Override() != 1.0)
+					{
+						if (mesh->Is_Additive())
+						{	//additive blended mesh can't switch to alpha or we will get a black outline.
+							//so adjust diffuse color instead.
+							vmaterial->Set_Diffuse(mesh->Get_Alpha_Override(),mesh->Get_Alpha_Override(),mesh->Get_Alpha_Override());
+							theAlphaShader = theShader;	//keep using additive blending.
+						}
+						vmaterial->Set_Opacity(mesh->Get_Alpha_Override());
+						DX8Wrapper::Set_Shader(theAlphaShader);
+						DX8Wrapper::Apply_Render_State_Changes();
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF,(int)((float)0x60*mesh->Get_Alpha_Override()));
+
+						Render_Rigid_Mesh_With_Optional_Programmable_Effects(
+							renderer,
+							mesh->Get_Base_Vertex_Offset(),
+							geometryFVF,
+							Peek_Texture(0),
+							stage1Texture,
+							allowProgrammableRigidFallback,
+							lenv,
+							vmaterial,
+							theAlphaShader,
+							*world_transform);
+
+						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF, 0x60);
+						vmaterial->Set_Opacity(oldOpacity);	//restore previous value
+						vmaterial->Set_Diffuse(oldDiffuse.X, oldDiffuse.Y, oldDiffuse.Z);
+						DX8Wrapper::Set_Shader(theShader);	//restore previous value
 					}
-					vmaterial->Set_Opacity(mesh->Get_Alpha_Override());
-					DX8Wrapper::Set_Shader(theAlphaShader);
-					DX8Wrapper::Apply_Render_State_Changes();
-					DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF,(int)((float)0x60*mesh->Get_Alpha_Override()));
+					else {
 
-					Render_Rigid_Mesh_With_Optional_Fixed_Function_Cloud(
+						Render_Rigid_Mesh_With_Optional_Programmable_Effects(
+							renderer,
+							mesh->Get_Base_Vertex_Offset(),
+							geometryFVF,
+							Peek_Texture(0),
+							stage1Texture,
+							allowProgrammableRigidFallback,
+							lenv,
+							vmaterial,
+							theShader,
+							*world_transform);
+					}
+
+					if (oldMapper)	//did we override the uv offset?
+					{
+						oldMapper->Set_LastUsedSyncTime(oldUVOffsetSyncTime);
+						oldMapper->Set_Current_UV_Offset(oldUVOffset);
+					}
+					DX8Wrapper::Set_Material(nullptr);	//force a reset of vertex material since we secretly changed opacity
+					DX8Wrapper::Set_Material(vmaterial);	//restore previous material.
+				}
+				else {
+
+					Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 						renderer,
 						mesh->Get_Base_Vertex_Offset(),
 						geometryFVF,
-						stage1Texture);
-
-					DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF,0x60);
-					vmaterial->Set_Opacity(oldOpacity);	//restore previous value
-					vmaterial->Set_Diffuse(oldDiffuse.X,oldDiffuse.Y,oldDiffuse.Z);
-					DX8Wrapper::Set_Shader(theShader);	//restore previous value
+						Peek_Texture(0),
+						stage1Texture,
+						allowProgrammableRigidFallback,
+						lenv,
+						vmaterial,
+						theShader,
+						*world_transform);
 				}
-				else
-					Render_Rigid_Mesh_With_Optional_Fixed_Function_Cloud(
-						renderer,
-						mesh->Get_Base_Vertex_Offset(),
-						geometryFVF,
-						stage1Texture);
-
-				if (oldMapper)	//did we override the uv offset?
-				{	oldMapper->Set_LastUsedSyncTime(oldUVOffsetSyncTime);
-					oldMapper->Set_Current_UV_Offset(oldUVOffset);
-				}
-				DX8Wrapper::Set_Material(nullptr);	//force a reset of vertex material since we secretly changed opacity
-				DX8Wrapper::Set_Material(vmaterial);	//restore previous material.
 			}
-			else
-				Render_Rigid_Mesh_With_Optional_Fixed_Function_Cloud(
-					renderer,
-					mesh->Get_Base_Vertex_Offset(),
-					geometryFVF,
-					stage1Texture);
-		}
 //--------------------------------------------------------------------
 		if (mesh->Get_ObjectScale() != 1.0f)
 			DX8Wrapper::Set_DX8_Render_State(D3DRS_NORMALIZENORMALS, FALSE);

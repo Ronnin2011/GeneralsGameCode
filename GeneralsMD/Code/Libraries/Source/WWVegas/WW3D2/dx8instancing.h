@@ -25,6 +25,8 @@
 
 class DX8PolygonRendererClass;
 class LightEnvironmentClass;
+class Matrix3D;
+class TextureClass;
 class VertexMaterialClass;
 
 /**
@@ -86,14 +88,30 @@ public:
 	** Caller is responsible for having already set textures, shader, material,
 	** and the geometry vertex buffer on stream 0.
 	**
-	** @param renderer      The polygon renderer that defines the index range
-	** @param geometryFVF   The FVF of the stream 0 vertex buffer (used to build the combined declaration)
+	** @param renderer         The polygon renderer that defines the index range
+	** @param geometryFVF      The FVF of the stream 0 vertex buffer
+	** @param lightEnv         Light environment for the batch (may be null)
+	** @param material         Vertex material for the batch (may be null)
+	** @param diffuseTexture   Stage-0 diffuse texture; used by R2 normal-mapping to look up <basename>_NRM
 	*/
 	void Draw_Instanced(
 		DX8PolygonRendererClass* renderer,
 		DWORD geometryFVF,
 		LightEnvironmentClass* lightEnv,
-		VertexMaterialClass* material);
+		VertexMaterialClass* material,
+		TextureClass* diffuseTexture);
+
+	// Ronin @feature 23/05/2026 DX9: R3 programmable non-instanced rigid fallback.
+	// Mirrors the instanced rigid normal-map/cloud look for meshes that fall out of
+	// hardware instancing but still match the same shader contract.
+	bool Draw_Single_Rigid(
+		DX8PolygonRendererClass* renderer,
+		DWORD geometryFVF,
+		LightEnvironmentClass* lightEnv,
+		VertexMaterialClass* material,
+		TextureClass* diffuseTexture,
+		const Matrix3D& worldTransform,
+		unsigned baseVertexOffset);
 
 	/**
 	** Reset the collection buffer for a new batch of instances.
@@ -159,11 +177,19 @@ private:
 	IDirect3DVertexBuffer9* m_instanceVB;        // Stream 1 instance buffer
 	IDirect3DVertexShader9* m_instanceVS;        // Instancing vertex shader (with COLOR0)
 	IDirect3DVertexShader9* m_instanceVSNoColor; // Instancing vertex shader (no COLOR0)
-	IDirect3DPixelShader9* m_instancePS;        // Ronin @feature 08/03/2026 DX9: Minimal pixel shader to bypass FFP pixel combiners on AMD
+	IDirect3DPixelShader9* m_instancePS;         // Ronin @feature 08/03/2026 DX9: Minimal pixel shader to bypass FFP pixel combiners on AMD
+	IDirect3DVertexShader9* m_rigidVS;           // Ronin @feature 23/05/2026 DX9 R3: Non-instanced rigid fallback VS (with COLOR0)
+	IDirect3DVertexShader9* m_rigidVSNoColor;    // Ronin @feature 23/05/2026 DX9 R3: Non-instanced rigid fallback VS (no COLOR0)
 
 	// Ronin @bugfix 18/02/2026 DX9: Per-FVF declaration cache (replaces single m_instanceDecl)
 	CachedDecl m_declCache[MAX_CACHED_DECLS];
 	unsigned   m_declCacheCount;
+
+	// Ronin @feature 23/05/2026 DX9 R3: Separate declaration cache for the
+	// non-instanced programmable rigid fallback. Unlike the instanced path, these
+	// declarations contain only stream 0 geometry elements.
+	CachedDecl m_geometryDeclCache[MAX_CACHED_DECLS];
+	unsigned   m_geometryDeclCacheCount;
 
 	// Per-frame collection buffer (CPU side, written to m_instanceVB before draw)
 	InstanceData m_instanceBuffer[MAX_INSTANCES_PER_DRAW];
@@ -178,6 +204,7 @@ private:
 	// Internal helpers
 	bool Create_Instance_VB();
 	IDirect3DVertexDeclaration9* Get_Or_Create_Instance_Decl(DWORD geometryFVF);
+	IDirect3DVertexDeclaration9* Get_Or_Create_Geometry_Decl(DWORD geometryFVF);
 	bool Load_Instance_Shader();
 	bool Load_Vertex_Shader_From_File(const char* shaderPath, IDirect3DVertexShader9** outShader);
 	bool Load_Pixel_Shader_From_File(const char* shaderPath, IDirect3DPixelShader9** outShader);
