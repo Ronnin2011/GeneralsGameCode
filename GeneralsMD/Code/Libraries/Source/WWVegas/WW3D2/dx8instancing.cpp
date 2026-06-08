@@ -52,8 +52,43 @@ namespace
 		float c11[4];
 		float c12[4];
 		float c13[4];
+		float c15[4];
+		float c16[4];
+		float c17[4];
+		float c18[4];
 		float numLights;
 	};
+
+	static void Get_Rigid_Shader_Light_Constant_Slots(
+		RigidShaderLightingConstants* constants,
+		int lightIndex,
+		float** dirOut,
+		float** diffOut)
+	{
+		*dirOut = nullptr;
+		*diffOut = nullptr;
+
+		switch (lightIndex) {
+		default:
+			break;
+		case 0:
+			*dirOut = constants->c5;
+			*diffOut = constants->c6;
+			break;
+		case 1:
+			*dirOut = constants->c11;
+			*diffOut = constants->c12;
+			break;
+		case 2:
+			*dirOut = constants->c15;
+			*diffOut = constants->c16;
+			break;
+		case 3:
+			*dirOut = constants->c17;
+			*diffOut = constants->c18;
+			break;
+		}
+	}
 
 	static void Upload_Rigid_View_Projection(IDirect3DDevice9* dev, D3DXMATRIX* dxViewOut)
 	{
@@ -108,33 +143,39 @@ namespace
 		outConstants->c4[2] = ambientB;
 		outConstants->c4[3] = 0.0f;
 
-		float numLights = 0.0f;
+		int numLights = 0;
 
 		if (lightEnv != nullptr) {
 			const int envLightCount = lightEnv->Get_Light_Count();
-			for (int li = 0; li < envLightCount && numLights < 2.0f; ++li) {
+			for (int li = 0; li < envLightCount && numLights < 4; ++li) {
 				const Vector3& worldDir = lightEnv->Get_Light_Direction(li);
 				const Vector3& diffuse = lightEnv->Get_Light_Diffuse(li);
 
-				float* dirOut = (numLights < 1.0f) ? outConstants->c5 : outConstants->c11;
-				float* diffOut = (numLights < 1.0f) ? outConstants->c6 : outConstants->c12;
+				float* dirOut = nullptr;
+				float* diffOut = nullptr;
+				Get_Rigid_Shader_Light_Constant_Slots(outConstants, numLights, &dirOut, &diffOut);
+				if (dirOut == nullptr || diffOut == nullptr) {
+					break;
+				}
 
 				dirOut[0] = worldDir.X;
 				dirOut[1] = worldDir.Y;
 				dirOut[2] = worldDir.Z;
+				dirOut[3] = 0.0f;
 
 				diffOut[0] = diffuse.X;
 				diffOut[1] = diffuse.Y;
 				diffOut[2] = diffuse.Z;
+				diffOut[3] = 0.0f;
 
-				numLights += 1.0f;
+				++numLights;
 			}
 		}
 		else {
 			D3DXMATRIX dxViewInv;
 			D3DXMatrixInverse(&dxViewInv, nullptr, &dxView);
 
-			for (int li = 0; li < 2; ++li) {
+			for (int li = 0; li < 4; ++li) {
 				BOOL lightEnabled = FALSE;
 				dev->GetLightEnable(li, &lightEnabled);
 				if (!lightEnabled) {
@@ -150,18 +191,24 @@ namespace
 				D3DXVec3TransformNormal(&worldDir, &camDir, &dxViewInv);
 				D3DXVec3Normalize(&worldDir, &worldDir);
 
-				float* dirOut = (numLights < 1.0f) ? outConstants->c5 : outConstants->c11;
-				float* diffOut = (numLights < 1.0f) ? outConstants->c6 : outConstants->c12;
+				float* dirOut = nullptr;
+				float* diffOut = nullptr;
+				Get_Rigid_Shader_Light_Constant_Slots(outConstants, numLights, &dirOut, &diffOut);
+				if (dirOut == nullptr || diffOut == nullptr) {
+					break;
+				}
 
 				dirOut[0] = -worldDir.x;
 				dirOut[1] = -worldDir.y;
 				dirOut[2] = -worldDir.z;
+				dirOut[3] = 0.0f;
 
 				diffOut[0] = light.Diffuse.r;
 				diffOut[1] = light.Diffuse.g;
 				diffOut[2] = light.Diffuse.b;
+				diffOut[3] = 0.0f;
 
-				numLights += 1.0f;
+				++numLights;
 			}
 		}
 
@@ -197,7 +244,7 @@ namespace
 		float hasVertexColorFlag = (geometryFVF & D3DFVF_DIFFUSE) ? 1.0f : 0.0f;
 		outConstants->c9[0] = lightingRS ? 1.0f : 0.0f;
 		outConstants->c9[1] = hasVertexColorFlag;
-		outConstants->c9[2] = numLights;
+		outConstants->c9[2] = (float)numLights;
 		outConstants->c9[3] = 0.0f;
 
 		DWORD diffuseSrc = D3DMCS_MATERIAL, ambientSrc = D3DMCS_MATERIAL, emissiveSrc = D3DMCS_MATERIAL;
@@ -210,7 +257,7 @@ namespace
 		outConstants->c13[2] = (emissiveSrc == D3DMCS_COLOR1 || emissiveSrc == D3DMCS_COLOR2) ? 1.0f : 0.0f;
 		outConstants->c13[3] = 0.0f;
 
-		outConstants->numLights = numLights;
+		outConstants->numLights = (float)numLights;
 	}
 
 	static void Upload_Rigid_Shader_VS_Lighting_Constants(
@@ -227,6 +274,10 @@ namespace
 		dev->SetVertexShaderConstantF(11, constants.c11, 1);
 		dev->SetVertexShaderConstantF(12, constants.c12, 1);
 		dev->SetVertexShaderConstantF(13, constants.c13, 1);
+		dev->SetVertexShaderConstantF(15, constants.c15, 1);
+		dev->SetVertexShaderConstantF(16, constants.c16, 1);
+		dev->SetVertexShaderConstantF(17, constants.c17, 1);
+		dev->SetVertexShaderConstantF(18, constants.c18, 1);
 	}
 
 	static void Upload_Rigid_Shader_PS_Lighting_Constants(
@@ -237,9 +288,13 @@ namespace
 		dev->SetPixelShaderConstantF(4, constants.c6, 1);
 		dev->SetPixelShaderConstantF(5, constants.c11, 1);
 		dev->SetPixelShaderConstantF(6, constants.c12, 1);
+		dev->SetPixelShaderConstantF(7, constants.c15, 1);
+		dev->SetPixelShaderConstantF(8, constants.c16, 1);
+		dev->SetPixelShaderConstantF(9, constants.c17, 1);
+		dev->SetPixelShaderConstantF(10, constants.c18, 1);
 
-		const float psC7[4] = { constants.numLights, 0.0f, 0.0f, 0.0f };
-		dev->SetPixelShaderConstantF(7, psC7, 1);
+		const float psC11[4] = { constants.numLights, 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(11, psC11, 1);
 	}
 
 	static TextureClass* Get_Valid_Rigid_Cloud_Texture()

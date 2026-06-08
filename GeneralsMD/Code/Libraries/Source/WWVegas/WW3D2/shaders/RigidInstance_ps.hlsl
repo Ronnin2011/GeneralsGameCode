@@ -1,4 +1,4 @@
-// Ronin @feature 16/05/2026 DX9: sample the terrain cloud field on rigid instanced meshes.
+/// Ronin @feature 16/05/2026 DX9: sample the terrain cloud field on rigid instanced meshes.
 // Ronin @bugfix 17/05/2026 DX9: gate the tex2D call behind the cloud-enabled flag.
 // Ronin @diagnostic 22/05/2026 DX9: one-shot debug output modes for the cloud path.
 // Ronin @feature 23/05/2026 DX9 R2: rigid normal mapping (phase 2).
@@ -9,6 +9,7 @@
 //     existing VS Gouraud term, mirroring the terrain N3 approach documented in
 //     docs/Terrain_Normal_Map_Design_NEW.md.
 //   * Falls back to identical previous behavior when g_NormalMapParams.x == 0.
+// Ronin @feature 07/06/2026 DX9: expand programmable rigid lighting from 2 to 4 directional lights.
 //
 // Compile with: fxc /T ps_3_0 /Fo RigidInstance.pso RigidInstance_ps.hlsl
 
@@ -23,7 +24,11 @@ float4 g_PS_LightDir0 : register(c3);
 float4 g_PS_LightDiffuse0 : register(c4);
 float4 g_PS_LightDir1 : register(c5);
 float4 g_PS_LightDiffuse1 : register(c6);
-float4 g_PS_NumLights : register(c7); // x = number of lights (0/1/2)
+float4 g_PS_LightDir2 : register(c7);
+float4 g_PS_LightDiffuse2 : register(c8);
+float4 g_PS_LightDir3 : register(c9);
+float4 g_PS_LightDiffuse3 : register(c10);
+float4 g_PS_NumLights : register(c11); // x = number of lights (0..4)
 
 struct PS_INPUT
 {
@@ -45,7 +50,6 @@ float4 main(PS_INPUT input) : COLOR0
     float3 lambertDelta = float3(0.0f, 0.0f, 0.0f);
     if (g_NormalMapParams.x > 0.0f)
     {
-        // Screen-space tangent basis from interpolants.
         float3 dPdx = ddx(input.worldPos);
         float3 dPdy = ddy(input.worldPos);
         float2 dUVdx = ddx(input.uv0);
@@ -53,7 +57,6 @@ float4 main(PS_INPUT input) : COLOR0
 
         float3 N = normalize(input.worldNormal);
 
-        // Cotangent frame (Mikktspace-style approximation without per-vertex tangents).
         float3 dPdy_cross_N = cross(dPdy, N);
         float3 N_cross_dPdx = cross(N, dPdx);
         float3 T = dPdy_cross_N * dUVdx.x + N_cross_dPdx * dUVdy.x;
@@ -62,9 +65,6 @@ float4 main(PS_INPUT input) : COLOR0
         float tLenSq = dot(T, T);
         float bLenSq = dot(B, B);
 
-        // Ronin @bugfix 23/05/2026 DX9 R3: Guard against degenerate screen-space
-        // tangent frames. Some rigid meshes produce near-zero UV derivatives on a few
-        // pixels; the old rsqrt(0) path caused NaNs / flickering artifacts.
         if (tLenSq > 1.0e-8f && bLenSq > 1.0e-8f)
         {
             float invMax = rsqrt(max(tLenSq, bLenSq));
@@ -75,8 +75,6 @@ float4 main(PS_INPUT input) : COLOR0
             nm.xy *= g_NormalMapParams.y;
             float3 perturbedN = normalize(T * nm.x + B * nm.y + N * nm.z);
 
-            // Lambert delta vs. the geometric normal so we only add the *bump-induced*
-            // shading on top of the existing VS Gouraud term — never double-count base lighting.
             float numLights = g_PS_NumLights.x;
             if (numLights > 0.0f)
             {
@@ -90,9 +88,19 @@ float4 main(PS_INPUT input) : COLOR0
                             saturate(dot(N, g_PS_LightDir1.xyz));
                 lambertDelta += dN1 * g_PS_LightDiffuse1.rgb;
             }
+            if (numLights > 2.0f)
+            {
+                float dN2 = saturate(dot(perturbedN, g_PS_LightDir2.xyz)) -
+                            saturate(dot(N, g_PS_LightDir2.xyz));
+                lambertDelta += dN2 * g_PS_LightDiffuse2.rgb;
+            }
+            if (numLights > 3.0f)
+            {
+                float dN3 = saturate(dot(perturbedN, g_PS_LightDir3.xyz)) -
+                            saturate(dot(N, g_PS_LightDir3.xyz));
+                lambertDelta += dN3 * g_PS_LightDiffuse3.rgb;
+            }
 
-            // Modulate the delta by the diffuse texel so the bump never lights up
-            // areas that are otherwise dark in the diffuse map (e.g. black decals).
             baseColor.rgb = saturate(baseColor.rgb + lambertDelta * texel.rgb);
         }
     }

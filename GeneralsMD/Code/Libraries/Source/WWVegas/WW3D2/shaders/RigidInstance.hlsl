@@ -5,6 +5,7 @@
 // Ronin @feature 16/05/2026 DX9: pass terrain cloud projection UVs through TEXCOORD1.
 // Ronin @feature 23/05/2026 DX9 R2: also pass world-space normal (TEXCOORD2) and world-space
 // position (TEXCOORD3) so the PS can build a screen-space TBN for rigid normal mapping.
+// Ronin @feature 07/06/2026 DX9: expand programmable rigid lighting from 2 to 4 directional lights.
 // Compile with: fxc /T vs_3_0 /Fo RigidInstance.vso RigidInstance.hlsl
 
 float4x4 g_ViewProj : register(c0);
@@ -19,6 +20,10 @@ float4 g_LightDir1 : register(c11);
 float4 g_LightDiffuse1 : register(c12);
 float4 g_MatSrcFlags : register(c13);
 float4 g_CloudParams : register(c14);
+float4 g_LightDir2 : register(c15);
+float4 g_LightDiffuse2 : register(c16);
+float4 g_LightDir3 : register(c17);
+float4 g_LightDiffuse3 : register(c18);
 
 struct VS_INPUT
 {
@@ -73,14 +78,30 @@ VS_OUTPUT main(VS_INPUT input)
     float3 effectiveEmissive = lerp(g_MatEmissive.rgb, input.diffuse.rgb, emissiveSrcVertex * hasVertexColor);
 
     float3 ambientTerm = effectiveAmbient * g_AmbientLight.rgb;
+    float3 diffuseAccum = float3(0.0f, 0.0f, 0.0f);
 
-    float NdotL0 = max(0.0f, dot(worldNormal, g_LightDir0.xyz));
-    float3 diffuseAccum = NdotL0 * g_LightDiffuse0.rgb;
+    if (numLights > 0.0f)
+    {
+        float NdotL0 = max(0.0f, dot(worldNormal, g_LightDir0.xyz));
+        diffuseAccum += NdotL0 * g_LightDiffuse0.rgb;
+    }
 
     if (numLights > 1.0f)
     {
         float NdotL1 = max(0.0f, dot(worldNormal, g_LightDir1.xyz));
         diffuseAccum += NdotL1 * g_LightDiffuse1.rgb;
+    }
+
+    if (numLights > 2.0f)
+    {
+        float NdotL2 = max(0.0f, dot(worldNormal, g_LightDir2.xyz));
+        diffuseAccum += NdotL2 * g_LightDiffuse2.rgb;
+    }
+
+    if (numLights > 3.0f)
+    {
+        float NdotL3 = max(0.0f, dot(worldNormal, g_LightDir3.xyz));
+        diffuseAccum += NdotL3 * g_LightDiffuse3.rgb;
     }
 
     float3 litColor = effectiveEmissive + ambientTerm + diffuseAccum * effectiveDiffuse.rgb;

@@ -2242,17 +2242,17 @@ void DX8TextureCategoryClass::Render()
 				prt_i = next_prt_i;
 			}
 
-			unsigned collected = TheDX8InstanceManager.Get_Collected_Count();
+						unsigned collected = TheDX8InstanceManager.Get_Collected_Count();
 
 			// Issue the instanced draw call for this renderer group
 			if (collected >= minInstancedBatchSize) {
 
-					TheDX8InstanceManager.Draw_Instanced(
-						best_renderer,
-						container->Get_FVF(),
-						best_light_env,
-						vmaterial,
-						Peek_Texture(0));   // Ronin @feature 23/05/2026 DX9 R2: forward diffuse texture for normal-map lookup
+				TheDX8InstanceManager.Draw_Instanced(
+					best_renderer,
+					container->Get_FVF(),
+					best_light_env,
+					vmaterial,
+					Peek_Texture(0));   // Ronin @feature 23/05/2026 DX9 R2: forward diffuse texture for normal-map lookup
 
 				// Restore DX8Wrapper-tracked state after instanced draw
 				DX8Wrapper::BindLayoutFVF(container->Get_FVF(), "DX8TextureCategoryClass::Render post-instancing restore");
