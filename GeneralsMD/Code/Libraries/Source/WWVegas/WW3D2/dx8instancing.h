@@ -119,19 +119,21 @@ public:
 	void Reset_Collection() { m_collectedCount = 0; }
 
 	/**
-	** Add a single instance world transform (Matrix3D rows) to the collection buffer.
-	** Returns true if the instance was added, false if the buffer is full.
+	** Add a single instance (world transform + its light environment) to the
+	** collection buffer. Returns true if added, false if the buffer is full.
 	**
-	** Matrix3D stores rows as Vector4: Row[i] = (m[i][0], m[i][1], m[i][2], m[i][3])
-	** which matches the InstanceData layout expected by the HLSL shader.
+	** The lighting payload is computed from lightEnv into the GPU InstanceData at
+	** draw time (see Draw_Instanced), so identically-typed meshes lit differently
+	** can still share one collection. lightEnv may be null (treated as ambient-only).
 	*/
-	bool Add_Instance_Transform(const float row0[4], const float row1[4], const float row2[4])
+	bool Add_Instance(const float row0[4], const float row1[4], const float row2[4], LightEnvironmentClass* lightEnv)
 	{
 		if (m_collectedCount >= MAX_INSTANCES_PER_DRAW) return false;
 		InstanceData& inst = m_instanceBuffer[m_collectedCount];
 		inst.row0[0] = row0[0]; inst.row0[1] = row0[1]; inst.row0[2] = row0[2]; inst.row0[3] = row0[3];
 		inst.row1[0] = row1[0]; inst.row1[1] = row1[1]; inst.row1[2] = row1[2]; inst.row1[3] = row1[3];
 		inst.row2[0] = row2[0]; inst.row2[1] = row2[1]; inst.row2[2] = row2[2]; inst.row2[3] = row2[3];
+		m_collectedLightEnv[m_collectedCount] = lightEnv;
 		m_collectedCount++;
 		return true;
 	}
@@ -144,6 +146,8 @@ public:
 	// Statistics for the draw call HUD
 	unsigned Get_Last_Frame_Instanced_Draw_Calls() const { return m_lastFrameInstancedDrawCalls; }
 	unsigned Get_Last_Frame_Instanced_Meshes() const { return m_lastFrameInstancedMeshes; }
+	unsigned Get_Last_Frame_Instanced_Mixed_Light_Draw_Calls() const { return m_lastFrameInstancedMixedLightDrawCalls; }
+	unsigned Get_Last_Frame_Instanced_Mixed_Light_Meshes() const { return m_lastFrameInstancedMixedLightMeshes; }
 	void Begin_Frame_Statistics();
 	void End_Frame_Statistics();
 	void Release_Resources();
@@ -152,17 +156,28 @@ private:
 
 	/**
 	** Per-instance data written to stream 1.
-	** This is a 4x3 world transform matrix stored as 3 float4 rows.
-	** Matches the HLSL shader's expected TEXCOORD1..TEXCOORD3 input.
+	** Transform rows (TEXCOORD1..3) come first, followed by the per-instance
+	** lighting payload (TEXCOORD4..12): ambient (rgb + numLights in .w) and up to
+	** four directional lights (direction + diffuse) matching the shared rigid
+	** lighting builder's lightenv branch.
 	*/
 	struct InstanceData
 	{
-		float row0[4]; // world matrix row 0 (m00, m01, m02, m03)
-		float row1[4]; // world matrix row 1 (m10, m11, m12, m13)
-		float row2[4]; // world matrix row 2 (m20, m21, m22, m23)
+		float row0[4]; // world matrix row 0 (m00, m01, m02, m03)  TEXCOORD1
+		float row1[4]; // world matrix row 1 (m10, m11, m12, m13)  TEXCOORD2
+		float row2[4]; // world matrix row 2 (m20, m21, m22, m23)  TEXCOORD3
+		float ambient[4];       // rgb = equivalent ambient, w = numLights   TEXCOORD4
+		float lightDir0[4];     // TEXCOORD5
+		float lightDiffuse0[4]; // TEXCOORD6
+		float lightDir1[4];     // TEXCOORD7
+		float lightDiffuse1[4]; // TEXCOORD8
+		float lightDir2[4];     // TEXCOORD9
+		float lightDiffuse2[4]; // TEXCOORD10
+		float lightDir3[4];     // TEXCOORD11
+		float lightDiffuse3[4]; // TEXCOORD12
 	};
 
-	static_assert(sizeof(InstanceData) == 48, "InstanceData must be 48 bytes (3x float4)");
+	static_assert(sizeof(InstanceData) == 192, "InstanceData must be 192 bytes (3 transform + 9 lighting float4)");
 
 	// Ronin @bugfix 18/02/2026 DX9: Cached vertex declaration entry keyed by FVF.
 	struct CachedDecl
@@ -193,16 +208,22 @@ private:
 
 	// Per-frame collection buffer (CPU side, written to m_instanceVB before draw)
 	InstanceData m_instanceBuffer[MAX_INSTANCES_PER_DRAW];
+	LightEnvironmentClass* m_collectedLightEnv[MAX_INSTANCES_PER_DRAW]; // per-instance lighting source
 	unsigned     m_collectedCount;
 
 	// Statistics
 	unsigned m_instancedDrawCalls;
 	unsigned m_instancedMeshes;
+	unsigned m_instancedMixedLightDrawCalls;
+	unsigned m_instancedMixedLightMeshes;
 	unsigned m_lastFrameInstancedDrawCalls;
 	unsigned m_lastFrameInstancedMeshes;
+	unsigned m_lastFrameInstancedMixedLightDrawCalls;
+	unsigned m_lastFrameInstancedMixedLightMeshes;
 
 	// Internal helpers
 	bool Create_Instance_VB();
+	static void Extract_Instance_Lighting(LightEnvironmentClass* lightEnv, InstanceData& inst);
 	IDirect3DVertexDeclaration9* Get_Or_Create_Instance_Decl(DWORD geometryFVF);
 	IDirect3DVertexDeclaration9* Get_Or_Create_Geometry_Decl(DWORD geometryFVF);
 	bool Load_Instance_Shader();

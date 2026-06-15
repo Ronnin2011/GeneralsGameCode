@@ -2420,6 +2420,7 @@ void HeightMapRenderObjClass::renderPrimaryBlendControlPass()
 	// @debug Ronin 03/05/2026 Splat S20 diagnostics: dump per-page enabled slots AND
 	// their region UVs, so we can see whether enabled slots on pages 1+ point at the
 	// right tile inside the right terrain atlas page.
+#ifdef WWDEBUG
 	{
 		static const WorldHeightMap* s_loggedMap = nullptr;
 		if (s_loggedMap != m_map) {
@@ -2497,6 +2498,8 @@ void HeightMapRenderObjClass::renderPrimaryBlendControlPass()
 			}
 		}
 	}
+
+#endif
 
 	const Bool doCloud = useCloud();
 

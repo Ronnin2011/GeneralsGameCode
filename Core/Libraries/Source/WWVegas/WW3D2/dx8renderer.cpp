@@ -84,6 +84,22 @@ static MultiListClass<MeshModelClass>			_RegisteredMeshList;
 static TextureCategoryList							texture_category_delete_list;
 static FVFCategoryList								fvf_category_container_delete_list;
 
+namespace
+{
+	static TextureClass* s_rigidCloudTexture = nullptr;
+
+	// Ronin @bugfix 12/06/2026 DX9: Do not keep a static normal-map cache here.
+	// The per-draw programmable rigid paths already acquire and release their own
+	// TextureClass refs, and the extra static cache introduced shutdown-order noise.
+	static void Release_Rigid_Renderer_Texture_Caches()
+	{
+		if (s_rigidCloudTexture != nullptr) {
+			s_rigidCloudTexture->Release_Ref();
+			s_rigidCloudTexture = nullptr;
+		}
+	}
+}
+
 // helper data structure
 class PolyRemover : public MultiListObjectClass
 {
@@ -207,7 +223,6 @@ static bool Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(
 // This mirrors the instanced path's visual behavior for rigid no-color meshes.
 static TextureClass* Get_Rigid_Cloud_Texture()
 {
-	static TextureClass* s_rigidCloudTexture = nullptr;
 	if (s_rigidCloudTexture == nullptr) {
 		WW3DAssetManager* am = WW3DAssetManager::Get_Instance();
 		if (am != nullptr) {
@@ -237,8 +252,7 @@ static TextureClass* Get_Rigid_Cloud_Texture()
 //   * DX8InstanceManagerClass::Draw_Instanced()
 //   * DX8InstanceManagerClass::Draw_Single_Rigid()
 //
-// Results are cached per diffuse texture name, including negative lookups, so
-// assets without authored normal maps do not hit the asset system every draw.
+// Callers own the returned ref when non-null.
 
 TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture)
 {
@@ -246,21 +260,9 @@ TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture)
 		return nullptr;
 	}
 
-	struct NormalMapCacheEntry
-	{
-		TextureClass* normalTex;
-	};
-
-	static std::map<StringClass, NormalMapCacheEntry> s_normalMapCache;
-
 	const StringClass& diffuseName = diffuseTexture->Get_Texture_Name();
 	if (diffuseName.Get_Length() == 0) {
 		return nullptr;
-	}
-
-	std::map<StringClass, NormalMapCacheEntry>::iterator it = s_normalMapCache.find(diffuseName);
-	if (it != s_normalMapCache.end()) {
-		return it->second.normalTex;
 	}
 
 	// Split base name from extension. If the diffuse name has no extension
@@ -305,10 +307,18 @@ TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture)
 		}
 	}
 
-	NormalMapCacheEntry entry;
-	entry.normalTex = normalTex;
-	s_normalMapCache[diffuseName] = entry;
 	return normalTex;
+}
+
+static bool Rigid_Texture_Has_Normal_Map(TextureClass* diffuseTexture)
+{
+	TextureClass* normalTex = Get_Normal_Map_For_Diffuse_Texture(diffuseTexture);
+	if (normalTex == nullptr) {
+		return false;
+	}
+
+	normalTex->Release_Ref();
+	return true;
 }
 
 enum RigidRenderPathType
@@ -403,23 +413,28 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 	return RIGID_RENDER_PATH_LEGACY_CLOUD;
 }
 
-// Ronin @bugfix 17/05/2026 DX9: Stricter lightenv equivalence for instancing.
-// The earlier version returned true for (a==nullptr && b==nullptr) and used
-// pointer-equality as an early-out. Both paths could let meshes whose effective
-// lighting differs end up in the same instanced batch.
-//
-// This version:
-//   * refuses to batch when either side has no lightenv;
-//   * compares LightCount, OutputAmbient, and every InputLight's
-//     (Direction and Diffuse) bit-for-bit;
-//   * never short-circuits via pointer equality so even shared-pointer paths
-//     get a full content compare.
+// Ronin @feature 13/06/2026 DX9: Per-instance rigid VS lighting now lives in
+// stream 1, so instancing no longer requires identical LightEnvironmentClass
+// contents across all meshes in a batch.
+// Non-normal-mapped rigid props can therefore batch across mixed non-null
+// lightenvs. `_NRM` props stay conservative for now because the programmable
+// rigid PS still consumes one representative lightenv for its per-pixel normal
+// map Lambert delta.
 static bool Light_Environments_Are_Equivalent_For_Instancing(
 	LightEnvironmentClass* a,
-	LightEnvironmentClass* b)
+	LightEnvironmentClass* b,
+	bool requireExactMatch)
 {
-	if (a == nullptr || b == nullptr) {
+	if ((a == nullptr) != (b == nullptr)) {
 		return false;
+	}
+
+	if (a == nullptr) {
+		return true;
+	}
+
+	if (!requireExactMatch) {
+		return true;
 	}
 
 	const int countA = a->Get_Light_Count();
@@ -548,7 +563,8 @@ void DX8TextureCategoryClass::Add_Polygon_Renderer(DX8PolygonRendererClass* p_re
 	WWASSERT(!PolygonRendererList.Contains(p_renderer));
 
 	if (add_after_this != nullptr) {
-		bool res = PolygonRendererList.Add_After(p_renderer,add_after_this,false);
+		MAYBE_UNUSED bool res = PolygonRendererList.Add_After(p_renderer,add_after_this,false);
+		(void)res;
 		WWASSERT(res);
 	} else {
 		PolygonRendererList.Add(p_renderer);
@@ -1549,7 +1565,8 @@ void DX8FVFCategoryContainer::Generate_Texture_Categories(Vertex_Split_Table& sp
 			Insert_To_Texture_Category(split_table,textures,mat,shader,pass,vertex_offset);
 		}
 
-		int new_inds=used_indices-old_used_indices;
+		MAYBE_UNUSED int new_inds=used_indices-old_used_indices;
+		(void)new_inds;
 		WWASSERT(new_inds<=polygon_count*3);
 	}
 }
@@ -2124,6 +2141,15 @@ void DX8TextureCategoryClass::Render()
 			(fvfTexCount == 1) &&
 			!usesAdditionalTextureStages;
 
+		// Ronin @bugfix 14/06/2026 DX9: `_NRM` rigid props still use one
+		// representative lightenv in the programmable rigid PS. Keep those
+		// categories on exact lightenv batching until PS-side per-instance
+		// lighting exists; non-`_NRM` props can continue to batch across mixed
+		// non-null lightenvs because their lighting is fully VS-side today.
+		const bool categoryRequiresExactInstancingLightMatch =
+			instancingShaderSupported &&
+			Rigid_Texture_Has_Normal_Map(Peek_Texture(0));
+
 		const unsigned minInstancedBatchSize = 2u;
 
 		// Ronin @bugfix 07/03/2026 DX9: The instancing shader requires geometry TEXCOORD0.
@@ -2165,7 +2191,8 @@ void DX8TextureCategoryClass::Render()
 								m->Get_ObjectScale() == 1.0f &&
 								Light_Environments_Are_Equivalent_For_Instancing(
 									m->Get_Lighting_Environment(),
-									candidate_light_env))
+									candidate_light_env,
+									categoryRequiresExactInstancingLightMatch))
 							{
 								count++;
 							}
@@ -2210,14 +2237,16 @@ void DX8TextureCategoryClass::Render()
 					mesh->Get_ObjectScale() == 1.0f &&
 					Light_Environments_Are_Equivalent_For_Instancing(
 						mesh->Get_Lighting_Environment(),
-						best_light_env);
+						best_light_env,
+						categoryRequiresExactInstancingLightMatch);
 
 				if (eligible) {
 					const Matrix3D& tm = mesh->Get_Transform();
-					TheDX8InstanceManager.Add_Instance_Transform(
+					TheDX8InstanceManager.Add_Instance(
 						(const float*)&tm[0],
 						(const float*)&tm[1],
-						(const float*)&tm[2]);
+						(const float*)&tm[2],
+						mesh->Get_Lighting_Environment());
 
 					// Ronin @bugfix 17/05/2026 DX9: The instancing shader now receives
 					// the batch light environment explicitly through Draw_Instanced().
@@ -2893,6 +2922,7 @@ static void Invalidate_FVF_Category_Container_List(FVFCategoryList& list)
 void DX8MeshRendererClass::Invalidate( bool shutdown)
 {
 	WWMEMLOG(MEM_RENDERER);
+	Release_Rigid_Renderer_Texture_Caches();
 	_RegisteredMeshList.Reset_List();
 
 	for (int i=0;i<texture_category_container_lists_rigid.Count();++i) {

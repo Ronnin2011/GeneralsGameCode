@@ -38,8 +38,61 @@ DX8InstanceManagerClass TheDX8InstanceManager;
 // Ronin @feature 23/05/2026 DX9 R2/R3: resolver lives in dx8renderer.cpp.
 extern TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture);
 
+// Ronin @feature 07/06/2026 DX9: Per-instance lighting payload. Mirrors the lightenv
+// branch of Build_Rigid_Shader_Lighting_Constants so a collected instance carries the
+// same ambient + up to 4 directional lights the single-rigid path would have uploaded.
+void DX8InstanceManagerClass::Extract_Instance_Lighting(LightEnvironmentClass* lightEnv, InstanceData& inst)
+{
+	memset(inst.ambient, 0, sizeof(inst.ambient));
+	memset(inst.lightDir0, 0, sizeof(inst.lightDir0));
+	memset(inst.lightDiffuse0, 0, sizeof(inst.lightDiffuse0));
+	memset(inst.lightDir1, 0, sizeof(inst.lightDir1));
+	memset(inst.lightDiffuse1, 0, sizeof(inst.lightDiffuse1));
+	memset(inst.lightDir2, 0, sizeof(inst.lightDir2));
+	memset(inst.lightDiffuse2, 0, sizeof(inst.lightDiffuse2));
+	memset(inst.lightDir3, 0, sizeof(inst.lightDir3));
+	memset(inst.lightDiffuse3, 0, sizeof(inst.lightDiffuse3));
+
+	if (lightEnv == nullptr) {
+		return;
+	}
+
+	const Vector3& amb = lightEnv->Get_Equivalent_Ambient();
+	inst.ambient[0] = amb.X;
+	inst.ambient[1] = amb.Y;
+	inst.ambient[2] = amb.Z;
+
+	float* dirs[4] = { inst.lightDir0, inst.lightDir1, inst.lightDir2, inst.lightDir3 };
+	float* difs[4] = { inst.lightDiffuse0, inst.lightDiffuse1, inst.lightDiffuse2, inst.lightDiffuse3 };
+
+	const int count = lightEnv->Get_Light_Count();
+	int n = 0;
+	for (int i = 0; i < count && n < 4; ++i, ++n) {
+		const Vector3& d = lightEnv->Get_Light_Direction(i);
+		const Vector3& c = lightEnv->Get_Light_Diffuse(i);
+		dirs[n][0] = d.X; dirs[n][1] = d.Y; dirs[n][2] = d.Z; dirs[n][3] = 0.0f;
+		difs[n][0] = c.X; difs[n][1] = c.Y; difs[n][2] = c.Z; difs[n][3] = 0.0f;
+	}
+
+	inst.ambient[3] = (float)n; // numLights
+}
+
+
 namespace
 {
+ static TextureClass* s_rigidCloudTexture = nullptr;
+
+	// Ronin @bugfix 08/06/2026 DX9: Release the cached rigid cloud texture ref when
+	// instancing resources are torn down. The cache intentionally keeps the asset alive
+	// across draws, but it must not pin the texture for the rest of the process.
+	static void Release_Instance_Texture_Caches()
+	{
+		if (s_rigidCloudTexture != nullptr) {
+			s_rigidCloudTexture->Release_Ref();
+			s_rigidCloudTexture = nullptr;
+		}
+	}
+
 	struct RigidShaderLightingConstants
 	{
 		float c4[4];
@@ -299,7 +352,6 @@ namespace
 
 	static TextureClass* Get_Valid_Rigid_Cloud_Texture()
 	{
-		static TextureClass* s_rigidCloudTexture = nullptr;
 		if (s_rigidCloudTexture == nullptr) {
 			WW3DAssetManager* am = WW3DAssetManager::Get_Instance();
 			if (am != nullptr) {
@@ -336,8 +388,12 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	, m_collectedCount(0)
 	, m_instancedDrawCalls(0)
 	, m_instancedMeshes(0)
+	, m_instancedMixedLightDrawCalls(0)
+	, m_instancedMixedLightMeshes(0)
 	, m_lastFrameInstancedDrawCalls(0)
 	, m_lastFrameInstancedMeshes(0)
+	, m_lastFrameInstancedMixedLightDrawCalls(0)
+	, m_lastFrameInstancedMixedLightMeshes(0)
 {
 	memset(m_declCache, 0, sizeof(m_declCache));
 	memset(m_geometryDeclCache, 0, sizeof(m_geometryDeclCache));
@@ -347,6 +403,8 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 
 void DX8InstanceManagerClass::Release_Resources()
 {
+  Release_Instance_Texture_Caches();
+
 	if (m_instanceVB) { m_instanceVB->Release(); m_instanceVB = nullptr; }
 	if (m_instanceVS) { m_instanceVS->Release(); m_instanceVS = nullptr; }
 	if (m_instanceVSNoColor) { m_instanceVSNoColor->Release(); m_instanceVSNoColor = nullptr; }
@@ -498,11 +556,6 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 		return false;
 	}
 
-	TextureClass* normalMapTex = Get_Normal_Map_For_Diffuse_Texture(diffuseTexture);
-	if (normalMapTex == nullptr) {
-		return false;
-	}
-
 	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
 	if (dev == nullptr) {
 		return false;
@@ -520,23 +573,14 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 		return false;
 	}
 
+	TextureClass* normalMapTex = Get_Normal_Map_For_Diffuse_Texture(diffuseTexture);
+	if (normalMapTex == nullptr) {
+		return false;
+	}
+
 	// Make sure the category's stage-0 texture/material/shader state is already on the device
 	// before we temporarily switch to the programmable rigid fallback.
 	DX8Wrapper::Apply_Render_State_Changes();
-
-	InstanceData singleInstance;
-	memcpy(singleInstance.row0, (const float*)&worldTransform[0], sizeof(singleInstance.row0));
-	memcpy(singleInstance.row1, (const float*)&worldTransform[1], sizeof(singleInstance.row1));
-	memcpy(singleInstance.row2, (const float*)&worldTransform[2], sizeof(singleInstance.row2));
-
-	void* pData = nullptr;
-	HRESULT hr = m_instanceVB->Lock(0, sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
-	if (FAILED(hr)) {
-		WWDEBUG_SAY(("DX8InstanceManager: Single rigid instance VB lock failed: 0x%08X", hr));
-		return false;
-	}
-	memcpy(pData, &singleInstance, sizeof(singleInstance));
-	m_instanceVB->Unlock();
 
 	IDirect3DVertexBuffer9* savedVB0 = nullptr;
 	UINT savedOffset0 = 0, savedStride0 = 0;
@@ -585,6 +629,39 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	RigidShaderLightingConstants lightingConstants;
 	Build_Rigid_Shader_Lighting_Constants(dev, geometryFVF, lightEnv, material, dxView, &lightingConstants);
 	Upload_Rigid_Shader_VS_Lighting_Constants(dev, lightingConstants);
+
+	// Ronin @feature 07/06/2026 DX9: write this mesh's transform + lighting into the
+	// instance VB. Lighting comes from the just-built constants so both the lightenv
+	// and FFP-readback branches reproduce the previous shared-constant VS behavior.
+	{
+		InstanceData inst;
+		memcpy(inst.row0, (const float*)&worldTransform[0], sizeof(inst.row0));
+		memcpy(inst.row1, (const float*)&worldTransform[1], sizeof(inst.row1));
+		memcpy(inst.row2, (const float*)&worldTransform[2], sizeof(inst.row2));
+
+		inst.ambient[0] = lightingConstants.c4[0];
+		inst.ambient[1] = lightingConstants.c4[1];
+		inst.ambient[2] = lightingConstants.c4[2];
+		inst.ambient[3] = lightingConstants.numLights;
+		memcpy(inst.lightDir0, lightingConstants.c5, sizeof(inst.lightDir0));
+		memcpy(inst.lightDiffuse0, lightingConstants.c6, sizeof(inst.lightDiffuse0));
+		memcpy(inst.lightDir1, lightingConstants.c11, sizeof(inst.lightDir1));
+		memcpy(inst.lightDiffuse1, lightingConstants.c12, sizeof(inst.lightDiffuse1));
+		memcpy(inst.lightDir2, lightingConstants.c15, sizeof(inst.lightDir2));
+		memcpy(inst.lightDiffuse2, lightingConstants.c16, sizeof(inst.lightDiffuse2));
+		memcpy(inst.lightDir3, lightingConstants.c17, sizeof(inst.lightDir3));
+		memcpy(inst.lightDiffuse3, lightingConstants.c18, sizeof(inst.lightDiffuse3));
+
+		void* pData = nullptr;
+		HRESULT hrFill = m_instanceVB->Lock(0, sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
+		if (FAILED(hrFill)) {
+			WWDEBUG_SAY(("DX8InstanceManager: Single rigid instance VB lock failed: 0x%08X", hrFill));
+			normalMapTex->Release_Ref();
+			return false;
+		}
+		memcpy(pData, &inst, sizeof(inst));
+		m_instanceVB->Unlock();
+	}
 
 	{
 		const bool cloudEnabled =
@@ -674,6 +751,8 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 
 	dev->SetTexture(1, nullptr);
 	dev->SetTexture(2, nullptr);
+
+	normalMapTex->Release_Ref();
 
 	ShaderClass::Invalidate();
 	DX8Wrapper::Invalidate_Vertex_Buffer_State();
@@ -849,6 +928,18 @@ IDirect3DVertexDeclaration9* DX8InstanceManagerClass::Get_Or_Create_Instance_Dec
 	elements[idx++] = { 1,  0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1 };
 	elements[idx++] = { 1, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 2 };
 	elements[idx++] = { 1, 32, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 3 };
+
+	// Ronin @feature 07/06/2026 DX9: per-instance lighting payload, contiguous TEXCOORD4..12
+	// on stream 1 (no gaps - AMD). Offsets follow the transform rows (0/16/32).
+	elements[idx++] = { 1,  48, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 4 };  // ambient + numLights
+	elements[idx++] = { 1,  64, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 5 };  // dir0
+	elements[idx++] = { 1,  80, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 6 };  // diffuse0
+	elements[idx++] = { 1,  96, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 7 };  // dir1
+	elements[idx++] = { 1, 112, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 8 };  // diffuse1
+	elements[idx++] = { 1, 128, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 9 };  // dir2
+	elements[idx++] = { 1, 144, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 10 }; // diffuse2
+	elements[idx++] = { 1, 160, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 11 }; // dir3
+	elements[idx++] = { 1, 176, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 12 }; // diffuse3
 
 	elements[idx] = D3DDECL_END();
 
@@ -1045,14 +1136,38 @@ void DX8InstanceManagerClass::Draw_Instanced(
 		return;
 	}
 
-	// 1. Lock and fill the instance VB with collected transforms
+		// 1. Lock and fill the instance VB with collected transforms + per-instance lighting
 	void* pData = nullptr;
 	HRESULT hr = m_instanceVB->Lock(0, m_collectedCount * sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
 	if (FAILED(hr)) {
 		WWDEBUG_SAY(("Instance VB Lock failed: 0x%08X", hr));
 		return;
 	}
-	memcpy(pData, m_instanceBuffer, m_collectedCount * sizeof(InstanceData));
+
+	InstanceData* dst = (InstanceData*)pData;
+	bool mixedLighting = false;
+	const size_t lightingPayloadSize =
+		sizeof(dst[0].ambient) +
+		sizeof(dst[0].lightDir0) +
+		sizeof(dst[0].lightDiffuse0) +
+		sizeof(dst[0].lightDir1) +
+		sizeof(dst[0].lightDiffuse1) +
+		sizeof(dst[0].lightDir2) +
+		sizeof(dst[0].lightDiffuse2) +
+		sizeof(dst[0].lightDir3) +
+		sizeof(dst[0].lightDiffuse3);
+
+	for (unsigned i = 0; i < m_collectedCount; ++i) {
+		dst[i] = m_instanceBuffer[i];
+		Extract_Instance_Lighting(m_collectedLightEnv[i], dst[i]);
+
+		if (i > 0 && !mixedLighting) {
+			if (memcmp(dst[0].ambient, dst[i].ambient, lightingPayloadSize) != 0) {
+				mixedLighting = true;
+			}
+		}
+	}
+
 	m_instanceVB->Unlock();
 
 	// 2. Snapshot only the raw D3D state this function actually mutates.
@@ -1119,7 +1234,8 @@ void DX8InstanceManagerClass::Draw_Instanced(
 	RigidShaderLightingConstants lightingConstants;
 	Build_Rigid_Shader_Lighting_Constants(dev, geometryFVF, lightEnv, material, dxView, &lightingConstants);
 	Upload_Rigid_Shader_VS_Lighting_Constants(dev, lightingConstants);
-	
+
+	TextureClass* normalMapTex = nullptr;	
 
 	// Ronin @feature 17/05/2026 DX9: project the terrain cloud field onto rigid
 	// instanced meshes. The instancing path owns sampler 1 explicitly; we do NOT
@@ -1167,7 +1283,7 @@ void DX8InstanceManagerClass::Draw_Instanced(
 		}
 
 		// Ronin @feature 23/05/2026 DX9 R2: resolve <diffuse>_NRM and bind on sampler 2.
-		TextureClass* normalMapTex = Get_Normal_Map_For_Diffuse_Texture(diffuseTexture);
+		normalMapTex = Get_Normal_Map_For_Diffuse_Texture(diffuseTexture);
 		const bool normalMapActive = (normalMapTex != nullptr);
 
 		// PS c2: normal-map params (enable, intensity, reserved, reserved).
@@ -1250,6 +1366,10 @@ void DX8InstanceManagerClass::Draw_Instanced(
 	// Ronin @feature 23/05/2026 DX9 R2: release rigid normal-map binding for the same reason.
 	dev->SetTexture(2, nullptr);
 
+	if (normalMapTex != nullptr) {
+		normalMapTex->Release_Ref();
+	}
+
 	// 13. Tell ShaderClass to re-apply its cached state on the next draw.
 	ShaderClass::Invalidate();
 
@@ -1260,6 +1380,11 @@ void DX8InstanceManagerClass::Draw_Instanced(
 	// Statistics
 	m_instancedDrawCalls++;
 	m_instancedMeshes += m_collectedCount;
+
+	if (mixedLighting) {
+		m_instancedMixedLightDrawCalls++;
+		m_instancedMixedLightMeshes += m_collectedCount;
+	}
 }
 // ----------------------------------------------------------------------------
 
@@ -1267,10 +1392,14 @@ void DX8InstanceManagerClass::Begin_Frame_Statistics()
 {
 	m_instancedDrawCalls = 0;
 	m_instancedMeshes = 0;
+	m_instancedMixedLightDrawCalls = 0;
+	m_instancedMixedLightMeshes = 0;
 }
 
 void DX8InstanceManagerClass::End_Frame_Statistics()
 {
 	m_lastFrameInstancedDrawCalls = m_instancedDrawCalls;
 	m_lastFrameInstancedMeshes = m_instancedMeshes;
+	m_lastFrameInstancedMixedLightDrawCalls = m_instancedMixedLightDrawCalls;
+	m_lastFrameInstancedMixedLightMeshes = m_instancedMixedLightMeshes;
 }

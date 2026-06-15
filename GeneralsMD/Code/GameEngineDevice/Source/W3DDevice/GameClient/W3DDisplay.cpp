@@ -1146,6 +1146,8 @@ void W3DDisplay::gatherDebugStats()
 		// Ronin @feature 18/02/2026 DX9: Instancing statistics for draw call HUD
 		unsigned instDraws = TheDX8InstanceManager.Get_Last_Frame_Instanced_Draw_Calls();
 		unsigned instMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Meshes();
+		unsigned instLightDraws = TheDX8InstanceManager.Get_Last_Frame_Instanced_Mixed_Light_Draw_Calls();
+		unsigned instLightMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Mixed_Light_Meshes();
 
 		Int LOD = TheGlobalData->m_terrainLOD;
 		//unibuffer.format( L"FPS: %.2f, %.2fms mapLOD=%d [cumu FPS=%.2f] draws: %.2f sort: %.2f", fps, ms, LOD, cumuFPS, drawsPerFrame,sortPolysPerFrame);
@@ -1154,16 +1156,37 @@ void W3DDisplay::gatherDebugStats()
 		else
 			unibuffer.format(L"%.2f FPS, ", fps);
 
-		unibuffer2.format(L"%.2fms [cumuFPS=%.2f] draws: %d skins: %d sortP: %d skinP: %d LOD %d inst: %u/%u", ms, cumuFPS, (Int)drawsPerFrame, (Int)skinDrawsPerFrame, (Int)sortPolysPerFrame, (Int)skinPolysPerFrame, LOD, instDraws, instMeshes);
-		unibuffer.concat(unibuffer2);
+		unibuffer2.format(L"%.2fms [cumuFPS=%.2f] draws: %d skins: %d sortP: %d skinP: %d LOD %d inst: %u/%u instL: %u/%u",
+			ms,
+			cumuFPS,
+			(Int)drawsPerFrame,
+			(Int)skinDrawsPerFrame,
+			(Int)sortPolysPerFrame,
+			(Int)skinPolysPerFrame,
+			LOD,
+			instDraws,
+			instMeshes,
+			instLightDraws,
+			instLightMeshes);		unibuffer.concat(unibuffer2);
 #else
 		// Ronin @feature 18/02/2026 DX9: Instancing statistics for draw call HUD
 		unsigned instDraws = TheDX8InstanceManager.Get_Last_Frame_Instanced_Draw_Calls();
 		unsigned instMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Meshes();
+		unsigned instLightDraws = TheDX8InstanceManager.Get_Last_Frame_Instanced_Mixed_Light_Draw_Calls();
+		unsigned instLightMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Mixed_Light_Meshes();
 
 		//Int LOD = TheGlobalData->m_terrainLOD;
 		//unibuffer.format( L"FPS: %.2f, %.2fms mapLOD=%d draws: %.2f sort %.2f", fps, ms, LOD, drawsPerFrame,sortPolysPerFrame);
-		unibuffer.format(L"FPS: %.2f, %.2fms draws: %.2f skins: %.2f sort %.2f inst: %u/%u", fps, ms, drawsPerFrame, skinDrawsPerFrame, sortPolysPerFrame, instDraws, instMeshes);
+		unibuffer.format(L"FPS: %.2f, %.2fms draws: %.2f skins: %.2f sort %.2f inst: %u/%u instL: %u/%u",
+			fps,
+			ms,
+			drawsPerFrame,
+			skinDrawsPerFrame,
+			sortPolysPerFrame,
+			instDraws,
+			instMeshes,
+			instLightDraws,
+			instLightMeshes);
 		if (TheGlobalData->m_useFpsLimit)
 		{
 			unibuffer2.format(L", FPSLock %d", TheGlobalData->m_framesPerSecondLimit);
