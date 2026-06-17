@@ -201,20 +201,158 @@ DEFINE_AUTO_POOL(MatPassTaskClass, 256);
 
 // ----------------------------------------------------------------------------
 
-// Ronin @bugfix 23/05/2026 DX9 R3: The programmable rigid shader paths
-// (single-rigid fallback and hardware instancing) still sample plain UV0 and do
-// not reproduce legacy fixed-function material mappers / texture transforms.
-// Keep mapped materials on the vanilla fixed-function path until mapper parity
-// exists, otherwise reflective / scrolling / transformed UV assets render with
-// the wrong coordinates.
-static bool Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(
+// Ronin @bugfix 15/06/2026 DX9 Rigid parity: split programmable rigid mapper
+// eligibility by mapper family instead of treating every non-null mapper as one
+// opaque bucket. This is intentionally behavior-neutral for now:
+//   * only materials with NO mapper are considered parity-safe;
+//   * every non-NONE mapper family still stays on the legacy path until the
+//     programmable VS reproduces the same texcoord-source + texture-matrix
+//     contract as the fixed-function path;
+//   * we also close the old stage-1 blind spot by scanning both material
+//     texture stages instead of relying on Peek_Mapper()'s stage-0 default.
+enum ProgrammableRigidTextureMappingClass
+{
+	PROGRAMMABLE_RIGID_MAPPING_NONE = 0,
+	PROGRAMMABLE_RIGID_MAPPING_AFFINE_UV,
+	PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_NORMAL,
+	PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_REFLECT,
+	PROGRAMMABLE_RIGID_MAPPING_UNSUPPORTED,
+};
+
+static ProgrammableRigidTextureMappingClass Classify_Programmable_Rigid_Texture_Mapper(
+	const TextureMapperClass* mapper)
+{
+	if (mapper == nullptr) {
+		return PROGRAMMABLE_RIGID_MAPPING_NONE;
+	}
+
+	switch (mapper->Mapper_ID()) {
+		// Plain UV-source mappers: same input UVs, different texture matrix.
+		case TextureMapperClass::MAPPER_ID_SCALE:
+		case TextureMapperClass::MAPPER_ID_LINEAR_OFFSET:
+		case TextureMapperClass::MAPPER_ID_GRID:
+		case TextureMapperClass::MAPPER_ID_ROTATE:
+		case TextureMapperClass::MAPPER_ID_SINE_LINEAR_OFFSET:
+		case TextureMapperClass::MAPPER_ID_STEP_LINEAR_OFFSET:
+		case TextureMapperClass::MAPPER_ID_ZIGZAG_LINEAR_OFFSET:
+		case TextureMapperClass::MAPPER_ID_RANDOM:
+			return PROGRAMMABLE_RIGID_MAPPING_AFFINE_UV;
+
+		// Camera-space normal source with a 2D texture matrix.
+		case TextureMapperClass::MAPPER_ID_CLASSIC_ENVIRONMENT:
+		case TextureMapperClass::MAPPER_ID_WS_CLASSIC_ENVIRONMENT:
+		case TextureMapperClass::MAPPER_ID_GRID_CLASSIC_ENVIRONMENT:
+		case TextureMapperClass::MAPPER_ID_GRID_WS_CLASSIC_ENVIRONMENT:
+			return PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_NORMAL;
+
+		// Camera-space reflection-vector source with a 2D texture matrix.
+		case TextureMapperClass::MAPPER_ID_ENVIRONMENT:
+		case TextureMapperClass::MAPPER_ID_WS_ENVIRONMENT:
+		case TextureMapperClass::MAPPER_ID_GRID_ENVIRONMENT:
+		case TextureMapperClass::MAPPER_ID_GRID_WS_ENVIRONMENT:
+			return PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_REFLECT;
+
+		// Keep everything else on legacy until it gets its own parity pass.
+		case TextureMapperClass::MAPPER_ID_UNKNOWN:
+		case TextureMapperClass::MAPPER_ID_SCREEN:
+		case TextureMapperClass::MAPPER_ID_ANIMATING_1D:
+		case TextureMapperClass::MAPPER_ID_AXIAL:
+		case TextureMapperClass::MAPPER_ID_SILHOUETTE:
+		case TextureMapperClass::MAPPER_ID_EDGE:
+		case TextureMapperClass::MAPPER_ID_BUMPENV:
+		default:
+			return PROGRAMMABLE_RIGID_MAPPING_UNSUPPORTED;
+	}
+}
+
+static ProgrammableRigidTextureMappingClass Classify_Programmable_Rigid_Texture_Mapping(
 	VertexMaterialClass* material)
 {
 	if (material == nullptr) {
-		return false;
+		return PROGRAMMABLE_RIGID_MAPPING_NONE;
 	}
 
-	return material->Peek_Mapper() != nullptr;
+	ProgrammableRigidTextureMappingClass stage0MappingClass =
+		PROGRAMMABLE_RIGID_MAPPING_NONE;
+
+	for (int stage = 0; stage < MeshMatDescClass::MAX_TEX_STAGES; ++stage) {
+		TextureMapperClass* mapper = material->Peek_Mapper(stage);
+		if (mapper == nullptr) {
+			continue;
+		}
+
+		// The current programmable rigid path only understands the base material
+		// stage. Any mapper on later stages must remain on legacy until per-stage
+		// programmable parity exists.
+		if (stage != 0) {
+			return PROGRAMMABLE_RIGID_MAPPING_UNSUPPORTED;
+		}
+
+		stage0MappingClass = Classify_Programmable_Rigid_Texture_Mapper(mapper);
+		if (stage0MappingClass == PROGRAMMABLE_RIGID_MAPPING_UNSUPPORTED) {
+			return PROGRAMMABLE_RIGID_MAPPING_UNSUPPORTED;
+		}
+	}
+
+	return stage0MappingClass;
+}
+
+static bool Programmable_Rigid_Texture_Mapping_Has_Shader_Parity(
+	ProgrammableRigidTextureMappingClass mappingClass)
+{
+	switch (mappingClass) {
+		case PROGRAMMABLE_RIGID_MAPPING_NONE:
+		case PROGRAMMABLE_RIGID_MAPPING_AFFINE_UV:
+			return true;
+
+		case PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_NORMAL:
+		case PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_REFLECT:
+		case PROGRAMMABLE_RIGID_MAPPING_UNSUPPORTED:
+		default:
+			return false;
+	}
+}
+
+static bool Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(
+	VertexMaterialClass* material)
+{
+	return !Programmable_Rigid_Texture_Mapping_Has_Shader_Parity(
+		Classify_Programmable_Rigid_Texture_Mapping(material));
+}
+
+
+// Ronin @feature 16/06/2026 DX9 Rigid parity: resolve the programmable texcoord-gen
+// state forwarded to Draw_Single_Rigid / Draw_Instanced. Phase 1 wires only AFFINE_UV
+// (vertex-UV source + texture matrix). The matrix rows are WW Matrix4x4 rows verbatim;
+// the VS reproduces the FFP result as out_uv[i] = dot(row_i, float4(uv,0,1)).
+static void Build_Programmable_Rigid_TexGen(
+	VertexMaterialClass* material,
+	ProgrammableRigidTextureMappingClass mappingClass,
+	RigidTexGen& out)
+{
+	// Identity rows so even a disabled/stale upload is a clean passthrough.
+	out.enabled = false;
+	out.sourceMode = 0;
+	out.row0[0] = 1.0f; out.row0[1] = 0.0f; out.row0[2] = 0.0f; out.row0[3] = 0.0f;
+	out.row1[0] = 0.0f; out.row1[1] = 1.0f; out.row1[2] = 0.0f; out.row1[3] = 0.0f;
+
+	// Phase 1 only understands AFFINE_UV; env source modes land in the next step.
+	if (material == nullptr || mappingClass != PROGRAMMABLE_RIGID_MAPPING_AFFINE_UV) {
+		return;
+	}
+
+	TextureMapperClass* mapper = material->Peek_Mapper(0);
+	if (mapper == nullptr) {
+		return;
+	}
+
+	Matrix4x4 m;
+	mapper->Calculate_Texture_Matrix(m); // advances time-variant state, exactly like FFP Apply()
+
+	out.enabled = true;
+	out.sourceMode = 0; // vertex UV0
+	out.row0[0] = m[0][0]; out.row0[1] = m[0][1]; out.row0[2] = m[0][2]; out.row0[3] = m[0][3];
+	out.row1[0] = m[1][0]; out.row1[1] = m[1][1]; out.row1[2] = m[1][2]; out.row1[3] = m[1][3];
 }
 
 // Ronin @bugfix 23/05/2026 DX9: Apply the same projected cloud layer on the
@@ -364,6 +502,18 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 		(fvfTexCount == 1) &&
 		(stage1Texture == nullptr);
 
+	RigidTexGen singleRigidTexGen;
+	Build_Programmable_Rigid_TexGen(
+		material, Classify_Programmable_Rigid_Texture_Mapping(material), singleRigidTexGen);
+
+		#ifdef WWDEBUG
+			if (singleRigidTexGen.enabled) {
+		WWDEBUG_SAY(("Rigid AFFINE_UV (single): mapperID=%d tex=%s",
+			material->Peek_Mapper(0)->Mapper_ID(),
+			(stage0Texture != nullptr) ? stage0Texture->Get_Texture_Name().str() : "-"));
+	}
+		#endif
+
 	if (canUseProgrammableFallback &&
 		TheDX8InstanceManager.Draw_Single_Rigid(
 			renderer,
@@ -372,7 +522,8 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 			material,
 			stage0Texture,
 			worldTransform,
-			baseVertexOffset)) {
+			baseVertexOffset,
+			singleRigidTexGen)) {
 
 		DX8Wrapper::BindLayoutFVF(geometryFVF, "Render_Rigid_Mesh_With_Optional_Programmable_Effects post-R3 restore");
 		DX8Wrapper::Set_Texture(0, stage0Texture);
@@ -2123,8 +2274,10 @@ void DX8TextureCategoryClass::Render()
 		//     been matched in shader code;
 		//   * material mappers / texture transforms, because the programmable rigid
 		//     shaders still sample plain UV0.
+		const ProgrammableRigidTextureMappingClass rigidMappingClass =
+			Classify_Programmable_Rigid_Texture_Mapping(vmaterial);
 		const bool categoryUsesUnsupportedProgrammableMapping =
-			Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(vmaterial);
+			!Programmable_Rigid_Texture_Mapping_Has_Shader_Parity(rigidMappingClass);
 
 		const bool categoryUsesOpaqueBlend =
 			theShader.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE &&
@@ -2276,12 +2429,26 @@ void DX8TextureCategoryClass::Render()
 			// Issue the instanced draw call for this renderer group
 			if (collected >= minInstancedBatchSize) {
 
+				RigidTexGen instancedTexGen;
+				Build_Programmable_Rigid_TexGen(vmaterial, rigidMappingClass, instancedTexGen);
+				
+				#ifdef WWDEBUG
+				if (instancedTexGen.enabled) {
+					TextureClass* dbgTex = Peek_Texture(0);
+					WWDEBUG_SAY(("Rigid AFFINE_UV (instanced x%u): mapperID=%d tex=%s",
+						collected,
+						vmaterial->Peek_Mapper(0)->Mapper_ID(),
+						(dbgTex != nullptr) ? dbgTex->Get_Texture_Name().str() : "-"));
+				}
+				#endif
+
 				TheDX8InstanceManager.Draw_Instanced(
 					best_renderer,
 					container->Get_FVF(),
 					best_light_env,
 					vmaterial,
-					Peek_Texture(0));   // Ronin @feature 23/05/2026 DX9 R2: forward diffuse texture for normal-map lookup
+					Peek_Texture(0),   // Ronin @feature 23/05/2026 DX9 R2: forward diffuse texture for normal-map lookup
+					instancedTexGen);
 
 				// Restore DX8Wrapper-tracked state after instanced draw
 				DX8Wrapper::BindLayoutFVF(container->Get_FVF(), "DX8TextureCategoryClass::Render post-instancing restore");

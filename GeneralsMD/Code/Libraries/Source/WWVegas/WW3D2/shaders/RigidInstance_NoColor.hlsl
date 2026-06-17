@@ -11,6 +11,10 @@ float4 g_MatEmissive : register(c8);
 float4 g_Flags : register(c9); // x = lightingEnabled
 float4 g_MatAmbient : register(c10);
 float4 g_CloudParams : register(c14);
+float4 g_TexGenParams  : register(c19); // x = enable, y = sourceMode (0 = vertex UV)
+float4 g_TexMatrixRow0 : register(c20);
+float4 g_TexMatrixRow1 : register(c21);
+
 
 struct VS_INPUT
 {
@@ -100,7 +104,15 @@ VS_OUTPUT main(VS_INPUT input)
     output.diffuse.rgb = lerp(unlitColor, litColor, lightingEnabled);
     output.diffuse.a = lerp(unlitAlpha, litAlpha, lightingEnabled);
 
-    output.uv0 = input.uv0;
+    // Ronin @feature 16/06/2026 DX9 Rigid parity (Phase 1: AFFINE_UV).
+    float2 mappedUV = input.uv0;
+    if (g_TexGenParams.x > 0.5f)
+    {
+        float4 src = float4(input.uv0, 0.0f, 1.0f); // sourceMode 0; env modes added later
+        mappedUV.x = dot(g_TexMatrixRow0, src);
+        mappedUV.y = dot(g_TexMatrixRow1, src);
+    }
+    output.uv0 = mappedUV;
     output.uv1 = worldPos.xy * g_CloudParams.y + g_CloudParams.zw;
     output.worldNormal = worldNormal;
     output.worldPos = worldPos;

@@ -29,6 +29,18 @@ class Matrix3D;
 class TextureClass;
 class VertexMaterialClass;
 
+// Ronin @feature 16/06/2026 DX9 Rigid parity: texcoord-gen state forwarded to the
+// programmable rigid path. Mirrors the FFP "TEXCOORDINDEX source + texture matrix"
+// contract. Rows are WW Matrix4x4 rows (column-translation); the VS dots them with
+// float4(uv,0,1). A per-draw constant — shared across an instanced batch.
+struct RigidTexGen
+{
+	bool  enabled;    // false => geometry UV0 passed through unchanged (legacy-identical)
+	int   sourceMode; // 0 = vertex UV0, 1 = cam-space normal, 2 = cam-space reflection
+	float row0[4];    // Matrix4x4 row 0
+	float row1[4];    // Matrix4x4 row 1
+};
+
 /**
 ** DX8InstanceManagerClass
 **
@@ -99,7 +111,8 @@ public:
 		DWORD geometryFVF,
 		LightEnvironmentClass* lightEnv,
 		VertexMaterialClass* material,
-		TextureClass* diffuseTexture);
+		TextureClass* diffuseTexture,
+		const RigidTexGen& texGen);
 
 	// Ronin @feature 23/05/2026 DX9: R3 programmable non-instanced rigid fallback.
 	// Mirrors the instanced rigid normal-map/cloud look for meshes that fall out of
@@ -111,7 +124,9 @@ public:
 		VertexMaterialClass* material,
 		TextureClass* diffuseTexture,
 		const Matrix3D& worldTransform,
-		unsigned baseVertexOffset);
+		unsigned baseVertexOffset,
+		const RigidTexGen& texGen);
+
 
 	/**
 	** Reset the collection buffer for a new batch of instances.

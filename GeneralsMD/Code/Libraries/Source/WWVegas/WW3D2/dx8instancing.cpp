@@ -550,8 +550,10 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	VertexMaterialClass* material,
 	TextureClass* diffuseTexture,
 	const Matrix3D& worldTransform,
-	unsigned baseVertexOffset)
+	unsigned baseVertexOffset,
+	const RigidTexGen& texGen)
 {
+
 	if (renderer == nullptr) {
 		return false;
 	}
@@ -629,6 +631,17 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	RigidShaderLightingConstants lightingConstants;
 	Build_Rigid_Shader_Lighting_Constants(dev, geometryFVF, lightEnv, material, dxView, &lightingConstants);
 	Upload_Rigid_Shader_VS_Lighting_Constants(dev, lightingConstants);
+
+	
+	// Ronin @feature 16/06/2026 DX9 Rigid parity: programmable texcoord-gen (Phase 1: AFFINE_UV).
+	// Always uploaded so a disabled draw cannot inherit a previous draw's enable flag.
+	{
+		const float texGenParams[4] = { texGen.enabled ? 1.0f : 0.0f, (float)texGen.sourceMode, 0.0f, 0.0f };
+		dev->SetVertexShaderConstantF(19, texGenParams, 1);
+		dev->SetVertexShaderConstantF(20, texGen.row0, 1);
+		dev->SetVertexShaderConstantF(21, texGen.row1, 1);
+	}
+
 
 	// Ronin @feature 07/06/2026 DX9: write this mesh's transform + lighting into the
 	// instance VB. Lighting comes from the just-built constants so both the lightenv
@@ -865,7 +878,7 @@ IDirect3DVertexDeclaration9* DX8InstanceManagerClass::Get_Or_Create_Instance_Dec
 		}
 	}
 
-	// Cache miss — build a new combined declaration
+	// Cache miss ï¿½ build a new combined declaration
 	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
 	if (!dev) return nullptr;
 
@@ -901,7 +914,7 @@ IDirect3DVertexDeclaration9* DX8InstanceManagerClass::Get_Or_Create_Instance_Dec
 		offset += 4;
 	}
 
-	// Texture coordinates — expose ONLY geometry TEXCOORD0 on stream 0.
+	// Texture coordinates ï¿½ expose ONLY geometry TEXCOORD0 on stream 0.
 	// The instancing shader reads geometry UVs from TEXCOORD0 and instance rows from
 	// TEXCOORD1, TEXCOORD2, TEXCOORD3. Do NOT emit geometry TEXCOORD1+ here, or the
 	// declaration will contain duplicate TEXCOORD usage indices across streams.
@@ -913,7 +926,7 @@ IDirect3DVertexDeclaration9* DX8InstanceManagerClass::Get_Or_Create_Instance_Dec
 	}
 
 	// Ronin @bugfix 01/03/2026 DX9: Stream 1 instance data MUST use TEXCOORD1, TEXCOORD2,
-	// TEXCOORD3 — matching the compiled RigidInstance.vso's hardcoded input semantics.
+	// TEXCOORD3 ï¿½ matching the compiled RigidInstance.vso's hardcoded input semantics.
 	// The previous approach used nextTexIdx = texCount, which only matched the shader when
 	// texCount == 1. For texCount == 0 or texCount >= 2, the declaration/shader semantic
 	// indices diverged. NVIDIA tolerates this silently; AMD strictly validates and delivers
@@ -923,7 +936,7 @@ IDirect3DVertexDeclaration9* DX8InstanceManagerClass::Get_Or_Create_Instance_Dec
 	// from stream 0), but this is acceptable because:
 	//   a) Meshes with 0 UV channels are extremely rare in instancing-eligible rigid meshes
 	//   b) The gap is between streams (stream 0 has no TEXCOORD, stream 1 starts at TEXCOORD1)
-	//      which AMD handles correctly — the gap rejection only applies within a single stream
+	//      which AMD handles correctly ï¿½ the gap rejection only applies within a single stream
 	//   c) The shader's input signature is the authoritative contract; the decl must match it
 	elements[idx++] = { 1,  0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1 };
 	elements[idx++] = { 1, 16, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 2 };
@@ -1103,7 +1116,8 @@ void DX8InstanceManagerClass::Draw_Instanced(
 	DWORD geometryFVF,
 	LightEnvironmentClass* lightEnv,
 	VertexMaterialClass* material,
-	TextureClass* diffuseTexture)
+	TextureClass* diffuseTexture,
+	const RigidTexGen& texGen)
 {
 	if (m_collectedCount < 2 || !renderer) return;
 
@@ -1234,6 +1248,16 @@ void DX8InstanceManagerClass::Draw_Instanced(
 	RigidShaderLightingConstants lightingConstants;
 	Build_Rigid_Shader_Lighting_Constants(dev, geometryFVF, lightEnv, material, dxView, &lightingConstants);
 	Upload_Rigid_Shader_VS_Lighting_Constants(dev, lightingConstants);
+
+	// Ronin @feature 16/06/2026 DX9 Rigid parity: programmable texcoord-gen (Phase 1: AFFINE_UV).
+	// Per-draw constant â€” one mapper/material per batch. Always uploaded so a disabled draw
+	// cannot inherit a previous draw's enable flag.
+	{
+		const float texGenParams[4] = { texGen.enabled ? 1.0f : 0.0f, (float)texGen.sourceMode, 0.0f, 0.0f };
+		dev->SetVertexShaderConstantF(19, texGenParams, 1);
+		dev->SetVertexShaderConstantF(20, texGen.row0, 1);
+		dev->SetVertexShaderConstantF(21, texGen.row1, 1);
+	}
 
 	TextureClass* normalMapTex = nullptr;	
 
