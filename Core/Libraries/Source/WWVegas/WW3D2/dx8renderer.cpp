@@ -294,6 +294,15 @@ static ProgrammableRigidTextureMappingClass Classify_Programmable_Rigid_Texture_
 		}
 	}
 
+	// Perf and quality On/Off toggle: when true, force any mapped material to UNSUPPORTED
+	// so the gate routes it to legacy (pre-mapper instancing baseline). This is the single
+	// chokepoint the gate, Build_…TexGen, AND the debug logs all read — flipping it is
+	// authoritative, so the "(single)" / "(instanced)" AFFINE/ENV logs go silent too.
+	static const bool DISABLE_RIGID_MAPPER_PARITY = false;
+	if (DISABLE_RIGID_MAPPER_PARITY && stage0MappingClass != PROGRAMMABLE_RIGID_MAPPING_NONE) {
+		return PROGRAMMABLE_RIGID_MAPPING_UNSUPPORTED;
+	}
+
 	return stage0MappingClass;
 }
 
@@ -354,6 +363,33 @@ static void Build_Programmable_Rigid_TexGen(
 	out.row0[0] = m[0][0]; out.row0[1] = m[0][1]; out.row0[2] = m[0][2]; out.row0[3] = m[0][3];
 	out.row1[0] = m[1][0]; out.row1[1] = m[1][1]; out.row1[2] = m[1][2]; out.row1[3] = m[1][3];
 }
+
+
+// Ronin @feature 17/06/2026 DX9 Rigid parity: is a per-mesh material override reproducible
+// by the programmable rigid path? The only override kind (Material_Override) carries a
+// per-unit customUVOffset that the surrounding legacy block has ALREADY pushed into the
+// shared stage-0 LinearOffset mapper before we draw — so Build_…TexGen bakes it in for free.
+// Any override paired with a non-LinearOffset (or absent) mapper stays on legacy.
+static bool Programmable_Rigid_Material_Override_Is_Supported(
+	MeshClass* mesh,
+	VertexMaterialClass* material)
+{
+	if (mesh == nullptr) {
+		return true;
+	}
+
+	const bool hasOverride =
+		mesh->Get_User_Data() &&
+		*(int*)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE;
+	if (!hasOverride) {
+		return true; // no override → nothing to reproduce
+	}
+
+	TextureMapperClass* mapper = (material != nullptr) ? material->Peek_Mapper(0) : nullptr;
+	return mapper != nullptr &&
+		mapper->Mapper_ID() == TextureMapperClass::MAPPER_ID_LINEAR_OFFSET;
+}
+
 
 // Ronin @bugfix 23/05/2026 DX9: Apply the same projected cloud layer on the
 // non-instanced rigid path so selected meshes do not pop brighter simply by
@@ -468,6 +504,42 @@ enum RigidRenderPathType
 	RIGID_RENDER_PATH_SORTED,
 };
 
+
+#ifdef WWDEBUG
+// Ronin @diagnostic: de-duplicated per-frame logging. Returns true at most once per
+// (label|texture) per frame, so N identical units don't print N lines. Resets when
+// WW3D::Get_Frame_Count() advances. Uses only StringClass + strcmp (no std containers).
+static bool Rigid_Debug_Should_Log_Once(const char* label, const char* texName)
+{
+	enum { MAX_KEYS = 1024 };
+	static unsigned s_lastFrame = 0xFFFFFFFFu;
+	static StringClass s_keys[MAX_KEYS];
+	static int s_count = 0;
+
+	const unsigned frame = WW3D::Get_Frame_Count();
+	if (frame != s_lastFrame) {
+		s_lastFrame = frame;
+		s_count = 0;
+	}
+
+	StringClass key;
+	key += label;
+	key += "|";
+	key += texName;
+
+	for (int i = 0; i < s_count; ++i) {
+		if (strcmp(s_keys[i].str(), key.str()) == 0) {
+			return false; // already logged this key this frame
+		}
+	}
+	if (s_count < MAX_KEYS) {
+		s_keys[s_count++] = key;
+	}
+	return true; // first time this frame -> log it
+}
+#endif
+
+
 static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 	DX8PolygonRendererClass* renderer,
 	unsigned baseVertexOffset,
@@ -484,6 +556,12 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 		return RIGID_RENDER_PATH_LEGACY;
 	}
 
+
+#ifdef WWDEBUG
+	const char* texName = (stage0Texture != nullptr) ? stage0Texture->Get_Texture_Name().str() : "-";
+#endif
+
+
 	const int fvfTexCount = (geometryFVF & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
 
 	// Ronin @bugfix 25/05/2026 DX9 R3: Keep the programmable single-rigid fallback
@@ -495,24 +573,22 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 		activeShader.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE &&
 		activeShader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO;
 
+	// Single Rigid path On/Off switch: flip true to disable the single-rigid programmable path.
+	// Those meshes fall back to LEGACY_CLOUD / LEGACY (FFP), isolating Draw_Single_Rigid's per-mesh cost.
+	static const bool DISABLE_SINGLE_RIGID_PATH = false;
+
 	const bool canUseProgrammableFallback =
+		!DISABLE_SINGLE_RIGID_PATH &&
 		allowProgrammableRigidFallback &&
 		shaderUsesOpaqueBlend &&
 		((geometryFVF & D3DFVF_NORMAL) != 0) &&
 		(fvfTexCount == 1) &&
 		(stage1Texture == nullptr);
 
+
 	RigidTexGen singleRigidTexGen;
 	Build_Programmable_Rigid_TexGen(
 		material, Classify_Programmable_Rigid_Texture_Mapping(material), singleRigidTexGen);
-
-		#ifdef WWDEBUG
-			if (singleRigidTexGen.enabled) {
-		WWDEBUG_SAY(("Rigid AFFINE_UV (single): mapperID=%d tex=%s",
-			material->Peek_Mapper(0)->Mapper_ID(),
-			(stage0Texture != nullptr) ? stage0Texture->Get_Texture_Name().str() : "-"));
-	}
-		#endif
 
 	if (canUseProgrammableFallback &&
 		TheDX8InstanceManager.Draw_Single_Rigid(
@@ -524,6 +600,19 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 			worldTransform,
 			baseVertexOffset,
 			singleRigidTexGen)) {
+
+		
+		#ifdef WWDEBUG
+		if (singleRigidTexGen.enabled) {
+			if (Rigid_Debug_Should_Log_Once("SINGLE", texName)) { 
+
+			WWDEBUG_SAY(("Rigid AFFINE_UV (single, ACTUAL): mapperID=%d tex=%s",
+				material->Peek_Mapper(0)->Mapper_ID(),
+				(stage0Texture != nullptr) ? stage0Texture->Get_Texture_Name().str() : "-"));
+			}
+		}
+		#endif
+		
 
 		DX8Wrapper::BindLayoutFVF(geometryFVF, "Render_Rigid_Mesh_With_Optional_Programmable_Effects post-R3 restore");
 		DX8Wrapper::Set_Texture(0, stage0Texture);
@@ -542,14 +631,34 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 
 	if (!applyCloud) {
 		renderer->Render(baseVertexOffset);
+
+		
+		#ifdef WWDEBUG
+		if (Rigid_Debug_Should_Log_Once("LEGACY_NOCLOUD", texName)) {
+		WWDEBUG_SAY(("Rigid path=LEGACY (no cloud) tex=%s",
+			(stage0Texture != nullptr) ? stage0Texture->Get_Texture_Name().str() : "-"));
+		}
+		#endif
+		
 		return RIGID_RENDER_PATH_LEGACY;
 	}
+
 
 	TextureClass* rigidCloudTex = Get_Rigid_Cloud_Texture();
 	if (rigidCloudTex == nullptr) {
 		renderer->Render(baseVertexOffset);
+
+		
+		#ifdef WWDEBUG
+		if (Rigid_Debug_Should_Log_Once("LEGACY_NOCLOUDTEX", texName)) {
+		WWDEBUG_SAY(("Rigid path=LEGACY (cloud tex missing) tex=%s",
+			(stage0Texture != nullptr) ? stage0Texture->Get_Texture_Name().str() : "-"));
+		}
+		#endif
+		
 		return RIGID_RENDER_PATH_LEGACY;
 	}
+
 
 	DX8Wrapper::Apply_Render_State_Changes();
 
@@ -560,6 +669,29 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 
 	W3DShaderManager::resetShader(W3DShaderManager::ST_CLOUD_TEXTURE);
 	W3DShaderManager::setTexture(1, nullptr);
+
+	
+	#ifdef WWDEBUG
+	// Why did this mesh fall to LEGACY_CLOUD instead of SINGLE_RIGID? Dump every factor of
+	// canUseProgrammableFallback so we can see which one is 0 (e.g. the group-B nvtreads).
+	// If ALL show 1, the gate passed and Draw_Single_Rigid itself bailed (VB lock / null shader).
+	{
+		const char* dbgTexName = (stage0Texture != nullptr) ? stage0Texture->Get_Texture_Name().str() : "-";
+		if (Rigid_Debug_Should_Log_Once("LEGACY_CLOUD", dbgTexName)) {
+			WWDEBUG_SAY(("Rigid path=LEGACY_CLOUD pass=%s tex=%s | allowFB=%d opaque=%d normal=%d fvfTex=%d stage1=%d (src=%d dst=%d)",
+				ShaderClass::Is_Backface_Culling_Inverted() ? "REFLECT" : "MAIN",
+				dbgTexName,
+				allowProgrammableRigidFallback ? 1 : 0,
+				shaderUsesOpaqueBlend ? 1 : 0,
+				((geometryFVF & D3DFVF_NORMAL) != 0) ? 1 : 0,
+				fvfTexCount,
+				(stage1Texture != nullptr) ? 1 : 0,
+				(int)activeShader.Get_Src_Blend_Func(),
+				(int)activeShader.Get_Dst_Blend_Func()));
+		}
+	}
+	#endif
+
 
 	return RIGID_RENDER_PATH_LEGACY_CLOUD;
 }
@@ -2429,6 +2561,20 @@ void DX8TextureCategoryClass::Render()
 			// Issue the instanced draw call for this renderer group
 			if (collected >= minInstancedBatchSize) {
 
+				
+				#ifdef WWDEBUG
+				{
+					TextureClass* dbgTex0 = Peek_Texture(0);
+					if (Rigid_Debug_Should_Log_Once("INSTANCED", (dbgTex0 != nullptr) ? dbgTex0->Get_Texture_Name().str() : "-")) {
+					WWDEBUG_SAY(("Rigid INSTANCED x%u: mapperClass=%d tex=%s",
+						collected,
+						(int)rigidMappingClass,
+						(dbgTex0 != nullptr) ? dbgTex0->Get_Texture_Name().str() : "-"));
+					}
+				}
+				#endif
+				
+
 				RigidTexGen instancedTexGen;
 				Build_Programmable_Rigid_TexGen(vmaterial, rigidMappingClass, instancedTexGen);
 				
@@ -2548,6 +2694,39 @@ void DX8TextureCategoryClass::Render()
 		}
 #endif
 
+		
+		#ifdef WWDEBUG
+		// TEMP: for a mapped rigid mesh that did NOT get instanced, report the first failing
+		// per-mesh exclusion. Explains why live-unit treads stay non-instanced while their
+		// wreckage instances. Runs per-mesh per-frame — remove after diagnosis.
+		if (Classify_Programmable_Rigid_Texture_Mapping(vmaterial) != PROGRAMMABLE_RIGID_MAPPING_NONE) {
+			TextureClass* dbgT = Peek_Texture(0);
+			const char* tn = (dbgT != nullptr) ? dbgT->Get_Texture_Name().str() : "-";
+			if (Rigid_Debug_Should_Log_Once("NOT-INST", tn)) { 
+			if (mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN))
+				WWDEBUG_SAY(("NOT-INSTANCED %s: SKIN", tn));
+			else if (mesh->Get_User_Data() && *(int*)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE)
+				WWDEBUG_SAY(("NOT-INSTANCED %s: MATERIAL_OVERRIDE", tn));
+			else if (mesh->Get_ObjectScale() != 1.0f)
+				WWDEBUG_SAY(("NOT-INSTANCED %s: ObjectScale=%.3f", tn, mesh->Get_ObjectScale()));
+			else if (mesh->Get_Alpha_Override() != 1.0f)
+				WWDEBUG_SAY(("NOT-INSTANCED %s: AlphaOverride=%.3f", tn, mesh->Get_Alpha_Override()));
+			else if (mesh->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED))
+				WWDEBUG_SAY(("NOT-INSTANCED %s: ALIGNED", tn));
+			else if (mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED))
+				WWDEBUG_SAY(("NOT-INSTANCED %s: ORIENTED", tn));
+			else if (!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled())
+				WWDEBUG_SAY(("NOT-INSTANCED %s: SORT", tn));
+			else if (mesh->Get_Base_Vertex_Offset() == VERTEX_BUFFER_OVERFLOW)
+				WWDEBUG_SAY(("NOT-INSTANCED %s: VB_OVERFLOW", tn));
+			else
+				WWDEBUG_SAY(("NOT-INSTANCED %s: passed all flags - alone this frame (no >=2 equivalent batch / lightenv mismatch)", tn));
+		}
+		}
+		#endif
+		
+
+
 		// Ronin @bugfix 24/05/2026 DX9 R3: The single-rigid programmable fallback
 		// must obey the same mesh contract as the instanced rigid path, minus only
 		// the instance-count requirement. (selection/material override, object scale,
@@ -2558,7 +2737,7 @@ void DX8TextureCategoryClass::Render()
 			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED) &&
 			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
 			mesh->Get_Alpha_Override() == 1.0f &&
-			!(mesh->Get_User_Data() && *(int*)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE) &&
+			Programmable_Rigid_Material_Override_Is_Supported(mesh, vmaterial) &&
 			mesh->Get_ObjectScale() == 1.0f &&
 			!Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(vmaterial);
 

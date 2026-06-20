@@ -123,7 +123,7 @@ VS_OUTPUT main(VS_INPUT input)
     float2 mappedUV = input.uv0;
     if (g_TexGenParams.x > 0.5f)
     {
-        float4 src = float4(input.uv0, 0.0f, 1.0f); // sourceMode 0; env modes added later
+        float4 src = float4(input.uv0, 1.0f, 0.0f); // 2D UV: D3DTTFF_COUNT2 pads to (u,v,1,0) — translation lives in column 2 (Z)
         mappedUV.x = dot(g_TexMatrixRow0, src);
         mappedUV.y = dot(g_TexMatrixRow1, src);
     }

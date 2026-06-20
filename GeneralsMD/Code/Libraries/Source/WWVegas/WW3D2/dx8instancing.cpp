@@ -575,12 +575,14 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 		return false;
 	}
 
+	// Ronin @bugfix 17/06/2026 DX9 Rigid parity: the normal map is OPTIONAL here, mirroring
+	// Draw_Instanced. Meshes without a <basename>_NRM map (e.g. scrolling treads) must still
+	// take the single-rigid path instead of silently falling back to legacy.
 	TextureClass* normalMapTex = Get_Normal_Map_For_Diffuse_Texture(diffuseTexture);
-	if (normalMapTex == nullptr) {
-		return false;
-	}
+	const bool normalMapActive = (normalMapTex != nullptr);
 
-	// Make sure the category's stage-0 texture/material/shader state is already on the device
+
+	// Make sure the category's stage-0 texture/material/shader state is alr""eady on the device
 	// before we temporarily switch to the programmable rigid fallback.
 	DX8Wrapper::Apply_Render_State_Changes();
 
@@ -669,8 +671,11 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 		HRESULT hrFill = m_instanceVB->Lock(0, sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
 		if (FAILED(hrFill)) {
 			WWDEBUG_SAY(("DX8InstanceManager: Single rigid instance VB lock failed: 0x%08X", hrFill));
-			normalMapTex->Release_Ref();
+			if (normalMapTex != nullptr) {
+				normalMapTex->Release_Ref();
+			}
 			return false;
+
 		}
 		memcpy(pData, &inst, sizeof(inst));
 		m_instanceVB->Unlock();
@@ -712,18 +717,24 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 			dev->SetTexture(1, nullptr);
 		}
 
-		const float psC2[4] = { 1.0f, 1.0f, 0.0f, 0.0f };
+		const float psC2[4] = { normalMapActive ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
 		dev->SetPixelShaderConstantF(2, psC2, 1);
 
 		Upload_Rigid_Shader_PS_Lighting_Constants(dev, lightingConstants);
 
-		IDirect3DBaseTexture9* d3dNormal = normalMapTex->Peek_D3D_Texture();
-		dev->SetTexture(2, d3dNormal);
-		dev->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-		dev->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-		dev->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-		dev->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-		dev->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+		if (normalMapActive) {
+			IDirect3DBaseTexture9* d3dNormal = normalMapTex->Peek_D3D_Texture();
+			dev->SetTexture(2, d3dNormal);
+			dev->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+			dev->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+		}
+		else {
+			dev->SetTexture(2, nullptr);
+		}
+
 	}
 
 	renderer->Render_Instanced(0);
@@ -765,7 +776,9 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	dev->SetTexture(1, nullptr);
 	dev->SetTexture(2, nullptr);
 
-	normalMapTex->Release_Ref();
+	if (normalMapTex != nullptr) {
+		normalMapTex->Release_Ref();
+	}
 
 	ShaderClass::Invalidate();
 	DX8Wrapper::Invalidate_Vertex_Buffer_State();
