@@ -962,7 +962,13 @@ void W3DDisplay::init()
 
 	// we're now online
 	m_initialized = true;
-	if( TheGlobalData->m_displayDebug )
+	// Ronin @diagnostic 20/06/2026: -displayDebug (which sets m_displayDebug) is compiled out of
+	// release, so the on-screen stat HUD never activates there — and that's exactly where we're
+	// measuring perf. Force the StatDebugDisplay callback on for release testing. The whole
+	// gather/draw chain (gatherDebugStats / drawDebugStats) already runs in release; only this
+	// switch was gated. Set to false before shipping.
+	static const bool RONIN_FORCE_STAT_HUD = false;
+	if( TheGlobalData->m_displayDebug || RONIN_FORCE_STAT_HUD )
 	{
 		m_debugDisplayCallback = StatDebugDisplay;
 	}
@@ -1677,6 +1683,50 @@ void W3DDisplay::drawFPSStats()
 }
 
 
+// Ronin @diagnostic 21/06/2026 DX9 P0 bisect: INDEPENDENT on-screen readout of the single-rigid
+// per-frame draw count + active perf mode. Deliberately separate from the debug-stats DisplayStrings
+// (own string, own position, own color) so it shows in RELEASE during A/B without a debugger.
+extern unsigned DX8_Get_Single_Rigid_Last_Frame_Draw_Count();
+extern unsigned DX8_Get_Single_Rigid_Last_Frame_Flush_Count();
+extern int      DX8_Get_Single_Rigid_Perf_Mode();
+
+
+static void drawSingleRigidPerfReadout()
+{
+	if (TheDisplayStringManager == NULL || TheFontLibrary == NULL) {
+		return;
+	}
+
+	static DisplayString* s_srString = NULL;
+	if (s_srString == NULL) {
+		s_srString = TheDisplayStringManager->newDisplayString();
+		if (s_srString == NULL) {
+			return;
+		}
+		GameFont* font = TheFontLibrary->getFont("FixedSys", 8, FALSE);
+		s_srString->setFont(font);
+	}
+
+	const unsigned srDraws   = DX8_Get_Single_Rigid_Last_Frame_Draw_Count();
+	const unsigned srFlushes = DX8_Get_Single_Rigid_Last_Frame_Flush_Count();
+	const float    srAvg     = (srFlushes > 0) ? ((float)srDraws / (float)srFlushes) : 0.0f;
+
+	UnicodeString text;
+	text.format(L"[SR] mode=%d  draws/frame=%u  flushes=%u  avgBatch=%.1f",
+		DX8_Get_Single_Rigid_Perf_Mode(),
+		srDraws,
+		srFlushes,
+		srAvg);
+	s_srString->setText(text);
+
+
+	const Int   x = 3;
+	const Int   y = 300; // independent slot; move if it overlaps the stats column
+	const Color textColor = GameMakeColor(255, 255, 0, 255); // yellow = "ours", not the white stats
+	const Color dropColor = GameMakeColor(0, 0, 0, 255);
+	s_srString->draw(x, y, textColor, dropColor);
+}
+
 //=============================================================================
 void StatDebugDisplay( DebugDisplayInterface *, void *, FILE *fp )
 {
@@ -2073,6 +2123,9 @@ AGAIN:
 					// draw the current debug display
 					drawCurrentDebugDisplay();
 				}
+
+				// Ronin @diagnostic 21/06/2026 DX9 P0 bisect: independent single-rigid readout (release too).
+				drawSingleRigidPerfReadout();
 
 #if defined(RTS_DEBUG)
 				if (TheGlobalData->m_benchmarkTimer > 0)

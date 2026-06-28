@@ -31,6 +31,8 @@
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "assetmgr.h"
 #include "vertmaterial.h"
+#include "ww3d.h"   // Ronin @diagnostic 21/06/2026: WW3D::Get_Frame_Count for the per-frame SR counter
+
 
 // Global instance
 DX8InstanceManagerClass TheDX8InstanceManager;
@@ -378,6 +380,8 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	: m_available(false)
 	, m_enabled(true)
 	, m_instanceVB(nullptr)
+	, m_singleRigidVB(nullptr)
+	, m_singleRigidCursor(0)
 	, m_instanceVS(nullptr)
 	, m_instanceVSNoColor(nullptr)
 	, m_rigidVS(nullptr)
@@ -386,6 +390,8 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	, m_declCacheCount(0)
 	, m_geometryDeclCacheCount(0)
 	, m_collectedCount(0)
+	, m_pendingSingleRigidCount(0)
+	, m_srFVF(0)
 	, m_instancedDrawCalls(0)
 	, m_instancedMeshes(0)
 	, m_instancedMixedLightDrawCalls(0)
@@ -406,6 +412,8 @@ void DX8InstanceManagerClass::Release_Resources()
   Release_Instance_Texture_Caches();
 
 	if (m_instanceVB) { m_instanceVB->Release(); m_instanceVB = nullptr; }
+	if (m_singleRigidVB) { m_singleRigidVB->Release(); m_singleRigidVB = nullptr; }
+	m_singleRigidCursor = 0;
 	if (m_instanceVS) { m_instanceVS->Release(); m_instanceVS = nullptr; }
 	if (m_instanceVSNoColor) { m_instanceVSNoColor->Release(); m_instanceVSNoColor = nullptr; }
 	if (m_rigidVS) { m_rigidVS->Release(); m_rigidVS = nullptr; }
@@ -538,6 +546,30 @@ bool DX8InstanceManagerClass::Load_Instance_Shader()
 
 // ----------------------------------------------------------------------------
 
+// Ronin @diagnostic 21/06/2026 DX9 P0 bisect: localize where the single-rigid cost lives.
+// Flip g_SR_PerfMode and rebuild to attribute the 375->231 fps cliff:
+//   0 = full path (normal)
+//   1 = do ALL state setup + lock, but SKIP the draw           -> isolates GPU/draw cost
+//   2 = also SKIP the per-mesh DISCARD lock + upload           -> isolates the lock cost
+//   3 = early-out at the very top, do nothing                  -> upper bound: is the cost even here?
+// Counts are surfaced ON SCREEN (drawSingleRigidPerfReadout in W3DDisplay.cpp) because we
+// A/B in release, where WWDEBUG_SAY isn't visible without a debugger attached.
+static int      g_SR_PerfMode       = 0;
+static unsigned g_SR_DrawCount      = 0;          // accumulating during the current frame
+static unsigned g_SR_LastFrameCount = 0;          // total from the last COMPLETED frame (for the HUD)
+static unsigned g_SR_LastFrame      = 0xFFFFFFFFu;
+
+// Ronin @diagnostic 26/06/2026 DX9 P2: how many category flushes per frame (=> avg batch size).
+// Many tiny flushes => per-category pipeline re-setup is the cost; few big ones => it's per-mesh.
+static unsigned g_SR_FlushCount          = 0;
+static unsigned g_SR_LastFrameFlushCount = 0;
+
+// Accessors for the on-screen readout in W3DDisplay.cpp (kept OUT of the debug-stats system).
+unsigned DX8_Get_Single_Rigid_Last_Frame_Draw_Count()  { return g_SR_LastFrameCount; }
+unsigned DX8_Get_Single_Rigid_Last_Frame_Flush_Count() { return g_SR_LastFrameFlushCount; }
+int      DX8_Get_Single_Rigid_Perf_Mode()              { return g_SR_PerfMode; }
+
+
 // Ronin @bugfix 23/05/2026 DX9 R3: Reuse the exact instanced programmable rigid path
 // for the single-mesh fallback too. The separate non-instanced VS path diverged from
 // the working instanced shader contract and produced persistent normal-map artifacts on
@@ -558,6 +590,25 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 		return false;
 	}
 
+	// Ronin @diagnostic 21/06/2026 DX9 P0 bisect: per-frame count + mode gate.
+	// NOTE: only runs on the legacy INLINE path (USE_SINGLE_RIGID_BATCH=false). The flush counter
+	// lives in Collect_Single_Rigid, which is the path that actually batches + flushes.
+	{
+		const unsigned f = WW3D::Get_Frame_Count();
+		if (f != g_SR_LastFrame) {
+			g_SR_LastFrameCount = g_SR_DrawCount;
+			g_SR_LastFrame = f;
+			g_SR_DrawCount = 0;
+		}
+		++g_SR_DrawCount;
+
+	}
+
+	if (g_SR_PerfMode == 3) {
+		return true; // skip the entire body (perf upper-bound test)
+	}
+
+
 	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
 	if (dev == nullptr) {
 		return false;
@@ -571,7 +622,7 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	const bool hasVertexColor = (geometryFVF & D3DFVF_DIFFUSE) != 0;
 	IDirect3DVertexShader9* selectedVS = hasVertexColor ? m_instanceVS : m_instanceVSNoColor;
 	IDirect3DPixelShader9* selectedPS = m_instancePS;
-	if (selectedVS == nullptr || selectedPS == nullptr || m_instanceVB == nullptr) {
+	if (selectedVS == nullptr || selectedPS == nullptr || m_singleRigidVB == nullptr) {
 		return false;
 	}
 
@@ -582,45 +633,37 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	const bool normalMapActive = (normalMapTex != nullptr);
 
 
-	// Make sure the category's stage-0 texture/material/shader state is alr""eady on the device
-	// before we temporarily switch to the programmable rigid fallback.
+	// Make sure the category's stage-0 texture/material/shader state (incl. the geometry VB on
+	// stream 0) is on the device before we switch to the programmable rigid path.
 	DX8Wrapper::Apply_Render_State_Changes();
 
-	IDirect3DVertexBuffer9* savedVB0 = nullptr;
-	UINT savedOffset0 = 0, savedStride0 = 0;
-	dev->GetStreamSource(0, &savedVB0, &savedOffset0, &savedStride0);
-
-	IDirect3DIndexBuffer9* savedIB = nullptr;
-	dev->GetIndices(&savedIB);
-
-	DWORD savedFVF = 0;
-	dev->GetFVF(&savedFVF);
-
-	IDirect3DVertexDeclaration9* savedDecl = nullptr;
-	dev->GetVertexDeclaration(&savedDecl);
-
-	IDirect3DVertexShader9* savedVS = nullptr;
-	dev->GetVertexShader(&savedVS);
-
-	IDirect3DPixelShader9* savedPS = nullptr;
-	dev->GetPixelShader(&savedPS);
-
-	BOOL savedSoftwareVP = dev->GetSoftwareVertexProcessing();
-	if (savedSoftwareVP) {
-		dev->SetSoftwareVertexProcessing(FALSE);
-	}
-
+	// Ronin @perf 20/06/2026 DX9 P0: removed the per-mesh device-state save via Get* queries.
+	// Each Get* (Stream/Indices/FVF/Decl/VS/PS/SoftwareVP) stalls the D3D9 runtime; across
+	// hundreds of single-rigid meshes that was the dominant cost. We don't need them:
+	//   * Render_Instanced is a bare DrawIndexedPrimitive — it never changes stream 0 or the
+	//     index buffer, so there's nothing to save there.
+	//   * VS/PS are fixed-function (null) on entry, so we restore to null at the end, not to a
+	//     queried value. The caller re-binds the FFP layout/shader and we Invalidate() below.
 	dev->SetVertexDeclaration(instanceDecl);
 	dev->SetVertexShader(selectedVS);
 	dev->SetPixelShader(selectedPS);
+	dev->SetSoftwareVertexProcessing(FALSE); // VS 3.0 instancing needs HW VP; no-op on pure-HW devices
 
 	dev->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | 1);
 	dev->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1);
 
-	if (savedVB0) {
-		dev->SetStreamSource(0, savedVB0, savedOffset0, savedStride0);
+	// Stream 0 already holds the geometry VB (from Apply_Render_State_Changes above);
+	// only the per-instance stream needs binding.
+	// Ronin @perf 24/06/2026 DX9 P0.5: bind this mesh's slot in the single-rigid ring buffer. Advance
+	// the cursor here (all modes) so the slot is stable for both the bind and the upload below; the
+	// upload picks DISCARD vs NOOVERWRITE from ringSlot. The GPU reads instance 0 at this byte offset.
+	const unsigned ringSlot = m_singleRigidCursor;
+	m_singleRigidCursor++;
+	if (m_singleRigidCursor >= SINGLE_RIGID_RING_INSTANCES) {
+		m_singleRigidCursor = 0;
 	}
-	dev->SetStreamSource(1, m_instanceVB, 0, sizeof(InstanceData));
+	const unsigned ringByteOffset = ringSlot * sizeof(InstanceData);
+	dev->SetStreamSource(1, m_singleRigidVB, ringByteOffset, sizeof(InstanceData));
 
 	D3DMATRIX identityMat;
 	memset(&identityMat, 0, sizeof(identityMat));
@@ -648,7 +691,7 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	// Ronin @feature 07/06/2026 DX9: write this mesh's transform + lighting into the
 	// instance VB. Lighting comes from the just-built constants so both the lightenv
 	// and FFP-readback branches reproduce the previous shared-constant VS behavior.
-	{
+	if (g_SR_PerfMode < 2) { // P0 bisect: mode>=2 skips the per-mesh DISCARD lock + upload
 		InstanceData inst;
 		memcpy(inst.row0, (const float*)&worldTransform[0], sizeof(inst.row0));
 		memcpy(inst.row1, (const float*)&worldTransform[1], sizeof(inst.row1));
@@ -668,9 +711,13 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 		memcpy(inst.lightDiffuse3, lightingConstants.c18, sizeof(inst.lightDiffuse3));
 
 		void* pData = nullptr;
-		HRESULT hrFill = m_instanceVB->Lock(0, sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
+		// Ronin @perf 24/06/2026 DX9 P0.5: ring + NOOVERWRITE instead of a per-mesh DISCARD on a
+		// 1-instance VB. DISCARD only on the first slot of the frame (ringSlot 0); every other mesh
+		// appends with NOOVERWRITE, which the driver guarantees won't stall (no rename, no wait).
+		const DWORD lockFlag = (ringSlot == 0) ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE;
+		HRESULT hrFill = m_singleRigidVB->Lock(ringByteOffset, sizeof(InstanceData), &pData, lockFlag);
 		if (FAILED(hrFill)) {
-			WWDEBUG_SAY(("DX8InstanceManager: Single rigid instance VB lock failed: 0x%08X", hrFill));
+			WWDEBUG_SAY(("DX8InstanceManager: Single rigid ring VB lock failed: 0x%08X", hrFill));
 			if (normalMapTex != nullptr) {
 				normalMapTex->Release_Ref();
 			}
@@ -678,7 +725,7 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 
 		}
 		memcpy(pData, &inst, sizeof(inst));
-		m_instanceVB->Unlock();
+		m_singleRigidVB->Unlock();
 	}
 
 	{
@@ -737,41 +784,23 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 
 	}
 
-	renderer->Render_Instanced(0);
-
+	if (g_SR_PerfMode == 0) {
+		renderer->Render_Instanced(0); // P0 bisect: modes 1/2/3 skip the actual draw
+	}
+	
+	// Ronin @perf 20/06/2026 DX9 P0: restore to known fixed-function defaults, not queried values.
+	// CRITICAL: reset the stream-frequency divider (otherwise the next non-instanced draw misreads
+	// the streams) and clear the programmable VS/PS (the caller's BindLayoutFVF clears VS but not
+	// PS). Stream 0 / index buffer were never changed; the caller re-binds the FFP layout and the
+	// Invalidate() below makes DX8Wrapper re-apply its tracked VB/shader state on the next draw.
 	dev->SetStreamSourceFreq(0, 1);
 	dev->SetStreamSourceFreq(1, 1);
 	dev->SetStreamSource(1, nullptr, 0, 0);
 
-	if (savedDecl) {
-		dev->SetVertexDeclaration(savedDecl);
-	}
-	else if (savedFVF != 0) {
-		dev->SetFVF(savedFVF);
-	}
-	else if (DX8Wrapper::Get_Current_FVF() != 0) {
-		dev->SetFVF(DX8Wrapper::Get_Current_FVF());
-	}
+	dev->SetVertexDeclaration(nullptr);
+	dev->SetVertexShader(nullptr);
+	dev->SetPixelShader(nullptr);
 
-	dev->SetVertexShader(savedVS);
-	dev->SetPixelShader(savedPS);
-
-	if (savedSoftwareVP) {
-		dev->SetSoftwareVertexProcessing(savedSoftwareVP);
-	}
-
-	if (savedVB0) {
-		dev->SetStreamSource(0, savedVB0, savedOffset0, savedStride0);
-	}
-	if (savedIB) {
-		dev->SetIndices(savedIB);
-	}
-
-	if (savedVB0) savedVB0->Release();
-	if (savedIB) savedIB->Release();
-	if (savedDecl) savedDecl->Release();
-	if (savedVS) savedVS->Release();
-	if (savedPS) savedPS->Release();
 
 	dev->SetTexture(1, nullptr);
 	dev->SetTexture(2, nullptr);
@@ -784,6 +813,291 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	DX8Wrapper::Invalidate_Vertex_Buffer_State();
 
 	return true;
+}
+
+// Ronin @perf 24/06/2026 DX9 P1: defer one eligible single-rigid mesh into the per-category batch.
+// Mirrors Add_Instance, but also remembers the geometry + per-mesh texgen and the category-constant
+// material/diffuse/FVF so Flush_Single_Rigid can set the programmable pipeline exactly once.
+bool DX8InstanceManagerClass::Collect_Single_Rigid(
+	DX8PolygonRendererClass* renderer,
+	DWORD geometryFVF,
+	LightEnvironmentClass* lightEnv,
+	VertexMaterialClass* material,
+	TextureClass* diffuseTexture,
+	const Matrix3D& worldTransform,
+	const RigidTexGen& texGen,
+	const ShaderClass& shader)
+{
+
+	if (renderer == nullptr) {
+		return false;
+	}
+
+	// If the per-category batch is full, flush what we have to make room (same category state).
+	if (m_pendingSingleRigidCount >= MAX_PENDING_SINGLE_RIGID) {
+		Flush_Single_Rigid();
+	}
+
+	PendingSingleRigid& rec = m_pendingSingleRigid[m_pendingSingleRigidCount];
+	memcpy(rec.inst.row0, (const float*)&worldTransform[0], sizeof(rec.inst.row0));
+	memcpy(rec.inst.row1, (const float*)&worldTransform[1], sizeof(rec.inst.row1));
+	memcpy(rec.inst.row2, (const float*)&worldTransform[2], sizeof(rec.inst.row2));
+	rec.lightEnv = lightEnv;
+	rec.renderer = renderer;
+	rec.texGen   = texGen;
+	rec.diffuse  = diffuseTexture; // per-record: a container flush spans many texture-categories
+	rec.material = material;
+	rec.shader   = shader;         // per-record render state (blend/z/alpha-test/cull)
+	m_pendingSingleRigidCount++;
+
+	// Container-constant: every mesh in a DX8RigidFVFCategoryContainer shares one FVF (one decl/VB).
+	m_srFVF = geometryFVF;
+
+	// Keep the on-screen [SR] readout accurate now that meshes route through Collect, not Draw.
+	{
+		const unsigned f = WW3D::Get_Frame_Count();
+		if (f != g_SR_LastFrame) {
+			g_SR_LastFrameCount = g_SR_DrawCount;
+			g_SR_LastFrameFlushCount = g_SR_FlushCount;
+			g_SR_LastFrame = f;
+			g_SR_DrawCount = 0;
+			g_SR_FlushCount = 0;
+		}
+		++g_SR_DrawCount;
+	}
+
+	return true;
+}
+
+// Ronin @perf 24/06/2026 DX9 P1: draw the whole per-category single-rigid batch with ONE ring lock and
+// ONE programmable-state setup/teardown. Structurally mirrors Draw_Instanced, but each collected mesh
+// keeps its own geometry, so we loop N single-instance DrawIndexedPrimitive calls that share all state.
+void DX8InstanceManagerClass::Flush_Single_Rigid()
+{
+	const unsigned count = m_pendingSingleRigidCount;
+	if (count == 0) {
+		return;
+	}
+	++g_SR_FlushCount; // P2 diagnostic: count non-empty category flushes this frame
+	m_pendingSingleRigidCount = 0; // consume now so a re-entrant Collect (full) can't recurse
+
+	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev == nullptr || m_singleRigidVB == nullptr) {
+		return;
+	}
+
+	IDirect3DVertexDeclaration9* instanceDecl = Get_Or_Create_Instance_Decl(m_srFVF);
+	if (instanceDecl == nullptr) {
+		return;
+	}
+
+	const bool hasVertexColor = (m_srFVF & D3DFVF_DIFFUSE) != 0;
+	IDirect3DVertexShader9* selectedVS = hasVertexColor ? m_instanceVS : m_instanceVSNoColor;
+	IDirect3DPixelShader9* selectedPS = m_instancePS;
+	if (selectedVS == nullptr || selectedPS == nullptr) {
+		return;
+	}
+
+	// Ensure stream 0 (category geometry VB) + index buffer + category texture/material/shader are on
+	// the device before we switch to the programmable pipeline.
+	DX8Wrapper::Apply_Render_State_Changes();
+
+	// --- Fill per-instance lighting and upload the whole batch to the ring (ONE lock) ----------
+	void* pData = nullptr;
+	HRESULT hr = m_singleRigidVB->Lock(0, count * sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
+	if (FAILED(hr)) {
+		WWDEBUG_SAY(("DX8InstanceManager: Single-rigid batch lock failed: 0x%08X", hr));
+		return;
+	}
+	InstanceData* dst = (InstanceData*)pData;
+	for (unsigned i = 0; i < count; ++i) {
+		PendingSingleRigid& rec = m_pendingSingleRigid[i];
+		Extract_Instance_Lighting(rec.lightEnv, rec.inst); // no device queries
+		dst[i] = rec.inst;
+	}
+	m_singleRigidVB->Unlock();
+
+	// --- Programmable pipeline: set ONCE for the whole batch -----------------------------------
+	dev->SetVertexDeclaration(instanceDecl);
+	dev->SetVertexShader(selectedVS);
+	dev->SetPixelShader(selectedPS);
+	dev->SetSoftwareVertexProcessing(FALSE);
+
+	dev->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | 1);
+	dev->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1);
+
+	D3DMATRIX identityMat;
+	memset(&identityMat, 0, sizeof(identityMat));
+	identityMat._11 = identityMat._22 = identityMat._33 = identityMat._44 = 1.0f;
+	dev->SetTransform(D3DTS_WORLD, &identityMat);
+
+	D3DXMATRIX dxView;
+	Upload_Rigid_View_Projection(dev, &dxView); // frame-constant: once per batch now, not per mesh
+
+	// Cloud (category-constant) -----------------------------------------------------------------
+	const bool cloudEnabled =
+		(TheGlobalData != nullptr) &&
+		TheGlobalData->m_useCloudMap &&
+		(m_srFVF & D3DFVF_DIFFUSE) == 0;
+	TextureClass* rigidCloudTex = cloudEnabled ? Get_Valid_Rigid_Cloud_Texture() : nullptr;
+	const bool cloudActive = cloudEnabled && (rigidCloudTex != nullptr);
+
+	float cloudScale = 0.0f, cloudOffsetX = 0.0f, cloudOffsetY = 0.0f;
+	if (cloudActive) {
+		W3DShaderManager::getCloudMapState(&cloudScale, &cloudOffsetX, &cloudOffsetY);
+	}
+	const float c14[4] = { cloudActive ? 1.0f : 0.0f, cloudScale, cloudOffsetX, cloudOffsetY };
+	dev->SetVertexShaderConstantF(14, c14, 1);
+
+	const float psC0[4] = { cloudActive ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(0, psC0, 1);
+	const float psC1[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(1, psC1, 1);
+
+	if (cloudActive) {
+		IDirect3DBaseTexture9* d3dCloud = rigidCloudTex->Peek_D3D_Texture();
+		dev->SetTexture(1, d3dCloud);
+		dev->SetSamplerState(1, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(1, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(1, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(1, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+		dev->SetSamplerState(1, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+	} else {
+		dev->SetTexture(1, nullptr);
+	}
+
+	// Stage-0 (diffuse) sampler defaults for the programmable path. FFP categories normally set these
+	// per texture; a container flush spans many, so use the common linear/wrap defaults once.
+	dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+	dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+
+	// --- Per-mesh draw loop. State that varies BETWEEN texture-categories (material, diffuse, normal
+	// map) is swapped only when it changes; records arrive grouped by category, so these swaps happen
+	// ~once per category, not per mesh. ---------------------------------------------------------
+	VertexMaterialClass* lastMaterial = nullptr;
+	TextureClass*        lastDiffuse  = nullptr;
+	bool                 haveMaterial = false;
+	bool                 haveDiffuse  = false;
+	TextureClass*        curNormalMap = nullptr;     // ref owned here; released on change/teardown
+	bool                 normalMapActive = false;
+	RigidTexGen          lastTexGen;
+	bool                 haveLastTexGen = false;
+	unsigned             lastShaderBits = 0;
+	bool                 haveShader = false;
+
+	for (unsigned i = 0; i < count; ++i) {
+		PendingSingleRigid& rec = m_pendingSingleRigid[i];
+
+		// Per-shader: re-apply this group's render state (blend/z/alpha-test/cull/fog). The gate
+		// guarantees opaque BLEND, but z/alpha-test/cull still vary and a container flush spans many
+		// categories — so the batch must NOT inherit one category's state (that was the translucent /
+		// popping bug). Set_Shader+Apply runs the engine's own render-state path; only SHADER_CHANGED is
+		// dirty here, so it sets render states, not the decl. We re-assert the programmable pipeline
+		// after, and force material/diffuse re-bind in case Apply touched tracked texture/material state.
+		if (!haveShader || rec.shader.Get_Bits() != lastShaderBits) {
+			DX8Wrapper::Set_Shader(rec.shader);
+			DX8Wrapper::Apply_Render_State_Changes();
+			dev->SetVertexDeclaration(instanceDecl);
+			dev->SetVertexShader(selectedVS);
+			dev->SetPixelShader(selectedPS);
+			dev->SetSoftwareVertexProcessing(FALSE);
+			dev->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | 1);
+			dev->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1);
+			haveMaterial = false;
+			haveDiffuse  = false;
+			lastShaderBits = rec.shader.Get_Bits();
+			haveShader = true;
+		}
+
+		// Per-material: upload VS material constants (c7..c13). Lights ride the stream, so the lightEnv
+		// here only feeds material constants; build once per distinct material.
+		if (!haveMaterial || rec.material != lastMaterial) {
+			RigidShaderLightingConstants lightingConstants;
+			Build_Rigid_Shader_Lighting_Constants(dev, m_srFVF, rec.lightEnv, rec.material, dxView, &lightingConstants);
+			Upload_Rigid_Shader_VS_Lighting_Constants(dev, lightingConstants);
+			lastMaterial = rec.material;
+			haveMaterial = true;
+		}
+
+		// Per-diffuse: bind the diffuse on sampler 0 and resolve/bind its optional normal map (s2).
+		if (!haveDiffuse || rec.diffuse != lastDiffuse) {
+			dev->SetTexture(0, (rec.diffuse != nullptr) ? rec.diffuse->Peek_D3D_Texture() : nullptr);
+
+			if (curNormalMap != nullptr) {
+				curNormalMap->Release_Ref();
+				curNormalMap = nullptr;
+			}
+			curNormalMap = Get_Normal_Map_For_Diffuse_Texture(rec.diffuse);
+			normalMapActive = (curNormalMap != nullptr);
+
+			const float psC2[4] = { normalMapActive ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
+			dev->SetPixelShaderConstantF(2, psC2, 1);
+
+			if (normalMapActive) {
+				dev->SetTexture(2, curNormalMap->Peek_D3D_Texture());
+				dev->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+				dev->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+				dev->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+				dev->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+				dev->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+			} else {
+				dev->SetTexture(2, nullptr);
+			}
+			lastDiffuse = rec.diffuse;
+			haveDiffuse = true;
+		}
+
+		// Per-mesh texgen (treads carry a per-unit UV offset). Skip the upload when unchanged.
+		if (!haveLastTexGen || memcmp(&lastTexGen, &rec.texGen, sizeof(RigidTexGen)) != 0) {
+			const float texGenParams[4] = { rec.texGen.enabled ? 1.0f : 0.0f, (float)rec.texGen.sourceMode, 0.0f, 0.0f };
+			dev->SetVertexShaderConstantF(19, texGenParams, 1);
+			dev->SetVertexShaderConstantF(20, rec.texGen.row0, 1);
+			dev->SetVertexShaderConstantF(21, rec.texGen.row1, 1);
+			lastTexGen = rec.texGen;
+			haveLastTexGen = true;
+		}
+
+		// Bind this mesh's instance slot on stream 1 (GPU reads instance 0 at this byte offset).
+		dev->SetStreamSource(1, m_singleRigidVB, i * sizeof(InstanceData), sizeof(InstanceData));
+
+		// PS per-pixel normal-map lighting needs this mesh's lights as constants (only when a normal
+		// map is present). Values come straight from the per-instance payload we just built.
+		if (normalMapActive) {
+			dev->SetPixelShaderConstantF(3, rec.inst.lightDir0, 1);
+			dev->SetPixelShaderConstantF(4, rec.inst.lightDiffuse0, 1);
+			dev->SetPixelShaderConstantF(5, rec.inst.lightDir1, 1);
+			dev->SetPixelShaderConstantF(6, rec.inst.lightDiffuse1, 1);
+			dev->SetPixelShaderConstantF(7, rec.inst.lightDir2, 1);
+			dev->SetPixelShaderConstantF(8, rec.inst.lightDiffuse2, 1);
+			dev->SetPixelShaderConstantF(9, rec.inst.lightDir3, 1);
+			dev->SetPixelShaderConstantF(10, rec.inst.lightDiffuse3, 1);
+			const float psNum[4] = { rec.inst.ambient[3], 0.0f, 0.0f, 0.0f };
+			dev->SetPixelShaderConstantF(11, psNum, 1);
+		}
+
+		rec.renderer->Render_Instanced(0);
+	}
+
+	// --- Teardown ONCE -------------------------------------------------------------------------
+	dev->SetStreamSourceFreq(0, 1);
+	dev->SetStreamSourceFreq(1, 1);
+	dev->SetStreamSource(1, nullptr, 0, 0);
+	dev->SetVertexDeclaration(nullptr);
+	dev->SetVertexShader(nullptr);
+	dev->SetPixelShader(nullptr);
+	dev->SetTexture(0, nullptr);
+	dev->SetTexture(1, nullptr);
+	dev->SetTexture(2, nullptr);
+
+	if (curNormalMap != nullptr) {
+		curNormalMap->Release_Ref();
+	}
+
+	ShaderClass::Invalidate();
+	DX8Wrapper::Invalidate_Vertex_Buffer_State();
 }
 
 DX8InstanceManagerClass::~DX8InstanceManagerClass()
@@ -865,6 +1179,20 @@ bool DX8InstanceManagerClass::Create_Instance_VB()
 
 	if (FAILED(hr)) {
 		WWDEBUG_SAY(("CreateVertexBuffer for instance data failed: 0x%08X", hr));
+		return false;
+	}
+
+	// Ronin @perf 24/06/2026 DX9 P0.5: dedicated single-rigid ring buffer (see SINGLE_RIGID_RING_INSTANCES).
+	HRESULT hrRing = dev->CreateVertexBuffer(
+		SINGLE_RIGID_RING_INSTANCES * sizeof(InstanceData),
+		D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY,
+		0,
+		D3DPOOL_DEFAULT,
+		&m_singleRigidVB,
+		nullptr);
+
+	if (FAILED(hrRing)) {
+		WWDEBUG_SAY(("CreateVertexBuffer for single-rigid ring failed: 0x%08X", hrRing));
 		return false;
 	}
 

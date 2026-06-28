@@ -575,7 +575,7 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 
 	// Single Rigid path On/Off switch: flip true to disable the single-rigid programmable path.
 	// Those meshes fall back to LEGACY_CLOUD / LEGACY (FFP), isolating Draw_Single_Rigid's per-mesh cost.
-	static const bool DISABLE_SINGLE_RIGID_PATH = false;
+	static const bool DISABLE_SINGLE_RIGID_PATH = true;
 
 	const bool canUseProgrammableFallback =
 		!DISABLE_SINGLE_RIGID_PATH &&
@@ -590,37 +590,56 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 	Build_Programmable_Rigid_TexGen(
 		material, Classify_Programmable_Rigid_Texture_Mapping(material), singleRigidTexGen);
 
-	if (canUseProgrammableFallback &&
-		TheDX8InstanceManager.Draw_Single_Rigid(
-			renderer,
-			geometryFVF,
-			lightEnv,
-			material,
-			stage0Texture,
-			worldTransform,
-			baseVertexOffset,
-			singleRigidTexGen)) {
+	// Ronin @perf 24/06/2026 DX9 P1: flip to false to A/B the OLD inline per-mesh Draw_Single_Rigid
+	// against the batched path (collect now, flush once per category at the end of Render()).
+	static const bool USE_SINGLE_RIGID_BATCH = true;
 
-		
-		#ifdef WWDEBUG
-		if (singleRigidTexGen.enabled) {
-			if (Rigid_Debug_Should_Log_Once("SINGLE", texName)) { 
+	if (canUseProgrammableFallback) {
 
-			WWDEBUG_SAY(("Rigid AFFINE_UV (single, ACTUAL): mapperID=%d tex=%s",
-				material->Peek_Mapper(0)->Mapper_ID(),
-				(stage0Texture != nullptr) ? stage0Texture->Get_Texture_Name().str() : "-"));
+		if (USE_SINGLE_RIGID_BATCH) {
+			// Defer: collect into this category's batch. No device state changes here, so interleaved
+			// inline (legacy) meshes are unaffected; the batch is flushed at the end of Render().
+			if (TheDX8InstanceManager.Collect_Single_Rigid(
+					renderer,
+					geometryFVF,
+					lightEnv,
+					material,
+					stage0Texture,
+					worldTransform,
+					singleRigidTexGen,
+					activeShader)) {
+
+				#ifdef WWDEBUG
+				if (singleRigidTexGen.enabled) {
+					if (Rigid_Debug_Should_Log_Once("SINGLE", texName)) {
+						WWDEBUG_SAY(("Rigid AFFINE_UV (single BATCH, collected): mapperID=%d tex=%s",
+							material->Peek_Mapper(0)->Mapper_ID(),
+							(stage0Texture != nullptr) ? stage0Texture->Get_Texture_Name().str() : "-"));
+					}
+				}
+				#endif
+
+				return RIGID_RENDER_PATH_SINGLE_RIGID;
 			}
 		}
-		#endif
-		
+		else if (TheDX8InstanceManager.Draw_Single_Rigid(
+				renderer,
+				geometryFVF,
+				lightEnv,
+				material,
+				stage0Texture,
+				worldTransform,
+				baseVertexOffset,
+				singleRigidTexGen)) {
 
-		DX8Wrapper::BindLayoutFVF(geometryFVF, "Render_Rigid_Mesh_With_Optional_Programmable_Effects post-R3 restore");
-		DX8Wrapper::Set_Texture(0, stage0Texture);
-		DX8Wrapper::Set_Texture(1, stage1Texture);
-		DX8Wrapper::Set_Material(material);
-		DX8Wrapper::Set_Shader(activeShader);
-		DX8Wrapper::Apply_Render_State_Changes();
-		return RIGID_RENDER_PATH_SINGLE_RIGID;
+			DX8Wrapper::BindLayoutFVF(geometryFVF, "Render_Rigid_Mesh_With_Optional_Programmable_Effects post-R3 restore");
+			DX8Wrapper::Set_Texture(0, stage0Texture);
+			DX8Wrapper::Set_Texture(1, stage1Texture);
+			DX8Wrapper::Set_Material(material);
+			DX8Wrapper::Set_Shader(activeShader);
+			DX8Wrapper::Apply_Render_State_Changes();
+			return RIGID_RENDER_PATH_SINGLE_RIGID;
+		}
 	}
 
 	const bool applyCloud =
@@ -1411,7 +1430,13 @@ void DX8RigidFVFCategoryContainer::Render()
 	if (!Anything_To_Render()) return;
 	AnythingToRender=false;
 
+	// Ronin @perf 26/06/2026 DX9 P2: single-rigid meshes from ALL of this container's texture-categories
+	// share this one VB/IB/FVF, so collect them across the whole container and flush ONCE at the end
+	// (one programmable pipeline setup instead of one per category). Start the container's batch empty.
+	TheDX8InstanceManager.Reset_Single_Rigid_Collection();
+
 	DX8Wrapper::Set_Vertex_Buffer(vertex_buffer);
+
 
 	DX8Wrapper::Set_Index_Buffer(index_buffer,0, "DX8RigidFVFCategoryContainer::Render");
 
@@ -1428,6 +1453,19 @@ void DX8RigidFVFCategoryContainer::Render()
 		while (DX8TextureCategoryClass * tex = visible_texture_category_list[p].Remove_Head()) {
 			tex->Render();
 		}
+	}
+
+	// Ronin @perf 26/06/2026 DX9 P2: flush every single-rigid mesh this container collected as ONE batch
+	// (the container VB/IB is still bound), then restore FFP layout for the procedural passes below.
+	if (TheDX8InstanceManager.Get_Pending_Single_Rigid_Count() > 0) {
+		TheDX8InstanceManager.Flush_Single_Rigid();
+
+		DX8Wrapper::Set_Vertex_Buffer(vertex_buffer);
+		DX8Wrapper::Set_Index_Buffer(index_buffer, 0, "DX8RigidFVFCategoryContainer::Render post single-rigid flush");
+		if (vertex_buffer) {
+			DX8Wrapper::BindLayoutFVF(vertex_buffer->FVF_Info().Get_FVF(), "DX8RigidFVFCategoryContainer::Render post single-rigid flush");
+		}
+		DX8Wrapper::Apply_Render_State_Changes();
 	}
 
 	Render_Procedural_Material_Passes();
@@ -2381,7 +2419,7 @@ void DX8TextureCategoryClass::Render()
 	// range) rather than pointer identity, so meshes from different MeshModelClass instances that
 	// share the same container VB/IB can be batched together.
 
-	if (TheDX8InstanceManager.Is_Enabled() && render_task_head != nullptr) {
+	if (false && TheDX8InstanceManager.Is_Enabled() && render_task_head != nullptr) {
 
 		// Ronin @bugfix 27/02/2026 DX9: Skip instancing for FVFs without normals.
 		// The instancing vertex shader computes lighting via dot(N, lightDir). Without

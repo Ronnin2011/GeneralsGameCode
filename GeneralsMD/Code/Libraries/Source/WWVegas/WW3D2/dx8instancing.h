@@ -22,6 +22,7 @@
 
 #include <d3d9.h>
 #include "always.h"
+#include "shader.h"   // Ronin @bugfix 27/06/2026 DX9 P2: ShaderClass stored per single-rigid record (render-state grouping)
 
 class DX8PolygonRendererClass;
 class LightEnvironmentClass;
@@ -65,6 +66,11 @@ public:
 	// Maximum instances per single instanced draw call.
 	// Capped to keep the instance VB small and avoid huge batches that stall the GPU.
 	enum { MAX_INSTANCES_PER_DRAW = 256 };
+
+	// Ronin @perf 24/06/2026 DX9 P0.5: dedicated ring buffer for the single-rigid path so we append
+	// per-mesh instance data with NOOVERWRITE (one DISCARD per frame) instead of a per-mesh DISCARD on
+	// a 1-instance VB. Sized well above worst-case single-rigid draws/frame so it won't wrap mid-frame.
+	enum { SINGLE_RIGID_RING_INSTANCES = 8192 };
 
 	// Ronin @bugfix 18/02/2026 DX9: Maximum cached vertex declarations for different FVFs.
 	enum { MAX_CACHED_DECLS = 16 };
@@ -126,6 +132,25 @@ public:
 		const Matrix3D& worldTransform,
 		unsigned baseVertexOffset,
 		const RigidTexGen& texGen);
+
+	// Ronin @perf 24/06/2026 DX9 P1: deferred single-rigid batch. The renderer collects eligible
+	// non-instanced rigid meshes per texture-category via Collect_Single_Rigid, then issues them all
+	// in Flush_Single_Rigid: one ring lock, programmable state set ONCE, one FFP restore. This kills
+	// the per-mesh lock + FFP<->programmable thrash that made inline Draw_Single_Rigid slow.
+	bool Collect_Single_Rigid(
+		DX8PolygonRendererClass* renderer,
+		DWORD geometryFVF,
+		LightEnvironmentClass* lightEnv,
+		VertexMaterialClass* material,
+		TextureClass* diffuseTexture,
+		const Matrix3D& worldTransform,
+		const RigidTexGen& texGen,
+		const ShaderClass& shader);
+
+	void Flush_Single_Rigid();
+	void Reset_Single_Rigid_Collection() { m_pendingSingleRigidCount = 0; }
+	unsigned Get_Pending_Single_Rigid_Count() const { return m_pendingSingleRigidCount; }
+
 
 
 	/**
@@ -204,7 +229,11 @@ private:
 	bool m_available;        // Hardware supports instancing
 	bool m_enabled;          // User has instancing enabled
 
-	IDirect3DVertexBuffer9* m_instanceVB;        // Stream 1 instance buffer
+	IDirect3DVertexBuffer9* m_instanceVB;        // Stream 1 instance buffer (batched Draw_Instanced path)
+	
+	IDirect3DVertexBuffer9* m_singleRigidVB;     // Ronin @perf 24/06/2026 DX9 P0.5: ring buffer for Draw_Single_Rigid
+	unsigned                m_singleRigidCursor; // Ronin @perf 24/06/2026 DX9 P0.5: next free instance slot in the ring
+
 	IDirect3DVertexShader9* m_instanceVS;        // Instancing vertex shader (with COLOR0)
 	IDirect3DVertexShader9* m_instanceVSNoColor; // Instancing vertex shader (no COLOR0)
 	IDirect3DPixelShader9* m_instancePS;         // Ronin @feature 08/03/2026 DX9: Minimal pixel shader to bypass FFP pixel combiners on AMD
@@ -225,6 +254,24 @@ private:
 	InstanceData m_instanceBuffer[MAX_INSTANCES_PER_DRAW];
 	LightEnvironmentClass* m_collectedLightEnv[MAX_INSTANCES_PER_DRAW]; // per-instance lighting source
 	unsigned     m_collectedCount;
+
+	// Ronin @perf 24/06/2026 DX9 P1: deferred single-rigid batch state (see Collect/Flush_Single_Rigid).
+	struct PendingSingleRigid {
+		InstanceData             inst;      // transform rows now; per-instance lighting filled at flush
+		LightEnvironmentClass*   lightEnv;  // per-mesh light env (Extract_Instance_Lighting at flush)
+		DX8PolygonRendererClass* renderer;  // geometry to draw (its own index range)
+		RigidTexGen              texGen;    // per-mesh (tread UV offset varies within a category)
+		TextureClass*            diffuse;   // per-record: a container flush spans many texture-categories
+		VertexMaterialClass*     material;  // per-record: VS material constants swapped per distinct material
+		ShaderClass              shader;    // per-record: blend/z/alpha-test/cull render state, re-applied per group
+	};
+
+	enum { MAX_PENDING_SINGLE_RIGID = 4096 };
+	PendingSingleRigid   m_pendingSingleRigid[MAX_PENDING_SINGLE_RIGID];
+	unsigned             m_pendingSingleRigidCount;
+	// Container-constant: every mesh in a DX8RigidFVFCategoryContainer shares one FVF (one decl, one VB).
+	DWORD                m_srFVF;
+
 
 	// Statistics
 	unsigned m_instancedDrawCalls;
