@@ -695,6 +695,13 @@ void W3DProjectedShadowManager::flushDecals(W3DShadowTexture *texture, ShadowTyp
 	REF_PTR_RELEASE(vmat);
 	DX8Wrapper::Set_Texture(0,texture->getTexture());
 
+	// Ronin @bugfix DX9: raw device SetRenderState calls elsewhere (e.g.
+	// FlatTerrainShaderPixelShader::set disabling ALPHABLENDENABLE) leave the device
+	// out of sync with the wrapper's shader tracking. Without this, Set_Shader() below
+	// early-outs on the unchanged multiplicative shader, shader.Apply() is skipped, and
+	// the decal draws OPAQUE -> white squares under trees. Force a re-apply.
+	ShaderClass::Invalidate();
+
 //	DX8Wrapper::Set_Shader(ShaderClass::_PresetOpaqueShader);	//good for debugging, draws without alpha
 	switch (type)
 	{

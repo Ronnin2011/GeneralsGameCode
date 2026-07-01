@@ -575,7 +575,7 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 
 	// Single Rigid path On/Off switch: flip true to disable the single-rigid programmable path.
 	// Those meshes fall back to LEGACY_CLOUD / LEGACY (FFP), isolating Draw_Single_Rigid's per-mesh cost.
-	static const bool DISABLE_SINGLE_RIGID_PATH = true;
+	static const bool DISABLE_SINGLE_RIGID_PATH = false;
 
 	const bool canUseProgrammableFallback =
 		!DISABLE_SINGLE_RIGID_PATH &&
@@ -2777,6 +2777,7 @@ void DX8TextureCategoryClass::Render()
 			mesh->Get_Alpha_Override() == 1.0f &&
 			Programmable_Rigid_Material_Override_Is_Supported(mesh, vmaterial) &&
 			mesh->Get_ObjectScale() == 1.0f &&
+			mesh->Peek_Model()->Get_Pass_Count() == 1 && // multi-pass meshes need legacy's interleaved pass order; the deferred single-rigid flush reorders their passes
 			!Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(vmaterial);
 
 		/*
