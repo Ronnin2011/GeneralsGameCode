@@ -131,7 +131,13 @@ public:
 		TextureClass* diffuseTexture,
 		const Matrix3D& worldTransform,
 		unsigned baseVertexOffset,
-		const RigidTexGen& texGen);
+		const RigidTexGen& texGen,
+		bool reflective = false); // Ronin @feature DX9: reflective pass-0 -> select m_reflectivePS + upload world camera pos to PS c0
+
+	// Ronin @feature DX9: true once ReflectiveRigid.pso loaded; the reflective rigid branch checks this
+	// before routing an env-reflect pass to the per-pixel path (else it stays on legacy).
+	bool Has_Reflective_PS() const { return m_reflectivePS != nullptr; }
+
 
 	// Ronin @perf 24/06/2026 DX9 P1: deferred single-rigid batch. The renderer collects eligible
 	// non-instanced rigid meshes per texture-category via Collect_Single_Rigid, then issues them all
@@ -239,6 +245,7 @@ private:
 	IDirect3DPixelShader9* m_instancePS;         // Ronin @feature 08/03/2026 DX9: Minimal pixel shader to bypass FFP pixel combiners on AMD
 	IDirect3DVertexShader9* m_rigidVS;           // Ronin @feature 23/05/2026 DX9 R3: Non-instanced rigid fallback VS (with COLOR0)
 	IDirect3DVertexShader9* m_rigidVSNoColor;    // Ronin @feature 23/05/2026 DX9 R3: Non-instanced rigid fallback VS (no COLOR0)
+	IDirect3DPixelShader9* m_reflectivePS;       // Ronin @feature DX9: per-pixel env reflection PS (ReflectiveRigid.pso) for reflective pass-0
 
 	// Ronin @bugfix 18/02/2026 DX9: Per-FVF declaration cache (replaces single m_instanceDecl)
 	CachedDecl m_declCache[MAX_CACHED_DECLS];

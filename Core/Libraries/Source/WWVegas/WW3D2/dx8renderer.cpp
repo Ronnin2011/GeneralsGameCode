@@ -594,6 +594,99 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 	// against the batched path (collect now, flush once per category at the end of Render()).
 	static const bool USE_SINGLE_RIGID_BATCH = true;
 
+	// Ronin @feature DX9: reflective env pass (per-pixel reflection). Rendered INLINE via
+	// Draw_Single_Rigid so multi-pass order holds — the deferred batch flushes at container end,
+	// which would draw this reflective pass-0 AFTER the FFP diffuse pass-1 overlay. Intentionally
+	// independent of the single-rigid gate/pass-count: reflective meshes (SKYLIGHTS) are multi-pass
+	// and we WANT their pass-0 here. Only fires for ENV reflection-vector mappers on opaque,
+	// normal-bearing, single-stage passes; everything else is untouched.
+	static const bool ENABLE_REFLECTIVE_RIGID = true; // flip false to A/B against the legacy env path
+	if (ENABLE_REFLECTIVE_RIGID &&
+		TheDX8InstanceManager.Has_Reflective_PS() &&
+		Classify_Programmable_Rigid_Texture_Mapping(material) == PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_REFLECT &&
+		shaderUsesOpaqueBlend &&
+		((geometryFVF & D3DFVF_NORMAL) != 0) &&
+		(fvfTexCount == 1) &&
+		(stage1Texture == nullptr)) {
+
+		RigidTexGen reflectiveTexGen = {};
+		reflectiveTexGen.enabled = false; // reflective PS computes reflect(V,N) itself; no FFP UV matrix
+
+		if (TheDX8InstanceManager.Draw_Single_Rigid(
+				renderer,
+				geometryFVF,
+				lightEnv,
+				material,
+				stage0Texture,
+				worldTransform,
+				baseVertexOffset,
+				reflectiveTexGen,
+				/*reflective=*/true)) {
+
+			#ifdef WWDEBUG
+			if (Rigid_Debug_Should_Log_Once("REFLECTIVE", texName)) {
+				WWDEBUG_SAY(("Rigid REFLECTIVE (per-pixel, inline): tex=%s", texName));
+			}
+			#endif
+
+			DX8Wrapper::BindLayoutFVF(geometryFVF, "Render_Rigid_Mesh reflective restore");
+			DX8Wrapper::Set_Texture(0, stage0Texture);
+			DX8Wrapper::Set_Texture(1, stage1Texture);
+			DX8Wrapper::Set_Material(material);
+			DX8Wrapper::Set_Shader(activeShader);
+			DX8Wrapper::Apply_Render_State_Changes();
+			return RIGID_RENDER_PATH_SINGLE_RIGID;
+		}
+	}
+
+	// Ronin @feature DX9: blended diffuse-overlay pass of a rigid mesh onto the programmable path
+	// (e.g. the SKYLIGHTS/airfield abarfrccmd overlay that composites over the lakedusk reflection).
+	// The normal map is OPTIONAL — this is for ALL blended overlays, not just ones with a <diffuse>_NRM.
+	// The PS no-ops its normal-map block when none exists (g_NormalMapParams.x == 0), so a plain overlay
+	// still renders as diffuse+lighting through the same path. Rendered INLINE like the reflective branch
+	// so pass-1 stays after pass-0 (the deferred batch would reorder it). Bringing these overlays across
+	// is also what makes a reflective mesh's pass-0 and pass-1 share clip-Z; any overlay left on FFP
+	// z-fights the programmable pass-0 (that's what the pass-0 depth bias in Draw_Single_Rigid masks).
+	static const bool ENABLE_BLENDED_RIGID = true; // flip false to A/B against LEGACY_CLOUD
+	const bool shaderUsesAlphaBlend =
+		activeShader.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_SRC_ALPHA &&
+		activeShader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA;
+	if (ENABLE_BLENDED_RIGID &&
+		shaderUsesAlphaBlend &&
+		((geometryFVF & D3DFVF_NORMAL) != 0) &&
+		(fvfTexCount == 1) &&
+		(stage1Texture == nullptr) &&
+		!Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(material)) {
+
+
+		if (TheDX8InstanceManager.Draw_Single_Rigid(
+				renderer,
+				geometryFVF,
+				lightEnv,
+				material,
+				stage0Texture,
+				worldTransform,
+				baseVertexOffset,
+				singleRigidTexGen,
+				/*reflective=*/false)) {
+
+			#ifdef WWDEBUG
+			if (Rigid_Debug_Should_Log_Once("BLENDED", texName)) {
+				WWDEBUG_SAY(("Rigid BLENDED (overlay -> programmable, inline): tex=%s hasNRM=%d",
+					texName, Rigid_Texture_Has_Normal_Map(stage0Texture) ? 1 : 0));
+			}
+			#endif
+
+			DX8Wrapper::BindLayoutFVF(geometryFVF, "Render_Rigid_Mesh blended-nrm restore");
+			DX8Wrapper::Set_Texture(0, stage0Texture);
+			DX8Wrapper::Set_Texture(1, stage1Texture);
+			DX8Wrapper::Set_Material(material);
+			DX8Wrapper::Set_Shader(activeShader);
+			DX8Wrapper::Apply_Render_State_Changes();
+			return RIGID_RENDER_PATH_SINGLE_RIGID;
+		}
+	}
+
 	if (canUseProgrammableFallback) {
 
 		if (USE_SINGLE_RIGID_BATCH) {
@@ -608,6 +701,20 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 					worldTransform,
 					singleRigidTexGen,
 					activeShader)) {
+
+			/*#ifdef WWDEBUG
+			// Ronin @diagnostic DX9: log EVERY mesh that takes the single-rigid programmable path,
+			// not just AFFINE_UV ones. Identity-mapper meshes (e.g. plain abarfrccmd body/fans) were
+			// silently invisible here, hiding that their <diffuse>_NRM is already active. Shows hasNRM
+			// so we can see per-pixel normal mapping is live on this draw.
+			if (Rigid_Debug_Should_Log_Once("SR-ALL", texName)) {
+				WWDEBUG_SAY(("Rigid SINGLE_RIGID (collected): tex=%s hasNRM=%d mapperClass=%d",
+					texName,
+					Rigid_Texture_Has_Normal_Map(stage0Texture) ? 1 : 0,
+					(int)Classify_Programmable_Rigid_Texture_Mapping(material)));
+			}
+			#endif*/
+
 
 				#ifdef WWDEBUG
 				if (singleRigidTexGen.enabled) {
@@ -793,8 +900,43 @@ static MeshModelClass* Find_Registered_Mesh_Sharing_Geometry(MeshModelClass* mmc
 			existing->Get_Pass_Count() == mmc->Get_Pass_Count() &&
 			existing->Has_Polygon_Renderers())
 		{
-			return existing;
+			// Ronin @bugfix DX9: sharing geometry buffers is NOT sufficient to share a texture
+			// category. Make_Unique clones housecolor/ZHC meshes that keep the same VB/IB ShareBuffers
+			// but carry a DIFFERENT per-pass material (HOUSECOLOR vertex color) or texture (ZHC recolor).
+			// The donor's polygon renderers live in the donor's texture category, which is keyed by
+			// (textures, material, shader). Reusing it draws the new mesh with the DONOR's color — e.g. a
+			// freshly-captured red oil derrick rendered through the old neutral/white material. Only reuse
+			// the donor when every pass matches material + textures + shader; otherwise fall through to
+			// normal registration so this mesh gets its own correctly-colored category.
+			bool renderStateMatches = true;
+			const int passCount = mmc->Get_Pass_Count();
+			for (int pass = 0; pass < passCount && renderStateMatches; ++pass)
+			{
+							// Inline the material-CRC compare (Equal_Material is defined later in this file).
+				const VertexMaterialClass* exMat  = existing->Peek_Single_Material(pass);
+				const VertexMaterialClass* newMat = mmc->Peek_Single_Material(pass);
+				const int exMatCrc  = exMat  ? exMat->Get_CRC()  : 0;
+				const int newMatCrc = newMat ? newMat->Get_CRC() : 0;
+				if (exMatCrc != newMatCrc ||
+					!(existing->Get_Single_Shader(pass) == mmc->Get_Single_Shader(pass)))
+				{
+					renderStateMatches = false;
+					break;
+				}
+				for (int stage = 0; stage < MeshMatDescClass::MAX_TEX_STAGES; ++stage)
+				{
+					if (existing->Peek_Single_Texture(pass, stage) != mmc->Peek_Single_Texture(pass, stage))
+					{
+						renderStateMatches = false;
+						break;
+					}
+				}
+			}
+
+			if (renderStateMatches)
+				return existing;
 		}
+
 		it.Next();
 	}
 	return nullptr;

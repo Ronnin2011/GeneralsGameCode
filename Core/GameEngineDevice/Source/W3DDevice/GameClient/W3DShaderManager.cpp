@@ -1288,7 +1288,7 @@ Int ShroudTextureShader::set(Int stage)
 	// z-fights those props (shimmer). This pass has Z-write OFF -> biasing it moves NO geometry 
 	// (unlike biasing the base, which sank props into the terrain). Slope-scaled adapts to distance/angle; 
 	// the tiny constant floor covers camera-facing faces.
-	const float shroudSlopeBias = -1.0f;
+	const float shroudSlopeBias = 0.0f;  // slope term is ~0 on flat props but enormous on sloped shore terrain (blue-triangle artifacts); the constant term below is what actually lands the shroud on the props
 	const float shroudConstBias = -1.0e-6f;
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, *(DWORD *)(&shroudSlopeBias));
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, *(DWORD *)(&shroudConstBias));

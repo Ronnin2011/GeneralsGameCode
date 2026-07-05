@@ -124,6 +124,10 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/terrainpermaterial_vs.vso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/terrainpermaterial_vs.vso"
+        # Ronin @build 05/07/2026 Deploy reflection pixel shader to shaders subfolder.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/ReflectiveRigid.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/ReflectiveRigid.pso"
         COMMENT "Auto-deploying to Zero Hour installation folder"
 
     )

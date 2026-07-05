@@ -387,6 +387,7 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	, m_rigidVS(nullptr)
 	, m_rigidVSNoColor(nullptr)
 	, m_instancePS(nullptr)
+	, m_reflectivePS(nullptr)
 	, m_declCacheCount(0)
 	, m_geometryDeclCacheCount(0)
 	, m_collectedCount(0)
@@ -419,6 +420,7 @@ void DX8InstanceManagerClass::Release_Resources()
 	if (m_rigidVS) { m_rigidVS->Release(); m_rigidVS = nullptr; }
 	if (m_rigidVSNoColor) { m_rigidVSNoColor->Release(); m_rigidVSNoColor = nullptr; }
 	if (m_instancePS) { m_instancePS->Release(); m_instancePS = nullptr; }
+	if (m_reflectivePS) { m_reflectivePS->Release(); m_reflectivePS = nullptr; }
 
 	for (unsigned i = 0; i < m_declCacheCount; ++i) {
 		if (m_declCache[i].decl) {
@@ -541,6 +543,14 @@ bool DX8InstanceManagerClass::Load_Instance_Shader()
 		return false;
 	}
 
+	// Ronin @feature DX9: per-pixel environment reflection PS for the reflective pass-0 of
+	// reflective rigid meshes (SKYLIGHTS lakedusk). NON-FATAL: if absent we keep those meshes
+	// on the legacy env path, so a missing .pso never breaks rigid rendering.
+	if (!Load_Pixel_Shader_From_File("shaders\\ReflectiveRigid.pso", &m_reflectivePS)) {
+		WWDEBUG_SAY(("DX8InstanceManager: ReflectiveRigid.pso not loaded; reflective rigid path disabled"));
+		m_reflectivePS = nullptr;
+	}
+
 	return true;
 }
 
@@ -583,7 +593,8 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	TextureClass* diffuseTexture,
 	const Matrix3D& worldTransform,
 	unsigned baseVertexOffset,
-	const RigidTexGen& texGen)
+	const RigidTexGen& texGen,
+	bool reflective)
 {
 
 	if (renderer == nullptr) {
@@ -621,7 +632,8 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 
 	const bool hasVertexColor = (geometryFVF & D3DFVF_DIFFUSE) != 0;
 	IDirect3DVertexShader9* selectedVS = hasVertexColor ? m_instanceVS : m_instanceVSNoColor;
-	IDirect3DPixelShader9* selectedPS = m_instancePS;
+	// Ronin @feature DX9: reflective pass-0 uses the per-pixel env-reflection PS.
+	IDirect3DPixelShader9* selectedPS = (reflective && m_reflectivePS != nullptr) ? m_reflectivePS : m_instancePS;
 	if (selectedVS == nullptr || selectedPS == nullptr || m_singleRigidVB == nullptr) {
 		return false;
 	}
@@ -672,6 +684,17 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 
 	D3DXMATRIX dxView;
 	Upload_Rigid_View_Projection(dev, &dxView);
+	
+	// Ronin @feature DX9: world-space camera position for the reflective PS (register c0). The camera
+	// origin in world space is the translation row of the inverse view matrix.
+	float reflectiveCameraPosPS[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
+	if (reflective) {
+		D3DXMATRIX invView;
+		D3DXMatrixInverse(&invView, nullptr, &dxView);
+		reflectiveCameraPosPS[0] = invView._41;
+		reflectiveCameraPosPS[1] = invView._42;
+		reflectiveCameraPosPS[2] = invView._43;
+	}
 
 	RigidShaderLightingConstants lightingConstants;
 	Build_Rigid_Shader_Lighting_Constants(dev, geometryFVF, lightEnv, material, dxView, &lightingConstants);
@@ -784,8 +807,42 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 
 	}
 
+	// Ronin @feature DX9: the reflective PS reads c0 as world-space camera position; override the
+	// cloud flag the block above wrote to c0. Must be after that block and before the draw.
+	if (reflective) {
+		dev->SetPixelShaderConstantF(0, reflectiveCameraPosPS, 1);
+		// Ronin @feature DX9: view matrix (world->camera) so the reflective PS can sphere-map the
+		// reflection in CAMERA space (view-relative chrome look) instead of world space, which drops
+		// the reflection on camera-facing panels as you orbit. Transposed to match the VS g_ViewProj
+		// convention. Overwrites the cloud psC1/psC2 above — harmless, the reflective PS ignores cloud.
+		D3DXMATRIX reflectiveViewT;
+		D3DXMatrixTranspose(&reflectiveViewT, &dxView);
+		dev->SetPixelShaderConstantF(1, (const float*)&reflectiveViewT, 4);
+	}
+
+	// Ronin @feature DX9: reflective pass-0 depth bias. HISTORICAL: pass-0 (programmable) wrote depth
+	// ~1 LSB off the FFP pass-1 overlay, so the two z-fought -> shimmer, and we pushed pass-0 away so the
+	// overlay would land. As of the BLENDED_NRM change, pass-1 is ALSO programmable and shares pass-0's
+	// EXACT clip-Z (both = mul(worldPos, g_ViewProj)) -> the mismatch is gone and the bias is dead weight.
+	// Behind an A/B toggle: flip true to restore the old hack ONLY if a reflective mesh whose overlay
+	// still falls to FFP (no <diffuse>_NRM -> not caught by BLENDED_NRM) shimmers. Cleared after regardless.
+	static const bool ENABLE_REFLECTIVE_DEPTH_BIAS = false; // false = drop the hack (pass-1 now programmable)
+	if (reflective && ENABLE_REFLECTIVE_DEPTH_BIAS) {
+		const float reflectiveSlopeBias = 1.0f;     // + = push pass-0 away from camera
+		const float reflectiveConstBias = 1.0e-6f;  // floor for flat, camera-facing panels
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, *(DWORD *)(&reflectiveSlopeBias));
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, *(DWORD *)(&reflectiveConstBias));
+	}
+
 	if (g_SR_PerfMode == 0) {
 		renderer->Render_Instanced(0); // P0 bisect: modes 1/2/3 skip the actual draw
+	}
+	
+	// Ronin @feature DX9: clear the reflective pass-0 depth bias so it can't leak into later passes.
+	if (reflective) {
+		const float reflectiveZeroBias = 0.0f;
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, *(DWORD *)(&reflectiveZeroBias));
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, *(DWORD *)(&reflectiveZeroBias));
 	}
 	
 	// Ronin @perf 20/06/2026 DX9 P0: restore to known fixed-function defaults, not queried values.
@@ -903,8 +960,20 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	DX8Wrapper::Apply_Render_State_Changes();
 
 	// --- Fill per-instance lighting and upload the whole batch to the ring (ONE lock) ----------
+	// Ronin @bugfix DX9: the batch MUST share the rolling cursor with the inline Draw_Single_Rigid,
+	// NOT a fixed offset 0. Both draw from m_singleRigidVB; when an inline draw (reflective / blended
+	// overlays) writes a slot with NOOVERWRITE that lands inside a fixed 0..count flush region whose GPU
+	// draw is still in flight, it stomps that batched instance's transform/lighting -> meshes render at
+	// the wrong place / wrong team color. Allocating the batch at the cursor (and advancing past it below)
+	// keeps the two paths in disjoint slots. count (<=4096) < ring (8192), so a wrapped block always fits.
+	if (m_singleRigidCursor + count > SINGLE_RIGID_RING_INSTANCES) {
+		m_singleRigidCursor = 0; // wrap; the DISCARD below hands back a fresh buffer
+	}
+	const unsigned baseSlot = m_singleRigidCursor;
+	const DWORD batchLockFlag = (baseSlot == 0) ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE;
+
 	void* pData = nullptr;
-	HRESULT hr = m_singleRigidVB->Lock(0, count * sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
+	HRESULT hr = m_singleRigidVB->Lock(baseSlot * sizeof(InstanceData), count * sizeof(InstanceData), &pData, batchLockFlag);
 	if (FAILED(hr)) {
 		WWDEBUG_SAY(("DX8InstanceManager: Single-rigid batch lock failed: 0x%08X", hr));
 		return;
@@ -916,6 +985,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		dst[i] = rec.inst;
 	}
 	m_singleRigidVB->Unlock();
+
 
 	// --- Programmable pipeline: set ONCE for the whole batch -----------------------------------
 	dev->SetVertexDeclaration(instanceDecl);
@@ -1061,7 +1131,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		}
 
 		// Bind this mesh's instance slot on stream 1 (GPU reads instance 0 at this byte offset).
-		dev->SetStreamSource(1, m_singleRigidVB, i * sizeof(InstanceData), sizeof(InstanceData));
+		dev->SetStreamSource(1, m_singleRigidVB, (baseSlot + i) * sizeof(InstanceData), sizeof(InstanceData));
 
 		// PS per-pixel normal-map lighting needs this mesh's lights as constants (only when a normal
 		// map is present). Values come straight from the per-instance payload we just built.
@@ -1079,6 +1149,13 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		}
 
 		rec.renderer->Render_Instanced(0);
+	}
+
+	// Ronin @bugfix DX9: advance the shared ring cursor past this batch so the next inline
+	// Draw_Single_Rigid (or the next flush) can't reuse these slots while the GPU is still drawing them.
+	m_singleRigidCursor = baseSlot + count;
+	if (m_singleRigidCursor >= SINGLE_RIGID_RING_INSTANCES) {
+		m_singleRigidCursor = 0;
 	}
 
 	// --- Teardown ONCE -------------------------------------------------------------------------
