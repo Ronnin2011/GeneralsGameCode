@@ -1109,7 +1109,7 @@ void W3DDisplay::gatherDebugStats()
 #ifdef EXTENDED_STATS
 		static FILE *pListFile = nullptr;
 		static Int64 lastFrameTime=0;
-		static samples = 0;
+		static int samples = 0;
 		if (pListFile == nullptr) {
 			pListFile = fopen("FrameRateLog.txt", "w");
 		}

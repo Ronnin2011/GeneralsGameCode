@@ -2053,91 +2053,96 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 		TheGlobalData->m_useS20PerMaterialSplat &&
 		perMaterialTerrainReady;
 
+
+	// Ronin @perf DX9: the cell->page mapping is INVARIANT per map, but drawPagedTerrainVB
+	// re-bucketed every cell + built a dynamic IB EVERY FRAME. Precompute each VB tile's page-groups ONCE 
+	// (static IBs),mirroring the splat path's s_lastSplatMap guard). Single-group full tiles reuse the shared m_indexBuffer.
+	struct CachedTerrainGroup { Int basePage; Int alphaPage; DX8IndexBufferClass* ib; Int polyCount; };
+	struct CachedTerrainTile  { std::vector<CachedTerrainGroup> groups; };
+	static const WorldHeightMap* s_pageCacheMap = nullptr;
+	static std::vector<CachedTerrainTile> s_tileCache;
+	if (useMultiPageTerrain && m_map != nullptr && s_pageCacheMap != m_map) {
+		for (Int t = 0; t < (Int)s_tileCache.size(); ++t)
+			for (Int g = 0; g < (Int)s_tileCache[t].groups.size(); ++g)
+				if (s_tileCache[t].groups[g].ib) { REF_PTR_RELEASE(s_tileCache[t].groups[g].ib); }
+		s_tileCache.clear();
+		s_pageCacheMap = m_map;
+		s_tileCache.resize(m_numVBTilesX * m_numVBTilesY);
+
+		struct BuildGroup { Int basePage; Int alphaPage; std::vector<UnsignedShort> indices; };
+		for (Int tj = 0; tj < m_numVBTilesY; ++tj) {
+			for (Int ti = 0; ti < m_numVBTilesX; ++ti) {
+				Int ccX = VERTEX_BUFFER_TILE_LENGTH, ccY = VERTEX_BUFFER_TILE_LENGTH;
+				if (ti == m_numVBTilesX - 1 && m_numBlockColumnsInLastVB > 0) ccX = m_numBlockColumnsInLastVB;
+				if (tj == m_numVBTilesY - 1 && m_numBlockRowsInLastVB > 0) ccY = m_numBlockRowsInLastVB;
+				const Int oX = ti * VERTEX_BUFFER_TILE_LENGTH;
+				const Int oY = tj * VERTEX_BUFFER_TILE_LENGTH;
+				const Int vertsPerRow = VERTEX_BUFFER_TILE_LENGTH * 4;
+
+				std::vector<BuildGroup> bgroups;
+				for (Int ly = 0; ly < ccY; ++ly) {
+					for (Int lx = 0; lx < ccX; ++lx) {
+						const Int mX = getXWithOrigin(oX + lx);
+						const Int mY = getYWithOrigin(oY + ly);
+						const Int bp = m_map->getTerrainTexturePageForCell(mX, mY);
+						const Int ap = m_map->getAlphaTexturePageForCell(mX, mY);
+						BuildGroup* pg = nullptr;
+						for (Int gi = 0; gi < (Int)bgroups.size(); ++gi)
+							if (bgroups[gi].basePage == bp && bgroups[gi].alphaPage == ap) { pg = &bgroups[gi]; break; }
+						if (pg == nullptr) { bgroups.push_back(BuildGroup()); pg = &bgroups.back(); pg->basePage = bp; pg->alphaPage = ap; }
+						const UnsignedShort vb = (UnsignedShort)(ly * vertsPerRow + lx * 4);
+						pg->indices.push_back(vb + 0); pg->indices.push_back(vb + 2); pg->indices.push_back(vb + 3);
+						pg->indices.push_back(vb + 0); pg->indices.push_back(vb + 1); pg->indices.push_back(vb + 2);
+					}
+				}
+
+				const Bool fullTile = (ccX == VERTEX_BUFFER_TILE_LENGTH && ccY == VERTEX_BUFFER_TILE_LENGTH);
+				CachedTerrainTile& ct = s_tileCache[tj * m_numVBTilesX + ti];
+				for (Int gi = 0; gi < (Int)bgroups.size(); ++gi) {
+					CachedTerrainGroup cg;
+					cg.basePage  = bgroups[gi].basePage;
+					cg.alphaPage = bgroups[gi].alphaPage;
+					const Int cnt = (Int)bgroups[gi].indices.size();
+					if (bgroups.size() == 1 && fullTile) {
+						cg.ib = nullptr;                       // reuse shared full-tile m_indexBuffer
+						cg.polyCount = HEIGHTMAP_POLYGON_NUM;
+					} else {
+						cg.ib = NEW_REF(DX8IndexBufferClass, (cnt));
+						{
+							DX8IndexBufferClass::WriteLockClass lk(cg.ib);
+							memcpy(lk.Get_Index_Array(), &bgroups[gi].indices[0], cnt * sizeof(UnsignedShort));
+						}
+						cg.polyCount = cnt / 3;
+					}
+					ct.groups.push_back(cg);
+				}
+			}
+		}
+	}
+
 	const auto drawPagedTerrainVB =
 		[&](Int vbTileX, Int vbTileY, W3DShaderManager::ShaderTypes shaderType, Int shaderPass)
 		{
-			struct TerrainPageDrawGroup
-			{
-				Int basePage;
-				Int alphaPage;
-				std::vector<UnsignedShort> indices;
-			};
-
 			DX8VertexBufferClass* pVB = getVertexBufferTile(vbTileX, vbTileY);
 			if (pVB == nullptr || m_map == nullptr) {
 				return;
 			}
 
-			Int cellCountX = VERTEX_BUFFER_TILE_LENGTH;
-			Int cellCountY = VERTEX_BUFFER_TILE_LENGTH;
-			if (vbTileX == m_numVBTilesX - 1 && m_numBlockColumnsInLastVB > 0) {
-				cellCountX = m_numBlockColumnsInLastVB;
-			}
-			if (vbTileY == m_numVBTilesY - 1 && m_numBlockRowsInLastVB > 0) {
-				cellCountY = m_numBlockRowsInLastVB;
+			const Int tileIdx = vbTileY * m_numVBTilesX + vbTileX;
+			if (tileIdx < 0 || tileIdx >= (Int)s_tileCache.size()) {
+				return;
 			}
 
-			const Int originX = vbTileX * VERTEX_BUFFER_TILE_LENGTH;
-			const Int originY = vbTileY * VERTEX_BUFFER_TILE_LENGTH;
-			const Int vertsPerRow = VERTEX_BUFFER_TILE_LENGTH * 4;
-
-			std::vector<TerrainPageDrawGroup> drawGroups;
-			drawGroups.reserve(4);
-
-			for (Int localY = 0; localY < cellCountY; ++localY) {
-				for (Int localX = 0; localX < cellCountX; ++localX) {
-					const Int mapX = getXWithOrigin(originX + localX);
-					const Int mapY = getYWithOrigin(originY + localY);
-					const Int basePage = m_map->getTerrainTexturePageForCell(mapX, mapY);
-					const Int alphaPage = m_map->getAlphaTexturePageForCell(mapX, mapY);
-
-					TerrainPageDrawGroup* pGroup = nullptr;
-					for (Int groupNdx = 0; groupNdx < (Int)drawGroups.size(); ++groupNdx) {
-						TerrainPageDrawGroup& candidate = drawGroups[groupNdx];
-						if (candidate.basePage == basePage && candidate.alphaPage == alphaPage) {
-							pGroup = &candidate;
-							break;
-						}
-					}
-
-					if (pGroup == nullptr) {
-						drawGroups.push_back(TerrainPageDrawGroup());
-						pGroup = &drawGroups.back();
-						pGroup->basePage = basePage;
-						pGroup->alphaPage = alphaPage;
-					}
-
-					const UnsignedShort vertexBase = (UnsignedShort)(localY * vertsPerRow + localX * 4);
-					pGroup->indices.push_back(vertexBase + 0);
-					pGroup->indices.push_back(vertexBase + 2);
-					pGroup->indices.push_back(vertexBase + 3);
-					pGroup->indices.push_back(vertexBase + 0);
-					pGroup->indices.push_back(vertexBase + 1);
-					pGroup->indices.push_back(vertexBase + 2);
-				}
-			}
-
-			for (Int groupNdx = 0; groupNdx < (Int)drawGroups.size(); ++groupNdx) {
-				TerrainPageDrawGroup& drawGroup = drawGroups[groupNdx];
-				const Int indexCount = (Int)drawGroup.indices.size();
-				if (indexCount == 0) {
+			const CachedTerrainTile& ct = s_tileCache[tileIdx];
+			for (Int g = 0; g < (Int)ct.groups.size(); ++g) {
+				const CachedTerrainGroup& grp = ct.groups[g];
+				if (grp.polyCount <= 0) {
 					continue;
 				}
-
-				TextureClass* pBaseTexture = m_map->getTerrainTexture(drawGroup.basePage);
-				TextureClass* pAlphaTexture = m_map->getAlphaTerrainTexture(drawGroup.alphaPage);
+				TextureClass* pBaseTexture  = m_map->getTerrainTexture(grp.basePage);
+				TextureClass* pAlphaTexture = m_map->getAlphaTerrainTexture(grp.alphaPage);
 				if (pBaseTexture == nullptr || pAlphaTexture == nullptr) {
 					continue;
-				}
-
-				DynamicIBAccessClass ibAccess(BUFFER_TYPE_DYNAMIC_DX8, indexCount);
-				{
-					DynamicIBAccessClass::WriteLockClass lockib(&ibAccess);
-					UnsignedShort* pIndices = lockib.Get_Index_Array();
-					if (pIndices == nullptr) {
-						continue;
-					}
-					memcpy(pIndices, &drawGroup.indices[0], indexCount * sizeof(UnsignedShort));
 				}
 
 				W3DShaderManager::resetShader(shaderType);
@@ -2146,10 +2151,9 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 				W3DShaderManager::setShader(shaderType, shaderPass);
 
 				DX8Wrapper::Set_Vertex_Buffer(pVB);
-				DX8Wrapper::Set_Index_Buffer(ibAccess, 0);
-
+				DX8Wrapper::Set_Index_Buffer(grp.ib ? grp.ib : m_indexBuffer, 0);
 				if (Is_Hidden() == 0) {
-					DX8Wrapper::Draw_Triangles(0, indexCount / 3, 0, HEIGHTMAP_VERTEX_NUM);
+					DX8Wrapper::Draw_Triangles(0, grp.polyCount, 0, HEIGHTMAP_VERTEX_NUM);
 				}
 			}
 		};
