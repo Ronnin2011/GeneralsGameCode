@@ -20,6 +20,7 @@
 
 #include <d3d9.h>
 #include <d3dx9math.h>
+#include <algorithm>   // Ronin @perf §16 DX9: std::sort over the single-rigid draw-order index array
 
 #include "dx8instancing.h"
 #include "dx8wrapper.h"
@@ -379,7 +380,6 @@ namespace
 DX8InstanceManagerClass::DX8InstanceManagerClass()
 	: m_available(false)
 	, m_enabled(true)
-	, m_instanceVB(nullptr)
 	, m_singleRigidVB(nullptr)
 	, m_singleRigidCursor(0)
 	, m_instanceVS(nullptr)
@@ -390,17 +390,27 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	, m_reflectivePS(nullptr)
 	, m_declCacheCount(0)
 	, m_geometryDeclCacheCount(0)
-	, m_collectedCount(0)
 	, m_pendingSingleRigidCount(0)
 	, m_srFVF(0)
+	, m_instancedRecords(0)
 	, m_instancedDrawCalls(0)
 	, m_instancedMeshes(0)
-	, m_instancedMixedLightDrawCalls(0)
-	, m_instancedMixedLightMeshes(0)
+	, m_instancedIndividualDraws(0)
+	, m_instancedNormalMapped(0)
+	, m_instancedNormalMappedMerged(0)
+	, m_instancedLightBreaks(0)
+	, m_instancedFlushes(0)
+	, m_reflectiveDraws(0)
+	, m_lastFrameInstancedRecords(0)
 	, m_lastFrameInstancedDrawCalls(0)
 	, m_lastFrameInstancedMeshes(0)
-	, m_lastFrameInstancedMixedLightDrawCalls(0)
-	, m_lastFrameInstancedMixedLightMeshes(0)
+	, m_lastFrameInstancedIndividualDraws(0)
+	, m_lastFrameInstancedNormalMapped(0)
+	, m_lastFrameInstancedNormalMappedMerged(0)
+	, m_lastFrameInstancedLightBreaks(0)
+	, m_lastFrameInstancedFlushes(0)
+	, m_lastFrameReflectiveDraws(0)
+	, m_instancedStatsFrame(0)
 {
 	memset(m_declCache, 0, sizeof(m_declCache));
 	memset(m_geometryDeclCache, 0, sizeof(m_geometryDeclCache));
@@ -412,7 +422,6 @@ void DX8InstanceManagerClass::Release_Resources()
 {
   Release_Instance_Texture_Caches();
 
-	if (m_instanceVB) { m_instanceVB->Release(); m_instanceVB = nullptr; }
 	if (m_singleRigidVB) { m_singleRigidVB->Release(); m_singleRigidVB = nullptr; }
 	m_singleRigidCursor = 0;
 	if (m_instanceVS) { m_instanceVS->Release(); m_instanceVS = nullptr; }
@@ -556,15 +565,15 @@ bool DX8InstanceManagerClass::Load_Instance_Shader()
 
 // ----------------------------------------------------------------------------
 
-// Ronin @diagnostic 21/06/2026 DX9 P0 bisect: localize where the single-rigid cost lives.
-// Flip g_SR_PerfMode and rebuild to attribute the 375->231 fps cliff:
-//   0 = full path (normal)
-//   1 = do ALL state setup + lock, but SKIP the draw           -> isolates GPU/draw cost
-//   2 = also SKIP the per-mesh DISCARD lock + upload           -> isolates the lock cost
-//   3 = early-out at the very top, do nothing                  -> upper bound: is the cost even here?
-// Counts are surfaced ON SCREEN (drawSingleRigidPerfReadout in W3DDisplay.cpp) because we
-// A/B in release, where WWDEBUG_SAY isn't visible without a debugger attached.
-static int      g_SR_PerfMode       = 0;
+// Ronin @diagnostic 21/06/2026 DX9: single-rigid counters, surfaced ON SCREEN by
+// drawSingleRigidPerfReadout (W3DDisplay.cpp) because we A/B in RELEASE, where WWDEBUG_SAY isn't
+// visible without a debugger attached. Deliberately kept OUT of the debug-stats system.
+//
+// Ronin @cleanup 01/08/2026 §16 DX9: g_SR_PerfMode is GONE along with the legacy inline path it
+// instrumented (the P0 bisect knob: skip-draw / skip-lock / early-out, built to attribute the
+// 375->231 cliff that the deferred batch then fixed). It has read 0 in every capture since.
+// g_SR_DrawCount is now bumped ONLY by Collect_Single_Rigid, so [SR] draws/frame == [INST] recs
+// exactly; reflective meshes are counted separately (m_reflectiveDraws -> [INST] refl=).
 static unsigned g_SR_DrawCount      = 0;          // accumulating during the current frame
 static unsigned g_SR_LastFrameCount = 0;          // total from the last COMPLETED frame (for the HUD)
 static unsigned g_SR_LastFrame      = 0xFFFFFFFFu;
@@ -577,48 +586,44 @@ static unsigned g_SR_LastFrameFlushCount = 0;
 // Accessors for the on-screen readout in W3DDisplay.cpp (kept OUT of the debug-stats system).
 unsigned DX8_Get_Single_Rigid_Last_Frame_Draw_Count()  { return g_SR_LastFrameCount; }
 unsigned DX8_Get_Single_Rigid_Last_Frame_Flush_Count() { return g_SR_LastFrameFlushCount; }
-int      DX8_Get_Single_Rigid_Perf_Mode()              { return g_SR_PerfMode; }
 
 
-// Ronin @bugfix 23/05/2026 DX9 R3: Reuse the exact instanced programmable rigid path
-// for the single-mesh fallback too. The separate non-instanced VS path diverged from
-// the working instanced shader contract and produced persistent normal-map artifacts on
-// rigid meshes. Feeding one world transform through stream 1 keeps the fallback visually
-// identical to the instanced path.
-bool DX8InstanceManagerClass::Draw_Single_Rigid(
+// Ronin @bugfix 23/05/2026 DX9 R3: Reuse the exact instanced programmable rigid path for a single
+// mesh. Feeding one world transform through stream 1 keeps this visually identical to a batched draw.
+//
+// Ronin @cleanup 01/08/2026 §16 DX9: this used to be Draw_Single_Rigid, a general "one rigid mesh,
+// inline" path with a `reflective` flag. Every non-reflective caller is gone -- eligible rigid meshes
+// are collected and drawn by Flush_Single_Rigid -- so the function is specialized to the ONE thing that
+// genuinely cannot be batched: the reflective env pass-0. It needs m_reflectivePS plus per-draw camera
+// position and view matrix in PS constants, which the shared flush (fixed m_instancePS) cannot supply,
+// and it must draw IMMEDIATELY so pass-0 lands before its pass-1 overlay (which IS batched).
+// Also dropped: the dead `baseVertexOffset` parameter (declared, never referenced) and the
+// g_SR_PerfMode bisect gates.
+bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	DX8PolygonRendererClass* renderer,
 	DWORD geometryFVF,
 	LightEnvironmentClass* lightEnv,
 	VertexMaterialClass* material,
 	TextureClass* diffuseTexture,
 	const Matrix3D& worldTransform,
-	unsigned baseVertexOffset,
-	const RigidTexGen& texGen,
-	bool reflective)
+	const RigidTexGen& texGen)
 {
 
-	if (renderer == nullptr) {
+	// Ronin @bugfix 31/07/2026 §16 DX9: strips can NEVER take the programmable path. The only draw this
+	// function issues is Render_Instanced -- a bare D3DPT_TRIANGLELIST DrawIndexedPrimitive with
+	// index_count/3 primitives -- while a strip needs Draw_Strip. Returning false makes the caller fall
+	// through to legacy FFP, whose Render() branches on Is_Strip() correctly.
+	if (renderer == nullptr || renderer->Is_Strip()) {
 		return false;
 	}
 
-	// Ronin @diagnostic 21/06/2026 DX9 P0 bisect: per-frame count + mode gate.
-	// NOTE: only runs on the legacy INLINE path (USE_SINGLE_RIGID_BATCH=false). The flush counter
-	// lives in Collect_Single_Rigid, which is the path that actually batches + flushes.
-	{
-		const unsigned f = WW3D::Get_Frame_Count();
-		if (f != g_SR_LastFrame) {
-			g_SR_LastFrameCount = g_SR_DrawCount;
-			g_SR_LastFrame = f;
-			g_SR_DrawCount = 0;
-		}
-		++g_SR_DrawCount;
-
-	}
-
-	if (g_SR_PerfMode == 3) {
-		return true; // skip the entire body (perf upper-bound test)
-	}
-
+	// Ronin @diagnostic 01/08/2026 §16 DX9: reflective meshes are their own line item now. They used to
+	// bump g_SR_DrawCount, which silently inflated [SR] draws/frame above [INST] recs (that was the
+	// 556-vs-555 gap) because the [SR] counter is fed by Collect_Single_Rigid and reflective draws never
+	// go through it. Rolled here so the frame boundary is picked up during the per-mesh walk (reflective
+	// draws happen before any container flush); the count itself is bumped at the draw, so the device-lost
+	// / lock-failure early-outs below can't report draws that never happened.
+	Roll_Instancing_Stats_Frame();
 
 	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
 	if (dev == nullptr) {
@@ -632,8 +637,10 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 
 	const bool hasVertexColor = (geometryFVF & D3DFVF_DIFFUSE) != 0;
 	IDirect3DVertexShader9* selectedVS = hasVertexColor ? m_instanceVS : m_instanceVSNoColor;
-	// Ronin @feature DX9: reflective pass-0 uses the per-pixel env-reflection PS.
-	IDirect3DPixelShader9* selectedPS = (reflective && m_reflectivePS != nullptr) ? m_reflectivePS : m_instancePS;
+	// Ronin @feature DX9: the per-pixel env-reflection PS -- the whole reason this draw stays inline.
+	// Null means ReflectiveRigid.pso failed to load; returning false drops the mesh to the legacy env
+	// path (the caller also pre-checks Has_Reflective_PS(), this is the backstop).
+	IDirect3DPixelShader9* selectedPS = m_reflectivePS;
 	if (selectedVS == nullptr || selectedPS == nullptr || m_singleRigidVB == nullptr) {
 		return false;
 	}
@@ -688,7 +695,7 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	// Ronin @feature DX9: world-space camera position for the reflective PS (register c0). The camera
 	// origin in world space is the translation row of the inverse view matrix.
 	float reflectiveCameraPosPS[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
-	if (reflective) {
+	{
 		D3DXMATRIX invView;
 		D3DXMatrixInverse(&invView, nullptr, &dxView);
 		reflectiveCameraPosPS[0] = invView._41;
@@ -714,7 +721,7 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	// Ronin @feature 07/06/2026 DX9: write this mesh's transform + lighting into the
 	// instance VB. Lighting comes from the just-built constants so both the lightenv
 	// and FFP-readback branches reproduce the previous shared-constant VS behavior.
-	if (g_SR_PerfMode < 2) { // P0 bisect: mode>=2 skips the per-mesh DISCARD lock + upload
+	{
 		InstanceData inst;
 		memcpy(inst.row0, (const float*)&worldTransform[0], sizeof(inst.row0));
 		memcpy(inst.row1, (const float*)&worldTransform[1], sizeof(inst.row1));
@@ -809,7 +816,7 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 
 	// Ronin @feature DX9: the reflective PS reads c0 as world-space camera position; override the
 	// cloud flag the block above wrote to c0. Must be after that block and before the draw.
-	if (reflective) {
+	{
 		dev->SetPixelShaderConstantF(0, reflectiveCameraPosPS, 1);
 		// Ronin @feature DX9: view matrix (world->camera) so the reflective PS can sphere-map the
 		// reflection in CAMERA space (view-relative chrome look) instead of world space, which drops
@@ -827,19 +834,18 @@ bool DX8InstanceManagerClass::Draw_Single_Rigid(
 	// Behind an A/B toggle: flip true to restore the old hack ONLY if a reflective mesh whose overlay
 	// still falls to FFP (no <diffuse>_NRM -> not caught by BLENDED_NRM) shimmers. Cleared after regardless.
 	static const bool ENABLE_REFLECTIVE_DEPTH_BIAS = false; // false = drop the hack (pass-1 now programmable)
-	if (reflective && ENABLE_REFLECTIVE_DEPTH_BIAS) {
+	if (ENABLE_REFLECTIVE_DEPTH_BIAS) {
 		const float reflectiveSlopeBias = 1.0f;     // + = push pass-0 away from camera
 		const float reflectiveConstBias = 1.0e-6f;  // floor for flat, camera-facing panels
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, *(DWORD *)(&reflectiveSlopeBias));
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, *(DWORD *)(&reflectiveConstBias));
 	}
 
-	if (g_SR_PerfMode == 0) {
-		renderer->Render_Instanced(0); // P0 bisect: modes 1/2/3 skip the actual draw
-	}
-	
+	renderer->Render_Instanced(0);
+	++m_reflectiveDraws; // Ronin @diagnostic §16: [INST] refl= — draws actually issued, not attempts
+
 	// Ronin @feature DX9: clear the reflective pass-0 depth bias so it can't leak into later passes.
-	if (reflective) {
+	{
 		const float reflectiveZeroBias = 0.0f;
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, *(DWORD *)(&reflectiveZeroBias));
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, *(DWORD *)(&reflectiveZeroBias));
@@ -886,7 +892,13 @@ bool DX8InstanceManagerClass::Collect_Single_Rigid(
 	const ShaderClass& shader)
 {
 
-	if (renderer == nullptr) {
+	// Ronin @bugfix 31/07/2026 §16 DX9: strips can NEVER be collected -- Flush_Single_Rigid draws every
+	// record with Render_Instanced (D3DPT_TRIANGLELIST, index_count/3), which is wrong for strip indices.
+	// CHOKEPOINT guard: the BLENDED overlay branch reaches here without consulting
+	// allowProgrammableRigidFallback (it can't -- overlays are multi-pass and that gate requires
+	// Get_Pass_Count()==1), so the gate's !Is_Strip() term cannot cover this path. Returning false makes
+	// the caller fall through to legacy FFP, which handles strips correctly.
+	if (renderer == nullptr || renderer->Is_Strip()) {
 		return false;
 	}
 
@@ -926,16 +938,141 @@ bool DX8InstanceManagerClass::Collect_Single_Rigid(
 	return true;
 }
 
-// Ronin @perf 24/06/2026 DX9 P1: draw the whole per-category single-rigid batch with ONE ring lock and
-// ONE programmable-state setup/teardown. Structurally mirrors Draw_Instanced, but each collected mesh
-// keeps its own geometry, so we loop N single-instance DrawIndexedPrimitive calls that share all state.
+// Ronin @perf 30/07/2026 §16 DX9: opaque == the single-rigid gate's blend contract. Anything else in the
+// pending array is a blended diffuse overlay (ENABLE_BLENDED_RIGID collects those here too) and acts as a
+// SORT BARRIER below, so alpha compositing order stays byte-for-byte what it is today.
+static inline bool Single_Rigid_Shader_Is_Opaque(const ShaderClass& shader)
+{
+	return shader.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE &&
+		shader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO;
+}
+
+// Ronin @perf §16 DX9: total order on the merge key, so records that can share ONE instanced draw end up
+// adjacent. Decreasing significance: render state -> material -> diffuse -> geometry -> texGen.
+// Deliberately does NOT consider lighting: per-instance lights ride stream 1 (VS side), and the per-DRAW
+// PS light set only ever BREAKS a run (Single_Rigid_Records_Merge), it never reorders records.
+bool DX8InstanceManagerClass::Single_Rigid_Order_Less(const PendingSingleRigid& a, const PendingSingleRigid& b)
+{
+	// Render state (blend/z/alpha-test/cull) — the most expensive swap in the flush, so it sorts first.
+	const unsigned aBits = a.shader.Get_Bits();
+	const unsigned bBits = b.shader.Get_Bits();
+	if (aBits != bBits) return aBits < bBits;
+
+	// VS material constants (c7..c13).
+	if (a.material != b.material) return a.material < b.material;
+
+	// s0 diffuse — and through it the optional <diffuse>_NRM bound on s2.
+	if (a.diffuse != b.diffuse) return a.diffuse < b.diffuse;
+
+	// Geometry: the same 6 fields the old Polygon_Renderers_Are_Equivalent compared, expressed as an
+	// ordering. Two DIFFERENT renderers with identical fields ARE the same geometry (meshes registered
+	// into one container VB/IB) and must compare equal here, or they could never merge.
+	DX8PolygonRendererClass* ra = a.renderer;
+	DX8PolygonRendererClass* rb = b.renderer;
+	if (ra != rb) {
+		if (ra->Get_Vertex_Offset()      != rb->Get_Vertex_Offset())      return ra->Get_Vertex_Offset()      < rb->Get_Vertex_Offset();
+		if (ra->Get_Index_Offset()       != rb->Get_Index_Offset())       return ra->Get_Index_Offset()       < rb->Get_Index_Offset();
+		if (ra->Get_Index_Count()        != rb->Get_Index_Count())        return ra->Get_Index_Count()        < rb->Get_Index_Count();
+		if (ra->Get_Min_Vertex_Index()   != rb->Get_Min_Vertex_Index())   return ra->Get_Min_Vertex_Index()   < rb->Get_Min_Vertex_Index();
+		if (ra->Get_Vertex_Index_Range() != rb->Get_Vertex_Index_Range()) return ra->Get_Vertex_Index_Range() < rb->Get_Vertex_Index_Range();
+		if (ra->Is_Strip()               != rb->Is_Strip())               return (int)ra->Is_Strip() < (int)rb->Is_Strip();
+	}
+
+	// texGen is per-MESH, not per-category: live scrolling treads carry their own customUVOffset, so they
+	// land in separate runs and draw individually (correct, and better than the old instancing, which
+	// excluded material-override meshes wholesale). Rows compare as raw bytes — exact-equality consistent
+	// and immune to a NaN breaking the strict weak ordering std::sort requires.
+	if (a.texGen.enabled != b.texGen.enabled)       return (int)a.texGen.enabled < (int)b.texGen.enabled;
+	if (a.texGen.sourceMode != b.texGen.sourceMode) return a.texGen.sourceMode < b.texGen.sourceMode;
+	int cmp = memcmp(a.texGen.row0, b.texGen.row0, sizeof(a.texGen.row0));
+	if (cmp != 0) return cmp < 0;
+	cmp = memcmp(a.texGen.row1, b.texGen.row1, sizeof(a.texGen.row1));
+	if (cmp != 0) return cmp < 0;
+
+	return false; // equal on the whole merge key -> these two can share one instanced draw
+}
+
+// Ronin @perf §16 DX9: can these two records ride ONE instanced DrawIndexedPrimitive? Equality is DERIVED
+// from the sort comparator (neither is less than the other) so the two can never drift apart — a merge
+// test that disagreed with the sort would silently stop merging, or merge across a state boundary.
+//
+// requireLightMatch is set when this run's diffuse resolved a normal map. The PS per-pixel Lambert delta
+// (RigidInstance_ps.hlsl) reads its lights from constants c3..c11, which are per-DRAW — so a normal-mapped
+// run may only collapse if every instance's extracted light payload is identical, in which case the shared
+// constants ARE each instance's own constants and the merged draw is pixel-identical to separate draws.
+// Non-normal-mapped records need no such check: their lighting is 100% VS-side, fed per-instance from
+// stream 1 (TEXCOORD4..12), so batch size is irrelevant to them.
+bool DX8InstanceManagerClass::Single_Rigid_Records_Merge(
+	const PendingSingleRigid& a, const PendingSingleRigid& b, bool requireLightMatch)
+{
+	if (Single_Rigid_Order_Less(a, b) || Single_Rigid_Order_Less(b, a)) {
+		return false;
+	}
+
+	if (requireLightMatch) {
+		// ambient (rgb + numLights in .w) + 4x (direction, diffuse): one contiguous block in InstanceData.
+		const size_t lightingPayloadSize =
+			sizeof(a.inst.ambient) + sizeof(a.inst.lightDir0) + sizeof(a.inst.lightDiffuse0) +
+			sizeof(a.inst.lightDir1) + sizeof(a.inst.lightDiffuse1) + sizeof(a.inst.lightDir2) +
+			sizeof(a.inst.lightDiffuse2) + sizeof(a.inst.lightDir3) + sizeof(a.inst.lightDiffuse3);
+		if (memcmp(&a.inst.ambient, &b.inst.ambient, lightingPayloadSize) != 0) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+// Ronin @perf §16 DX9: build the draw order for one flush. Opaque records are sorted into merge runs; a
+// BLENDED record keeps its exact collection position and nothing sorts across it, so alpha compositing
+// order is unchanged from today. O(N log N) over a compact array (~hundreds of entries per container) —
+// NOT a pointer-chasing list walk. That distinction is the whole point of the merge: the old bucket pass
+// paid a second cache-missing traversal of render_task_head for the same information.
+void DX8InstanceManagerClass::Build_Single_Rigid_Order(unsigned count)
+{
+	for (unsigned k = 0; k < count; ++k) {
+		m_srOrder[k] = k;
+	}
+
+	const PendingSingleRigid* recs = m_pendingSingleRigid;
+
+	unsigned i = 0;
+	while (i < count) {
+		if (!Single_Rigid_Shader_Is_Opaque(recs[i].shader)) {
+			++i;      // barrier: this record draws exactly where it was collected
+			continue;
+		}
+		unsigned j = i + 1;
+		while (j < count && Single_Rigid_Shader_Is_Opaque(recs[j].shader)) {
+			++j;
+		}
+		if ((j - i) > 1) {
+			std::sort(m_srOrder + i, m_srOrder + j,
+				[recs](unsigned lhs, unsigned rhs) { return Single_Rigid_Order_Less(recs[lhs], recs[rhs]); });
+		}
+		i = j;
+	}
+}
+
+// Ronin @perf 30/07/2026 §16 DX9 AUTO-INSTANCING: draw this container's whole single-rigid batch with ONE
+// ring lock and ONE programmable-state setup/teardown, collapsing each maximal run of records that share
+// full pipeline state + geometry into ONE instanced DrawIndexedPrimitive. This REPLACES the old instancing
+// bucket pass, which walked the per-category render-task linked list a SECOND time (pointer chasing +
+// cache misses, ~60 fps fixed) to rediscover groups this array already contains. Same technique as
+// Unreal's FMeshDrawCommand::MatchesForDynamicInstancing: sort the collected draws, merge identical runs.
 void DX8InstanceManagerClass::Flush_Single_Rigid()
 {
+	// Ronin @perf §16 DX9: minimum identical records before we collapse them into ONE instanced draw. 2
+	// matches the old bucket pass's minInstancedBatchSize so the numbers stay comparable. SWEEP this
+	// (2/4/8) on a DENSE map — on a normal map almost nothing reaches it, which is exactly the intent:
+	// instancing is free when it can't help. The threshold does NOT affect the ordering cost.
+	static const unsigned MIN_INSTANCED_RUN = 2u;
+
 	const unsigned count = m_pendingSingleRigidCount;
 	if (count == 0) {
 		return;
 	}
-	++g_SR_FlushCount; // P2 diagnostic: count non-empty category flushes this frame
+	++g_SR_FlushCount; // P2 diagnostic: count non-empty container flushes this frame
 	m_pendingSingleRigidCount = 0; // consume now so a re-entrant Collect (full) can't recurse
 
 	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
@@ -959,13 +1096,17 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	// the device before we switch to the programmable pipeline.
 	DX8Wrapper::Apply_Render_State_Changes();
 
+	// --- Order the records so mergeable ones are adjacent (and a run's ring slots contiguous) ---------
+	Build_Single_Rigid_Order(count);
+
 	// --- Fill per-instance lighting and upload the whole batch to the ring (ONE lock) ----------
-	// Ronin @bugfix DX9: the batch MUST share the rolling cursor with the inline Draw_Single_Rigid,
-	// NOT a fixed offset 0. Both draw from m_singleRigidVB; when an inline draw (reflective / blended
-	// overlays) writes a slot with NOOVERWRITE that lands inside a fixed 0..count flush region whose GPU
-	// draw is still in flight, it stomps that batched instance's transform/lighting -> meshes render at
-	// the wrong place / wrong team color. Allocating the batch at the cursor (and advancing past it below)
-	// keeps the two paths in disjoint slots. count (<=4096) < ring (8192), so a wrapped block always fits.
+	// Ronin @bugfix DX9: the batch MUST share the rolling cursor with the inline Draw_Reflective_Rigid,
+	// NOT a fixed offset 0. Both draw from m_singleRigidVB; when an inline draw (reflective overlays —
+	// the only remaining inline path; blended is now batched) writes a slot with NOOVERWRITE that lands
+	// inside a fixed 0..count flush region whose GPU draw is still in flight, it stomps that batched
+	// instance's transform/lighting -> meshes render at the wrong place / wrong team color. Allocating
+	// the batch at the cursor (and advancing past it below) keeps the two paths in disjoint slots.
+	// count (<=4096) < ring (8192), so a wrapped block always fits.
 	if (m_singleRigidCursor + count > SINGLE_RIGID_RING_INSTANCES) {
 		m_singleRigidCursor = 0; // wrap; the DISCARD below hands back a fresh buffer
 	}
@@ -979,13 +1120,20 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		return;
 	}
 	InstanceData* dst = (InstanceData*)pData;
-	for (unsigned i = 0; i < count; ++i) {
-		PendingSingleRigid& rec = m_pendingSingleRigid[i];
+	// Upload in DRAW order: ring slot k holds the record drawn at position k, so a merged run [i, i+L)
+	// occupies contiguous slots baseSlot+i .. baseSlot+i+L-1 — what an instanced draw requires.
+	for (unsigned k = 0; k < count; ++k) {
+		PendingSingleRigid& rec = m_pendingSingleRigid[m_srOrder[k]];
 		Extract_Instance_Lighting(rec.lightEnv, rec.inst); // no device queries
-		dst[i] = rec.inst;
+		dst[k] = rec.inst;
 	}
 	m_singleRigidVB->Unlock();
 
+	// Ronin @diagnostic §16 DX9: [INST] reports the MERGED flush now (self-contained per-frame roll —
+	// do NOT go back to Begin/End_Frame_Statistics, they are double-bracketed and reset mid-frame).
+	Roll_Instancing_Stats_Frame();
+	m_instancedRecords += count;
+	++m_instancedFlushes;
 
 	// --- Programmable pipeline: set ONCE for the whole batch -----------------------------------
 	dev->SetVertexDeclaration(instanceDecl);
@@ -1004,7 +1152,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	D3DXMATRIX dxView;
 	Upload_Rigid_View_Projection(dev, &dxView); // frame-constant: once per batch now, not per mesh
 
-	// Cloud (category-constant) -----------------------------------------------------------------
+	// Cloud (container-constant) ----------------------------------------------------------------
 	const bool cloudEnabled =
 		(TheGlobalData != nullptr) &&
 		TheGlobalData->m_useCloudMap &&
@@ -1044,9 +1192,9 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
 	dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
 
-	// --- Per-mesh draw loop. State that varies BETWEEN texture-categories (material, diffuse, normal
-	// map) is swapped only when it changes; records arrive grouped by category, so these swaps happen
-	// ~once per category, not per mesh. ---------------------------------------------------------
+	// --- Draw loop. State that varies between texture-categories (shader, material, diffuse, normal map,
+	// texGen) is swapped only when it changes; the sort put like with like, so these swaps happen about
+	// once per distinct state, and the run-length scan then collapses whatever is left. -----------------
 	VertexMaterialClass* lastMaterial = nullptr;
 	TextureClass*        lastDiffuse  = nullptr;
 	bool                 haveMaterial = false;
@@ -1057,16 +1205,19 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	bool                 haveLastTexGen = false;
 	unsigned             lastShaderBits = 0;
 	bool                 haveShader = false;
+	unsigned             lastFreq0 = D3DSTREAMSOURCE_INDEXEDDATA | 1; // matches the setup above
 
-	for (unsigned i = 0; i < count; ++i) {
-		PendingSingleRigid& rec = m_pendingSingleRigid[i];
+	unsigned i = 0;
+	while (i < count) {
+		PendingSingleRigid& rec = m_pendingSingleRigid[m_srOrder[i]];
 
 		// Per-shader: re-apply this group's render state (blend/z/alpha-test/cull/fog). The gate
-		// guarantees opaque BLEND, but z/alpha-test/cull still vary and a container flush spans many
-		// categories — so the batch must NOT inherit one category's state (that was the translucent /
-		// popping bug). Set_Shader+Apply runs the engine's own render-state path; only SHADER_CHANGED is
-		// dirty here, so it sets render states, not the decl. We re-assert the programmable pipeline
-		// after, and force material/diffuse re-bind in case Apply touched tracked texture/material state.
+		// guarantees opaque BLEND for merged records, but z/alpha-test/cull still vary and a container
+		// flush spans many categories — so the batch must NOT inherit one category's state (that was the
+		// translucent / popping bug). Set_Shader+Apply runs the engine's own render-state path; only
+		// SHADER_CHANGED is dirty here, so it sets render states, not the decl. We re-assert the
+		// programmable pipeline after, and force material/diffuse re-bind in case Apply touched tracked
+		// texture/material state.
 		if (!haveShader || rec.shader.Get_Bits() != lastShaderBits) {
 			DX8Wrapper::Set_Shader(rec.shader);
 			DX8Wrapper::Apply_Render_State_Changes();
@@ -1076,6 +1227,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 			dev->SetSoftwareVertexProcessing(FALSE);
 			dev->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | 1);
 			dev->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1);
+			lastFreq0 = D3DSTREAMSOURCE_INDEXEDDATA | 1;
 			haveMaterial = false;
 			haveDiffuse  = false;
 			lastShaderBits = rec.shader.Get_Bits();
@@ -1093,6 +1245,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		}
 
 		// Per-diffuse: bind the diffuse on sampler 0 and resolve/bind its optional normal map (s2).
+		// normalMapActive also decides whether this run needs identical per-instance light payloads.
 		if (!haveDiffuse || rec.diffuse != lastDiffuse) {
 			dev->SetTexture(0, (rec.diffuse != nullptr) ? rec.diffuse->Peek_D3D_Texture() : nullptr);
 
@@ -1130,11 +1283,41 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 			haveLastTexGen = true;
 		}
 
-		// Bind this mesh's instance slot on stream 1 (GPU reads instance 0 at this byte offset).
+		// How many of the FOLLOWING records can ride this same draw? State + geometry adjacency comes
+		// from the sort; the light-payload check only applies when this diffuse resolved a normal map.
+		// Strips are never merged (Render_Instanced issues a TRIANGLELIST draw).
+		unsigned runLen = 1;
+		if (!rec.renderer->Is_Strip()) {
+			while ((i + runLen) < count &&
+				Single_Rigid_Records_Merge(rec, m_pendingSingleRigid[m_srOrder[i + runLen]], normalMapActive)) {
+				++runLen;
+			}
+		}
+
+		// Ronin @diagnostic §16 DX9: did a normal-mapped run stop ONLY because the next record's light
+		// set differs? That count is the evidence for/against keeping NRM merging (flip the third
+		// argument above to a hard false to disable it entirely).
+		if (normalMapActive && (i + runLen) < count &&
+			Single_Rigid_Records_Merge(rec, m_pendingSingleRigid[m_srOrder[i + runLen]], false)) {
+			++m_instancedLightBreaks;
+		}
+
+		if (runLen < MIN_INSTANCED_RUN) {
+			runLen = 1; // below the merge threshold -> draw this record on its own, exactly as before
+		}
+
+		const unsigned freq0 = D3DSTREAMSOURCE_INDEXEDDATA | runLen;
+		if (freq0 != lastFreq0) {
+			dev->SetStreamSourceFreq(0, freq0);
+			lastFreq0 = freq0;
+		}
+
+		// Bind this run's FIRST instance slot on stream 1; the GPU walks runLen consecutive slots.
 		dev->SetStreamSource(1, m_singleRigidVB, (baseSlot + i) * sizeof(InstanceData), sizeof(InstanceData));
 
-		// PS per-pixel normal-map lighting needs this mesh's lights as constants (only when a normal
-		// map is present). Values come straight from the per-instance payload we just built.
+		// PS per-pixel normal-map lighting needs this draw's lights as constants (only when a normal map
+		// is present). For a merged run every instance's payload is identical by construction, so the
+		// first record's values ARE the whole run's values.
 		if (normalMapActive) {
 			dev->SetPixelShaderConstantF(3, rec.inst.lightDir0, 1);
 			dev->SetPixelShaderConstantF(4, rec.inst.lightDiffuse0, 1);
@@ -1149,10 +1332,29 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		}
 
 		rec.renderer->Render_Instanced(0);
+
+		if (runLen > 1) {
+			++m_instancedDrawCalls;        // ONE instanced draw standing in for runLen individual draws
+			m_instancedMeshes += runLen;
+		} else {
+			++m_instancedIndividualDraws;
+		}
+
+		// Ronin @diagnostic §16 DX9: makes lbrk readable. nrm=0 -> no normal-mapped records at all;
+		// nrm>0 with nrmMerged=0 -> NRM records never had a state-matching neighbour (merging them is
+		// moot); nrm>0, nrmMerged>0, lbrk=0 -> NRM merging works and the light payloads match.
+		if (normalMapActive) {
+			m_instancedNormalMapped += runLen;
+			if (runLen > 1) {
+				m_instancedNormalMappedMerged += runLen;
+			}
+		}
+
+		i += runLen;
 	}
 
 	// Ronin @bugfix DX9: advance the shared ring cursor past this batch so the next inline
-	// Draw_Single_Rigid (or the next flush) can't reuse these slots while the GPU is still drawing them.
+	// Draw_Reflective_Rigid (or the next flush) can't reuse these slots while the GPU is still drawing them.
 	m_singleRigidCursor = baseSlot + count;
 	if (m_singleRigidCursor >= SINGLE_RIGID_RING_INSTANCES) {
 		m_singleRigidCursor = 0;
@@ -1227,7 +1429,7 @@ bool DX8InstanceManagerClass::Init()
 	}
 
 	m_available = true;
-	WWDEBUG_SAY(("DX8InstanceManager: Hardware instancing initialized (max %d instances)", MAX_INSTANCES_PER_DRAW));
+	WWDEBUG_SAY(("DX8InstanceManager: Programmable rigid path initialized (instance ring = %d)", SINGLE_RIGID_RING_INSTANCES));
 	return true;
 }
 
@@ -1246,20 +1448,9 @@ bool DX8InstanceManagerClass::Create_Instance_VB()
 {
 	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
 
-	HRESULT hr = dev->CreateVertexBuffer(
-		MAX_INSTANCES_PER_DRAW * sizeof(InstanceData),
-		D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY,
-		0,
-		D3DPOOL_DEFAULT,
-		&m_instanceVB,
-		nullptr);
+	// Ronin @perf §14e.3 DX9: the container-level instanced batch draws from the single-rigid ring
+	// (m_singleRigidVB); the old per-draw m_instanceVB was removed. Create only the ring.
 
-	if (FAILED(hr)) {
-		WWDEBUG_SAY(("CreateVertexBuffer for instance data failed: 0x%08X", hr));
-		return false;
-	}
-
-	// Ronin @perf 24/06/2026 DX9 P0.5: dedicated single-rigid ring buffer (see SINGLE_RIGID_RING_INSTANCES).
 	HRESULT hrRing = dev->CreateVertexBuffer(
 		SINGLE_RIGID_RING_INSTANCES * sizeof(InstanceData),
 		D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY,
@@ -1529,319 +1720,37 @@ bool DX8InstanceManagerClass::Load_Pixel_Shader_From_File(const char* shaderPath
 
 // ----------------------------------------------------------------------------
 
-void DX8InstanceManagerClass::Draw_Instanced(
-	DX8PolygonRendererClass* renderer,
-	DWORD geometryFVF,
-	LightEnvironmentClass* lightEnv,
-	VertexMaterialClass* material,
-	TextureClass* diffuseTexture,
-	const RigidTexGen& texGen)
+// Ronin @diagnostic §14e.3 DX9: roll the instancing counters on frame change, independent of
+// Debug_Statistics::Begin/End_Statistics (bracketed from ww3d.cpp AND W3DDisplay.cpp -> it reset these
+// mid-frame, so the HUD read 0). Mirrors the [SR] counters' WW3D::Get_Frame_Count() reset.
+void DX8InstanceManagerClass::Roll_Instancing_Stats_Frame()
 {
-	if (m_collectedCount < 2 || !renderer) return;
-
-	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
-	if (!dev) return;
-
-	// Ronin @bugfix 18/02/2026 DX9: Get the correct vertex declaration for this mesh's FVF
-	IDirect3DVertexDeclaration9* instanceDecl = Get_Or_Create_Instance_Decl(geometryFVF);
-	if (!instanceDecl) {
-		WWDEBUG_SAY(("DX8InstanceManager: No decl for FVF 0x%08X, falling back to non-instanced", geometryFVF));
-		return;
-	}
-
-	// Ronin @bugfix 07/03/2026 DX9: Select the shader variant that matches the
-	// geometry FVF. AMD strictly validates VS input semantics against the vertex
-	// declaration; meshes without D3DFVF_DIFFUSE must not use the COLOR0 variant.
-	const bool hasVertexColor = (geometryFVF & D3DFVF_DIFFUSE) != 0;
-	IDirect3DVertexShader9* selectedVS = hasVertexColor ? m_instanceVS : m_instanceVSNoColor;
-	if (!selectedVS) {
-		WWDEBUG_SAY(("DX8InstanceManager: Missing instancing shader variant for FVF 0x%08X (hasColor=%d)",
-			geometryFVF, hasVertexColor ? 1 : 0));
-		return;
-	}
-
-	// Ronin @feature 08/03/2026 DX9: Bind a small programmable pixel shader for the
-	// instanced path instead of relying on fixed-function pixel combiners.
-	IDirect3DPixelShader9* selectedPS = m_instancePS;
-	if (!selectedPS) {
-		WWDEBUG_SAY(("DX8InstanceManager: Missing instancing pixel shader"));
-		return;
-	}
-
-		// 1. Lock and fill the instance VB with collected transforms + per-instance lighting
-	void* pData = nullptr;
-	HRESULT hr = m_instanceVB->Lock(0, m_collectedCount * sizeof(InstanceData), &pData, D3DLOCK_DISCARD);
-	if (FAILED(hr)) {
-		WWDEBUG_SAY(("Instance VB Lock failed: 0x%08X", hr));
-		return;
-	}
-
-	InstanceData* dst = (InstanceData*)pData;
-	bool mixedLighting = false;
-	const size_t lightingPayloadSize =
-		sizeof(dst[0].ambient) +
-		sizeof(dst[0].lightDir0) +
-		sizeof(dst[0].lightDiffuse0) +
-		sizeof(dst[0].lightDir1) +
-		sizeof(dst[0].lightDiffuse1) +
-		sizeof(dst[0].lightDir2) +
-		sizeof(dst[0].lightDiffuse2) +
-		sizeof(dst[0].lightDir3) +
-		sizeof(dst[0].lightDiffuse3);
-
-	for (unsigned i = 0; i < m_collectedCount; ++i) {
-		dst[i] = m_instanceBuffer[i];
-		Extract_Instance_Lighting(m_collectedLightEnv[i], dst[i]);
-
-		if (i > 0 && !mixedLighting) {
-			if (memcmp(dst[0].ambient, dst[i].ambient, lightingPayloadSize) != 0) {
-				mixedLighting = true;
-			}
-		}
-	}
-
-	m_instanceVB->Unlock();
-
-	// 2. Snapshot only the raw D3D state this function actually mutates.
-	IDirect3DVertexBuffer9* savedVB0 = nullptr;
-	UINT savedOffset0 = 0, savedStride0 = 0;
-	dev->GetStreamSource(0, &savedVB0, &savedOffset0, &savedStride0);
-
-	IDirect3DIndexBuffer9* savedIB = nullptr;
-	dev->GetIndices(&savedIB);
-
-	DWORD savedFVF = 0;
-	dev->GetFVF(&savedFVF);
-
-	IDirect3DVertexDeclaration9* savedDecl = nullptr;
-	dev->GetVertexDeclaration(&savedDecl);
-
-	IDirect3DVertexShader9* savedVS = nullptr;
-	dev->GetVertexShader(&savedVS);
-
-	IDirect3DPixelShader9* savedPS = nullptr;
-	dev->GetPixelShader(&savedPS);
-
-	// Ronin @bugfix 01/03/2026 DX9: On MIXED_VERTEXPROCESSING devices, AMD requires explicit
-	// hardware vertex processing mode before using VS 3.0 with stream frequency instancing.
-	BOOL savedSoftwareVP = dev->GetSoftwareVertexProcessing();
-	if (savedSoftwareVP) {
-		dev->SetSoftwareVertexProcessing(FALSE);
-	}
-
-	// Ronin @bugfix 28/02/2026 DX9: AMD driver requires specific call ordering:
-	// 1) SetVertexDeclaration  2) SetVertexShader  3) SetStreamSourceFreq
-	// 4) SetStreamSource  5) Draw
-	// Setting declaration BEFORE stream frequency is critical on AMD.
-
-	// 3. Set the instancing programmable pipeline.
-	dev->SetVertexDeclaration(instanceDecl);
-	dev->SetVertexShader(selectedVS);
-	dev->SetPixelShader(selectedPS);
-
-	// 4. Set stream frequency AFTER declaration (AMD requirement)
-	dev->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | m_collectedCount);
-	dev->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1);
-
-	// 5. Ronin @bugfix 01/03/2026 DX9: Re-bind BOTH stream sources AFTER setting frequency.
-	// AMD invalidates stream source bindings when SetStreamSourceFreq is called.
-	// NVIDIA preserves them, which is why it works there without re-binding.
-	if (savedVB0) {
-		dev->SetStreamSource(0, savedVB0, savedOffset0, savedStride0);
-	}
-	dev->SetStreamSource(1, m_instanceVB, 0, sizeof(InstanceData));
-
-
-	// 6. Set world transform to identity (transforms are per-instance in the shader)
-	D3DMATRIX identityMat;
-	memset(&identityMat, 0, sizeof(identityMat));
-	identityMat._11 = identityMat._22 = identityMat._33 = identityMat._44 = 1.0f;
-	dev->SetTransform(D3DTS_WORLD, &identityMat);
-
-	// 7. Upload ViewProjection matrix into c0..c3
-	D3DXMATRIX dxView;
-	Upload_Rigid_View_Projection(dev, &dxView);
-
-	// 8. Upload lighting state into VS constants c4..c13
-	RigidShaderLightingConstants lightingConstants;
-	Build_Rigid_Shader_Lighting_Constants(dev, geometryFVF, lightEnv, material, dxView, &lightingConstants);
-	Upload_Rigid_Shader_VS_Lighting_Constants(dev, lightingConstants);
-
-	// Ronin @feature 16/06/2026 DX9 Rigid parity: programmable texcoord-gen (Phase 1: AFFINE_UV).
-	// Per-draw constant — one mapper/material per batch. Always uploaded so a disabled draw
-	// cannot inherit a previous draw's enable flag.
-	{
-		const float texGenParams[4] = { texGen.enabled ? 1.0f : 0.0f, (float)texGen.sourceMode, 0.0f, 0.0f };
-		dev->SetVertexShaderConstantF(19, texGenParams, 1);
-		dev->SetVertexShaderConstantF(20, texGen.row0, 1);
-		dev->SetVertexShaderConstantF(21, texGen.row1, 1);
-	}
-
-	TextureClass* normalMapTex = nullptr;	
-
-	// Ronin @feature 17/05/2026 DX9: project the terrain cloud field onto rigid
-	// instanced meshes. The instancing path owns sampler 1 explicitly; we do NOT
-	// rely on the fixed-function rigid path having left anything on stage 1.
-	// Ronin @feature 23/05/2026 DX9 R2: also resolve and bind an optional per-diffuse
-	// normal map on sampler 2 and push the PS constants the rigid PS needs to evaluate
-	// a screen-space TBN Lambert delta on top of the existing Gouraud lighting.
-	{
-		const bool cloudEnabled =
-			(TheGlobalData != nullptr) &&
-			TheGlobalData->m_useCloudMap &&
-			(geometryFVF & D3DFVF_DIFFUSE) == 0;
-
-		TextureClass* rigidCloudTex = cloudEnabled ? Get_Valid_Rigid_Cloud_Texture() : nullptr;
-
-		const bool cloudActive = cloudEnabled && (rigidCloudTex != nullptr);
-
-		float cloudScale = 0.0f, cloudOffsetX = 0.0f, cloudOffsetY = 0.0f;
-		if (cloudActive) {
-			W3DShaderManager::getCloudMapState(&cloudScale, &cloudOffsetX, &cloudOffsetY);
-		}
-
-		const float c14[4] = { cloudActive ? 1.0f : 0.0f, cloudScale, cloudOffsetX, cloudOffsetY };
-		dev->SetVertexShaderConstantF(14, c14, 1);
-
-		// PS c0: cloud enable
-		const float psC0[4] = { cloudActive ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
-		dev->SetPixelShaderConstantF(0, psC0, 1);
-
-		// PS c1: debug mode (kept for parity with existing PS)
-		const float psC1[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-		dev->SetPixelShaderConstantF(1, psC1, 1);
-
-		if (cloudActive) {
-			IDirect3DBaseTexture9* d3dCloud = rigidCloudTex->Peek_D3D_Texture();
-			dev->SetTexture(1, d3dCloud);
-			dev->SetSamplerState(1, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-			dev->SetSamplerState(1, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-			dev->SetSamplerState(1, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-			dev->SetSamplerState(1, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-			dev->SetSamplerState(1, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
-		}
-		else {
-			dev->SetTexture(1, nullptr);
-		}
-
-		// Ronin @feature 23/05/2026 DX9 R2: resolve <diffuse>_NRM and bind on sampler 2.
-		normalMapTex = Get_Normal_Map_For_Diffuse_Texture(diffuseTexture);
-		const bool normalMapActive = (normalMapTex != nullptr);
-
-		// PS c2: normal-map params (enable, intensity, reserved, reserved).
-		// Intensity 1.0f matches the sampled normal exactly; lower values soften the perturbation.
-		const float psC2[4] = { normalMapActive ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
-		dev->SetPixelShaderConstantF(2, psC2, 1);
-
-		// PS c3..c6: forward the same two lights the VS used, so the PS can evaluate
-		// a per-pixel Lambert delta against the perturbed normal without re-querying state.
-		// Mirrors the values pushed into VS c5/c6/c11/c12 above.
-		//const float* vsLightDir0 = nullptr;
-		//const float* vsLightDiff0 = nullptr;
-		//const float* vsLightDir1 = nullptr;
-		//const float* vsLightDiff1 = nullptr;
-
-		// We already wrote these into VS constants; re-emit them as PS constants.
-		// Simpler than re-querying lightEnv with two code paths.
-		Upload_Rigid_Shader_PS_Lighting_Constants(dev, lightingConstants);
-
-		if (normalMapActive) {
-			IDirect3DBaseTexture9* d3dNormal = normalMapTex->Peek_D3D_Texture();
-			dev->SetTexture(2, d3dNormal);
-			dev->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-			dev->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-			dev->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-			dev->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-			dev->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
-		}
-		else {
-			dev->SetTexture(2, nullptr);
-		}
-	}
-
-	// 9. Issue the instanced draw call
-	renderer->Render_Instanced(0);
-
-	// 10. Restore stream frequency to non-instanced defaults
-	dev->SetStreamSourceFreq(0, 1);
-	dev->SetStreamSourceFreq(1, 1);
-
-	// 11. Unbind stream 1
-	dev->SetStreamSource(1, nullptr, 0, 0);
-
-	// 12. Restore raw D3D state touched by instancing
-	if (savedDecl) {
-		dev->SetVertexDeclaration(savedDecl);
-	}
-	else if (savedFVF != 0) {
-		dev->SetFVF(savedFVF);
-	}
-	else if (DX8Wrapper::Get_Current_FVF() != 0) {
-		dev->SetFVF(DX8Wrapper::Get_Current_FVF());
-	}
-
-	dev->SetVertexShader(savedVS);
-	dev->SetPixelShader(savedPS);
-
-	// Ronin @bugfix 01/03/2026 DX9: Restore software vertex processing mode if it was active.
-	if (savedSoftwareVP) {
-		dev->SetSoftwareVertexProcessing(savedSoftwareVP);
-	}
-
-	if (savedVB0) {
-		dev->SetStreamSource(0, savedVB0, savedOffset0, savedStride0);
-	}
-	if (savedIB) {
-		dev->SetIndices(savedIB);
-	}
-
-	// Release the Get* refs
-	if (savedVB0) savedVB0->Release();
-	if (savedIB) savedIB->Release();
-	if (savedDecl) savedDecl->Release();
-	if (savedVS) savedVS->Release();
-	if (savedPS) savedPS->Release();
-
-	// Ronin @feature 16/05/2026 DX9: release our cloud binding so subsequent
-	// fixed-function draws don't accidentally sample it.
-	dev->SetTexture(1, nullptr);
-	// Ronin @feature 23/05/2026 DX9 R2: release rigid normal-map binding for the same reason.
-	dev->SetTexture(2, nullptr);
-
-	if (normalMapTex != nullptr) {
-		normalMapTex->Release_Ref();
-	}
-
-	// 13. Tell ShaderClass to re-apply its cached state on the next draw.
-	ShaderClass::Invalidate();
-
-	// 14. Ronin @bugfix 19/02/2026 DX9: Dirty the change flags so Apply_Render_State_Changes
-	// re-validates. The container's VB is still valid and still bound on the device.
-	DX8Wrapper::Invalidate_Vertex_Buffer_State();
-
-	// Statistics
-	m_instancedDrawCalls++;
-	m_instancedMeshes += m_collectedCount;
-
-	if (mixedLighting) {
-		m_instancedMixedLightDrawCalls++;
-		m_instancedMixedLightMeshes += m_collectedCount;
-	}
-}
-// ----------------------------------------------------------------------------
-
-void DX8InstanceManagerClass::Begin_Frame_Statistics()
-{
+	const unsigned f = WW3D::Get_Frame_Count();
+	if (f == m_instancedStatsFrame) return;
+	m_lastFrameInstancedRecords         = m_instancedRecords;
+	m_lastFrameInstancedDrawCalls       = m_instancedDrawCalls;
+	m_lastFrameInstancedMeshes          = m_instancedMeshes;
+	m_lastFrameInstancedIndividualDraws = m_instancedIndividualDraws;
+	m_lastFrameInstancedLightBreaks     = m_instancedLightBreaks;
+	m_lastFrameInstancedNormalMapped       = m_instancedNormalMapped;
+	m_lastFrameInstancedNormalMappedMerged = m_instancedNormalMappedMerged;
+	m_lastFrameInstancedFlushes         = m_instancedFlushes;
+	m_lastFrameReflectiveDraws          = m_reflectiveDraws;
+	m_instancedRecords = 0;
 	m_instancedDrawCalls = 0;
 	m_instancedMeshes = 0;
-	m_instancedMixedLightDrawCalls = 0;
-	m_instancedMixedLightMeshes = 0;
+	m_instancedIndividualDraws = 0;
+	m_instancedLightBreaks = 0;
+	m_instancedNormalMapped = 0;
+	m_instancedNormalMappedMerged = 0;
+	m_instancedFlushes = 0;
+	m_reflectiveDraws = 0;
+	m_instancedStatsFrame = f;
 }
 
-void DX8InstanceManagerClass::End_Frame_Statistics()
-{
-	m_lastFrameInstancedDrawCalls = m_instancedDrawCalls;
-	m_lastFrameInstancedMeshes = m_instancedMeshes;
-	m_lastFrameInstancedMixedLightDrawCalls = m_instancedMixedLightDrawCalls;
-	m_lastFrameInstancedMixedLightMeshes = m_instancedMixedLightMeshes;
-}
+// Ronin @diagnostic §14e.3 DX9: the instancing counters roll themselves now (Roll_Instancing_Stats_Frame,
+// like the [SR] line). These stay no-ops so DX8Wrapper::Begin/End_Statistics still link — but they must NOT
+// touch the counters (the mid-frame double-bracket was resetting them to 0).
+void DX8InstanceManagerClass::Begin_Frame_Statistics() {}
+void DX8InstanceManagerClass::End_Frame_Statistics()   {}
+

@@ -484,6 +484,7 @@ TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture)
 	return normalTex;
 }
 
+#ifdef WWDEBUG
 static bool Rigid_Texture_Has_Normal_Map(TextureClass* diffuseTexture)
 {
 	TextureClass* normalTex = Get_Normal_Map_For_Diffuse_Texture(diffuseTexture);
@@ -494,6 +495,7 @@ static bool Rigid_Texture_Has_Normal_Map(TextureClass* diffuseTexture)
 	normalTex->Release_Ref();
 	return true;
 }
+#endif
 
 enum RigidRenderPathType
 {
@@ -547,6 +549,12 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 	TextureClass* stage0Texture,
 	TextureClass* stage1Texture,
 	bool allowProgrammableRigidFallback,
+	// Ronin @bugfix 31/07/2026 DX9: TRUE when the caller has temporarily mutated the shared
+	// VertexMaterialClass for this one mesh (alpha-override path: Set_Opacity/Set_Diffuse, restored
+	// immediately after this call returns). Anything DEFERRED reads the material at flush time, i.e.
+	// after the restore, so a transiently-overridden mesh must NOT be collected — it renders opaque.
+	// texGen is safe because it is snapshotted into the record at collect time; opacity is not.
+	bool materialStateIsTransient,
 	LightEnvironmentClass* lightEnv,
 	VertexMaterialClass* material,
 	const ShaderClass& activeShader,
@@ -590,16 +598,15 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 	Build_Programmable_Rigid_TexGen(
 		material, Classify_Programmable_Rigid_Texture_Mapping(material), singleRigidTexGen);
 
-	// Ronin @perf 24/06/2026 DX9 P1: flip to false to A/B the OLD inline per-mesh Draw_Single_Rigid
-	// against the batched path (collect now, flush once per category at the end of Render()).
-	static const bool USE_SINGLE_RIGID_BATCH = true;
-
 	// Ronin @feature DX9: reflective env pass (per-pixel reflection). Rendered INLINE via
-	// Draw_Single_Rigid so multi-pass order holds — the deferred batch flushes at container end,
-	// which would draw this reflective pass-0 AFTER the FFP diffuse pass-1 overlay. Intentionally
-	// independent of the single-rigid gate/pass-count: reflective meshes (SKYLIGHTS) are multi-pass
-	// and we WANT their pass-0 here. Only fires for ENV reflection-vector mappers on opaque,
-	// normal-bearing, single-stage passes; everything else is untouched.
+	// Draw_Reflective_Rigid for two reasons: (1) it needs the dedicated m_reflectivePS (+ camera-pos /
+	// view-matrix PS constants) that the shared Flush_Single_Rigid pipeline (fixed m_instancePS) can't
+	// apply; (2) drawing immediately keeps this pass-0 BEFORE its pass-1 overlay, which is now BATCHED
+	// and flushes at container end (see the blended branch below). Intentionally independent of the
+	// single-rigid gate/pass-count: reflective meshes (SKYLIGHTS) are multi-pass and we WANT their
+	// pass-0 here. Reflective is a handful of meshes (§14f: ~free), so leaving it inline costs nothing;
+	// batch it only if a scene ever has many reflective meshes. Only fires for ENV reflection-vector
+	// mappers on opaque, normal-bearing, single-stage passes; everything else is untouched.
 	static const bool ENABLE_REFLECTIVE_RIGID = true; // flip false to A/B against the legacy env path
 	if (ENABLE_REFLECTIVE_RIGID &&
 		TheDX8InstanceManager.Has_Reflective_PS() &&
@@ -612,16 +619,14 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 		RigidTexGen reflectiveTexGen = {};
 		reflectiveTexGen.enabled = false; // reflective PS computes reflect(V,N) itself; no FFP UV matrix
 
-		if (TheDX8InstanceManager.Draw_Single_Rigid(
+		if (TheDX8InstanceManager.Draw_Reflective_Rigid(
 				renderer,
 				geometryFVF,
 				lightEnv,
 				material,
 				stage0Texture,
 				worldTransform,
-				baseVertexOffset,
-				reflectiveTexGen,
-				/*reflective=*/true)) {
+				reflectiveTexGen)) {
 
 			#ifdef WWDEBUG
 			if (Rigid_Debug_Should_Log_Once("REFLECTIVE", texName)) {
@@ -643,9 +648,9 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 	// (e.g. the SKYLIGHTS/airfield abarfrccmd overlay that composites over the lakedusk reflection).
 	// The normal map is OPTIONAL — this is for ALL blended overlays, not just ones with a <diffuse>_NRM.
 	// The PS no-ops its normal-map block when none exists (g_NormalMapParams.x == 0), so a plain overlay
-	// still renders as diffuse+lighting through the same path. Rendered INLINE like the reflective branch
-	// so pass-1 stays after pass-0 (the deferred batch would reorder it). Bringing these overlays across
-	// is also what makes a reflective mesh's pass-0 and pass-1 share clip-Z; any overlay left on FFP
+	// still renders as diffuse+lighting through the same path. BATCHED (not inline) — see the ordering
+	// note on the Collect_Single_Rigid call below. Bringing these overlays onto the programmable path is
+	// also what makes a reflective mesh's pass-0 and pass-1 share clip-Z; any overlay left on FFP
 	// z-fights the programmable pass-0 (that's what the pass-0 depth bias in Draw_Single_Rigid masks).
 	static const bool ENABLE_BLENDED_RIGID = true; // flip false to A/B against LEGACY_CLOUD
 	const bool shaderUsesAlphaBlend =
@@ -653,43 +658,44 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 		activeShader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA;
 	if (ENABLE_BLENDED_RIGID &&
 		shaderUsesAlphaBlend &&
+		!materialStateIsTransient &&   // Ronin @bugfix 31/07/2026 DX9: see the parameter comment
 		((geometryFVF & D3DFVF_NORMAL) != 0) &&
 		(fvfTexCount == 1) &&
 		(stage1Texture == nullptr) &&
 		!Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(material)) {
 
 
-		if (TheDX8InstanceManager.Draw_Single_Rigid(
+		// Ronin @perf DX9 §14f: batch blended overlays instead of drawing them INLINE, one mesh at a
+		// time. Collect_Single_Rigid defers into the per-container batch (flushed at container end), so
+		// each overlay pays its share of ONE programmable pipeline setup/teardown instead of a full
+		// per-mesh transition (the ~70 fps in §14f). Flush_Single_Rigid's per-shader-group render-state
+		// path applies THIS record's alpha-blend shader, so opaque + blended records coexist in one
+		// flush. Draws in collection (render) order -> the overlay still lands after the geometry it
+		// sits on, and after its own reflective pass-0 (inline, drawn before the container-end flush).
+		if (TheDX8InstanceManager.Collect_Single_Rigid(
 				renderer,
 				geometryFVF,
 				lightEnv,
 				material,
 				stage0Texture,
 				worldTransform,
-				baseVertexOffset,
 				singleRigidTexGen,
-				/*reflective=*/false)) {
+				activeShader)) {
 
 			#ifdef WWDEBUG
 			if (Rigid_Debug_Should_Log_Once("BLENDED", texName)) {
-				WWDEBUG_SAY(("Rigid BLENDED (overlay -> programmable, inline): tex=%s hasNRM=%d",
+				WWDEBUG_SAY(("Rigid BLENDED (overlay -> programmable, BATCHED): tex=%s hasNRM=%d",
 					texName, Rigid_Texture_Has_Normal_Map(stage0Texture) ? 1 : 0));
 			}
 			#endif
 
-			DX8Wrapper::BindLayoutFVF(geometryFVF, "Render_Rigid_Mesh blended-nrm restore");
-			DX8Wrapper::Set_Texture(0, stage0Texture);
-			DX8Wrapper::Set_Texture(1, stage1Texture);
-			DX8Wrapper::Set_Material(material);
-			DX8Wrapper::Set_Shader(activeShader);
-			DX8Wrapper::Apply_Render_State_Changes();
+			// No device-state restore: Collect_Single_Rigid touches no device state (unlike the old
+			// inline Draw_Single_Rigid), exactly like the opaque canUseProgrammableFallback branch.
 			return RIGID_RENDER_PATH_SINGLE_RIGID;
 		}
 	}
 
 	if (canUseProgrammableFallback) {
-
-		if (USE_SINGLE_RIGID_BATCH) {
 			// Defer: collect into this category's batch. No device state changes here, so interleaved
 			// inline (legacy) meshes are unaffected; the batch is flushed at the end of Render().
 			if (TheDX8InstanceManager.Collect_Single_Rigid(
@@ -728,25 +734,6 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 
 				return RIGID_RENDER_PATH_SINGLE_RIGID;
 			}
-		}
-		else if (TheDX8InstanceManager.Draw_Single_Rigid(
-				renderer,
-				geometryFVF,
-				lightEnv,
-				material,
-				stage0Texture,
-				worldTransform,
-				baseVertexOffset,
-				singleRigidTexGen)) {
-
-			DX8Wrapper::BindLayoutFVF(geometryFVF, "Render_Rigid_Mesh_With_Optional_Programmable_Effects post-R3 restore");
-			DX8Wrapper::Set_Texture(0, stage0Texture);
-			DX8Wrapper::Set_Texture(1, stage1Texture);
-			DX8Wrapper::Set_Material(material);
-			DX8Wrapper::Set_Shader(activeShader);
-			DX8Wrapper::Apply_Render_State_Changes();
-			return RIGID_RENDER_PATH_SINGLE_RIGID;
-		}
 	}
 
 	const bool applyCloud =
@@ -822,64 +809,11 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 	return RIGID_RENDER_PATH_LEGACY_CLOUD;
 }
 
-// Ronin @feature 13/06/2026 DX9: Per-instance rigid VS lighting now lives in
-// stream 1, so instancing no longer requires identical LightEnvironmentClass
-// contents across all meshes in a batch.
-// Non-normal-mapped rigid props can therefore batch across mixed non-null
-// lightenvs. `_NRM` props stay conservative for now because the programmable
-// rigid PS still consumes one representative lightenv for its per-pixel normal
-// map Lambert delta.
-static bool Light_Environments_Are_Equivalent_For_Instancing(
-	LightEnvironmentClass* a,
-	LightEnvironmentClass* b,
-	bool requireExactMatch)
-{
-	if ((a == nullptr) != (b == nullptr)) {
-		return false;
-	}
-
-	if (a == nullptr) {
-		return true;
-	}
-
-	if (!requireExactMatch) {
-		return true;
-	}
-
-	const int countA = a->Get_Light_Count();
-	if (countA != b->Get_Light_Count()) {
-		return false;
-	}
-
-	if (!(a->Get_Equivalent_Ambient() == b->Get_Equivalent_Ambient())) {
-		return false;
-	}
-
-	for (int i = 0; i < countA; ++i) {
-		if (!(a->Get_Light_Direction(i) == b->Get_Light_Direction(i))) {
-			return false;
-		}
-		if (!(a->Get_Light_Diffuse(i) == b->Get_Light_Diffuse(i))) {
-			return false;
-		}
-	}
-
-	return true;
-}
-
-// Ronin @feature 23/02/2026 DX9: Check if two polygon renderers reference the same geometry
-// in the shared VB/IB. This enables instancing across different MeshModelClass instances that
-// were registered into the same FVF container (and thus share the same VB/IB ranges).
-static bool Polygon_Renderers_Are_Equivalent(DX8PolygonRendererClass* a, DX8PolygonRendererClass* b)
-{
-	return (a == b) ||
-		(a->Get_Vertex_Offset() == b->Get_Vertex_Offset() &&
-			a->Get_Index_Offset() == b->Get_Index_Offset() &&
-			a->Get_Index_Count() == b->Get_Index_Count() &&
-			a->Get_Min_Vertex_Index() == b->Get_Min_Vertex_Index() &&
-			a->Get_Vertex_Index_Range() == b->Get_Vertex_Index_Range() &&
-			a->Is_Strip() == b->Is_Strip());
-}
+// Ronin @perf 30/07/2026 §16 DX9: Light_Environments_Are_Equivalent_For_Instancing,
+// Polygon_Renderers_Are_Equivalent and Mesh_Instancing_Eligible are GONE with the instancing bucket pass.
+// Their jobs moved into the merged flush: geometry equivalence is the 6-field ordering in
+// DX8InstanceManagerClass::Single_Rigid_Order_Less, the per-mesh gate is allowProgrammableRigidFallback
+// below, and lightenv matching is a payload memcmp that only applies to normal-mapped runs.
 
 // Ronin @feature 23/02/2026 DX9: Reuse VB/IB slots for cloned MeshModels that share geometry
 // When Make_Unique() clones a MeshModelClass, the Poly and Vertex ShareBuffers are ref-counted
@@ -1572,9 +1506,9 @@ void DX8RigidFVFCategoryContainer::Render()
 	if (!Anything_To_Render()) return;
 	AnythingToRender=false;
 
-	// Ronin @perf 26/06/2026 DX9 P2: single-rigid meshes from ALL of this container's texture-categories
-	// share this one VB/IB/FVF, so collect them across the whole container and flush ONCE at the end
-	// (one programmable pipeline setup instead of one per category). Start the container's batch empty.
+	// Ronin @perf DX9 (P2 + §16): every eligible rigid mesh in ALL of this container's texture-categories
+	// shares this one VB/IB/FVF, so they are collected across the whole container and flushed ONCE at the
+	// end — one programmable pipeline setup, and the flush merges same-geometry runs into instanced draws.
 	TheDX8InstanceManager.Reset_Single_Rigid_Collection();
 
 	DX8Wrapper::Set_Vertex_Buffer(vertex_buffer);
@@ -2551,244 +2485,13 @@ void DX8TextureCategoryClass::Render()
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_DESTCOLOR);
 	}
 
-	// Ronin @feature 19/02/2026 DX9: Hardware instancing pre-pass for rigid mesh batching.
-	// Before the per-mesh rendering loop, scan the render task list for eligible instances
-	// that share the same polygon renderer. If we find >= 2, collect their world transforms
-	// and issue a single instanced DrawIndexedPrimitive, then remove them from the task list.
-	// Non-eligible meshes (skins, sorted, billboard, alpha override, scaled, strips, overflow)
-	// fall through to the original per-mesh rendering path below.
-	// Ronin @bugfix 23/02/2026 DX9: Match polygon renderers by geometric equivalence (same IB/VB
-	// range) rather than pointer identity, so meshes from different MeshModelClass instances that
-	// share the same container VB/IB can be batched together.
-
-	if (false && TheDX8InstanceManager.Is_Enabled() && render_task_head != nullptr) {
-
-		// Ronin @bugfix 27/02/2026 DX9: Skip instancing for FVFs without normals.
-		// The instancing vertex shader computes lighting via dot(N, lightDir). Without
-		// normals in the vertex declaration, the GPU reads float3(0,0,0) for NORMAL,
-		// causing normalize(0,0,0) -> NaN -> black/corrupted pixels. Prelit meshes
-		// don't need per-vertex lighting and gain nothing from the instancing shader.
-		const bool fvfHasNormals = (container->Get_FVF() & D3DFVF_NORMAL) != 0;
-		const int fvfTexCount = (container->Get_FVF() & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
-
-		bool usesAdditionalTextureStages = false;
-		for (unsigned stage = 1; stage < MeshMatDescClass::MAX_TEX_STAGES; ++stage) {
-			if (Peek_Texture(stage) != nullptr) {
-				usesAdditionalTextureStages = true;
-				break;
-			}
-		}
-
-		// Ronin @bugfix 25/05/2026 DX9 R3: Instancing must stay on the same
-		// programmable contract as the single-rigid fallback. Exclude categories
-		// that still rely on legacy-only features:
-		//   * non-opaque blends, because legacy multi-pass composition has not yet
-		//     been matched in shader code;
-		//   * material mappers / texture transforms, because the programmable rigid
-		//     shaders still sample plain UV0.
-		const ProgrammableRigidTextureMappingClass rigidMappingClass =
-			Classify_Programmable_Rigid_Texture_Mapping(vmaterial);
-		const bool categoryUsesUnsupportedProgrammableMapping =
-			!Programmable_Rigid_Texture_Mapping_Has_Shader_Parity(rigidMappingClass);
-
-		const bool categoryUsesOpaqueBlend =
-			theShader.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE &&
-			theShader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO;
-
-		// Ronin @bugfix 07/03/2026 DX9: Instancing is currently restricted to the
-		// rigid shader subset that has parity with the single-rigid programmable path:
-		// normals present, exactly one geometry UV set, no additional texture stages,
-		// opaque blending only, and no legacy-only mapper usage.
-		const bool instancingShaderSupported =
-			fvfHasNormals &&
-			categoryUsesOpaqueBlend &&
-			!categoryUsesUnsupportedProgrammableMapping &&
-			(fvfTexCount == 1) &&
-			!usesAdditionalTextureStages;
-
-		// Ronin @bugfix 14/06/2026 DX9: `_NRM` rigid props still use one
-		// representative lightenv in the programmable rigid PS. Keep those
-		// categories on exact lightenv batching until PS-side per-instance
-		// lighting exists; non-`_NRM` props can continue to batch across mixed
-		// non-null lightenvs because their lighting is fully VS-side today.
-		const bool categoryRequiresExactInstancingLightMatch =
-			instancingShaderSupported &&
-			Rigid_Texture_Has_Normal_Map(Peek_Texture(0));
-
-		const unsigned minInstancedBatchSize = 2u;
-
-		// Ronin @bugfix 07/03/2026 DX9: The instancing shader requires geometry TEXCOORD0.
-		// After fixing the vertex declaration to expose only TEXCOORD0 from stream 0 and
-		// TEXCOORD1..3 from stream 1, meshes with zero UV channels can no longer be safely
-		// instanced. NVIDIA used to tolerate the mismatch; AMD rejects it.
-		bool found_batch = instancingShaderSupported;
-		while (found_batch) {
-			found_batch = false;
-
-			// Scan for the most common eligible polygon renderer among remaining tasks.
-			DX8PolygonRendererClass* best_renderer = nullptr;
-			LightEnvironmentClass* best_light_env = nullptr;
-			unsigned best_count = 0;
-
-			PolyRenderTaskClass* scan = render_task_head;
-			while (scan != nullptr) {
-				DX8PolygonRendererClass* candidate = scan->Peek_Polygon_Renderer();
-				MeshClass* mesh = scan->Peek_Mesh();
-				LightEnvironmentClass* candidate_light_env = mesh->Get_Lighting_Environment();
-
-				// Quick eligibility pre-check
-				if (mesh->Get_Base_Vertex_Offset() != VERTEX_BUFFER_OVERFLOW &&
-					!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) &&
-					!candidate->Is_Strip())
-				{
-					unsigned count = 0;
-					PolyRenderTaskClass* inner = render_task_head;
-					while (inner != nullptr && count < DX8InstanceManagerClass::MAX_INSTANCES_PER_DRAW) {
-						if (Polygon_Renderers_Are_Equivalent(inner->Peek_Polygon_Renderer(), candidate)) {
-							MeshClass* m = inner->Peek_Mesh();
-							if (m->Get_Base_Vertex_Offset() != VERTEX_BUFFER_OVERFLOW &&
-								!m->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) &&
-								!(!!m->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) &&
-								!m->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED) &&
-								!m->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
-								m->Get_Alpha_Override() == 1.0f &&
-								!(m->Get_User_Data() && *(int*)m->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE) &&
-								m->Get_ObjectScale() == 1.0f &&
-								Light_Environments_Are_Equivalent_For_Instancing(
-									m->Get_Lighting_Environment(),
-									candidate_light_env,
-									categoryRequiresExactInstancingLightMatch))
-							{
-								count++;
-							}
-						}
-						inner = inner->Get_Next_Visible();
-					}
-
-					if (count > best_count) {
-						best_count = count;
-						best_renderer = candidate;
-						best_light_env = candidate_light_env;
-					}
-				}
-
-				scan = scan->Get_Next_Visible();
-			}
-
-			// If we found >= 2 eligible instances, collect and draw them instanced.
-			if (best_count < minInstancedBatchSize || best_renderer == nullptr)
-				break;				
-
-			// Found a batchable group; collect transforms and splice them out.
-			found_batch = true;
-			TheDX8InstanceManager.Reset_Collection();
-
-			PolyRenderTaskClass* prt_i = render_task_head;
-			PolyRenderTaskClass* last_prt_i = nullptr;
-
-			while (prt_i != nullptr) {
-				PolyRenderTaskClass* next_prt_i = prt_i->Get_Next_Visible();
-				MeshClass* mesh = prt_i->Peek_Mesh();
-				DX8PolygonRendererClass* renderer = prt_i->Peek_Polygon_Renderer();
-
-				bool eligible = Polygon_Renderers_Are_Equivalent(renderer, best_renderer) &&
-					mesh->Get_Base_Vertex_Offset() != VERTEX_BUFFER_OVERFLOW &&
-					!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) &&
-					!(!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) &&
-					!mesh->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED) &&
-					!mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
-					mesh->Get_Alpha_Override() == 1.0f &&
-					!(mesh->Get_User_Data() && *(int*)mesh->Get_User_Data() == RenderObjClass::USER_DATA_MATERIAL_OVERRIDE) &&
-					mesh->Get_ObjectScale() == 1.0f &&
-					Light_Environments_Are_Equivalent_For_Instancing(
-						mesh->Get_Lighting_Environment(),
-						best_light_env,
-						categoryRequiresExactInstancingLightMatch);
-
-				if (eligible) {
-					const Matrix3D& tm = mesh->Get_Transform();
-					TheDX8InstanceManager.Add_Instance(
-						(const float*)&tm[0],
-						(const float*)&tm[1],
-						(const float*)&tm[2],
-						mesh->Get_Lighting_Environment());
-
-					// Ronin @bugfix 17/05/2026 DX9: The instancing shader now receives
-					// the batch light environment explicitly through Draw_Instanced().
-					// Do not source it from DX8Wrapper global light state here.
-					if (TheDX8InstanceManager.Get_Collected_Count() == 1) {
-						DX8Wrapper::Apply_Render_State_Changes();
-					}
-
-					// Remove this task from the linked list
-					if (last_prt_i == nullptr) {
-						render_task_head = next_prt_i;
-					}
-					else {
-						last_prt_i->Set_Next_Visible(next_prt_i);
-					}
-					delete prt_i;
-				}
-				else {
-					last_prt_i = prt_i;
-				}
-
-				prt_i = next_prt_i;
-			}
-
-						unsigned collected = TheDX8InstanceManager.Get_Collected_Count();
-
-			// Issue the instanced draw call for this renderer group
-			if (collected >= minInstancedBatchSize) {
-
-				
-				#ifdef WWDEBUG
-				{
-					TextureClass* dbgTex0 = Peek_Texture(0);
-					if (Rigid_Debug_Should_Log_Once("INSTANCED", (dbgTex0 != nullptr) ? dbgTex0->Get_Texture_Name().str() : "-")) {
-					WWDEBUG_SAY(("Rigid INSTANCED x%u: mapperClass=%d tex=%s",
-						collected,
-						(int)rigidMappingClass,
-						(dbgTex0 != nullptr) ? dbgTex0->Get_Texture_Name().str() : "-"));
-					}
-				}
-				#endif
-				
-
-				RigidTexGen instancedTexGen;
-				Build_Programmable_Rigid_TexGen(vmaterial, rigidMappingClass, instancedTexGen);
-				
-				#ifdef WWDEBUG
-				if (instancedTexGen.enabled) {
-					TextureClass* dbgTex = Peek_Texture(0);
-					WWDEBUG_SAY(("Rigid AFFINE_UV (instanced x%u): mapperID=%d tex=%s",
-						collected,
-						vmaterial->Peek_Mapper(0)->Mapper_ID(),
-						(dbgTex != nullptr) ? dbgTex->Get_Texture_Name().str() : "-"));
-				}
-				#endif
-
-				TheDX8InstanceManager.Draw_Instanced(
-					best_renderer,
-					container->Get_FVF(),
-					best_light_env,
-					vmaterial,
-					Peek_Texture(0),   // Ronin @feature 23/05/2026 DX9 R2: forward diffuse texture for normal-map lookup
-					instancedTexGen);
-
-				// Restore DX8Wrapper-tracked state after instanced draw
-				DX8Wrapper::BindLayoutFVF(container->Get_FVF(), "DX8TextureCategoryClass::Render post-instancing restore");
-
-				for (unsigned ri = 0; ri < MeshMatDescClass::MAX_TEX_STAGES; ++ri) {
-					DX8Wrapper::Set_Texture(ri, Peek_Texture(ri));
-				}
-				DX8Wrapper::Set_Material((VertexMaterialClass*)Peek_Material());
-				DX8Wrapper::Set_Shader(theShader);
-				DX8Wrapper::Apply_Render_State_Changes();
-			}
-		}
-	}
-
+	// Ronin @perf 30/07/2026 §16 DX9: the hardware-instancing pre-pass lived here — a SECOND walk of
+	// render_task_head, per category, per frame, bucketing tasks by geometry to find same-mesh groups.
+	// It cost a fixed ~60 fps on a normal-density scene (627 meshes walked to instance 368 into 102
+	// groups averaging 3.6, which the single-rigid batch was already drawing at avgBatch 33.8) and it
+	// bought nothing there. Deleted: every eligible rigid mesh now goes through the ONE per-mesh loop
+	// below into Collect_Single_Rigid, and Flush_Single_Rigid sorts that compact array and collapses
+	// identical runs into instanced draws. One walk, one flush.
 
 	bool renderTasksRemaining = false;
 
@@ -2907,19 +2610,44 @@ void DX8TextureCategoryClass::Render()
 		
 
 
+#ifdef WWDEBUG
+		// Ronin @diagnostic 31/07/2026 §16 DX9: does ANY rigid asset actually ship triangle strips? If this
+		// never fires, the !Is_Strip() term in the gate below is free insurance. If it DOES fire, those
+		// meshes were previously reaching Flush_Single_Rigid and drawing through Render_Instanced's
+		// hardcoded D3DPT_TRIANGLELIST (dx8polygonrenderer.h) with index_count/3 triangles read out of a
+		// STRIP index buffer -> garbage geometry. They are now correctly back on the FFP Draw_Strip path.
+		if (renderer->Is_Strip()) {
+			TextureClass* dbgStripTex = Peek_Texture(0);
+			const char* stripTexName = (dbgStripTex != nullptr) ? dbgStripTex->Get_Texture_Name().str() : "-";
+			if (Rigid_Debug_Should_Log_Once("STRIP", stripTexName)) {
+				WWDEBUG_SAY(("Rigid STRIP mesh kept on the FFP path: tex=%s mesh=%s",
+					stripTexName, mesh->Get_Name() ? mesh->Get_Name() : "(unnamed)"));
+			}
+		}
+#endif
+
 		// Ronin @bugfix 24/05/2026 DX9 R3: The single-rigid programmable fallback
 		// must obey the same mesh contract as the instanced rigid path, minus only
 		// the instance-count requirement. (selection/material override, object scale,
-		// sorted/aligned/oriented, etc.) 
+		// sorted/aligned/oriented, etc.)
 		const bool allowProgrammableRigidFallback =
 			!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) &&
+			// Ronin @bugfix 31/07/2026 §16 DX9: strips must NOT take the programmable path. Everything
+			// deferred is drawn by DX8PolygonRendererClass::Render_Instanced, which always issues a
+			// D3DPT_TRIANGLELIST DrawIndexedPrimitive with index_count/3 primitives; only Render() branches
+			// to Draw_Strip. A strip record reaching the flush therefore renders garbage. The merge already
+			// refuses to MERGE strips, but a lone strip record still drew through the wrong primitive type
+			// -- this closes it at the gate. (Strips are legacy geometry anyway: since the post-transform
+			// vertex cache, cache-optimized indexed LISTS match or beat them, and strips can't be reordered
+			// or concatenated, which is exactly what batching/instancing need.)
+			!renderer->Is_Strip() &&
 			!(!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) &&
 			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED) &&
 			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
 			mesh->Get_Alpha_Override() == 1.0f &&
 			Programmable_Rigid_Material_Override_Is_Supported(mesh, vmaterial) &&
 			mesh->Get_ObjectScale() == 1.0f &&
-			mesh->Peek_Model()->Get_Pass_Count() == 1 && // multi-pass meshes need legacy's interleaved pass order; the deferred single-rigid flush reorders their passes
+			mesh->Peek_Model()->Get_Pass_Count() == 1 && // multi-pass: some passes may qualify for the deferred batch while others draw inline (FFP), splitting a mesh's passes across two draw times -> order breaks. (The flush preserves collection order; the risk is the deferred-vs-inline split, not the flush.)
 			!Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(vmaterial);
 
 		/*
@@ -3040,10 +2768,12 @@ void DX8TextureCategoryClass::Render()
 							Peek_Texture(0),
 							stage1Texture,
 							allowProgrammableRigidFallback,
+							false,  // only the mapper UV offset is overridden here, and texGen IS snapshotted
 							lenv,
 							vmaterial,
-							theAlphaShader,
+							theShader,
 							*world_transform);
+
 
 						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF, 0x60);
 						vmaterial->Set_Opacity(oldOpacity);	//restore previous value
@@ -3052,17 +2782,18 @@ void DX8TextureCategoryClass::Render()
 					}
 					else {
 
-						Render_Rigid_Mesh_With_Optional_Programmable_Effects(
-							renderer,
-							mesh->Get_Base_Vertex_Offset(),
-							geometryFVF,
-							Peek_Texture(0),
-							stage1Texture,
-							allowProgrammableRigidFallback,
-							lenv,
-							vmaterial,
-							theShader,
-							*world_transform);
+					Render_Rigid_Mesh_With_Optional_Programmable_Effects(
+						renderer,
+						mesh->Get_Base_Vertex_Offset(),
+						geometryFVF,
+						Peek_Texture(0),
+						stage1Texture,
+						allowProgrammableRigidFallback,
+						false,  // material state is stable for this mesh
+						lenv,
+						vmaterial,
+						theShader,
+						*world_transform);
 					}
 
 					if (oldMapper)	//did we override the uv offset?
@@ -3082,6 +2813,7 @@ void DX8TextureCategoryClass::Render()
 						Peek_Texture(0),
 						stage1Texture,
 						allowProgrammableRigidFallback,
+						false,  // material state is stable for this mesh
 						lenv,
 						vmaterial,
 						theShader,

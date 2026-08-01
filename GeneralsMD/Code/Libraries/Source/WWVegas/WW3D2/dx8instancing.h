@@ -45,27 +45,23 @@ struct RigidTexGen
 /**
 ** DX8InstanceManagerClass
 **
-** Manages a stream1 instance buffer containing per-instance world transforms.
-** Used by DX8TextureCategoryClass::Render() to batch identical rigid meshes
-** via DrawIndexedPrimitive with stream-frequency instancing (DX9 SM3.0+).
+** Owns the stream1 instance ring holding per-instance world transforms + lighting, the programmable
+** rigid shaders, and the deferred single-rigid batch.
 **
-** Requirements for instancing eligibility:
-**  - Device supports stream-frequency instancing (SM3.0)
-**  - Mesh is NOT a skin (skins use dynamic VBs each frame)
-**  - Mesh is NOT sorted (sorting requires per-polygon z-ordering)
-**  - Mesh is NOT billboard-aligned or camera-oriented
-**  - All instances share the same polygon renderer (same index range)
-**  - Mesh has no alpha override or material override
-**  - Object scale is 1.0 (avoids normalize-normals state thrash)
-**  - At least 2 instances (instancing overhead not worth it for 1)
+** Ronin @perf 30/07/2026 §16 DX9: there is no longer a separate "instancing pass". Every eligible rigid
+** mesh is collected ONCE by DX8TextureCategoryClass::Render via Collect_Single_Rigid; Flush_Single_Rigid
+** then sorts that compact array by full pipeline state + geometry and collapses each maximal run of
+** identical records into ONE instanced DrawIndexedPrimitive (auto/dynamic instancing). The old bucket
+** pass was a SECOND walk of the per-category render-task linked list and cost a fixed ~60 fps whether or
+** not it found anything to batch.
+**
+** Per-mesh eligibility is the single-rigid gate (allowProgrammableRigidFallback in dx8renderer.cpp):
+** not SKIN/SORT/ALIGNED/ORIENTED, alpha override == 1, ObjectScale == 1, single pass, supported mapper.
 */
+
 class DX8InstanceManagerClass
 {
 public:
-
-	// Maximum instances per single instanced draw call.
-	// Capped to keep the instance VB small and avoid huge batches that stall the GPU.
-	enum { MAX_INSTANCES_PER_DRAW = 256 };
 
 	// Ronin @perf 24/06/2026 DX9 P0.5: dedicated ring buffer for the single-rigid path so we append
 	// per-mesh instance data with NOOVERWRITE (one DISCARD per frame) instead of a per-mesh DISCARD on
@@ -101,38 +97,22 @@ public:
 	void Set_Enabled(bool enabled) { m_enabled = enabled; }
 	bool Is_Enabled() const { return m_enabled && m_available; }
 
-	/**
-	** Issue the instanced draw call for the previously collected instances.
-	** Caller is responsible for having already set textures, shader, material,
-	** and the geometry vertex buffer on stream 0.
-	**
-	** @param renderer         The polygon renderer that defines the index range
-	** @param geometryFVF      The FVF of the stream 0 vertex buffer
-	** @param lightEnv         Light environment for the batch (may be null)
-	** @param material         Vertex material for the batch (may be null)
-	** @param diffuseTexture   Stage-0 diffuse texture; used by R2 normal-mapping to look up <basename>_NRM
-	*/
-	void Draw_Instanced(
-		DX8PolygonRendererClass* renderer,
-		DWORD geometryFVF,
-		LightEnvironmentClass* lightEnv,
-		VertexMaterialClass* material,
-		TextureClass* diffuseTexture,
-		const RigidTexGen& texGen);
-
-	// Ronin @feature 23/05/2026 DX9: R3 programmable non-instanced rigid fallback.
-	// Mirrors the instanced rigid normal-map/cloud look for meshes that fall out of
-	// hardware instancing but still match the same shader contract.
-	bool Draw_Single_Rigid(
+	// Ronin @feature DX9: the reflective env pass-0, drawn INLINE (one mesh, one draw). This is the only
+	// rigid draw that cannot be batched: it needs m_reflectivePS plus per-draw camera position and view
+	// matrix in PS constants, which the shared Flush_Single_Rigid pipeline (fixed m_instancePS) cannot
+	// supply, and it must land BEFORE its pass-1 overlay, which is batched to container end.
+	// Ronin @cleanup 01/08/2026 §16 DX9: was Draw_Single_Rigid(..., baseVertexOffset, ..., reflective).
+	// All non-reflective callers are gone (they collect into the batch), so the flag and the never-read
+	// baseVertexOffset went with them. Returns false for strips and when ReflectiveRigid.pso is missing;
+	// the caller then falls through to the legacy env path.
+	bool Draw_Reflective_Rigid(
 		DX8PolygonRendererClass* renderer,
 		DWORD geometryFVF,
 		LightEnvironmentClass* lightEnv,
 		VertexMaterialClass* material,
 		TextureClass* diffuseTexture,
 		const Matrix3D& worldTransform,
-		unsigned baseVertexOffset,
-		const RigidTexGen& texGen,
-		bool reflective = false); // Ronin @feature DX9: reflective pass-0 -> select m_reflectivePS + upload world camera pos to PS c0
+		const RigidTexGen& texGen);
 
 	// Ronin @feature DX9: true once ReflectiveRigid.pso loaded; the reflective rigid branch checks this
 	// before routing an env-reflect pass to the per-pixel path (else it stays on legacy).
@@ -157,43 +137,31 @@ public:
 	void Reset_Single_Rigid_Collection() { m_pendingSingleRigidCount = 0; }
 	unsigned Get_Pending_Single_Rigid_Count() const { return m_pendingSingleRigidCount; }
 
+	// Ronin @perf 30/07/2026 §16 DX9: the container-level instancing API (Can_Collect_Instanced_Group /
+	// Collect_Instanced_Group / Flush_Instanced / Reset_Instanced_Collection) and the staging buffer that
+	// fed it (Reset_Collection / Add_Instance / Get_Collected_Count) are GONE. Instancing now happens
+	// inside Flush_Single_Rigid, over records the ONE per-mesh walk already collected.
 
-
-	/**
-	** Reset the collection buffer for a new batch of instances.
-	*/
-	void Reset_Collection() { m_collectedCount = 0; }
-
-	/**
-	** Add a single instance (world transform + its light environment) to the
-	** collection buffer. Returns true if added, false if the buffer is full.
-	**
-	** The lighting payload is computed from lightEnv into the GPU InstanceData at
-	** draw time (see Draw_Instanced), so identically-typed meshes lit differently
-	** can still share one collection. lightEnv may be null (treated as ambient-only).
-	*/
-	bool Add_Instance(const float row0[4], const float row1[4], const float row2[4], LightEnvironmentClass* lightEnv)
-	{
-		if (m_collectedCount >= MAX_INSTANCES_PER_DRAW) return false;
-		InstanceData& inst = m_instanceBuffer[m_collectedCount];
-		inst.row0[0] = row0[0]; inst.row0[1] = row0[1]; inst.row0[2] = row0[2]; inst.row0[3] = row0[3];
-		inst.row1[0] = row1[0]; inst.row1[1] = row1[1]; inst.row1[2] = row1[2]; inst.row1[3] = row1[3];
-		inst.row2[0] = row2[0]; inst.row2[1] = row2[1]; inst.row2[2] = row2[2]; inst.row2[3] = row2[3];
-		m_collectedLightEnv[m_collectedCount] = lightEnv;
-		m_collectedCount++;
-		return true;
-	}
-
-	/**
-	** Returns the number of instances currently collected.
-	*/
-	unsigned Get_Collected_Count() const { return m_collectedCount; }
-
-	// Statistics for the draw call HUD
+	// Ronin @diagnostic §16 DX9: the [INST] HUD now reports the MERGED flush, not a bucket pass.
+	//   Records        - single-rigid records considered (compact array walk, no list traversal)
+	//   Draw_Calls     - runs collapsed into ONE instanced draw
+	//   Meshes         - records drawn inside those runs
+	//   Individual     - records drawn on their own (run below threshold)
+	//   Light_Breaks   - normal-mapped runs cut short ONLY because the next record's per-pixel light set
+	//                    differs (PS lights are per-DRAW constants c3..c11). Watch this to decide whether
+	//                    merging normal-mapped records is earning its keep.
+	unsigned Get_Last_Frame_Instanced_Records() const { return m_lastFrameInstancedRecords; }
 	unsigned Get_Last_Frame_Instanced_Draw_Calls() const { return m_lastFrameInstancedDrawCalls; }
 	unsigned Get_Last_Frame_Instanced_Meshes() const { return m_lastFrameInstancedMeshes; }
-	unsigned Get_Last_Frame_Instanced_Mixed_Light_Draw_Calls() const { return m_lastFrameInstancedMixedLightDrawCalls; }
-	unsigned Get_Last_Frame_Instanced_Mixed_Light_Meshes() const { return m_lastFrameInstancedMixedLightMeshes; }
+	unsigned Get_Last_Frame_Instanced_Individual_Draws() const { return m_lastFrameInstancedIndividualDraws; }
+	unsigned Get_Last_Frame_Instanced_Light_Breaks() const { return m_lastFrameInstancedLightBreaks; }
+	unsigned Get_Last_Frame_Instanced_Normal_Mapped() const { return m_lastFrameInstancedNormalMapped; }
+	unsigned Get_Last_Frame_Instanced_Normal_Mapped_Merged() const { return m_lastFrameInstancedNormalMappedMerged; }
+	unsigned Get_Last_Frame_Instanced_Flushes() const { return m_lastFrameInstancedFlushes; }
+	// Reflective env pass-0 meshes drawn INLINE this frame (Draw_Reflective_Rigid) — NOT part of the
+	// batch, so they are not in Records/Meshes/Individual. Their own line item since 01/08/2026.
+	unsigned Get_Last_Frame_Reflective_Draws() const { return m_lastFrameReflectiveDraws; }
+
 	void Begin_Frame_Statistics();
 	void End_Frame_Statistics();
 	void Release_Resources();
@@ -234,10 +202,8 @@ private:
 
 	bool m_available;        // Hardware supports instancing
 	bool m_enabled;          // User has instancing enabled
-
-	IDirect3DVertexBuffer9* m_instanceVB;        // Stream 1 instance buffer (batched Draw_Instanced path)
 	
-	IDirect3DVertexBuffer9* m_singleRigidVB;     // Ronin @perf 24/06/2026 DX9 P0.5: ring buffer for Draw_Single_Rigid
+	IDirect3DVertexBuffer9* m_singleRigidVB;     // Ronin @perf 24/06/2026 DX9 P0.5: instance ring, shared by Flush_Single_Rigid + Draw_Reflective_Rigid
 	unsigned                m_singleRigidCursor; // Ronin @perf 24/06/2026 DX9 P0.5: next free instance slot in the ring
 
 	IDirect3DVertexShader9* m_instanceVS;        // Instancing vertex shader (with COLOR0)
@@ -257,11 +223,6 @@ private:
 	CachedDecl m_geometryDeclCache[MAX_CACHED_DECLS];
 	unsigned   m_geometryDeclCacheCount;
 
-	// Per-frame collection buffer (CPU side, written to m_instanceVB before draw)
-	InstanceData m_instanceBuffer[MAX_INSTANCES_PER_DRAW];
-	LightEnvironmentClass* m_collectedLightEnv[MAX_INSTANCES_PER_DRAW]; // per-instance lighting source
-	unsigned     m_collectedCount;
-
 	// Ronin @perf 24/06/2026 DX9 P1: deferred single-rigid batch state (see Collect/Flush_Single_Rigid).
 	struct PendingSingleRigid {
 		InstanceData             inst;      // transform rows now; per-instance lighting filled at flush
@@ -275,20 +236,38 @@ private:
 
 	enum { MAX_PENDING_SINGLE_RIGID = 4096 };
 	PendingSingleRigid   m_pendingSingleRigid[MAX_PENDING_SINGLE_RIGID];
+
+	// Ronin @perf §16 DX9: draw order for one flush — indices into m_pendingSingleRigid. We sort THIS,
+	// never the 192-byte records. Rebuilt per flush by Build_Single_Rigid_Order.
+	unsigned             m_srOrder[MAX_PENDING_SINGLE_RIGID];
+
 	unsigned             m_pendingSingleRigidCount;
 	// Container-constant: every mesh in a DX8RigidFVFCategoryContainer shares one FVF (one decl, one VB).
 	DWORD                m_srFVF;
 
-
-	// Statistics
-	unsigned m_instancedDrawCalls;
-	unsigned m_instancedMeshes;
-	unsigned m_instancedMixedLightDrawCalls;
-	unsigned m_instancedMixedLightMeshes;
+	// Statistics — Ronin @diagnostic §16 DX9: all produced by the merged Flush_Single_Rigid.
+	// Live counters first, then their end-of-frame snapshots in the SAME order (the two lists are
+	// parallel: Roll_Instancing_Stats_Frame copies one to the other, and the ctor mirrors them).
+	unsigned m_instancedRecords;              // records considered
+	unsigned m_instancedDrawCalls;            // runs collapsed into one instanced draw
+	unsigned m_instancedMeshes;               // records drawn inside those runs
+	unsigned m_instancedIndividualDraws;      // records drawn on their own
+	unsigned m_instancedNormalMapped;         // records drawn with a <diffuse>_NRM bound
+	unsigned m_instancedNormalMappedMerged;   // ...of which rode a merged run
+	unsigned m_instancedLightBreaks;          // NRM runs cut short by a per-pixel light-set mismatch
+	unsigned m_instancedFlushes;
+	unsigned m_reflectiveDraws;               // inline reflective env pass-0 draws (outside the batch)
+	unsigned m_lastFrameInstancedRecords;
 	unsigned m_lastFrameInstancedDrawCalls;
 	unsigned m_lastFrameInstancedMeshes;
-	unsigned m_lastFrameInstancedMixedLightDrawCalls;
-	unsigned m_lastFrameInstancedMixedLightMeshes;
+	unsigned m_lastFrameInstancedIndividualDraws;
+	unsigned m_lastFrameInstancedNormalMapped;
+	unsigned m_lastFrameInstancedNormalMappedMerged;
+	unsigned m_lastFrameInstancedLightBreaks;
+	unsigned m_lastFrameInstancedFlushes;
+	unsigned m_lastFrameReflectiveDraws;
+	unsigned m_instancedStatsFrame;      // last WW3D frame seen — self-contained roll, like the [SR] counters
+	void Roll_Instancing_Stats_Frame();  // snapshot+reset ALL instanced counters on frame change
 
 	// Internal helpers
 	bool Create_Instance_VB();
@@ -298,6 +277,14 @@ private:
 	bool Load_Instance_Shader();
 	bool Load_Vertex_Shader_From_File(const char* shaderPath, IDirect3DVertexShader9** outShader);
 	bool Load_Pixel_Shader_From_File(const char* shaderPath, IDirect3DPixelShader9** outShader);
+
+	// Ronin @perf §16 DX9: auto-instancing merge. Build_Single_Rigid_Order sorts each opaque stretch of
+	// the pending array into merge runs (blended records are barriers); _Order_Less is the total order on
+	// the merge key; _Records_Merge asks "can these two ride one instanced draw?" and derives equality
+	// from _Order_Less so the sort and the merge test can never drift apart.
+	void Build_Single_Rigid_Order(unsigned count);
+	static bool Single_Rigid_Order_Less(const PendingSingleRigid& a, const PendingSingleRigid& b);
+	static bool Single_Rigid_Records_Merge(const PendingSingleRigid& a, const PendingSingleRigid& b, bool requireLightMatch);
 };
 
 /**

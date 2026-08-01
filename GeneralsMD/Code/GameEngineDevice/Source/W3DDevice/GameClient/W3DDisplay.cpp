@@ -1152,8 +1152,8 @@ void W3DDisplay::gatherDebugStats()
 		// Ronin @feature 18/02/2026 DX9: Instancing statistics for draw call HUD
 		unsigned instDraws = TheDX8InstanceManager.Get_Last_Frame_Instanced_Draw_Calls();
 		unsigned instMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Meshes();
-		unsigned instLightDraws = TheDX8InstanceManager.Get_Last_Frame_Instanced_Mixed_Light_Draw_Calls();
-		unsigned instLightMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Mixed_Light_Meshes();
+		unsigned instIndiv = TheDX8InstanceManager.Get_Last_Frame_Instanced_Individual_Draws();
+		unsigned instLightBreaks = TheDX8InstanceManager.Get_Last_Frame_Instanced_Light_Breaks();
 
 		Int LOD = TheGlobalData->m_terrainLOD;
 		//unibuffer.format( L"FPS: %.2f, %.2fms mapLOD=%d [cumu FPS=%.2f] draws: %.2f sort: %.2f", fps, ms, LOD, cumuFPS, drawsPerFrame,sortPolysPerFrame);
@@ -1162,7 +1162,7 @@ void W3DDisplay::gatherDebugStats()
 		else
 			unibuffer.format(L"%.2f FPS, ", fps);
 
-		unibuffer2.format(L"%.2fms [cumuFPS=%.2f] draws: %d skins: %d sortP: %d skinP: %d LOD %d inst: %u/%u instL: %u/%u",
+		unibuffer2.format(L"%.2fms [cumuFPS=%.2f] draws: %d skins: %d sortP: %d skinP: %d LOD %d inst: %u/%u indiv: %u lbrk: %u",
 			ms,
 			cumuFPS,
 			(Int)drawsPerFrame,
@@ -1172,18 +1172,18 @@ void W3DDisplay::gatherDebugStats()
 			LOD,
 			instDraws,
 			instMeshes,
-			instLightDraws,
-			instLightMeshes);		unibuffer.concat(unibuffer2);
+			instIndiv, 
+			instLightBreaks);		unibuffer.concat(unibuffer2);
 #else
 		// Ronin @feature 18/02/2026 DX9: Instancing statistics for draw call HUD
 		unsigned instDraws = TheDX8InstanceManager.Get_Last_Frame_Instanced_Draw_Calls();
 		unsigned instMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Meshes();
-		unsigned instLightDraws = TheDX8InstanceManager.Get_Last_Frame_Instanced_Mixed_Light_Draw_Calls();
-		unsigned instLightMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Mixed_Light_Meshes();
+		unsigned instIndiv = TheDX8InstanceManager.Get_Last_Frame_Instanced_Individual_Draws();
+		unsigned instLightBreaks = TheDX8InstanceManager.Get_Last_Frame_Instanced_Light_Breaks();
 
 		//Int LOD = TheGlobalData->m_terrainLOD;
 		//unibuffer.format( L"FPS: %.2f, %.2fms mapLOD=%d draws: %.2f sort %.2f", fps, ms, LOD, drawsPerFrame,sortPolysPerFrame);
-		unibuffer.format(L"FPS: %.2f, %.2fms draws: %.2f skins: %.2f sort %.2f inst: %u/%u instL: %u/%u",
+		unibuffer.format(L"FPS: %.2f, %.2fms draws: %.2f skins: %.2f sort %.2f inst: %u/%u indiv: %u lbrk: %u",
 			fps,
 			ms,
 			drawsPerFrame,
@@ -1191,8 +1191,8 @@ void W3DDisplay::gatherDebugStats()
 			sortPolysPerFrame,
 			instDraws,
 			instMeshes,
-			instLightDraws,
-			instLightMeshes);
+			instIndiv,
+			instLightBreaks);
 		if (TheGlobalData->m_useFpsLimit)
 		{
 			unibuffer2.format(L", FPSLock %d", TheGlobalData->m_framesPerSecondLimit);
@@ -1683,12 +1683,13 @@ void W3DDisplay::drawFPSStats()
 }
 
 
-// Ronin @diagnostic 21/06/2026 DX9 P0 bisect: INDEPENDENT on-screen readout of the single-rigid
-// per-frame draw count + active perf mode. Deliberately separate from the debug-stats DisplayStrings
-// (own string, own position, own color) so it shows in RELEASE during A/B without a debugger.
+// Ronin @diagnostic 21/06/2026 DX9: INDEPENDENT on-screen readout of the single-rigid per-frame record
+// count. Deliberately separate from the debug-stats DisplayStrings (own string, own position, own color)
+// so it shows in RELEASE during A/B without a debugger.
+// Ronin @cleanup 01/08/2026 §16 DX9: the mode= field is gone with g_SR_PerfMode (the P0 bisect knob that
+// instrumented the now-deleted inline path). draws/frame now equals [INST] recs exactly.
 extern unsigned DX8_Get_Single_Rigid_Last_Frame_Draw_Count();
 extern unsigned DX8_Get_Single_Rigid_Last_Frame_Flush_Count();
-extern int      DX8_Get_Single_Rigid_Perf_Mode();
 
 
 static void drawSingleRigidPerfReadout()
@@ -1712,8 +1713,7 @@ static void drawSingleRigidPerfReadout()
 	const float    srAvg     = (srFlushes > 0) ? ((float)srDraws / (float)srFlushes) : 0.0f;
 
 	UnicodeString text;
-	text.format(L"[SR] mode=%d  draws/frame=%u  flushes=%u  avgBatch=%.1f",
-		DX8_Get_Single_Rigid_Perf_Mode(),
+	text.format(L"[SR] draws/frame=%u  flushes=%u  avgBatch=%.1f",
 		srDraws,
 		srFlushes,
 		srAvg);
@@ -1725,6 +1725,44 @@ static void drawSingleRigidPerfReadout()
 	const Color textColor = GameMakeColor(255, 255, 0, 255); // yellow = "ours", not the white stats
 	const Color dropColor = GameMakeColor(0, 0, 0, 255);
 	s_srString->draw(x, y, textColor, dropColor);
+}
+
+static void drawInstancedPerfReadout()
+{
+	if (TheDisplayStringManager == NULL || TheFontLibrary == NULL) {
+		return;
+	}
+	static DisplayString* s_instString = NULL;
+	if (s_instString == NULL) {
+		s_instString = TheDisplayStringManager->newDisplayString();
+		if (s_instString == NULL) {
+			return;
+		}
+		GameFont* font = TheFontLibrary->getFont("FixedSys", 8, FALSE);
+		s_instString->setFont(font);
+	}
+
+	const unsigned records    = TheDX8InstanceManager.Get_Last_Frame_Instanced_Records();
+	const unsigned runs       = TheDX8InstanceManager.Get_Last_Frame_Instanced_Draw_Calls();
+	const unsigned instMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Meshes();
+	const unsigned indiv      = TheDX8InstanceManager.Get_Last_Frame_Instanced_Individual_Draws();
+	const unsigned lightBrk   = TheDX8InstanceManager.Get_Last_Frame_Instanced_Light_Breaks();
+	const unsigned nrm        = TheDX8InstanceManager.Get_Last_Frame_Instanced_Normal_Mapped();
+	const unsigned nrmMerged  = TheDX8InstanceManager.Get_Last_Frame_Instanced_Normal_Mapped_Merged();
+	const unsigned flushes    = TheDX8InstanceManager.Get_Last_Frame_Instanced_Flushes();
+	const unsigned refl       = TheDX8InstanceManager.Get_Last_Frame_Reflective_Draws();
+	const float    avgRun     = (runs > 0) ? ((float)instMeshes / (float)runs) : 0.0f;
+
+	UnicodeString text;
+	text.format(L"[INST] recs=%u  runs=%u  inst=%u  indiv=%u  nrm=%u/%u  lbrk=%u  refl=%u  flushes=%u  avgRun=%.1f",
+		records, runs, instMeshes, indiv, nrmMerged, nrm, lightBrk, refl, flushes, avgRun);
+	s_instString->setText(text);
+
+	const Int   x = 3;
+	const Int   y = 315; // just below the [SR] line (y=300)
+	const Color textColor = GameMakeColor(0, 255, 255, 255); // cyan = instancing
+	const Color dropColor = GameMakeColor(0, 0, 0, 255);
+	s_instString->draw(x, y, textColor, dropColor);
 }
 
 //=============================================================================
@@ -2124,8 +2162,17 @@ AGAIN:
 					drawCurrentDebugDisplay();
 				}
 
-				// Ronin @diagnostic 21/06/2026 DX9 P0 bisect: independent single-rigid readout (release too).
-				drawSingleRigidPerfReadout();
+				// Ronin @diagnostic DX9: rigid-path HUD readouts (release too). Flip either to false to
+				// hide that line — this also removes its per-frame UnicodeString::format + DisplayString
+				// draw, so turn BOTH off when taking a clean fps measurement.
+				static const bool SHOW_SINGLE_RIGID_READOUT = true;  // [SR]   yellow, y=300
+				static const bool SHOW_INSTANCING_READOUT   = true;  // [INST] cyan,   y=315
+				if (SHOW_SINGLE_RIGID_READOUT) {
+					drawSingleRigidPerfReadout();
+				}
+				if (SHOW_INSTANCING_READOUT) {
+					drawInstancedPerfReadout();
+				}
 
 #if defined(RTS_DEBUG)
 				if (TheGlobalData->m_benchmarkTimer > 0)
