@@ -43,8 +43,8 @@
 
 #include <d3d9.h>  // Native DX9
 
-#include "always.h"
-#include "wwstring.h"
+#include "WWLib/always.h"
+#include "WWLib/wwstring.h"
 
 class Vector4;
 class Targa;

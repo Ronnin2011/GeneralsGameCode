@@ -46,19 +46,19 @@
 #include <stdio.h>
 // Ronin 19/10/2025 Removed direct include of d3dx8core.h - not available with DX9 SDK
 #include "dx8wrapper.h"
-#include "TARGA.h"
-#include <nstrdup.h>
+#include "WWLib/TARGA.h"
+#include <WWLib/nstrdup.h>
 #include "w3d_file.h"
 #include "assetmgr.h"
 #include "formconv.h"
 #include "textureloader.h"
 #include "missingtexture.h"
-#include "ffactory.h"
+#include "WWLib/ffactory.h"
 #include "dx8caps.h"
 #include "dx8texman.h"
 #include "meshmatdesc.h"
 #include "texturethumbnail.h"
-#include "wwprofile.h"
+#include "WWDebug/wwprofile.h"
 
 // @feature Ronin 31/10/2025: Helper function 
 inline unsigned int CalculateSurfaceSize(const D3DSURFACE_DESC& desc) {

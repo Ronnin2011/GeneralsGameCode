@@ -39,12 +39,12 @@
 
 #include <d3d9.h>  // Native DX9
 
-#include "sharebuf.h"
+#include "WWLib/sharebuf.h"
 #include "linegrp.h"
 #include "texture.h"
 #include "vertmaterial.h"
 #include "dx8wrapper.h"
-#include "wwmath.h"
+#include "WWMath/wwmath.h"
 #include "rinfo.h"
 #include "camera.h"
 #include "dx8indexbuffer.h"

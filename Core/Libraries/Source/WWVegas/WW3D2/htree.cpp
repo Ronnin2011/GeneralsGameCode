@@ -55,10 +55,10 @@
 #include "hanim.h"
 #include "hcanim.h"
 #include <assert.h>
-#include "wwmath.h"
-#include "chunkio.h"
+#include "WWMath/wwmath.h"
+#include "WWLib/chunkio.h"
 #include "w3d_file.h"
-#include "wwmemlog.h"
+#include "WWDebug/wwmemlog.h"
 #include "hrawanim.h"
 #include "motchan.h"
 #include "ww3d.h"

@@ -42,10 +42,10 @@
 #pragma once
 
 #include <d3d9.h>  // Native DX9
-#include "always.h"
+#include "WWLib/always.h"
 #include <d3d9.h>
 #ifdef WWDEBUG
-#include "wwdebug.h"
+#include "WWDebug/wwdebug.h"
 #endif
 
 class StringClass;

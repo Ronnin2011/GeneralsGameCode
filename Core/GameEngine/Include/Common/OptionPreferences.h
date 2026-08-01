@@ -67,9 +67,11 @@ public:
 	void setOnlineIPAddress(UnsignedInt IP);
 	Bool getArchiveReplaysEnabled() const;
 	Bool getAlternateMouseModeEnabled();
+	Bool getRightMouseScrollWithAlternateMouseEnabled() const;	
 	Int getAntiAliasingMode(void) const;
 	Bool getRetaliationModeEnabled();
 	Bool getDoubleClickAttackMoveEnabled();
+	Int getJpegQuality() const;
 	Real getScrollFactor();
 	Bool getDrawScrollAnchor();
 	Bool getMoveScrollAnchor();
@@ -81,7 +83,6 @@ public:
 	Bool getScreenEdgeScrollEnabledInWindowedApp() const;
 	Bool getScreenEdgeScrollEnabledInFullscreenApp() const;
 	ScreenEdgeScrollMode getScreenEdgeScrollMode() const;
-	Bool getSendDelay();
 	Int getFirewallBehavior();
 	Short getFirewallPortAllocationDelta();
 	UnsignedShort getFirewallPortOverride();
@@ -133,4 +134,6 @@ public:
 	Real getResolutionFontAdjustment();
 
 	Bool getShowMoneyPerMinute() const;
+
+	Real getGameWindowTransitionSpeedMultiplier() const;
 };

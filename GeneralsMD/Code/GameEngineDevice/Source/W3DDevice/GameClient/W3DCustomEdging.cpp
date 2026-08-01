@@ -52,8 +52,8 @@
 
 #include <vector>
 
-#include <assetmgr.h>
-#include <texture.h>
+#include <WW3D2/assetmgr.h>
+#include <WW3D2/texture.h>
 #include "Common/GlobalData.h"
 #include "Common/RandomValue.h"
 #include "W3DDevice/GameClient/TerrainTex.h"

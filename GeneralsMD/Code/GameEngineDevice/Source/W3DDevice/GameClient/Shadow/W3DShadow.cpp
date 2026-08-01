@@ -35,7 +35,7 @@
 // Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
 #include "dx8todx9.h"
 
-#include "always.h"
+#include "WWLib/always.h"
 #include "GameClient/View.h"
 #include "WW3D2/camera.h"
 #include "WW3D2/light.h"
@@ -85,7 +85,6 @@ void DoShadows(RenderInfoClass & rinfo, Bool stencilPass)
 	{
 			if (TheW3DShadowManager->isShadowScene())
 				projectionCount=TheW3DProjectedShadowManager->renderShadows(rinfo);
-
 	}
 
 	if (stencilPass == TRUE && TheW3DVolumetricShadowManager)

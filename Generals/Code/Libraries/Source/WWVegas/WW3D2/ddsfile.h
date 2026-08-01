@@ -40,10 +40,10 @@ typedef IDirect3DSurface9 IDirect3DSurface8;
 
 #endif // DX8_TO_DX9_TYPEDEFS_DEFINED
 
-#include "always.h"
-#include "ww3dformat.h"
-#include "wwstring.h"
-#include "vector3.h"
+#include "WWLib/always.h"
+#include "WW3D2/ww3dformat.h"
+#include "WWLib/wwstring.h"
+#include "WWMath/vector3.h"
 
 // Ronin @build 26/10/2025 DX9: Removed forward declarations - conflicts with typedefs defined above
 

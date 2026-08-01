@@ -1,4 +1,4 @@
-﻿/*
+/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -34,7 +34,7 @@
 #include "WW3D2/surfaceclass.h"
 #include "GameClient/Image.h"
 #include "GameClient/GameWindow.h"
-#include "vector2i.h"
+#include "WWMath/vector2i.h"
 #include <d3dx9.h>  // Native DX9 extensions
 #include "WW3D2/dx8wrapper.h"
 #include "WW3D2/dx8webbrowser.h"

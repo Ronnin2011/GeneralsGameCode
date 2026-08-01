@@ -20,8 +20,8 @@
 #include <d3d9.h>  // Native DX9
 
 #include "ddsfile.h"
-#include "ffactory.h"
-#include "bufffile.h"
+#include "WWLib/ffactory.h"
+#include "WWLib/bufffile.h"
 #include "formconv.h"
 #include "dx8wrapper.h"
 #include "bitmaphandler.h"
@@ -99,14 +99,6 @@ DDSFileClass::DDSFileClass(const char* name,unsigned reduction_factor)
 	MipLevels=SurfaceDesc.MipMapCount;
 	if (MipLevels==0) MipLevels=1;
 
-	//Adjust the reduction factor to keep textures above some minimum dimensions
-	if (MipLevels <= WW3D::Get_Texture_Min_Dimension())
-		ReductionFactor=0;
-	else
-	{	int mipToDrop=MipLevels-WW3D::Get_Texture_Min_Dimension();
-		if (ReductionFactor >= mipToDrop)
-			ReductionFactor=mipToDrop;
-	}
 
 	if (MipLevels>ReductionFactor) MipLevels-=ReductionFactor;
 	else {

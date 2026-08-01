@@ -74,13 +74,13 @@
 #include "pointgr.h"
 #include "vertmaterial.h"
 #include "ww3d.h"
-#include "aabox.h"
+#include "WWMath/aabox.h"
 #include "statistics.h"
-#include "simplevec.h"
+#include "WWLib/simplevec.h"
 #include "texture.h"
-#include "Vector.h"
-#include "vp.h"
-#include "matrix4.h"
+#include "WWLib/Vector.h"
+#include "WWMath/vp.h"
+#include "WWMath/matrix4.h"
 #include "dx8wrapper.h"
 #include "dx8vertexbuffer.h"
 #include "dx8indexbuffer.h"
@@ -928,7 +928,12 @@ void PointGroupClass::Render(RenderInfoClass &rinfo)
 	DX8Wrapper::Set_Texture(0,Texture);
 
 	// Enable sorting if the primitives are translucent and alpha testing is not enabled.
-	const bool sort = (Shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO) && (Shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE) && (WW3D::Is_Sorting_Enabled());
+	// TheSuperHackers @bugfix stephanmeesters 30/06/2026 However, do not apply sorting to ground-aligned particles.
+	// This improves performance and resolves rendering artifacts caused by clipping between ground-aligned particles and billboard particles.
+	const bool sort = Billboard &&
+	                  Shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO &&
+	                  Shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE &&
+	                  WW3D::Is_Sorting_Enabled();
 
 	IndexBufferClass *indexbuffer;
 	int	verticesperprimitive;/// lorenzen fixed
@@ -1851,6 +1856,8 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 
 
 		// Enable sorting if the primitives are translucent and alpha testing is not enabled.
+		// TheSuperHackers @info Volumetric particles, both billboarded and ground-aligned, must have sorting enabled to
+		// ensure accurate alpha-blending because these particles have stacked layers that don't face the camera straight on.
 		const bool sort = (Shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ZERO) && (Shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE) && (WW3D::Is_Sorting_Enabled());
 
 		IndexBufferClass *indexbuffer;

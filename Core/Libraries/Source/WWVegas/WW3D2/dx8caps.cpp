@@ -1,4 +1,4 @@
-﻿/*
+/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -40,7 +40,7 @@
 
 #include <d3d9.h>  // Native DX9
 
-#include "always.h"
+#include "WWLib/always.h"
 #include "dx8caps.h"
 #include "dx8wrapper.h"
 #include "formconv.h"

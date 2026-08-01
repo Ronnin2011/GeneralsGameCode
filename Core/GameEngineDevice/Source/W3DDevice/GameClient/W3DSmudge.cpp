@@ -31,7 +31,7 @@
 #include "dx8todx9.h"
 
 #include "Lib/BaseType.h"
-#include "always.h"
+#include "WWLib/always.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "Common/GameMemory.h"
@@ -47,7 +47,7 @@
 #include "WW3D2/assetmgr.h"
 
 
-SmudgeManager* TheSmudgeManager = nullptr;
+SmudgeManager *TheSmudgeManager=nullptr;
 
 W3DSmudgeManager::W3DSmudgeManager()
 	: m_distortionPS(nullptr)
@@ -563,29 +563,34 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 	Real texScaleX = texClampX * 0.5f;
 	Real texScaleY = texClampY * 0.5f;
 
-	SmudgeSet* set = m_usedSmudgeSetList.Head();
+	SmudgeSetDeque::iterator setIt=m_usedSmudgeSetList.begin();	//first set that didn't fit into render batch.
 	Int count = 0;
 
-	if (set)
+	if (setIt != m_usedSmudgeSetList.end())
 	{	//there are possibly some smudges to render, so make sure background particles have finished drawing.
 		SortingRendererClass::Flush();
 	}
 
-	while (set)
+	for(; setIt != m_usedSmudgeSetList.end(); ++setIt)
 	{
-		Smudge* smudge = set->getUsedSmudgeList().Head();
+		SmudgeSet* set=*setIt;
+		SmudgeDeque::iterator smudgeIt=set->getUsedSmudgeList().begin();
 
-		while (smudge)
+		for (; smudgeIt != set->getUsedSmudgeList().end(); ++smudgeIt)
 		{
-			Matrix3D::Transform_Vector(view, smudge->m_pos, &vsVert);
+			Smudge* smudge=*smudgeIt;
+			if (!smudge->m_draw)
+				continue;
 
-			Smudge::smudgeVertex* verts = smudge->m_verts;
+			//Get view-space center
+			Matrix3D::Transform_Vector(view,smudge->m_pos,&vsVert);
 
 			verts[4].pos = vsVert;
 
 			for (Int i = 0; i < 4; i++)
 			{
 				verts[i].pos = vsVert + vertex_offsets[i] * smudge->m_size;
+				//Ge uv coordinates for each vertex
 				ssVert = proj * verts[i].pos;
 				Real oow = 1.0f / ssVert.W;
 				ssVert *= oow;
@@ -613,8 +618,6 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 			count++;
 			smudge = smudge->Succ();
 		}
-
-		set = set->Succ();
 	}
 
 	if (!count)
@@ -692,9 +695,9 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 	s_noiseScrollU -= (Int)s_noiseScrollU;
 	s_noiseScrollV -= (Int)s_noiseScrollV;
 
-	Int smudgesRemaining = count;
-	set = m_usedSmudgeSetList.Head();
-	Smudge* remainingSmudgeStart = set->getUsedSmudgeList().Head();
+	Int smudgesRemaining=count;
+	setIt=m_usedSmudgeSetList.begin();	//first smudge set that needs rendering.
+	SmudgeDeque::iterator smudgeIt = (*setIt)->getUsedSmudgeList().begin();	//first smudge that needs rendering.
 
 	while (smudgesRemaining)
 	{
@@ -710,17 +713,20 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 			DynamicVBAccessClass::WriteLockClass lock(&vb_access);
 			VertexFormatXYZNDUV2* verts = lock.Get_Formatted_Vertex_Array();
 
-			while (set)
+			while (setIt != m_usedSmudgeSetList.end())
 			{
-				Smudge* smudge = remainingSmudgeStart;
+				SmudgeDeque& smudgeList = (*setIt)->getUsedSmudgeList();
 
-				while (smudge)
+				for(; smudgeIt != smudgeList.end(); ++smudgeIt)
 				{
-					Smudge::smudgeVertex* smVerts = smudge->m_verts;
+					Smudge* smudge = *smudgeIt;
+					if (!smudge->m_draw)
+					{
+						continue;
+					}
 
 					if (smudgesInRenderBatch >= count)
 					{
-						remainingSmudgeStart = smudge;
 						goto flushSmudges;
 					}
 
@@ -770,10 +776,10 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 					smudge = smudge->Succ();
 				}
 
-				set = set->Succ();
+				++setIt;	//advance to next node.
 
-				if (set)
-					remainingSmudgeStart = set->getUsedSmudgeList().Head();
+				if (setIt != m_usedSmudgeSetList.end())	//start next batch at beginning of set.
+					smudgeIt = (*setIt)->getUsedSmudgeList().begin();
 			}
 		flushSmudges:
 			DX8Wrapper::Set_Vertex_Buffer(vb_access);

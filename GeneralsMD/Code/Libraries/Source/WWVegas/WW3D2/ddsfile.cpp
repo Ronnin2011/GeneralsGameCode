@@ -21,8 +21,8 @@
 #include <d3d9.h>  // Native DX9
 
 #include "ddsfile.h"
-#include "ffactory.h"
-#include "bufffile.h"
+#include "WWLib/ffactory.h"
+#include "WWLib/bufffile.h"
 #include "formconv.h"
 #include "dx8wrapper.h"
 #include "bitmaphandler.h"

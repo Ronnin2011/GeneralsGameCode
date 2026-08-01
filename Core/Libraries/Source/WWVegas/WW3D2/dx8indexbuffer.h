@@ -42,9 +42,9 @@
 #include <d3d9.h>
 typedef IDirect3DIndexBuffer9 IDirect3DIndexBuffer8;
 
-#include "always.h"
-#include "wwdebug.h"
-#include "sphere.h"
+#include "WWLib/always.h"
+#include "WWDebug/wwdebug.h"
+#include "WWMath/sphere.h"
 
 class DX8Wrapper;
 class SortingRendererClass;

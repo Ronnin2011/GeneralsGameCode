@@ -41,10 +41,10 @@
 // Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
 #include <d3d9.h>  // Native DX9
 
-#include "always.h"
-#include "vector3.h"
-#include "multilist.h"
-#include "mempool.h"
+#include "WWLib/always.h"
+#include "WWMath/vector3.h"
+#include "WWLib/multilist.h"
+#include "WWLib/mempool.h"
 
 class CameraClass;
 

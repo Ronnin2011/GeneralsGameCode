@@ -40,13 +40,13 @@
 #include <d3d9.h>  // Native DX9
 
 #include "vertmaterial.h"
-#include "realcrc.h"
-#include "wwdebug.h"
+#include "WWLib/realcrc.h"
+#include "WWDebug/wwdebug.h"
 #include "w3d_util.h"
-#include "chunkio.h"
+#include "WWLib/chunkio.h"
 #include "w3derr.h"
-#include "INI.h"
-#include "XSTRAW.h"
+#include "WWLib/INI.h"
+#include "WWLib/XSTRAW.h"
 #include "dx8wrapper.h"
 
 

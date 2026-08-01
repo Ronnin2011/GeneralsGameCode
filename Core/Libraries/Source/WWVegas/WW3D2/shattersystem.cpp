@@ -42,10 +42,10 @@
 #include "meshmdl.h"
 #include "dynamesh.h"
 #include "htree.h"
-#include "plane.h"
-#include "simplevec.h"
-#include "wwstring.h"
-#include "vp.h"
+#include "WWMath/plane.h"
+#include "WWLib/simplevec.h"
+#include "WWLib/wwstring.h"
+#include "WWMath/vp.h"
 #include "meshmatdesc.h"
 #include <stdlib.h>
 

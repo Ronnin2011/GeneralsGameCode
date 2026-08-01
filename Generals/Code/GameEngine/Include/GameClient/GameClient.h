@@ -44,6 +44,7 @@ class Drawable;
 class FontLibrary;
 class GameWindowManager;
 class InGameUI;
+class Intro;
 class Keyboard;
 class Mouse;
 class ParticleSystemManager;
@@ -54,7 +55,7 @@ struct RayEffectData;
 
 /// Function pointers for use by GameClient callback functions.
 typedef void (*GameClientFuncPtr)( Drawable *draw, void *userData );
-typedef std::hash_map<DrawableID, Drawable *, rts::hash<DrawableID>, rts::equal_to<DrawableID> > DrawablePtrHash;
+typedef std::hash_map<DrawableID, Drawable *, rts::hash<DrawableID>, rts::equal_to<DrawableID>/**/> DrawablePtrHash;
 typedef DrawablePtrHash::iterator DrawablePtrHashIt;
 
 //-----------------------------------------------------------------------------
@@ -87,14 +88,13 @@ public:
 	// subsystem methods
 	virtual void init() override;																					///< Initialize resources
 	virtual void update() override;																				///< Updates the GUI, display, audio, etc
+	virtual void draw() override;
 	virtual void reset() override;																					///< reset system
 
 	virtual void setFrame( UnsignedInt frame ) { m_frame = frame; }			///< Set the GameClient's internal frame number
 	virtual void registerDrawable( Drawable *draw );										///< Given a drawable, register it with the GameClient and give it a unique ID
 
 	void step(); ///< Do one fixed time step
-
-	void updateHeadless();
 
 	void addDrawableToLookupTable( Drawable *draw );			///< add drawable ID to hash lookup table
 	void removeDrawableFromLookupTable( Drawable *draw );	///< remove drawable ID from hash lookup table
@@ -150,6 +150,8 @@ public:
 	UnsignedInt getRenderedObjectCount() const { return m_renderedObjectCount; }
 	void incrementRenderedObjectCount() { m_renderedObjectCount++; }
 
+	Bool skipCurrentIntroStage();
+
 	static Bool isMovieAbortRequested();
 
 protected:
@@ -175,6 +177,7 @@ protected:
 
 private:
 
+	Intro* m_intro;
 	UnsignedInt m_renderedObjectCount;													///< Keeps track of the number of rendered objects -- resets each frame.
 
 	//---------------------------------------------------------------------------

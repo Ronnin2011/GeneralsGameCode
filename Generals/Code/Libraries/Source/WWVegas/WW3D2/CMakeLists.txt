@@ -176,8 +176,8 @@ set(WW3D2_SRC
     #shattersystem.h
     #snappts.cpp
     #snapPts.h
-    sortingrenderer.cpp
-    sortingrenderer.h
+#    sortingrenderer.cpp
+#    sortingrenderer.h
     #soundlibrarybridge.h
     #soundrobj.cpp
     #soundrobj.h
@@ -233,6 +233,10 @@ set_target_properties(g_ww3d2 PROPERTIES OUTPUT_NAME ww3d2)
 
 target_sources(g_ww3d2 PRIVATE ${WW3D2_SRC})
 
+target_include_directories(g_ww3d2 PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 target_compile_definitions(g_ww3d2 PRIVATE
     $<$<BOOL:${IS_VS6_BUILD}>:WINVER=0x0500>
 )
@@ -240,11 +244,11 @@ target_compile_definitions(g_ww3d2 PRIVATE
 target_precompile_headers(g_ww3d2 PRIVATE
     [["Utility/CppMacros.h"]] # Must be first, to be removed when abandoning VC6
     [["dx8wrapper.h"]]
-    [["always.h"]]
-    [["STLUtils.h"]]
-    [["win.h"]]
-    [["WWCommon.h"]]
-    [["wwstring.h"]]
+    [["WWLib/always.h"]]
+    [["WWLib/STLUtils.h"]]
+    [["WWLib/win.h"]]
+    [["WWLib/WWCommon.h"]]
+    [["WWLib/wwstring.h"]]
     <windows.h>
 )
 

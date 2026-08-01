@@ -56,8 +56,8 @@
 // Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
 #include "dx8todx9.h"
 
-#include "dx8wrapper.h"
-#include "assetmgr.h"
+#include "WW3D2/dx8wrapper.h"
+#include "WW3D2/assetmgr.h"
 #include "Lib/BaseType.h"
 #include "Common/file.h"
 #include "Common/FileSystem.h"
@@ -74,7 +74,7 @@
 #include "Common/GlobalData.h"
 #include "Common/GameLOD.h"
 #include "d3dx9tex.h"
-#include "dx8caps.h"
+#include "WW3D2/dx8caps.h"
 
 
 // Turn this on to turn off pixel shaders. jba[4/3/2003]
@@ -1506,6 +1506,7 @@ Int MaskTextureShader::set(Int pass)
 
 	D3DXMATRIX scale,offset,offsetTextureCenter;
 	Coord3D centerPos;
+	centerPos.zero();
 
 	//Find center of projection (this should be returned from some other filter, etc. but
 	//for now assume terrain location at center of screen.

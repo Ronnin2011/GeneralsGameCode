@@ -76,7 +76,7 @@
 
 #include "camera.h"
 #include "ww3d.h"
-#include "matrix4.h"
+#include "WWMath/matrix4.h"
 #include "dx8wrapper.h"
 
 

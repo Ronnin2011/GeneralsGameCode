@@ -40,7 +40,7 @@
 #pragma once
 
 #include <d3d9.h>  // Native DX9
-#include "always.h"
+#include "WWLib/always.h"
 #include "texture.h"
 
 class StringClass;

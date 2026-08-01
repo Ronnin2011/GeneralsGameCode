@@ -43,8 +43,8 @@
 #include <d3d9.h>
 typedef IDirect3DVertexBuffer9 IDirect3DVertexBuffer8;
 
-#include "always.h"
-#include "wwdebug.h"
+#include "WWLib/always.h"
+#include "WWDebug/wwdebug.h"
 #include "dx8fvf.h"
 
 const unsigned dynamic_fvf_type=D3DFVF_XYZ|D3DFVF_NORMAL|D3DFVF_DIFFUSE|D3DFVF_TEX2;

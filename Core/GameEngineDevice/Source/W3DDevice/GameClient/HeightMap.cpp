@@ -1,4 +1,4 @@
-﻿/*
+/*
 **	Command & Conquer Generals Zero Hour(tm)
 **	Copyright 2025 Electronic Arts Inc.
 **
@@ -56,13 +56,13 @@
 
 #include <stdlib.h>
 #include <vector>
-#include <assetmgr.h>
-#include <texture.h>
-#include <tri.h>
-#include <colmath.h>
-#include <coltest.h>
-#include <rinfo.h>
-#include <camera.h>
+#include <WW3D2/assetmgr.h>
+#include <WW3D2/texture.h>
+#include <WWMath/tri.h>
+#include <WWMath/colmath.h>
+#include <WW3D2/coltest.h>
+#include <WW3D2/rinfo.h>
+#include <WW3D2/camera.h>
 #include <d3dx9core.h>  // Native DX9 core
 #include "Common/GlobalData.h"
 #include "Common/PerfTimer.h"
@@ -312,7 +312,6 @@ Int HeightMapRenderObjClass::updateVB(DX8VertexBufferClass	*pVB, VERTEX_FORMAT *
 {
 	Int i,j;
 	Vector3 lightRay[MAX_GLOBAL_LIGHTS];
-	const Coord3D *lightPos;
 	Int xCoord, yCoord;
 	Int vn0,un0,vp1,up1;
 	Vector3 l2r,n2f,normalAtTexel;
@@ -325,6 +324,12 @@ Int HeightMapRenderObjClass::updateVB(DX8VertexBufferClass	*pVB, VERTEX_FORMAT *
 #ifdef RTS_DEBUG
 		assert(x0 >= originX && y0 >= originY && x1>x0 && y1>y0 && x1<=originX+VERTEX_BUFFER_TILE_LENGTH && y1<=originY+VERTEX_BUFFER_TILE_LENGTH);
 #endif
+
+		for (Int lightIndex=0; lightIndex < TheGlobalData->m_numGlobalLights; lightIndex++)
+		{
+			const Coord3D& lightPos = TheGlobalData->m_terrainLightPos[lightIndex];
+			lightRay[lightIndex].Set(-lightPos.x, -lightPos.y, -lightPos.z);
+		}
 
 		DX8VertexBufferClass::WriteLockClass lockVtxBuffer(pVB);
 		VERTEX_FORMAT *vbHardware = (VERTEX_FORMAT*)lockVtxBuffer.Get_Vertex_Array();
@@ -367,12 +372,6 @@ Int HeightMapRenderObjClass::updateVB(DX8VertexBufferClass	*pVB, VERTEX_FORMAT *
 
 				pMap->getUVData(mapX, mapY, U, V);
 				pMap->getAlphaUVData(mapX, mapY, UA, VA, alpha, &flipForBlend);
-
-				for (Int lightIndex=0; lightIndex < TheGlobalData->m_numGlobalLights; lightIndex++)
-				{
-					lightPos=&TheGlobalData->m_terrainLightPos[lightIndex];
-					lightRay[lightIndex].Set(-lightPos->x,-lightPos->y,	-lightPos->z);
-				}
 
 				//top-left sample
 				l2r.Set(2*MAP_XY_FACTOR,0,MAP_HEIGHT_SCALE*(pMap->getDisplayHeight(mapX+cellOffset, mapY) - pMap->getDisplayHeight(un0, mapY)));
@@ -1054,6 +1053,8 @@ m_vertexBufferTiles(nullptr),
 m_vertexBufferBackup(nullptr),
 m_originX(0),
 m_originY(0),
+m_desiredDrawWidth(WorldHeightMap::NORMAL_DRAW_WIDTH),
+m_desiredDrawHeight(WorldHeightMap::NORMAL_DRAW_HEIGHT),
 m_oversizeDrawWidth(0),
 m_oversizeDrawHeight(0),
 m_indexBuffer(nullptr),
@@ -1087,45 +1088,19 @@ void HeightMapRenderObjClass::adjustTerrainLOD(Int adj)
 		case	TERRAIN_LOD_MIN: TheWritableGlobalData->m_useCloudMap = false;
 									TheWritableGlobalData->m_useLightMap = false ;
 									TheWritableGlobalData->m_useWaterPlane = false;
-									TheWritableGlobalData->m_stretchTerrain = false;
-									TheWritableGlobalData->m_useHalfHeightMap = true;
-									break;
-		case TERRAIN_LOD_HALF_CLOUDS: TheWritableGlobalData->m_useCloudMap = true;
-									TheWritableGlobalData->m_useLightMap = true;
-									TheWritableGlobalData->m_useWaterPlane = false;
-									TheWritableGlobalData->m_stretchTerrain = false;
-									TheWritableGlobalData->m_useHalfHeightMap = true;
-									break;
-		case TERRAIN_LOD_STRETCH_NO_CLOUDS: TheWritableGlobalData->m_useCloudMap = false;
-									TheWritableGlobalData->m_useLightMap = false;
-									TheWritableGlobalData->m_useWaterPlane = false;
-									TheWritableGlobalData->m_stretchTerrain = true;
-									TheWritableGlobalData->m_useHalfHeightMap = false;
-									break;
-		case TERRAIN_LOD_STRETCH_CLOUDS: TheWritableGlobalData->m_useCloudMap = true;
-									TheWritableGlobalData->m_useLightMap = true;
-									TheWritableGlobalData->m_useWaterPlane = false;
-									TheWritableGlobalData->m_stretchTerrain = true;
-									TheWritableGlobalData->m_useHalfHeightMap = false;
 									break;
 		case TERRAIN_LOD_NO_CLOUDS: TheWritableGlobalData->m_useCloudMap = false;
 									TheWritableGlobalData->m_useLightMap = false;
 									TheWritableGlobalData->m_useWaterPlane = false;
-									TheWritableGlobalData->m_stretchTerrain = false;
-									TheWritableGlobalData->m_useHalfHeightMap = false;
 									break;
 		default:
 		case TERRAIN_LOD_NO_WATER: TheWritableGlobalData->m_useCloudMap = true;
 									TheWritableGlobalData->m_useLightMap = true;
 									TheWritableGlobalData->m_useWaterPlane = false;
-									TheWritableGlobalData->m_stretchTerrain = false;
-									TheWritableGlobalData->m_useHalfHeightMap = false;
 									break;
 		case TERRAIN_LOD_MAX: TheWritableGlobalData->m_useCloudMap = true;
 									TheWritableGlobalData->m_useLightMap = true;
 									TheWritableGlobalData->m_useWaterPlane = true;
-									TheWritableGlobalData->m_stretchTerrain = false;
-									TheWritableGlobalData->m_useHalfHeightMap = false;
 									break;
 	}
 	if (m_map==nullptr) return;
@@ -1184,17 +1159,13 @@ void HeightMapRenderObjClass::oversizeTerrain(Int tilesToOversize)
 	{
 		m_oversizeDrawWidth = WorldHeightMap::NORMAL_DRAW_WIDTH + VERTEX_BUFFER_TILE_LENGTH * tilesToOversize;
 		m_oversizeDrawHeight = WorldHeightMap::NORMAL_DRAW_HEIGHT + VERTEX_BUFFER_TILE_LENGTH * tilesToOversize;
-		m_oversizeDrawWidth = std::min(m_oversizeDrawWidth, m_map->getXExtent());
-		m_oversizeDrawHeight = std::min(m_oversizeDrawHeight, m_map->getYExtent());
-		setTerrainDrawSize(m_oversizeDrawWidth, m_oversizeDrawHeight);
+		setTerrainDrawSize(0, 0);
 	}
 	else
 	{
 		m_oversizeDrawWidth = 0;
 		m_oversizeDrawHeight = 0;
-		Int width = std::min((Int)WorldHeightMap::NORMAL_DRAW_WIDTH, m_map->getXExtent());
-		Int height = std::min((Int)WorldHeightMap::NORMAL_DRAW_HEIGHT, m_map->getYExtent());
-		setTerrainDrawSize(width, height);
+		setTerrainDrawSize(m_desiredDrawWidth, m_desiredDrawHeight);
 	}
 }
 
@@ -1203,15 +1174,17 @@ void HeightMapRenderObjClass::setTerrainDrawSize(Int width, Int height)
 	if (m_map == nullptr)
 		return;
 
-	if (m_oversizeDrawWidth != 0)
-		width = m_oversizeDrawWidth;
-	else
-		width = std::min(width, m_map->getXExtent());
+	if (width > 0)
+		m_desiredDrawWidth = width;
 
-	if (m_oversizeDrawHeight != 0)
-		height = m_oversizeDrawHeight;
-	else
-		height = std::min(height, m_map->getYExtent());
+	if (height > 0)
+		m_desiredDrawHeight = height;
+
+	width = std::max(m_oversizeDrawWidth, m_desiredDrawWidth);
+	height = std::max(m_oversizeDrawHeight, m_desiredDrawHeight);
+
+	width = std::min(width, m_map->getXExtent());
+	height = std::min(height, m_map->getYExtent());
 
 	if (width == m_map->getDrawWidth() && height == m_map->getDrawHeight())
 		return;
@@ -1232,7 +1205,7 @@ void HeightMapRenderObjClass::setTerrainDrawSize(Int width, Int height)
 	//delete m_shroud;
 	//m_shroud = nullptr;
 	initHeightData(m_map->getDrawWidth(), m_map->getDrawHeight(), m_map, nullptr, FALSE);
-	m_needFullUpdate = true;
+	scheduleFullUpdate();
 }
 
 
@@ -1299,7 +1272,7 @@ Int HeightMapRenderObjClass::initHeightData(Int x, Int y, WorldHeightMap *pMap, 
 
 	m_originX = 0;
 	m_originY = 0;
-	m_needFullUpdate = true;
+	scheduleFullUpdate();
 
 	// If the size changed, we need to allocate.
 	Bool needToAllocate = (x != m_x || y != m_y);
@@ -1676,8 +1649,17 @@ void HeightMapRenderObjClass::updateCenter(CameraClass *camera, const Vector3 *c
 
 	BaseHeightMapRenderObjClass::updateCenter(camera, cameraPivot, pLightsIterator);
 
+	m_updating = true;
+
 	if (m_x >= m_map->getXExtent() && m_y >= m_map->getYExtent())
-  {
+	{
+		if (m_needFullUpdate)
+		{
+			m_needFullUpdate = false;
+			updateBlock(0, 0, m_x-1, m_y-1, m_map, pLightsIterator);
+		}
+
+		m_updating = false;
 		return; // no need to center.
 	}
 
@@ -1798,7 +1780,6 @@ void HeightMapRenderObjClass::updateCenter(CameraClass *camera, const Vector3 *c
 
 	WorldHeightMap::DrawArea newDrawArea = m_map->createDrawArea(newOrgX, newOrgY);
 
-	m_updating = true;
 	if (m_needFullUpdate)
 	{
 		m_needFullUpdate = false;
@@ -2206,6 +2187,7 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 						DX8Wrapper::Draw_Triangles(0, HEIGHTMAP_POLYGON_NUM, 0, HEIGHTMAP_VERTEX_NUM);
 					}
 				}
+
 			}
 	}
 

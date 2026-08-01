@@ -38,7 +38,7 @@
 
 #pragma once
 
-#include "always.h"
+#include "WWLib/always.h"
 
 // Ronin @build 26/10/2025 DX9: Ensure d3d9.h and typedefs are available
 #include <d3d9.h>

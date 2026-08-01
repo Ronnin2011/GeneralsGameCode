@@ -685,7 +685,7 @@ WorldHeightMap::WorldHeightMap(ChunkInputStream *pStrm, Bool logicalDataOnly):
 	m_drawWidthX(NORMAL_DRAW_WIDTH), m_drawHeightY(NORMAL_DRAW_HEIGHT),
 	m_tileNdxes(nullptr), m_blendTileNdxes(nullptr), m_extraBlendTileNdxes(nullptr), m_cliffInfoNdxes(nullptr),
 	m_terrainTexHeight(1), m_alphaTexHeight(1),
-	#ifdef EVAL_TILING_MODES
+#ifdef EVAL_TILING_MODES
 	m_tileMode(TILE_4x4),
 #endif
 	m_numCliffInfo(1),
@@ -715,11 +715,6 @@ WorldHeightMap::WorldHeightMap(ChunkInputStream *pStrm, Bool logicalDataOnly):
 	}
 	m_terrainTexturePages[0].textureHeight = m_terrainTexHeight;
 	m_edgeTexturePages[0].textureHeight = m_alphaEdgeHeight;
-
-	if (TheGlobalData && TheGlobalData->m_stretchTerrain) {
-		m_drawWidthX=STRETCH_DRAW_WIDTH;
-		m_drawHeightY=STRETCH_DRAW_HEIGHT;
-	}
 
 	DataChunkInput file( pStrm );
 
@@ -758,10 +753,7 @@ WorldHeightMap::WorldHeightMap(ChunkInputStream *pStrm, Bool logicalDataOnly):
 			}
 		}
 	}
-	if (TheGlobalData && TheGlobalData->m_drawEntireTerrain) {
-		m_drawWidthX=m_width;
-		m_drawHeightY=m_height;
-	}
+
 	if (m_drawWidthX > m_width) {
 		m_drawWidthX = m_width;
 	}
@@ -3726,23 +3718,29 @@ TerrainTextureClass *WorldHeightMap::getFlatTexture(Int xCell, Int yCell, Int ce
 	return newTexture;
 }
 
+Region2D WorldHeightMap::getDrawRegion2D()
+{
+	// Get region in heightmap space
+	const Int loX = getDrawOrgX() - getBorderSize();
+	const Int loY = getDrawOrgY() - getBorderSize();
+	const Int hiX = loX + getDrawWidth();
+	const Int hiY = loY + getDrawHeight();
+
+	// Convert to world space
+	Region2D region;
+	region.lo.x = loX * MAP_XY_FACTOR;
+	region.lo.y = loY * MAP_XY_FACTOR;
+	region.hi.x = hiX * MAP_XY_FACTOR;
+	region.hi.y = hiY * MAP_XY_FACTOR;
+
+	return region;
+}
 
 WorldHeightMap::DrawArea WorldHeightMap::createDrawArea(Int xOrg, Int yOrg)
 {
 	DrawArea area;
-	area.sizeX = m_drawWidthX;
-	area.sizeY = m_drawHeightY;
-
-	if (TheGlobalData && TheGlobalData->m_stretchTerrain) {
-		area.sizeX = STRETCH_DRAW_WIDTH;
-		area.sizeY = STRETCH_DRAW_HEIGHT;
-	}
-	if (TheGlobalData && TheGlobalData->m_drawEntireTerrain) {
-		area.sizeX = m_width;
-		area.sizeY = m_height;
-	}
-	area.sizeX = std::min(area.sizeX, m_width);
-	area.sizeY = std::min(area.sizeY, m_height);
+	area.sizeX = std::min(m_drawWidthX, m_width);
+	area.sizeY = std::min(m_drawHeightY, m_height);
 	area.originX = clamp(0, xOrg, m_width - area.sizeX);
 	area.originY = clamp(0, yOrg, m_height - area.sizeY);
 

@@ -61,12 +61,12 @@ typedef IDirect3DSurface9 IDirect3DSurface8;
 
 #endif // DX8_TO_DX9_TYPEDEFS_DEFINED
 
-#include "always.h"
-#include "chunkio.h"
+#include "WWLib/always.h"
+#include "WWLib/chunkio.h"
 #include "surfaceclass.h"
 #include "ww3dformat.h"
-#include "wwstring.h"
-#include "vector3.h"
+#include "WWLib/wwstring.h"
+#include "WWMath/vector3.h"
 #include "texturefilter.h"
 
 class DX8Wrapper;

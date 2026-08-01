@@ -42,7 +42,7 @@
 #include <d3d9.h>  // Native DX9
 
 #include "dx8fvf.h"
-#include "wwstring.h"
+#include "WWLib/wwstring.h"
 #include <d3dx9.h>  // Native DX9 extensions
 
 static unsigned Get_FVF_Vertex_Size(unsigned FVF)

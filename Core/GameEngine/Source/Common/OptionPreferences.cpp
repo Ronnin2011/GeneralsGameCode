@@ -38,6 +38,7 @@
 #include "Common/OptionPreferences.h"
 
 #include "GameClient/ClientInstance.h"
+#include "GameClient/Display.h"
 #include "GameClient/LookAtXlat.h"
 #include "GameClient/Mouse.h"
 
@@ -205,6 +206,18 @@ Bool OptionPreferences::getAlternateMouseModeEnabled()
 	return FALSE;
 }
 
+Bool OptionPreferences::getRightMouseScrollWithAlternateMouseEnabled() const
+{
+	OptionPreferences::const_iterator it = find("UseRightMouseScrollWithAlternateMouse");
+	if (it == end())
+		return TheGlobalData->m_useRightMouseScrollWithAlternateMouse;
+
+	if (stricmp(it->second.str(), "yes") == 0) {
+		return TRUE;
+	}
+	return FALSE;
+}
+
 Bool OptionPreferences::getRetaliationModeEnabled()
 {
 	OptionPreferences::const_iterator it = find("Retaliation");
@@ -227,6 +240,18 @@ Bool OptionPreferences::getDoubleClickAttackMoveEnabled()
 		return TRUE;
 
 	return FALSE;
+}
+
+Int OptionPreferences::getJpegQuality() const
+{
+	OptionPreferences::const_iterator it = find("JpegQuality");
+	if (it == end())
+		return DEFAULT_JPEG_QUALITY;
+
+	// TheSuperHackers @info bobtista 14/07/2026 Clamp the quality to 50-95: above 95 the file
+	// size increases significantly with no visible benefit, below 50 the image degrades visibly.
+	const Int quality = atoi(it->second.str());
+	return clamp(50, quality, 95);
 }
 
 Real OptionPreferences::getScrollFactor()
@@ -426,18 +451,6 @@ Int OptionPreferences::getStaticGameDetail()
 		return TheGameLODManager->getStaticLODLevel();
 
 	return TheGameLODManager->getStaticGameLODIndex(it->second);
-}
-
-Bool OptionPreferences::getSendDelay()
-{
-	OptionPreferences::const_iterator it = find("SendDelay");
-	if (it == end())
-		return TheGlobalData->m_firewallSendDelay;
-
-	if (stricmp(it->second.str(), "yes") == 0) {
-		return TRUE;
-	}
-	return FALSE;
 }
 
 Int OptionPreferences::getFirewallBehavior()
@@ -902,4 +915,14 @@ Bool OptionPreferences::getShowMoneyPerMinute() const
 		return TRUE;
 	}
 	return FALSE;
+}
+
+Real OptionPreferences::getGameWindowTransitionSpeedMultiplier() const
+{
+	OptionPreferences::const_iterator it = find("GameWindowTransitionSpeedMultiplier");
+	if (it == end())
+		return 1.0f;
+
+	Real speed = (Real) atof(it->second.str());
+	return clamp(1.0f, speed, 1000.0f);
 }

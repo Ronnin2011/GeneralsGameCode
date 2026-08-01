@@ -60,11 +60,11 @@
 #include <d3d9.h>  // Native DX9
 
 #include "scene.h"
-#include "plane.h"
+#include "WWMath/plane.h"
 #include "camera.h"
 #include "ww3d.h"
 #include "rinfo.h"
-#include "chunkio.h"
+#include "WWLib/chunkio.h"
 #include "dx8renderer.h"
 #include "dx8wrapper.h"
 #include "sortingrenderer.h"

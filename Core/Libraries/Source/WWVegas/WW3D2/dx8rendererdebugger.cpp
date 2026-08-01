@@ -17,7 +17,7 @@
 */
 
 #include "dx8rendererdebugger.h"
-#include "hashtemplate.h"
+#include "WWLib/hashtemplate.h"
 #include "mesh.h"
 #include "meshmdl.h"
 
