@@ -28,7 +28,7 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
-#include "dx8todx9.h"
+#include "WW3D2/dx8todx9.h"
 
 #include "Lib/BaseType.h"
 #include "WWLib/always.h"
@@ -568,7 +568,7 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 
 	if (setIt != m_usedSmudgeSetList.end())
 	{	//there are possibly some smudges to render, so make sure background particles have finished drawing.
-		SortingRendererClass::Flush();
+		SortingRendererClass::Flush(); //draw sorted translucent polys like particles.
 	}
 
 	for(; setIt != m_usedSmudgeSetList.end(); ++setIt)
@@ -585,6 +585,10 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 			//Get view-space center
 			Matrix3D::Transform_Vector(view,smudge->m_pos,&vsVert);
 
+			//Get 5 view-space vertices
+			Smudge::smudgeVertex *verts=smudge->m_verts;
+
+			//Do center vertex outside 'for' loop since it's different.				  
 			verts[4].pos = vsVert;
 
 			for (Int i = 0; i < 4; i++)
@@ -593,11 +597,12 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 				//Ge uv coordinates for each vertex
 				ssVert = proj * verts[i].pos;
 				Real oow = 1.0f / ssVert.W;
-				ssVert *= oow;
+				ssVert *= oow; //returned in camera space which is -1,-1 (bottom-left) to 1,1 (top-right)
 				verts[i].uv.Set((ssVert.X + 1.0f) * texScaleX, (1.0f - ssVert.Y) * texScaleY);
 
 				Vector2& thisUV = verts[i].uv;
 
+				// Zero coordinates that fall outside valid texel bounds
 				if (thisUV.X > texClampX)
 					smudge->m_offset.X = 0;
 				else if (thisUV.X < 0)
@@ -609,14 +614,16 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 					smudge->m_offset.Y = 0;
 			}
 
+			//Finish center vertex
+			//Ge uv coordinates by interpolating corner uv coordinates and applying desired o																						  
 			uvSpanX = verts[3].uv.X - verts[0].uv.X;
 			uvSpanY = verts[1].uv.Y - verts[0].uv.Y;
 			verts[4].uv.X = verts[0].uv.X + uvSpanX * (0.5f + smudge->m_offset.X);
 			// @bugfix Ronin 04/03/2026 Was using m_offset.X for Y axis
 			verts[4].uv.Y = verts[0].uv.Y + uvSpanY * (0.5f + smudge->m_offset.Y);
 
-			count++;
-			smudge = smudge->Succ();
+			count++;   //increment visible smudge count.
+			
 		}
 	}
 
@@ -724,12 +731,16 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 					{
 						continue;
 					}
+					
+					Smudge::smudgeVertex *smVerts = smudge->m_verts;
 
+					//Check if we exceeded maximum number of smudges allowed per draw call.														
 					if (smudgesInRenderBatch >= count)
 					{
 						goto flushSmudges;
 					}
 
+					//Set center vertex opacity.			 
 					vertexDiffuse[4] = ((Int)(smudge->m_opacity * 255.0f) << 24) | THE_COLOR;
 
 					// @tweak Ronin 06/03/2026: Corner alpha at 25% of center for gentle falloff.
@@ -773,7 +784,7 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 					}
 
 					smudgesInRenderBatch++;
-					smudge = smudge->Succ();
+					
 				}
 
 				++setIt;	//advance to next node.

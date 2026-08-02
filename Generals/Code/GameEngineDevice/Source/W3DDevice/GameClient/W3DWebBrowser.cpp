@@ -26,7 +26,7 @@
 // July 2002 Bryan Cleveland
 
 // Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
-#include "dx8todx9.h"
+#include "WW3D2/dx8todx9.h"
 
 #include "W3DDevice/GameClient/W3DWebBrowser.h"
 #include "WW3D2/texture.h"

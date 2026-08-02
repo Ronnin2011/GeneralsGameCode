@@ -33,7 +33,7 @@
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 #define WIN32_LEAN_AND_MEAN  // only bare bones windows stuff wanted
 // Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
-#include "dx8todx9.h"
+#include "WW3D2/dx8todx9.h"
 
 #include <windows.h>
 #include <stdlib.h>

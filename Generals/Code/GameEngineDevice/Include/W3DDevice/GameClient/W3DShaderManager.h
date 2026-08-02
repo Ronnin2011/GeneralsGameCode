@@ -37,7 +37,7 @@
 #define __W3DSHADERMANAGER_H_
 
 // Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
-#include "dx8todx9.h"
+#include "WW3D2/dx8todx9.h"
 
 #include "WW3D2/texture.h"
 enum FilterTypes CPP_11(: Int);

@@ -58,6 +58,8 @@ set(WW3D2_SRC
     dx8rendererdebugger.h
     dx8texman.cpp
     dx8texman.h
+    # Ronin @build 18/10/2025 DX8-to-DX9 compatibility layer
+    dx8todx9.h 
     dx8vertexbuffer.cpp
     dx8vertexbuffer.h
     dx8webbrowser.cpp
@@ -216,6 +218,9 @@ set(WW3D2_SRC
     #vertmaterial.h
     visrasterizer.cpp
     visrasterizer.h
+    # Ronin @feature 26/01/2026: Vertex declaration cache
+    VertexDeclCache.cpp
+    VertexDeclCache.h
     w3d_dep.cpp
     w3d_dep.h
     #w3d_file.h

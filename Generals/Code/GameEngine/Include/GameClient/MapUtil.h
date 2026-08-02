@@ -33,7 +33,7 @@
 #define __MAPUTIL_H__
 
 // Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
-#include "dx8todx9.h"
+#include "WW3D2/dx8todx9.h"
 
 #include "Common/AsciiString.h"
 #include "Common/UnicodeString.h"

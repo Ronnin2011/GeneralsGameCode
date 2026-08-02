@@ -217,7 +217,7 @@ set(WW3D2_SRC
     #visrasterizer.cpp
     #visrasterizer.h
     # Ronin @feature 26/01/2026: Vertex declaration cache
-    VertexDeclCache.cpp
+    #VertexDeclCache.cpp
     # Ronin @feature 18/02/2026: Hardware instancing
     dx8instancing.cpp 
     dx8instancing.h

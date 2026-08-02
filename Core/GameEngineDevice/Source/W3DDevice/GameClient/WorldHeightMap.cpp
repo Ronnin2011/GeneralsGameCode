@@ -56,7 +56,7 @@
 // Note: this codebase's DDSFileClass is DXT-only (asserts on uncompressed BGRA8 DDS),
 // so the helper below pre-screens the FourCC and fails soft for non-DXT inputs --
 // uncompressed normal maps must ship as TGA, which the existing path already handles.
-#include "ddsfile.h"
+#include "WW3D2/ddsfile.h"
 
 #include "Common/file.h"
 

@@ -21,7 +21,7 @@
 #pragma once
 
 #include <d3d9.h>
-#include "always.h"
+#include "WWLib/always.h"
 #include "shader.h"   // Ronin @bugfix 27/06/2026 DX9 P2: ShaderClass stored per single-rigid record (render-state grouping)
 
 class DX8PolygonRendererClass;
