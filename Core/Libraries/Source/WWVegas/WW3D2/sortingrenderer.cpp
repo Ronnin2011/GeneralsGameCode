@@ -501,6 +501,24 @@ void SortingRendererClass::Insert_To_Sorting_Pool(SortingNodeStruct* state)
 // ----------------------------------------------------------------------------
 //static unsigned prevLight = 0xffffffff;
 
+// Ronin @diagnostic 02/08/2026 DX9: classify a sorted draw by blend mode for the [DRAW] HUD.
+// Additive is commutative, so those draws don't need the depth-sorted pool -- see Windowednew.md §19b.1.
+static Debug_Statistics::DrawSubsystem Classify_Sorted_Draw(const ShaderClass& shader)
+{
+	const ShaderClass::SrcBlendFuncType src = shader.Get_Src_Blend_Func();
+	const ShaderClass::DstBlendFuncType dst = shader.Get_Dst_Blend_Func();
+
+	// ONE/ONE is pure additive; SRC_ALPHA/ONE is the premultiplied-style additive particle shaders use.
+	if (dst == ShaderClass::DSTBLEND_ONE &&
+		(src == ShaderClass::SRCBLEND_ONE || src == ShaderClass::SRCBLEND_SRC_ALPHA)) {
+		return Debug_Statistics::DRAW_SUBSYS_SORTED_ADD;
+	}
+	if (src == ShaderClass::SRCBLEND_SRC_ALPHA && dst == ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA) {
+		return Debug_Statistics::DRAW_SUBSYS_SORTED_ALPHA;
+	}
+	return Debug_Statistics::DRAW_SUBSYS_SORTED;
+}
+
 static void Apply_Render_State(RenderStateStruct& render_state)
 {
 	DX8Wrapper::Set_Shader(render_state.shader);
@@ -748,6 +766,9 @@ void SortingRendererClass::Flush_Sorting_Pool()
 				SortingNodeStruct* state=overlapping_nodes[node_id];
 				Apply_Render_State(state->sorting_state);
 
+				// Ronin @diagnostic 02/08/2026: this draw exists only because depth order changed node.
+				Debug_Statistics::Set_Draw_Subsystem(Classify_Sorted_Draw(state->sorting_state.shader));
+
 				DX8Wrapper::Draw_Triangles(
 					start_index*3,
 					count_to_render,
@@ -765,6 +786,8 @@ void SortingRendererClass::Flush_Sorting_Pool()
 		if (count_to_render) {
 			SortingNodeStruct* state=overlapping_nodes[node_id];
 			Apply_Render_State(state->sorting_state);
+
+			Debug_Statistics::Set_Draw_Subsystem(Classify_Sorted_Draw(state->sorting_state.shader));
 
 			DX8Wrapper::Draw_Triangles(
 				start_index*3,
@@ -801,6 +824,9 @@ void SortingRendererClass::Flush_Sorting_Pool()
 
 void SortingRendererClass::Flush()
 {
+	// Ronin @diagnostic 02/08/2026 DX9: particles + translucent land here; per-draw blend split below.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_SORTED);
+
 	WWPROFILE("SortingRenderer::Flush");
 
 	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
@@ -879,6 +905,8 @@ void SortingRendererClass::Flush()
 		 }
 
 			DX8Wrapper::Apply_Render_State_Changes();
+
+			Debug_Statistics::Set_Draw_Subsystem(Classify_Sorted_Draw(state->sorting_state.shader));
 
 			DX8Wrapper::Draw_Triangles(state->start_index,
 				state->polygon_count,

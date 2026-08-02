@@ -60,6 +60,46 @@ namespace Debug_Statistics
 	int Get_Sorting_Vertices();
 	int Get_Draw_Calls();
 
+	// Ronin @diagnostic 02/08/2026 DX9: per-subsystem draw attribution ([DRAW] HUD). Renderers tag
+	// themselves with a DrawSubsystemScope; draws recorded under a live tag are attributed to it.
+	// Rationale + measured results: Windowednew.md §18f-0.
+	enum DrawSubsystem
+	{
+		DRAW_SUBSYS_OTHER = 0,   // untagged: UI, debug geometry, anything not claimed below
+		DRAW_SUBSYS_TERRAIN,
+		DRAW_SUBSYS_SHADOW,
+		DRAW_SUBSYS_WATER,
+		DRAW_SUBSYS_SHROUD,
+		DRAW_SUBSYS_SORTED,       // sorted, blend mode not classified below
+		DRAW_SUBSYS_SORTED_ADD,   // additive == order-INdependent -> batchable outside the depth sort
+		DRAW_SUBSYS_SORTED_ALPHA, // alpha == order-dependent -> must stay depth-sorted
+		DRAW_SUBSYS_SKIN,
+		DRAW_SUBSYS_RIGID_PROG,   // programmable rigid path (bypasses DX8Wrapper, self-reported)
+		DRAW_SUBSYS_COUNT
+	};
+
+	void Set_Draw_Subsystem(DrawSubsystem s);
+	DrawSubsystem Get_Draw_Subsystem();
+
+	// Monotonic. NOT reset by Begin/End_Statistics -- those are bracketed twice per frame and would
+	// truncate. Take a delta between frames for per-frame numbers.
+	unsigned Get_Total_Draw_Calls_By_Subsystem(int s);
+	const char* Get_Draw_Subsystem_Name(int s);
+
+	// Ronin @diagnostic 02/08/2026 DX9: Render_Instanced calls the device directly, so the rigid path
+	// never reached DX8_RECORD_RENDER and `draws:` undercounted it. Report it here.
+	void Record_Instanced_Draw(int pcount, int vcount);
+
+	// RAII tag; restores the previous subsystem so a nested renderer can't leak its tag.
+	class DrawSubsystemScope
+	{
+	public:
+		explicit DrawSubsystemScope(DrawSubsystem s) : m_prev(Get_Draw_Subsystem()) { Set_Draw_Subsystem(s); }
+		~DrawSubsystemScope() { Set_Draw_Subsystem(m_prev); }
+	private:
+		DrawSubsystem m_prev;
+	};
+
 	void Begin_Statistics();
 	void End_Statistics();
 	void Shutdown_Statistics();

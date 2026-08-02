@@ -3419,6 +3419,9 @@ void W3DVolumetricShadowManager::renderStencilShadows()
 
 void W3DVolumetricShadowManager::renderShadows( Bool forceStencilFill )
 {
+	// Ronin @diagnostic 02/08/2026 DX9: attribute every draw issued below to "shadow" on the [DRAW] HUD.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_SHADOW);
+
 	W3DVolumetricShadow *shadow;
 	Int numRenderedShadows = 0;
 

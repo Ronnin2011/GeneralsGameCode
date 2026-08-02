@@ -44,6 +44,7 @@
 #include "WW3D2/textureloader.h"
 #include "Common/GlobalData.h"
 #include "GameLogic/PartitionManager.h"
+#include "WW3D2/statistics.h"   // Ronin @diagnostic 02/08/2026: per-subsystem draw attribution ([DRAW])
 
 
 //-----------------------------------------------------------------------------
@@ -526,6 +527,9 @@ TextureClass *DummyTexture=nullptr;
 /** Updates video memory surface with currently visible shroud data */
 void W3DShroud::render(CameraClass *cam)
 {
+	// Ronin @diagnostic 02/08/2026 DX9: attribute every draw issued below to "shroud" on the [DRAW] HUD.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_SHROUD);
+
 	if (!m_pSrcTexture)
 		return; //nothing to update from.  Must be in reset state.
 

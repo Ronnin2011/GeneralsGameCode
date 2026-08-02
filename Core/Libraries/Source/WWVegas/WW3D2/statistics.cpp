@@ -282,12 +282,52 @@ static int last_frame_sorting_vertices;
 static int draw_calls;
 static int last_frame_draw_calls;
 
+// Ronin @diagnostic 02/08/2026 DX9: per-subsystem draw attribution (see statistics.h for why these are
+// monotonic and never reset here). Names are short because they share one HUD line.
+static Debug_Statistics::DrawSubsystem current_draw_subsystem = Debug_Statistics::DRAW_SUBSYS_OTHER;
+static unsigned draw_calls_by_subsystem[Debug_Statistics::DRAW_SUBSYS_COUNT] = { 0 };
+static const char* const draw_subsystem_names[Debug_Statistics::DRAW_SUBSYS_COUNT] =
+{
+	"other", "terrain", "shadow", "water", "shroud", "sorted", "sortAdd", "sortAlpha", "skin", "rigid"
+};
+
+void Debug_Statistics::Set_Draw_Subsystem(DrawSubsystem s)
+{
+	current_draw_subsystem = s;
+}
+
+Debug_Statistics::DrawSubsystem Debug_Statistics::Get_Draw_Subsystem()
+{
+	return current_draw_subsystem;
+}
+
+unsigned Debug_Statistics::Get_Total_Draw_Calls_By_Subsystem(int s)
+{
+	if (s < 0 || s >= DRAW_SUBSYS_COUNT) return 0;
+	return draw_calls_by_subsystem[s];
+}
+
+const char* Debug_Statistics::Get_Draw_Subsystem_Name(int s)
+{
+	if (s < 0 || s >= DRAW_SUBSYS_COUNT) return "?";
+	return draw_subsystem_names[s];
+}
+
+void Debug_Statistics::Record_Instanced_Draw(int pcount, int vcount)
+{
+	dx8_polygons += pcount;
+	dx8_vertices += vcount;
+	draw_calls++;
+	draw_calls_by_subsystem[DRAW_SUBSYS_RIGID_PROG]++;
+}
+
 void Debug_Statistics::Record_DX8_Skin_Polys_And_Vertices(int pcount,int vcount)
 {
 	dx8_skin_polygons+=pcount;
 	dx8_skin_vertices+=vcount;
 	dx8_skin_renders++;
 	draw_calls++;
+	draw_calls_by_subsystem[DRAW_SUBSYS_SKIN]++;
 }
 
 void Debug_Statistics::Record_DX8_Polys_And_Vertices(int pcount,int vcount,const ShaderClass& shader)
@@ -300,6 +340,7 @@ void Debug_Statistics::Record_DX8_Polys_And_Vertices(int pcount,int vcount,const
 	dx8_polygons+=pcount;
 	dx8_vertices+=vcount;
 	draw_calls++;
+	draw_calls_by_subsystem[current_draw_subsystem]++; // Ronin @diagnostic 02/08/2026: who issued this?
 }
 
 int Debug_Statistics::Get_DX8_Skin_Renders()

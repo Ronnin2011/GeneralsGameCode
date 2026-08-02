@@ -1308,6 +1308,9 @@ void W3DProjectedShadowManager::prepareShadows()
 
 Int W3DProjectedShadowManager::renderShadows(RenderInfoClass & rinfo)
 {
+	// Ronin @diagnostic 02/08/2026 DX9: attribute every draw issued below to "shadow" on the [DRAW] HUD.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_SHADOW);
+
 	Int projectionCount=0;
 
 	if (!TheTerrainRenderObject)

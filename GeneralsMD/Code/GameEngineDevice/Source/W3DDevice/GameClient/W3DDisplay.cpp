@@ -111,6 +111,7 @@ static void drawFramerateBar();
 #endif
 
 #include "WinMain.h"
+#include "WW3D2/statistics.h"   // Ronin @diagnostic 02/08/2026: per-subsystem draw attribution ([DRAW])
 
 
 // DEFINE AND ENUMS ///////////////////////////////////////////////////////////
@@ -968,7 +969,7 @@ void W3DDisplay::init()
 	// measuring perf. Force the StatDebugDisplay callback on for release testing. The whole
 	// gather/draw chain (gatherDebugStats / drawDebugStats) already runs in release; only this
 	// switch was gated. Set to false before shipping.
-	static const bool RONIN_FORCE_STAT_HUD = true;
+	static const bool RONIN_FORCE_STAT_HUD = false;
 	if( TheGlobalData->m_displayDebug || RONIN_FORCE_STAT_HUD )
 	{
 		m_debugDisplayCallback = StatDebugDisplay;
@@ -1773,6 +1774,57 @@ static void drawInstancedPerfReadout()
 	s_instString->draw(x, y, textColor, dropColor);
 }
 
+// Ronin @diagnostic 02/08/2026 DX9: [DRAW] — where the frame's draw calls come from. `total` includes
+// the programmable rigid path, which `draws:` can't see. Buckets + results: Windowednew.md §18f-0.
+static void drawSubsystemDrawReadout(Bool visible)
+{
+	// Delta must be taken every frame even when hidden, or a skipped frame folds into the next reading.
+	static unsigned s_prev[Debug_Statistics::DRAW_SUBSYS_COUNT] = { 0 };
+	unsigned perFrame[Debug_Statistics::DRAW_SUBSYS_COUNT];
+	unsigned total = 0;
+	for (int i = 0; i < Debug_Statistics::DRAW_SUBSYS_COUNT; ++i) {
+		const unsigned now = Debug_Statistics::Get_Total_Draw_Calls_By_Subsystem(i);
+		perFrame[i] = now - s_prev[i];   // unsigned wrap is fine: monotonic counters
+		s_prev[i]   = now;
+		total      += perFrame[i];
+	}
+
+	if (!visible || TheDisplayStringManager == NULL || TheFontLibrary == NULL) {
+		return;
+	}
+	static DisplayString* s_drawString = NULL;
+	if (s_drawString == NULL) {
+		s_drawString = TheDisplayStringManager->newDisplayString();
+		if (s_drawString == NULL) {
+			return;
+		}
+		GameFont* font = TheFontLibrary->getFont("FixedSys", 8, FALSE);
+		s_drawString->setFont(font);
+	}
+
+	UnicodeString text;
+	// sortAdd = draws collapsible by state-batching outside the depth sort (Windowednew.md §19b.1).
+	text.format(L"[DRAW] total=%u  terr=%u  shroud=%u  sortAdd=%u  sortAlpha=%u  sortOth=%u  shadow=%u  rigid=%u  water=%u  skin=%u  other=%u",
+		total,
+		perFrame[Debug_Statistics::DRAW_SUBSYS_TERRAIN],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_SHROUD],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_SORTED_ADD],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_SORTED_ALPHA],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_SORTED],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_SHADOW],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_RIGID_PROG],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_WATER],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_SKIN],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_OTHER]);
+	s_drawString->setText(text);
+
+	const Int   x = 3;
+	const Int   y = 330; // below [INST] (y=315)
+	const Color textColor = GameMakeColor(255, 160, 0, 255); // orange = draw attribution
+	const Color dropColor = GameMakeColor(0, 0, 0, 255);
+	s_drawString->draw(x, y, textColor, dropColor);
+}
+
 //=============================================================================
 void StatDebugDisplay( DebugDisplayInterface *, void *, FILE *fp )
 {
@@ -2170,12 +2222,15 @@ AGAIN:
 				// draw, so turn BOTH off when taking a clean fps measurement.
 				static const bool SHOW_SINGLE_RIGID_READOUT = true;  // [SR]   yellow, y=300
 				static const bool SHOW_INSTANCING_READOUT   = true;  // [INST] cyan,   y=315
+				static const bool SHOW_DRAW_SUBSYSTEM_READOUT = true; // [DRAW] orange, y=330
 				if (SHOW_SINGLE_RIGID_READOUT) {
 					drawSingleRigidPerfReadout();
 				}
 				if (SHOW_INSTANCING_READOUT) {
 					drawInstancedPerfReadout();
 				}
+				// Ronin @diagnostic 02/08/2026: call every frame even when hidden (it takes the delta).
+				drawSubsystemDrawReadout(SHOW_DRAW_SUBSYSTEM_READOUT);
 
 #if defined(RTS_DEBUG)
 				if (TheGlobalData->m_benchmarkTimer > 0)

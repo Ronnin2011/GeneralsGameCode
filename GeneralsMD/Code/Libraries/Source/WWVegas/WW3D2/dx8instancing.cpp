@@ -33,6 +33,7 @@
 #include "assetmgr.h"
 #include "vertmaterial.h"
 #include "ww3d.h"   // Ronin @diagnostic 21/06/2026: WW3D::Get_Frame_Count for the per-frame SR counter
+#include "statistics.h" // Ronin @diagnostic 02/08/2026: Record_Instanced_Draw (this path bypasses DX8Wrapper)
 
 
 // Global instance
@@ -565,15 +566,9 @@ bool DX8InstanceManagerClass::Load_Instance_Shader()
 
 // ----------------------------------------------------------------------------
 
-// Ronin @diagnostic 21/06/2026 DX9: single-rigid counters, surfaced ON SCREEN by
-// drawSingleRigidPerfReadout (W3DDisplay.cpp) because we A/B in RELEASE, where WWDEBUG_SAY isn't
-// visible without a debugger attached. Deliberately kept OUT of the debug-stats system.
-//
-// Ronin @cleanup 01/08/2026 §16 DX9: g_SR_PerfMode is GONE along with the legacy inline path it
-// instrumented (the P0 bisect knob: skip-draw / skip-lock / early-out, built to attribute the
-// 375->231 cliff that the deferred batch then fixed). It has read 0 in every capture since.
-// g_SR_DrawCount is now bumped ONLY by Collect_Single_Rigid, so [SR] draws/frame == [INST] recs
-// exactly; reflective meshes are counted separately (m_reflectiveDraws -> [INST] refl=).
+// Ronin @diagnostic 21/06/2026 DX9: [SR] counters, drawn on screen because we A/B in RELEASE.
+// Ronin @cleanup 01/08/2026 §16: g_SR_PerfMode removed with the legacy inline path. g_SR_DrawCount is
+// bumped only by Collect_Single_Rigid, so [SR] draws/frame == [INST] recs; reflective counts separately.
 static unsigned g_SR_DrawCount      = 0;          // accumulating during the current frame
 static unsigned g_SR_LastFrameCount = 0;          // total from the last COMPLETED frame (for the HUD)
 static unsigned g_SR_LastFrame      = 0xFFFFFFFFu;
@@ -588,17 +583,10 @@ unsigned DX8_Get_Single_Rigid_Last_Frame_Draw_Count()  { return g_SR_LastFrameCo
 unsigned DX8_Get_Single_Rigid_Last_Frame_Flush_Count() { return g_SR_LastFrameFlushCount; }
 
 
-// Ronin @bugfix 23/05/2026 DX9 R3: Reuse the exact instanced programmable rigid path for a single
-// mesh. Feeding one world transform through stream 1 keeps this visually identical to a batched draw.
-//
-// Ronin @cleanup 01/08/2026 §16 DX9: this used to be Draw_Single_Rigid, a general "one rigid mesh,
-// inline" path with a `reflective` flag. Every non-reflective caller is gone -- eligible rigid meshes
-// are collected and drawn by Flush_Single_Rigid -- so the function is specialized to the ONE thing that
-// genuinely cannot be batched: the reflective env pass-0. It needs m_reflectivePS plus per-draw camera
-// position and view matrix in PS constants, which the shared flush (fixed m_instancePS) cannot supply,
-// and it must draw IMMEDIATELY so pass-0 lands before its pass-1 overlay (which IS batched).
-// Also dropped: the dead `baseVertexOffset` parameter (declared, never referenced) and the
-// g_SR_PerfMode bisect gates.
+// Ronin @bugfix 23/05/2026 DX9 R3: one world transform through stream 1, visually identical to a batch.
+// Ronin @cleanup 01/08/2026 §16: was Draw_Single_Rigid(..., reflective). Specialized to the one draw that
+// can't be batched -- needs m_reflectivePS + per-draw camera/view constants, and must land before its
+// batched pass-1 overlay. Detail: InstancingMergePlan.md §11e.
 bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	DX8PolygonRendererClass* renderer,
 	DWORD geometryFVF,
@@ -843,6 +831,9 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 
 	renderer->Render_Instanced(0);
 	++m_reflectiveDraws; // Ronin @diagnostic §16: [INST] refl= — draws actually issued, not attempts
+	Debug_Statistics::Record_Instanced_Draw(                 // see the note in Flush_Single_Rigid
+		(int)(renderer->Get_Index_Count() / 3),
+		(int)renderer->Get_Vertex_Index_Range());
 
 	// Ronin @feature DX9: clear the reflective pass-0 depth bias so it can't leak into later passes.
 	{
@@ -992,16 +983,10 @@ bool DX8InstanceManagerClass::Single_Rigid_Order_Less(const PendingSingleRigid& 
 	return false; // equal on the whole merge key -> these two can share one instanced draw
 }
 
-// Ronin @perf §16 DX9: can these two records ride ONE instanced DrawIndexedPrimitive? Equality is DERIVED
-// from the sort comparator (neither is less than the other) so the two can never drift apart — a merge
-// test that disagreed with the sort would silently stop merging, or merge across a state boundary.
-//
-// requireLightMatch is set when this run's diffuse resolved a normal map. The PS per-pixel Lambert delta
-// (RigidInstance_ps.hlsl) reads its lights from constants c3..c11, which are per-DRAW — so a normal-mapped
-// run may only collapse if every instance's extracted light payload is identical, in which case the shared
-// constants ARE each instance's own constants and the merged draw is pixel-identical to separate draws.
-// Non-normal-mapped records need no such check: their lighting is 100% VS-side, fed per-instance from
-// stream 1 (TEXCOORD4..12), so batch size is irrelevant to them.
+// Ronin @perf 30/07/2026 §16 DX9: can these two records ride ONE instanced draw? Equality is DERIVED from
+// the sort comparator so the two can't drift apart. requireLightMatch applies only to normal-mapped runs:
+// the PS reads its lights from per-DRAW constants c3..c11, so they may merge only on identical payloads.
+// Rationale: InstancingMergePlan.md §11a / §11c.1.
 bool DX8InstanceManagerClass::Single_Rigid_Records_Merge(
 	const PendingSingleRigid& a, const PendingSingleRigid& b, bool requireLightMatch)
 {
@@ -1332,6 +1317,12 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		}
 
 		rec.renderer->Render_Instanced(0);
+
+		// Ronin @diagnostic 02/08/2026 DX9: Render_Instanced bypasses DX8_RECORD_RENDER, so report the
+		// draw here. One instanced draw for runLen meshes = 1 call, runLen x the polygons.
+		Debug_Statistics::Record_Instanced_Draw(
+			(int)((rec.renderer->Get_Index_Count() / 3) * runLen),
+			(int)(rec.renderer->Get_Vertex_Index_Range() * runLen));
 
 		if (runLen > 1) {
 			++m_instancedDrawCalls;        // ONE instanced draw standing in for runLen individual draws

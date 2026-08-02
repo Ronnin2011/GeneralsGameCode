@@ -94,6 +94,7 @@
 #include "WW3D2/scene.h"
 #include "W3DDevice/GameClient/W3DPoly.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
+#include "WW3D2/statistics.h"   // Ronin @diagnostic 02/08/2026: per-subsystem draw attribution ([DRAW])
 
 #include "Common/UnitTimings.h" //Contains the DO_UNIT_TIMINGS define jba.
 
@@ -1878,6 +1879,9 @@ void HeightMapRenderObjClass::updateCenter(CameraClass *camera, const Vector3 *c
 
 void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 {
+	// Ronin @diagnostic 02/08/2026 DX9: attribute every draw issued below to "terrain" on the [DRAW] HUD.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_TERRAIN);
+
 	//USE_PERF_TIMER(Terrain_Render)
 
 	Int i,j,devicePasses;
@@ -2300,6 +2304,10 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 ///Performs additional terrain rendering pass, blending in the black shroud texture.
 void HeightMapRenderObjClass::renderTerrainPass(CameraClass *pCamera)
 {
+	// Ronin @diagnostic 02/08/2026 DX9: the visible shroud is drawn HERE (W3DShroud::render only updates
+	// the source texture). One draw per VB tile -- ~half of the old terrain bucket. Windowednew.md §18f-0.7.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_SHROUD);
+
 	DX8Wrapper::Set_Transform(D3DTS_WORLD,Matrix3D(true));
 
 	//Apply the shader and material

@@ -69,6 +69,7 @@
 #include "W3DDevice/GameClient/W3DPoly.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
+#include "WW3D2/statistics.h"   // Ronin @diagnostic 02/08/2026: per-subsystem draw attribution ([DRAW])
 
 
 
@@ -1535,6 +1536,9 @@ void WaterRenderObjClass::renderMirror(CameraClass *cam)
 //DECLARE_PERF_TIMER(Water)
 void WaterRenderObjClass::Render(RenderInfoClass & rinfo)
 {
+	// Ronin @diagnostic 02/08/2026 DX9: attribute every draw issued below to "water" on the [DRAW] HUD.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_WATER);
+
 	//USE_PERF_TIMER(Water)
 	if (TheTerrainRenderObject && !TheTerrainRenderObject->getMap())
 		return;	//no map has been loaded yet.
