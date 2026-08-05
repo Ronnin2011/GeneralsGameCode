@@ -79,6 +79,12 @@ extern const FrustumClass *shadowCameraFrustum;	//defined in W3DShadow.
 // (represented in degrees in the first number below)
 // is large enough the shadow info will be reconstructed
 const Real cosAngleToCare = cos ((0.2 * PI) / 180.0);	//1.5 degree difference
+
+// Ronin @bugfix 05/08/2026 DX9: how far a mesh may drift from the pose its silhouette was built at
+// before the motion stops counting as decorative sway and normal rebuilding resumes. THE tuning knob:
+// too small and awnings still snap, too large and a slowly-turning object carries a stale silhouette.
+const Real COS_MAX_SWAY_ANGLE = cos ((15.0 * PI) / 180.0);	//15 degrees
+
 #define MAX_SILHOUETTE_EDGES	1024	//maximum number of shadov volume sides or edges in silhoutte
 #define	SHADOW_EXTRUSION_BUFFER	0.1f		//amount to extend shadow volume beyond what's required to hit ground.
 #define AIRBORNE_UNIT_GROUND_DELTA 2.0f
@@ -1676,6 +1682,9 @@ W3DVolumetricShadow::W3DVolumetricShadow()
 		m_maxSilhouetteEntries[j] = 0;
 		m_silhouetteIndex[j] = nullptr;
 		m_shadowVolumeCount[j] = 0;
+		m_meshRestXform[j].Make_Identity();     // Ronin @bugfix 05/08/2026 DX9: sway gate
+		m_meshRestValid[j] = FALSE;
+		m_meshFreeRotating[j] = FALSE;
 	}
 
 	for( i = 0; i < MAX_SHADOW_LIGHTS; i++ )
@@ -2061,6 +2070,37 @@ void W3DVolumetricShadow::updateMeshVolume(Int meshIndex, Int lightIndex, const 
 	if (fabs(objectCenter.Z - prevXForm->operator [](2).W) > SHADOW_EXTRUSION_BUFFER)
 		isLightMoving = true;	//treat model rising just like rotation since volume needs update for longer extrusion.
 
+	// Ronin @bugfix 05/08/2026 DX9: DECORATIVE SWAY gate. A tent awning oscillates a few degrees about a
+	// rest pose, and on a coarse mesh (UBBLACKMKT.MESH34: 14 polys) each rebuild swaps 2 polys in or out
+	// of the silhouette -- a quarter of the outline -- so the shadow visibly jumps. The change is real,
+	// so no per-polygon filter can remove it; the only fix is to stop rebuilding for sway. The volume is
+	// object-space geometry drawn with the mesh's CURRENT transform (see RenderVolume), so a kept
+	// silhouette still sways smoothly with the awning -- it just stops re-snapping.
+	// Deliberately gates ONLY isMeshRotating: isLightMoving still fires for sun movement and for the
+	// object rising, which is why this does not repeat the cosAngleToCare experiment that starved
+	// moving props (that constant desensitised the light/position test too).
+	// Once a mesh leaves the cone it is genuinely turning, and the latch keeps it ungated forever after,
+	// so a vehicle pays at most one stale silhouette on its first turn.
+	if( isMeshRotating && !m_meshFreeRotating[meshIndex] )
+	{
+		if( !m_meshRestValid[meshIndex] )
+		{
+			m_meshRestXform[meshIndex] = objectToWorld;
+			m_meshRestValid[meshIndex] = TRUE;
+		}
+		else
+		{
+			Vector3 restAxis = (Vector3 &)(m_meshRestXform[meshIndex][0]);
+			Vector3 nowAxis  = (Vector3 &)(objectToWorld[0]);
+			restAxis.Normalize();
+			nowAxis.Normalize();
+			if( WWMath::Fabs( Vector3::Dot_Product( restAxis, nowAxis ) ) >= COS_MAX_SWAY_ANGLE )
+				isMeshRotating = false;                // decorative sway -- keep the silhouette we have
+			else
+				m_meshFreeRotating[meshIndex] = TRUE;  // genuinely turning -- never gate this mesh again
+		}
+	}
+
 	// reconstruct if needed
 	if (isLightMoving || isMeshRotating)
 	{
@@ -2411,6 +2451,13 @@ void W3DVolumetricShadow::buildSilhouette(Int meshIndex, Vector3 *lightPosObject
 
 	geomMesh = m_geometry->getMesh(meshIndex);
 
+	// Ronin @bugfix 04/08/2026 DX9: guarantee the face-normal cache exists before anything reads it.
+	// GetPolygonNormal asserts on m_polygonNormals, which is only built opportunistically -- once during
+	// neighbor setup, and on the RE-build path where a silhouette already exists. The planarity scan
+	// below reads normals earlier than the old facing loop did and exposed the hole. Idempotent (no-ops
+	// when already allocated) and buildSilhouette needs a normal for every poly regardless.
+	geomMesh->buildPolygonNormals();
+
 	//record where this meshes indices will begin.
 	meshEdgeStart=m_numSilhouetteIndices[meshIndex];
 
@@ -2448,7 +2495,9 @@ void W3DVolumetricShadow::buildSilhouette(Int meshIndex, Vector3 *lightPosObject
 		// dot the light vector with the normal of the polygon to see if the
 		// poly is visible from this location
 		//
-		if( Vector3::Dot_Product( lightVector, normal ) < 0.0f )
+		Bool isVisible = ( Vector3::Dot_Product( lightVector, normal ) < 0.0f );
+
+		if( isVisible )
 			BitSet( polyNeighbor->status, POLY_VISIBLE );
 
 	}
@@ -3333,7 +3382,16 @@ void W3DVolumetricShadow::deleteSilhouette( Int meshIndex )
 	m_silhouetteIndex[meshIndex] = nullptr;
 	m_numSilhouetteIndices[meshIndex] = 0;
 
+	// Ronin @bugfix 05/08/2026 DX9: the sway gate's rest pose belongs to the silhouette it was measured
+	// against. SetGeometry calls this when a model is swapped (upgrade, construction finishing, damage
+	// state), so without the reset the new geometry inherits the OLD mesh's rest orientation and its
+	// free-rotating latch -- gating a mesh that should rebuild, or refusing to gate one that should not.
+	m_meshRestXform[meshIndex].Make_Identity();
+	m_meshRestValid[meshIndex] = FALSE;
+	m_meshFreeRotating[meshIndex] = FALSE;
+
 }
+
 
 // resetSilhouette ============================================================
 // Resets the silhouette to empty, it does NOT free any of the memory

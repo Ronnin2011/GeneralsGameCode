@@ -185,4 +185,13 @@ class W3DVolumetricShadow	: public Shadow
 
 		Int	  m_numIndicesPerMesh[MAX_SHADOW_CASTER_MESHES];	///<silhouette indices from each mesh.
 
+		// Ronin @bugfix 05/08/2026 DX9: rest-pose gate for decorative sway. m_meshRestXform is the
+		// orientation a mesh's silhouette was first built at; while the mesh stays within
+		// COS_MAX_SWAY_ANGLE of it we treat the motion as sway and keep the silhouette we have.
+		// m_meshFreeRotating latches once a mesh leaves that cone, so genuinely turning geometry is
+		// never gated again. Per-mesh, NOT per-light -- the pose is light-independent.
+		Matrix4x4 m_meshRestXform[MAX_SHADOW_CASTER_MESHES];
+		Bool      m_meshRestValid[MAX_SHADOW_CASTER_MESHES];
+		Bool      m_meshFreeRotating[MAX_SHADOW_CASTER_MESHES];
+
 };

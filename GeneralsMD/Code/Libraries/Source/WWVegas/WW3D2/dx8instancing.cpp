@@ -20,7 +20,7 @@
 
 #include <d3d9.h>
 #include <d3dx9math.h>
-#include <algorithm>   // Ronin @perf §16 DX9: std::sort over the single-rigid draw-order index array
+#include <algorithm>   // Ronin @perf §16 DX9: std::stable_sort over the single-rigid draw-order index array
 
 #include "dx8instancing.h"
 #include "dx8wrapper.h"
@@ -1013,6 +1013,9 @@ bool DX8InstanceManagerClass::Single_Rigid_Records_Merge(
 // order is unchanged from today. O(N log N) over a compact array (~hundreds of entries per container) —
 // NOT a pointer-chasing list walk. That distinction is the whole point of the merge: the old bucket pass
 // paid a second cache-missing traversal of render_task_head for the same information.
+//
+// Ronin @bugfix 02/08/2026 DX9: stable_sort — deterministic order for records tying on the full merge
+// key. Did NOT fix the §19e.2 shimmer (that was volumetric shadows, §20); kept as correct on its own.
 void DX8InstanceManagerClass::Build_Single_Rigid_Order(unsigned count)
 {
 	for (unsigned k = 0; k < count; ++k) {
@@ -1032,7 +1035,7 @@ void DX8InstanceManagerClass::Build_Single_Rigid_Order(unsigned count)
 			++j;
 		}
 		if ((j - i) > 1) {
-			std::sort(m_srOrder + i, m_srOrder + j,
+			std::stable_sort(m_srOrder + i, m_srOrder + j,
 				[recs](unsigned lhs, unsigned rhs) { return Single_Rigid_Order_Less(recs[lhs], recs[rhs]); });
 		}
 		i = j;
