@@ -1308,28 +1308,11 @@ void PartitionCell::removeLooker(Int playerIndex)
 	// the increasing Algorithm: a -1 goes up to min(1,activeLevel), otherwise it just gets incremented
 	if( m_shroudLevel[playerIndex].m_currentShroud == -1 )
 		m_shroudLevel[playerIndex].m_currentShroud = min( m_shroudLevel[playerIndex].m_activeShroudLevel, (Short)1 );
-	else if( m_shroudLevel[playerIndex].m_currentShroud < 0 )
-	{
-		m_shroudLevel[playerIndex].m_currentShroud++;
-	}
-#if defined(RTS_DEBUG)
 	else
 	{
-		// Ronin @diag DX9: removeLooker on a cell with NO active looker (currentShroud >= 0). Replaces the
-		// old DEBUG_ASSERTCRASH: kept as a NON-FATAL, once-per-frame tripwire so debug builds still surface
-		// an over-remove reaching the danger zone (e.g. the known TSH Search-and-Destroy save/load
-		// reveal desync exercises this) WITHOUT the full-screen crash. No-op past here by design.
-		static UnsignedInt s_lastOverRemoveFrame = 0;
-		const UnsignedInt nowFrame = TheGameLogic ? TheGameLogic->getFrame() : 0;
-		if( nowFrame != s_lastOverRemoveFrame )
-		{
-			s_lastOverRemoveFrame = nowFrame;
-			DEBUG_LOG(( "removeLooker over-remove guard: cell %d,%d p%d CS=%d (no-op; known TSH S&D save/load regression)",
-				m_cellX, m_cellY, playerIndex, m_shroudLevel[playerIndex].m_currentShroud ));
-		}
+		DEBUG_ASSERTCRASH( m_shroudLevel[playerIndex].m_currentShroud < 0, ("Someone is RemoveLooker-ing on a cell that is not looked at.  This will make a permanent shroud blob.") );
+		m_shroudLevel[playerIndex].m_currentShroud++;
 	}
-#endif
-
 
 	CellShroudStatus newShroud = getShroudStatusForPlayer( playerIndex );
 
@@ -4744,14 +4727,6 @@ void PartitionManager::xfer( Xfer *xfer )
 		// refresh the shroud for the local player which will update the radar and everything
 		refreshShroudForLocalPlayer();
 
-		// Ronin @bugfix DX9: during the load xfer phase, setTeam runs per sub-team unit and each call
-		// queues a spurious pending-undo (unlook) via handleShroud (see dev note at the v2 block below).
-		// Those unlooks have NO matching add in the authoritative cell counts we just restored, so when
-		// they later drain they over-remove lookers -> cells go SHROUDED (black opaque fog) + removeLooker
-		// underflow. Discard them here; the v2 block below then restores EXACTLY the saved queue, leaving
-		// cell counts, each object's m_partitionLastLook, and the pending-undo queue mutually consistent
-		// (== the state at save time). Also correct for v1 loads, whose queue should simply be empty.
-		resetPendingUndoShroudRevealQueue();
 
 	}
 
@@ -4764,10 +4739,8 @@ void PartitionManager::xfer( Xfer *xfer )
 
 		if(xfer->getXferMode() == XFER_LOAD)
 		{
-			// have to remove this assert, because during load there is a setTeam call for each guy on a sub-team, and that results
-			// in a queued unlook, so we actually have stuff in here at the start.  I am fairly certain that setTeam should wait
-			// until loadPostProcess, but I ain't gonna change it now.
-//			DEBUG_ASSERTCRASH(m_pendingUndoShroudReveals.empty(), ("At load, we appear to not be in a reset state.") );
+			DEBUG_ASSERTCRASH(m_pendingUndoShroudReveals.empty(),
+				("There should be no pending undo shround reveals during loading; check if battle plan bonuses were applied."));
 
 			// I have to split this up though, since on Load I need to make new instances.
 			for( Int infoIndex = 0; infoIndex < queueSize; infoIndex++ )
