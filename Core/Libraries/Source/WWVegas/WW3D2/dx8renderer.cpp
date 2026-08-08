@@ -815,67 +815,9 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 // DX8InstanceManagerClass::Single_Rigid_Order_Less, the per-mesh gate is allowProgrammableRigidFallback
 // below, and lightenv matching is a payload memcmp that only applies to normal-mapped runs.
 
-// Ronin @feature 23/02/2026 DX9: Reuse VB/IB slots for cloned MeshModels that share geometry
-// When Make_Unique() clones a MeshModelClass, the Poly and Vertex ShareBuffers are ref-counted
-// shares pointing to identical data. Detect this and create polygon renderers that reference
-// the existing VB/IB offsets instead of duplicating vertices/indices.
-static MeshModelClass* Find_Registered_Mesh_Sharing_Geometry(MeshModelClass* mmc)
-{
-	// Walk the registered mesh list looking for a model that shares the same
-	// underlying Poly and Vertex ShareBuffer pointers (ref-counted identity).
-	MultiListIterator<MeshModelClass> it(&_RegisteredMeshList);
-	while (!it.Is_Done()) {
-		MeshModelClass* existing = it.Peek_Obj();
-		if (existing != mmc &&
-			existing->Get_Polygon_Count() == mmc->Get_Polygon_Count() &&
-			existing->Get_Vertex_Count() == mmc->Get_Vertex_Count() &&
-			existing->Get_Polygon_Array() == mmc->Get_Polygon_Array() &&  // Same ShareBuffer
-			existing->Get_Vertex_Array() == mmc->Get_Vertex_Array() &&    // Same ShareBuffer
-			existing->Get_Pass_Count() == mmc->Get_Pass_Count() &&
-			existing->Has_Polygon_Renderers())
-		{
-			// Ronin @bugfix DX9: sharing geometry buffers is NOT sufficient to share a texture
-			// category. Make_Unique clones housecolor/ZHC meshes that keep the same VB/IB ShareBuffers
-			// but carry a DIFFERENT per-pass material (HOUSECOLOR vertex color) or texture (ZHC recolor).
-			// The donor's polygon renderers live in the donor's texture category, which is keyed by
-			// (textures, material, shader). Reusing it draws the new mesh with the DONOR's color — e.g. a
-			// freshly-captured red oil derrick rendered through the old neutral/white material. Only reuse
-			// the donor when every pass matches material + textures + shader; otherwise fall through to
-			// normal registration so this mesh gets its own correctly-colored category.
-			bool renderStateMatches = true;
-			const int passCount = mmc->Get_Pass_Count();
-			for (int pass = 0; pass < passCount && renderStateMatches; ++pass)
-			{
-							// Inline the material-CRC compare (Equal_Material is defined later in this file).
-				const VertexMaterialClass* exMat  = existing->Peek_Single_Material(pass);
-				const VertexMaterialClass* newMat = mmc->Peek_Single_Material(pass);
-				const int exMatCrc  = exMat  ? exMat->Get_CRC()  : 0;
-				const int newMatCrc = newMat ? newMat->Get_CRC() : 0;
-				if (exMatCrc != newMatCrc ||
-					!(existing->Get_Single_Shader(pass) == mmc->Get_Single_Shader(pass)))
-				{
-					renderStateMatches = false;
-					break;
-				}
-				for (int stage = 0; stage < MeshMatDescClass::MAX_TEX_STAGES; ++stage)
-				{
-					if (existing->Peek_Single_Texture(pass, stage) != mmc->Peek_Single_Texture(pass, stage))
-					{
-						renderStateMatches = false;
-						break;
-					}
-				}
-			}
-
-			if (renderStateMatches)
-				return existing;
-		}
-
-		it.Next();
-	}
-	return nullptr;
-}
-
+// Ronin @bugfix 07/08/2026 §19e.1 DX9: Find_Registered_Mesh_Sharing_Geometry (23/02/2026) removed here.
+// Every mesh now registers its own texture category, keyed by Generate_Texture_Categories, which reads
+// the per-polygon arrays correctly.
 
 inline static bool Equal_Material(const VertexMaterialClass* mat1,const VertexMaterialClass* mat2)
 {
@@ -2991,26 +2933,10 @@ void DX8MeshRendererClass::Register_Mesh_Type(MeshModelClass* mmc)
 		*/
 		if (!_RegisteredMeshList.Contains(mmc)) {
 
-			// Ronin @feature 23/02/2026 DX9: Check for an already-registered mesh that shares
-			// the same geometry buffers (same Poly/Vertex ShareBuffer pointers). If found,
-			// clone its polygon renderers to reuse the same VB/IB offsets.
-			MeshModelClass* donor = Find_Registered_Mesh_Sharing_Geometry(mmc);
-			if (donor != nullptr) {
-				// Clone polygon renderers from the donor \97 they reference the same VB/IB ranges
-				DX8PolygonRendererListIterator pr_it(&donor->PolygonRendererList);
-				while (!pr_it.Is_Done()) {
-					DX8PolygonRendererClass* src_pr = pr_it.Peek_Obj();
-					DX8PolygonRendererClass* new_pr = W3DNEW DX8PolygonRendererClass(*src_pr, mmc);
-					// Add to the same texture category so it shares the VB/IB
-					src_pr->Get_Texture_Category()->Add_Polygon_Renderer(new_pr, src_pr);
-					pr_it.Next();
-				}
-
-				if (!mmc->PolygonRendererList.Is_Empty()) {
-					_RegisteredMeshList.Add_Tail(mmc);
-				}
-				return;
-			}
+			// Ronin @bugfix 07/08/2026 §19e.1 DX9: geometry sharing DELETED. It reused a donor mesh's
+			// texture category keyed only on Peek_Single_Material/Peek_Single_Texture, which are NULL on
+			// a per-polygon-array mesh — the guard compared nothing, so a captured building drew through
+			// the previous owner's material. Worth before removal: ONE donor reuse in a session (83 verts).
 
 			unsigned fvf=DX8FVFCategoryContainer::Define_FVF(mmc,enable_lighting);
 
