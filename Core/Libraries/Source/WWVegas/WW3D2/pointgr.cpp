@@ -775,6 +775,9 @@ int PointGroupClass::Get_Polygon_Count()
 static SimpleVecClass<unsigned long> remap;
 void PointGroupClass::Render(RenderInfoClass &rinfo)
 {
+	// Ronin @diagnostic 09/08/2026 §19b.2 DX9: point-sprite particle groups.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_FX_POINT);
+
 	/// @todo lorenzen asks: is particle culling in the shader perhaps faster than in DoParticles? Fix winding and find out...
 	// NB: the winding for pointgroups is wrong, but we
 	// are disabling culling for particles anyway

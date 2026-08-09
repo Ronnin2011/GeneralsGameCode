@@ -30,6 +30,7 @@
 #include "ww3d.h"
 #include "rinfo.h"
 #include "dx8wrapper.h"
+#include "statistics.h"
 #include "sortingrenderer.h"
 #include "WWMath/vp.h"
 #include "WWMath/Vector3i.h"
@@ -311,6 +312,10 @@ void StreakRendererClass::RenderStreak
 	unsigned int *personalities			/////////////// DIFFERENT FROM RENDER()
 )
 {
+	// Ronin @diagnostic 09/08/2026 §19b.2 DX9: streak trails. Render() at :193 is a stub — this is the
+	// one that draws.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_FX_LINE);
+
 	Matrix4x4 view;
 	DX8Wrapper::Get_Transform(D3DTS_VIEW,view);
 

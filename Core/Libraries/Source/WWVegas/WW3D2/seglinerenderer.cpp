@@ -41,6 +41,7 @@
 #include "ww3d.h"
 #include "rinfo.h"
 #include "dx8wrapper.h"
+#include "statistics.h"
 #include "sortingrenderer.h"
 #include "WWMath/vp.h"
 #include "WWMath/Vector3i.h"
@@ -217,6 +218,11 @@ void SegLineRendererClass::Render
 	Vector4 * rgbas
 )
 {
+	// Ronin @diagnostic 09/08/2026 §19b.2 DX9: tracers, lasers and projectile streams draw from here,
+	// one call per line. Note the sorting branch below routes into the sorted pool instead, so this
+	// bucket counts only the unsorted ones.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_FX_LINE);
+
 	Matrix4x4 view;
 	DX8Wrapper::Get_Transform(D3DTS_VIEW,view);
 

@@ -75,7 +75,17 @@ namespace Debug_Statistics
 		DRAW_SUBSYS_SORTED_ALPHA, // alpha == order-dependent -> must stay depth-sorted
 		DRAW_SUBSYS_SKIN,
 		DRAW_SUBSYS_RIGID_PROG,   // programmable rigid path (bypasses DX8Wrapper, self-reported)
+		// Ronin @diagnostic 09/08/2026 §19b.2 DX9: splitting `other`, which TRIPLES in combat
+		// (186 calm -> 604 in a fight, §22a). These two are the structural suspects.
+		DRAW_SUBSYS_RIGID_FFP,    // legacy FFP mesh draws — every mesh the programmable gate rejected
+		DRAW_SUBSYS_MATPASS,      // procedural material passes (object shroud / selection / tint)
+		// Ronin @diagnostic 09/08/2026 §19b.2 round 2 DX9: rigidFFP=17 + matpass=110 accounted for only
+		// 127 of ~604, so 478 is drawn OUTSIDE the mesh renderer. These three split it.
+		DRAW_SUBSYS_FX_LINE,      // SegLine / Streak renderers — tracers, lasers, projectile streams
+		DRAW_SUBSYS_FX_POINT,     // PointGroupClass — point-sprite particle groups
+		DRAW_SUBSYS_UI2D,         // Render2DClass — every 2D UI element goes through this
 		DRAW_SUBSYS_COUNT
+
 	};
 
 	void Set_Draw_Subsystem(DrawSubsystem s);

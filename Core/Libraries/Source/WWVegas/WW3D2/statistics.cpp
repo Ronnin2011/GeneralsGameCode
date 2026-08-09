@@ -288,7 +288,8 @@ static Debug_Statistics::DrawSubsystem current_draw_subsystem = Debug_Statistics
 static unsigned draw_calls_by_subsystem[Debug_Statistics::DRAW_SUBSYS_COUNT] = { 0 };
 static const char* const draw_subsystem_names[Debug_Statistics::DRAW_SUBSYS_COUNT] =
 {
-	"other", "terrain", "shadow", "water", "shroud", "sorted", "sortAdd", "sortAlpha", "skin", "rigid"
+	"other", "terrain", "shadow", "water", "shroud", "sorted", "sortAdd", "sortAlpha", "skin", "rigid",
+	"rigidFFP", "matpass", "fxLine", "fxPoint", "ui2D"
 };
 
 void Debug_Statistics::Set_Draw_Subsystem(DrawSubsystem s)

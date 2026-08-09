@@ -935,6 +935,10 @@ void DX8FVFCategoryContainer::Add_Visible_Material_Pass(MaterialPassClass * pass
 
 void DX8FVFCategoryContainer::Render_Procedural_Material_Passes()
 {
+	// Ronin @diagnostic 09/08/2026 §19b.2 DX9: one extra draw PER OBJECT per pass (shroud overlay,
+	// selection highlight, tint) — the shape that would explain `other` tripling with unit count.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_MATPASS);
+
 	// additional passes
 	MatPassTaskClass * mpr = visible_matpass_head;
 	MatPassTaskClass * last_mpr = nullptr;
@@ -988,6 +992,8 @@ void DX8RigidFVFCategoryContainer::Add_Delayed_Visible_Material_Pass(MaterialPas
 
 void DX8RigidFVFCategoryContainer::Render_Delayed_Procedural_Material_Passes()
 {
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_MATPASS);
+
 	if (!Any_Delayed_Passes_To_Render()) return;
 	AnyDelayedPassesToRender=false;
 
@@ -2382,6 +2388,11 @@ unsigned DX8TextureCategoryClass::Add_Mesh(
 
 void DX8TextureCategoryClass::Render()
 {
+	// Ronin @diagnostic 09/08/2026 §19b.2 DX9: anything drawn from here that did NOT take the
+	// programmable path is a legacy FFP mesh draw, and until now it landed in `other`. The programmable
+	// path self-reports through Record_Instanced_Draw and is unaffected by this scope.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_RIGID_FFP);
+
 #ifdef WWDEBUG
 	if (!WW3D::Expose_Prelit()) {
 #endif

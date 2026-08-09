@@ -1804,7 +1804,8 @@ static void drawSubsystemDrawReadout(Bool visible)
 
 	UnicodeString text;
 	// sortAdd = draws collapsible by state-batching outside the depth sort (Windowednew.md §19b.1).
-	text.format(L"[DRAW] total=%u  terr=%u  shroud=%u  sortAdd=%u  sortAlpha=%u  sortOth=%u  shadow=%u  rigid=%u  water=%u  skin=%u  other=%u",
+	// The `other` split lives on the [DRAW2] line below (§19b.2).
+	text.format(L"[DRAW] total=%u  terr=%u  shroud=%u  sortAdd=%u  sortAlpha=%u  sortOth=%u  shadow=%u  rigid=%u  water=%u  skin=%u",
 		total,
 		perFrame[Debug_Statistics::DRAW_SUBSYS_TERRAIN],
 		perFrame[Debug_Statistics::DRAW_SUBSYS_SHROUD],
@@ -1814,8 +1815,7 @@ static void drawSubsystemDrawReadout(Bool visible)
 		perFrame[Debug_Statistics::DRAW_SUBSYS_SHADOW],
 		perFrame[Debug_Statistics::DRAW_SUBSYS_RIGID_PROG],
 		perFrame[Debug_Statistics::DRAW_SUBSYS_WATER],
-		perFrame[Debug_Statistics::DRAW_SUBSYS_SKIN],
-		perFrame[Debug_Statistics::DRAW_SUBSYS_OTHER]);
+		perFrame[Debug_Statistics::DRAW_SUBSYS_SKIN]);
 	s_drawString->setText(text);
 
 	const Int   x = 3;
@@ -1823,6 +1823,28 @@ static void drawSubsystemDrawReadout(Bool visible)
 	const Color textColor = GameMakeColor(255, 160, 0, 255); // orange = draw attribution
 	const Color dropColor = GameMakeColor(0, 0, 0, 255);
 	s_drawString->draw(x, y, textColor, dropColor);
+
+	// Ronin @diagnostic 09/08/2026 §19b.2 DX9: second line for the `other` split — its own DisplayString
+	// so the [DRAW] line above stays readable in a screenshot. Throwaway with the split.
+	static DisplayString* s_drawString2 = NULL;
+	if (s_drawString2 == NULL) {
+		s_drawString2 = TheDisplayStringManager->newDisplayString();
+		if (s_drawString2 == NULL) {
+			return;
+		}
+		s_drawString2->setFont(TheFontLibrary->getFont("FixedSys", 8, FALSE));
+	}
+
+	UnicodeString text2;
+	text2.format(L"[DRAW2] rigidFFP=%u  matpass=%u  fxLine=%u  fxPoint=%u  ui2D=%u  other=%u",
+		perFrame[Debug_Statistics::DRAW_SUBSYS_RIGID_FFP],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_MATPASS],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_FX_LINE],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_FX_POINT],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_UI2D],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_OTHER]);
+	s_drawString2->setText(text2);
+	s_drawString2->draw(x, y + 15, textColor, dropColor);
 }
 
 //=============================================================================

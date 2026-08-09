@@ -51,6 +51,7 @@
 #include "WWMath/matrix4.h"
 #include "WWMath/matrix3d.h"
 #include "dx8wrapper.h"
+#include "statistics.h"
 #include "dx8indexbuffer.h"
 #include "dx8vertexbuffer.h"
 #include "sortingrenderer.h"
@@ -608,6 +609,9 @@ void	Render2DClass::Add_Outline(const RectClass& rect, float width, const RectCl
 // all state application through Apply_Render_State_Changes() called by Draw_Triangles().
 void Render2DClass::Render(void)
 {
+	// Ronin @diagnostic 09/08/2026 §19b.2 DX9: every 2D UI element funnels through here.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_UI2D);
+
 	if (!Indices.Count() || IsHidden) {
 		return;
 	}
