@@ -568,9 +568,23 @@ static void Apply_Render_State(RenderStateStruct& render_state)
 
 // ----------------------------------------------------------------------------
 
-// Ronin @perf 09/08/2026 §19b.1 DX9: ONE switch for the additive-batching experiment. false = today's
-// pure depth order. The correctness argument lives with the block inside Flush_Sorting_Pool.
-static const bool BATCH_ADDITIVE_SORTED_DRAWS = false;
+// Ronin @perf 09/08/2026 §19b.1 DX9: is this node's blend ORDER-INDEPENDENT? Additive (ONE/ONE and
+// SRC_ALPHA/ONE) is commutative, so those triangles may be reordered relative to each other. A DEPTH
+// WRITE is never commutative and disqualifies a node regardless of blend mode. Reads ShaderClass ONLY,
+// deliberately NOT the [DRAW] diagnostic enum: a correctness decision must not depend on instrumentation,
+// and this way the batching ports to trees that have no Debug_Statistics draw buckets.
+static bool Sorted_Node_Is_Order_Independent(const ShaderClass& shader)
+{
+	const ShaderClass::SrcBlendFuncType src = shader.Get_Src_Blend_Func();
+	const ShaderClass::DstBlendFuncType dst = shader.Get_Dst_Blend_Func();
+	const bool additive = (dst == ShaderClass::DSTBLEND_ONE &&
+		(src == ShaderClass::SRCBLEND_ONE || src == ShaderClass::SRCBLEND_SRC_ALPHA));
+	return additive && (shader.Get_Depth_Mask() == ShaderClass::DEPTH_WRITE_DISABLE);
+}
+
+// Ronin @perf 09/08/2026 §19b.1 DX9: ONE switch for the additive-batching experiment. false = pure
+// depth order. The correctness argument lives with the block inside Flush_Sorting_Pool.
+static const bool BATCH_ADDITIVE_SORTED_DRAWS = true;
 
 // Which pooled nodes are additive (commutative)? Rebuilt every flush. File-scope so the 4KB stays off
 // the stack, matching how overlapping_nodes[] is held.
@@ -730,12 +744,7 @@ void SortingRendererClass::Flush_Sorting_Pool()
 	// untouched -> the image is unchanged. Flip BATCH_ADDITIVE_SORTED_DRAWS to false to A/B it.
 	if (BATCH_ADDITIVE_SORTED_DRAWS) {
 		for (unsigned n = 0; n < overlapping_node_count; ++n) {
-			const ShaderClass& node_shader = overlapping_nodes[n]->sorting_state.shader;
-			// Additive blending commutes, but a DEPTH WRITE does not — if a node writes z, reordering it
-			// changes what later triangles test against. Blend class alone is not sufficient.
-			node_is_additive[n] =
-				(Classify_Sorted_Draw(node_shader) == Debug_Statistics::DRAW_SUBSYS_SORTED_ADD) &&
-				(node_shader.Get_Depth_Mask() == ShaderClass::DEPTH_WRITE_DISABLE);
+			node_is_additive[n] = Sorted_Node_Is_Order_Independent(overlapping_nodes[n]->sorting_state.shader);
 		}
 
 		unsigned run_start = 0;
