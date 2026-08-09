@@ -568,6 +568,21 @@ static void Apply_Render_State(RenderStateStruct& render_state)
 
 // ----------------------------------------------------------------------------
 
+// Ronin @perf 09/08/2026 §19b.1 DX9: ONE switch for the additive-batching experiment. false = today's
+// pure depth order. The correctness argument lives with the block inside Flush_Sorting_Pool.
+static const bool BATCH_ADDITIVE_SORTED_DRAWS = false;
+
+// Which pooled nodes are additive (commutative)? Rebuilt every flush. File-scope so the 4KB stays off
+// the stack, matching how overlapping_nodes[] is held.
+static bool node_is_additive[MAX_OVERLAPPING_NODES];
+
+// Group an additive run by node. stable_sort keeps each node's triangles in their existing relative
+// depth order, which costs nothing and keeps the result deterministic frame to frame.
+static bool Additive_Node_Less(const TempIndexStruct& a, const TempIndexStruct& b)
+{
+	return a.idx < b.idx;
+}
+
 void SortingRendererClass::Flush_Sorting_Pool()
 {
 	if (!overlapping_node_count) return;
@@ -705,6 +720,40 @@ void SortingRendererClass::Flush_Sorting_Pool()
 	}
 
 	Sort(tis, tis + overlapping_polygon_count);
+
+	// Ronin @perf 09/08/2026 §19b.1 DX9: additive blending (ONE/ONE, SRC_ALPHA/ONE) is COMMUTATIVE, so
+	// those triangles need no depth order relative to EACH OTHER. The z-sort above interleaves nodes and
+	// the draw loop below emits a draw on every node CHANGE — that is why ~740 particles cost ~470 draws.
+	// Within each maximal run of CONSECUTIVE additive triangles, re-sort by node so every node in that run
+	// collapses to ONE draw. A run ENDS at any non-additive triangle, so nothing is reordered across an
+	// alpha triangle: additive commutes with additive, NOT with alpha-over. Depth order between runs is
+	// untouched -> the image is unchanged. Flip BATCH_ADDITIVE_SORTED_DRAWS to false to A/B it.
+	if (BATCH_ADDITIVE_SORTED_DRAWS) {
+		for (unsigned n = 0; n < overlapping_node_count; ++n) {
+			const ShaderClass& node_shader = overlapping_nodes[n]->sorting_state.shader;
+			// Additive blending commutes, but a DEPTH WRITE does not — if a node writes z, reordering it
+			// changes what later triangles test against. Blend class alone is not sufficient.
+			node_is_additive[n] =
+				(Classify_Sorted_Draw(node_shader) == Debug_Statistics::DRAW_SUBSYS_SORTED_ADD) &&
+				(node_shader.Get_Depth_Mask() == ShaderClass::DEPTH_WRITE_DISABLE);
+		}
+
+		unsigned run_start = 0;
+		while (run_start < overlapping_polygon_count) {
+			if (!node_is_additive[tis[run_start].idx]) {
+				++run_start;
+				continue;
+			}
+			unsigned run_end = run_start + 1;
+			while (run_end < overlapping_polygon_count && node_is_additive[tis[run_end].idx]) {
+				++run_end;
+			}
+			if (run_end - run_start > 1) {
+				std::stable_sort(tis + run_start, tis + run_end, Additive_Node_Less);
+			}
+			run_start = run_end;
+		}
+	}
 
 	// TheSuperHackers @fix stephanmeesters 10/06/2026
 	// Split rendering into chunks to prevent a crash when exceeding the 16-bit index buffer limit.
