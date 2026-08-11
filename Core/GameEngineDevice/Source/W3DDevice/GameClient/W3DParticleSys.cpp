@@ -245,7 +245,19 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			flushParticleBatch();
 		}
 
-		const Int startCount = count;
+		// Ronin @bugfix 10/08/2026 §23e DX9: adopt the batch key BEFORE filling, so the fill loop can
+		// flush mid-system and carry on. MAX_POINTS_PER_GROUP is 512 while a busy frame carries ~1900
+		// particles, so the shared buffer fills ~4x per frame; without this, whichever system straddles a
+		// boundary loses its uncopied remainder. MEASURED IMPACT IS SMALL — ~4.3 particles per system means
+		// ~10 lost of ~1900 per frame (0.5%), below the on-screen counter's noise, and no visible artifact.
+		// Fixed on correctness grounds: a scene with a few LARGE systems would drop a visible chunk.
+		if (canBatch && batchTexture == nullptr) {
+			batchTexture = texture;
+			batchTexture->Add_Ref();   // batchTexture owns its own ref; `texture` keeps the Get_Texture one
+			batchShaderType = sys->getShaderType();
+			batchBillboard  = sys->shouldBillboard();
+		}
+		Int startCount = count;
 
 		// build W3D particle buffer
 		Vector3 *posArray = m_posBuffer->Get_Array();
@@ -293,8 +305,20 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 
 			angleArray[count] = (uint8)(p->getAngle() * 255.0f / (2.0f * PI));
 
-			if (++count == MAX_POINTS_PER_GROUP)
-				break;
+			if (++count == MAX_POINTS_PER_GROUP) {
+				if (!BATCH_PARTICLE_SYSTEMS || !canBatch) {
+					break;   // unbatched paths keep the original truncate-at-512-per-system behaviour
+				}
+				// Buffer full mid-system: draw what we have and carry on with the SAME system so no
+				// particle is dropped. Bank the stat first — the flush resets count to 0.
+				m_onScreenParticleCount += (count - startCount);
+				flushParticleBatch();
+				batchTexture = texture;
+				batchTexture->Add_Ref();
+				batchShaderType = sys->getShaderType();
+				batchBillboard  = sys->shouldBillboard();
+				startCount = 0;
+			}
 		}
 
 		if ( count == startCount ) {
@@ -388,7 +412,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 					m_onScreenParticleCount += (count - startCount);
 					count = startCount;
 				}
-				
+
 				else
 				{
 					// Ronin @perf 09/08/2026 §19b.2 DX9: DO NOT DRAW HERE. The points are already sitting in

@@ -969,7 +969,7 @@ void W3DDisplay::init()
 	// measuring perf. Force the StatDebugDisplay callback on for release testing. The whole
 	// gather/draw chain (gatherDebugStats / drawDebugStats) already runs in release; only this
 	// switch was gated. Set to false before shipping.
-	static const bool RONIN_FORCE_STAT_HUD = false;
+	static const bool RONIN_FORCE_STAT_HUD = true;
 	if( TheGlobalData->m_displayDebug || RONIN_FORCE_STAT_HUD )
 	{
 		m_debugDisplayCallback = StatDebugDisplay;
