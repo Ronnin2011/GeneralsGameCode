@@ -289,12 +289,22 @@ static unsigned draw_calls_by_subsystem[Debug_Statistics::DRAW_SUBSYS_COUNT] = {
 static const char* const draw_subsystem_names[Debug_Statistics::DRAW_SUBSYS_COUNT] =
 {
 	"other", "terrain", "shadow", "water", "shroud", "sorted", "sortAdd", "sortAlpha", "skin", "rigid",
-	"rigidFFP", "matpass", "fxLine", "fxPoint", "ui2D"
+	"rigidFFP", "matpass", "fxLine", "fxPoint", "ui2D", "shadowMap"
 };
+
+// Ronin @diagnostic 12/08/2026 §29 DX9: when locked, nested tags cannot override. The shadow-map
+// depth pass is a whole scene render whose draws all re-tag themselves as rigid/terrain.
+static bool draw_subsystem_locked = false;
+
+void Debug_Statistics::Lock_Draw_Subsystem(bool locked)
+{
+	draw_subsystem_locked = locked;
+}
 
 void Debug_Statistics::Set_Draw_Subsystem(DrawSubsystem s)
 {
-	current_draw_subsystem = s;
+	if (!draw_subsystem_locked)
+		current_draw_subsystem = s;
 }
 
 Debug_Statistics::DrawSubsystem Debug_Statistics::Get_Draw_Subsystem()
@@ -319,7 +329,11 @@ void Debug_Statistics::Record_Instanced_Draw(int pcount, int vcount)
 	dx8_polygons += pcount;
 	dx8_vertices += vcount;
 	draw_calls++;
-	draw_calls_by_subsystem[DRAW_SUBSYS_RIGID_PROG]++;
+	// Ronin @bugfix 19/08/2026 DX9: §29h-8. This hardcoded DRAW_SUBSYS_RIGID_PROG and ignored
+	// Lock_Draw_Subsystem, so every programmable-rigid draw issued INSIDE the shadow depth pass was
+	// counted as `rigid`.
+	draw_calls_by_subsystem[draw_subsystem_locked ? current_draw_subsystem
+	                                              : DRAW_SUBSYS_RIGID_PROG]++;
 }
 
 void Debug_Statistics::Record_DX8_Skin_Polys_And_Vertices(int pcount,int vcount)
@@ -328,7 +342,9 @@ void Debug_Statistics::Record_DX8_Skin_Polys_And_Vertices(int pcount,int vcount)
 	dx8_skin_vertices+=vcount;
 	dx8_skin_renders++;
 	draw_calls++;
-	draw_calls_by_subsystem[DRAW_SUBSYS_SKIN]++;
+	// Same flaw as Record_Instanced_Draw above, smaller (skin 3 -> 6 with the map on).
+	draw_calls_by_subsystem[draw_subsystem_locked ? current_draw_subsystem
+	                                              : DRAW_SUBSYS_SKIN]++;
 }
 
 void Debug_Statistics::Record_DX8_Polys_And_Vertices(int pcount,int vcount,const ShaderClass& shader)

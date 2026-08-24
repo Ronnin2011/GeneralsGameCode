@@ -84,11 +84,20 @@ namespace Debug_Statistics
 		DRAW_SUBSYS_FX_LINE,      // SegLine / Streak renderers — tracers, lasers, projectile streams
 		DRAW_SUBSYS_FX_POINT,     // PointGroupClass — point-sprite particle groups
 		DRAW_SUBSYS_UI2D,         // Render2DClass — every 2D UI element goes through this
+		// Ronin @diagnostic 12/08/2026 §29 DX9: the depth pass is a second scene render; without its
+		// own bucket its draws hide inside rigid/terrain.
+		DRAW_SUBSYS_SHADOWMAP,    // shadow-map DEPTH pass — casters only
+		// Ronin @diagnostic 15/08/2026 §29h DX9: the terrain RECEIVER pass was sharing the bucket above,
+		// so shadowMap= was casters PLUS one draw per terrain VB tile — it moved 250->350 on zoom with no
+		// change in casters at all. Separate them, or the caster count cannot be read.
+		DRAW_SUBSYS_SHADOWRECV,   // terrain shadow receiver pass — one draw per VB tile
 		DRAW_SUBSYS_COUNT
 
 	};
 
 	void Set_Draw_Subsystem(DrawSubsystem s);
+	// While locked, Set_Draw_Subsystem is a no-op — a nested renderer cannot steal the tag (§29).
+	void Lock_Draw_Subsystem(bool locked);
 	DrawSubsystem Get_Draw_Subsystem();
 
 	// Monotonic. NOT reset by Begin/End_Statistics -- those are bracketed twice per frame and would
@@ -104,10 +113,12 @@ namespace Debug_Statistics
 	class DrawSubsystemScope
 	{
 	public:
-		explicit DrawSubsystemScope(DrawSubsystem s) : m_prev(Get_Draw_Subsystem()) { Set_Draw_Subsystem(s); }
-		~DrawSubsystemScope() { Set_Draw_Subsystem(m_prev); }
+		explicit DrawSubsystemScope(DrawSubsystem s, bool lock = false) : m_prev(Get_Draw_Subsystem())
+		{ Set_Draw_Subsystem(s); if (lock) Lock_Draw_Subsystem(true); m_locked = lock; }
+		~DrawSubsystemScope() { if (m_locked) Lock_Draw_Subsystem(false); Set_Draw_Subsystem(m_prev); }
 	private:
 		DrawSubsystem m_prev;
+		bool m_locked;
 	};
 
 	void Begin_Statistics();
