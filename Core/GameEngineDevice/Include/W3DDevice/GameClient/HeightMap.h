@@ -118,6 +118,8 @@ protected:
 	///update vertex buffers associated with the given rectangle
 	void initDestAlphaLUT();	///<initialize water depth LUT stored in m_destAlphaTexture
 	void renderTerrainPass(CameraClass *pCamera);	///< renders additional terrain pass.
+	/// Ronin @feature 14/08/2026 DX9: §29h shadow-map modulate pass over the terrain tiles.
+	void renderTerrainShadowPass(CameraClass *pCamera);
 
 	// @feature Ronin 29/04/2026 New and optional, continuous weight-atlas pipeline.
 	void renderPrimaryBlendControlPass();

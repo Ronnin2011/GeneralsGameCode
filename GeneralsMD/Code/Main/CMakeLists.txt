@@ -129,6 +129,16 @@ if(MSVC)
             "${SHADER_SOURCE_DIR}/ReflectiveRigid.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/ReflectiveRigid.pso"
         COMMENT "Auto-deploying to Zero Hour installation folder"
+        # Ronin @build 14/08/2026 Deploy terrain shadows pixel shader to shaders subfolder.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TerrainShadow.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TerrainShadow.pso"
+        COMMENT "Auto-deploying to Zero Hour installation folder"
+        # Ronin @build 14/08/2026 Deploy terrain shadows vertex shader to shaders subfolder.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TerrainShadow.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TerrainShadow.vso"
+        COMMENT "Auto-deploying to Zero Hour installation folder"
 
     )
     

@@ -83,6 +83,7 @@ enum
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
+#include "W3DDevice/GameClient/W3DShadowMapState.h"
 #include "WW3D2/camera.h"
 #include "WW3D2/dx8wrapper.h"
 #include "WW3D2/dx8renderer.h"
@@ -308,9 +309,30 @@ void W3DTreeBuffer::cull(const CameraClass * camera)
 	float z = zmod * camera_matrix[2][2] ;
 	m_cameraLookAtVector.Set(x,y,z);
 
+	// Ronin @bugfix 15/08/2026 DX9: §29h-4.4. Casters are culled against the VIEW (§29h-4.3), so a tree
+	// just off-screen dropped out and stopped casting onto ground that IS visible — the gap at the
+	// screen edge. Keep a tree if the volume its bounds SWEEP along the light is visible. Runs only
+	// while a map is being produced; with shadow maps off this is the original test exactly.
+	Vector3 lightTravel(TheTerrainShadowPass.lightTravelDir[0],
+						TheTerrainShadowPass.lightTravelDir[1],
+						TheTerrainShadowPass.lightTravelDir[2]);
+	const Bool sweepCasters = (TheTerrainShadowPass.active && lightTravel.Length2() > 1e-6f);
+	Real lightDrop = lightTravel.Z;
+	if (lightDrop < 0.0f)  lightDrop = -lightDrop;
+	if (lightDrop < 0.05f) lightDrop = 0.05f;	// near-horizontal sun, or reach runs to infinity
+
 	for (curTree=0; curTree<m_numTrees; curTree++) {
 		Bool doKey = false;	// We calculate the key when a tree becomes visible.
 		Bool visible = !camera->Cull_Sphere(m_trees[curTree].bounds);
+		if (!visible && sweepCasters) {
+			// A caster this tall throws its shadow `reach` away along the light. A sphere at the
+			// midpoint of that sweep, grown by half its length, encloses the whole swept capsule.
+			const Real reach = (2.0f * m_trees[curTree].bounds.Radius) / lightDrop;
+			SphereClass swept = m_trees[curTree].bounds;
+			swept.Center += lightTravel * (reach * 0.5f);
+			swept.Radius += reach * 0.5f;
+			visible = !camera->Cull_Sphere(swept);
+		}
 		if (visible != m_trees[curTree].visible) {
 			m_trees[curTree].visible=visible;
 			m_anythingChanged = true;
@@ -1464,12 +1486,22 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 		return;
 	}
 
+	// Ronin @bugfix 14/08/2026 DX9: §29h-4.3. The shadow-map depth pass is a SECOND scene render with
+	// the LIGHT camera. Trees must still DRAW here — they have to cast — but the pass must not touch
+	// one piece of per-frame state the main pass consumes: the cull token, the visible flags, the VB
+	// rebuild, the sway/topple stepping, the decal queue. Culling against the light frustum ate
+	// m_updateAllKeys (cull() clears it at :328) and rebuilt the VB from the light-visible set, so the
+	// main pass never re-culled — that was the popping.
+	const Bool depthPass = TheTerrainShadowPass.inDepthPass;
+
 	// if breeze changes, always process the full update, even if not visible,
 	// so that things offscreen won't 'pop' when first viewed
-	const BreezeInfo& info = TheScriptEngine->getBreezeInfo();
-	if (info.m_breezeVersion != m_curSwayVersion)
-	{
-		updateSway(info);
+	if (!depthPass) {
+		const BreezeInfo& info = TheScriptEngine->getBreezeInfo();
+		if (info.m_breezeVersion != m_curSwayVersion)
+		{
+			updateSway(info);
+		}
 	}
 
 	// TheSuperHackers @tweak The tree sway, topple and sink time steps are now decoupled from the render update.
@@ -1478,9 +1510,14 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 	Int i;
 	for (i=0; i<MAX_SWAY_TYPES; i++)
 	{
-		m_curSwayOffset[i] += m_curSwayStep[i] * timeScale;
-		if (m_curSwayOffset[i] > NUM_SWAY_ENTRIES-1) {
-			m_curSwayOffset[i] -= NUM_SWAY_ENTRIES-1;
+		// Ronin @bugfix 14/08/2026 DX9: §29h-4.3 advance ONCE per frame, main pass only. Two renders
+		// per frame stepped sway and sink at double rate. Reading without advancing also keeps the
+		// caster and the drawn tree in the SAME pose, so the shadow cannot drift off its trunk.
+		if (!depthPass) {
+			m_curSwayOffset[i] += m_curSwayStep[i] * timeScale;
+			if (m_curSwayOffset[i] > NUM_SWAY_ENTRIES-1) {
+				m_curSwayOffset[i] -= NUM_SWAY_ENTRIES-1;
+			}
 		}
 		Int minOffset = REAL_TO_INT_FLOOR(m_curSwayOffset[i]);
 		if (minOffset>=0 && minOffset+1<NUM_SWAY_ENTRIES) {
@@ -1491,7 +1528,11 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 		}
 	}
 
-	m_isTerrainPass = false;
+	// Ronin @bugfix 14/08/2026 DX9: §29h-4.3 leave the latch SET in the depth pass — the main pass
+	// still has to draw, and terrain raises this once per scene render.
+	if (!depthPass) {
+		m_isTerrainPass = false;
+	}
 
 	if (m_needToUpdateTexture) {
 		m_needToUpdateTexture = false;
@@ -1500,13 +1541,26 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 	if (m_treeTexture==nullptr) {
 		return;
 	}
+
+	// Ronin @bugfix 15/08/2026 DX9: §29h-4.3 the depth pass MUST run the cull + rebuild — that is what
+	// puts tree geometry in the light view, and skipping it is what stopped the casting. But it must
+	// cull against the MAIN camera, not the light: the light fit is radius-quantised to 64 and
+	// texel-snapped (§29b), so it STEPS as the camera moves and edge trees drop out of the caster set —
+	// that is the shadow blinking. Both passes now agree on the visible set, so neither has to redo it.
+	const CameraClass *cullCamera = camera;
+	if (depthPass && TheTerrainShadowPass.sceneCamera != NULL) {
+		cullCamera = TheTerrainShadowPass.sceneCamera;
+	}
 	if (m_updateAllKeys) {
-		cull(camera);
+		cull(cullCamera);
 	}
 
 	Int curTree;
 	// Draw tree shadows.
-	if (m_shadow && TheW3DProjectedShadowManager && TheGlobalData->m_useShadowDecals) {
+	// Ronin @feature 14/08/2026 DX9: §29h-4.2 no 2D blob when the shadow map already casts these
+	// trees — that IS the double shadow. And never queue decals from inside the depth pass.
+	if (m_shadow && TheW3DProjectedShadowManager && TheGlobalData->m_useShadowDecals &&
+		!depthPass && !TheTerrainShadowPass.active) {
 		for (curTree=0; curTree<m_numTrees; curTree++) {
 			Int type = m_trees[curTree].treeType;
 			if (type<0) { // deleted.
@@ -1528,33 +1582,35 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 	}
 
 	// Update pushed aside and toppling trees.
-	for (curTree=0; curTree<m_numTrees; curTree++) {
-		Int type = m_trees[curTree].treeType;
-		if (type<0) { // deleted.
-			continue;
-		}
-		const W3DTreeDrawModuleData *moduleData = m_treeTypes[type].m_data;
-		if(m_trees[curTree].m_toppleState == TOPPLE_FALLING ||
-			 m_trees[curTree].m_toppleState == TOPPLE_FOGGED) {
-			updateTopplingTree(m_trees+curTree, timeScale);
-		} else if(m_trees[curTree].m_toppleState == TOPPLE_DOWN) {
-			if (moduleData->m_killWhenToppled) {
-				if (m_trees[curTree].m_sinkFramesLeft <= 0.0f) {
-					m_trees[curTree].treeType = DELETED_TREE_TYPE; // delete it. [7/11/2003]
-					m_anythingChanged = true; // need to regenerate trees. [7/11/2003]
-				}
-				const Real sinkDistancePerFrame = moduleData->m_sinkDistance / moduleData->m_sinkFrames;
-				m_trees[curTree].m_sinkFramesLeft -= timeScale;
-				m_trees[curTree].location.Z -= sinkDistancePerFrame * timeScale;
-				m_trees[curTree].m_mtx.Set_Translation(m_trees[curTree].location);
+	if (!depthPass) {
+		for (curTree=0; curTree<m_numTrees; curTree++) {
+			Int type = m_trees[curTree].treeType;
+			if (type<0) { // deleted.
+				continue;
 			}
-		} else if (m_trees[curTree].pushAsideDelta!=0.0f) {
-			m_trees[curTree].pushAside += m_trees[curTree].pushAsideDelta;
-			if (m_trees[curTree].pushAside>=1.0f) {
-				m_trees[curTree].pushAsideDelta = -1.0f/(Real)moduleData->m_framesToMoveInward;
-			} else if (m_trees[curTree].pushAside<=0.0f) {
-				m_trees[curTree].pushAsideDelta = 0.0f;
-				m_trees[curTree].pushAside = 0.0f;
+			const W3DTreeDrawModuleData *moduleData = m_treeTypes[type].m_data;
+			if(m_trees[curTree].m_toppleState == TOPPLE_FALLING ||
+				 m_trees[curTree].m_toppleState == TOPPLE_FOGGED) {
+				updateTopplingTree(m_trees+curTree, timeScale);
+			} else if(m_trees[curTree].m_toppleState == TOPPLE_DOWN) {
+				if (moduleData->m_killWhenToppled) {
+					if (m_trees[curTree].m_sinkFramesLeft <= 0.0f) {
+						m_trees[curTree].treeType = DELETED_TREE_TYPE; // delete it. [7/11/2003]
+						m_anythingChanged = true; // need to regenerate trees. [7/11/2003]
+					}
+					const Real sinkDistancePerFrame = moduleData->m_sinkDistance / moduleData->m_sinkFrames;
+					m_trees[curTree].m_sinkFramesLeft -= timeScale;
+					m_trees[curTree].location.Z -= sinkDistancePerFrame * timeScale;
+					m_trees[curTree].m_mtx.Set_Translation(m_trees[curTree].location);
+				}
+			} else if (m_trees[curTree].pushAsideDelta!=0.0f) {
+				m_trees[curTree].pushAside += m_trees[curTree].pushAsideDelta;
+				if (m_trees[curTree].pushAside>=1.0f) {
+					m_trees[curTree].pushAsideDelta = -1.0f/(Real)moduleData->m_framesToMoveInward;
+				} else if (m_trees[curTree].pushAside<=0.0f) {
+					m_trees[curTree].pushAsideDelta = 0.0f;
+					m_trees[curTree].pushAside = 0.0f;
+				}
 			}
 		}
 	}

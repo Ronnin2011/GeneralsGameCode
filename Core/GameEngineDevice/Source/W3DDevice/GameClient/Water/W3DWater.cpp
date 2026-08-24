@@ -37,6 +37,7 @@
 
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/W3DShadowMapState.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/W3DWaterTracks.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
@@ -1552,6 +1553,14 @@ void WaterRenderObjClass::Render(RenderInfoClass & rinfo)
 		return;
 	}
 #endif
+	// Ronin @feature 15/08/2026 DX9: §29i depth-pass trim. Water has no business in a shadow DEPTH
+	// map — it costs ~191 draws there, and because it flushes AFTER the mesh renderer
+	// (W3DScene.cpp:879 vs :859) it paints over every caster in the colour target, which is exactly
+	// what the debug overlay shows us. Trimming it is wanted anyway; it also tests whether the ship
+	// was in the map all along and simply hidden behind water in the overlay.
+	if (TheTerrainShadowPass.inDepthPass)
+		return;
+
 	if (ShaderClass::Is_Backface_Culling_Inverted())
 		return;	//the water object will not reflect in itself, so don't do anything if rendering a mirror.
 

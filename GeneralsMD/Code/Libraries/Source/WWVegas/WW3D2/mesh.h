@@ -158,6 +158,16 @@ public:
 	void								Set_Debugger_Disable(bool b) { IsDisabledByDebugger=b; }
 	bool								Is_Disabled_By_Debugger() const { return IsDisabledByDebugger; }
 
+	// Ronin @perf 20/08/2026 DX9: §29j.8. Per-mesh gate for the static shadow bake — a building's bulk
+	// is baked while its flag or turret keeps drawing normally.
+	void								Set_Baked_Shadow_Caster(bool b) { BakedShadowCaster = b; }
+	bool								Is_Baked_Shadow_Caster() const { return BakedShadowCaster; }
+	// Sticky: a mesh proven to move is never baked again. The bit dies with the mesh, so no list.
+	void								Set_Shadow_Caster_Mover(bool b) { ShadowCasterMover = b; }
+	bool								Is_Shadow_Caster_Mover() const { return ShadowCasterMover; }
+	static void						Skip_Baked_Shadow_Casters(bool b) { s_SkipBakedShadowCasters = b; }
+	static bool						s_SkipBakedShadowCasters;
+
 protected:
 
 	virtual void					Add_Dependencies_To_List (DynamicVectorClass<StringClass> &file_list, bool textures_only = false) override;
@@ -170,6 +180,8 @@ protected:
 	void								clone_materials(const MeshClass & srcmesh);
 
 	MeshModelClass *				Model;
+	bool								BakedShadowCaster;		// §29j.8 — in the static shadow bake
+	bool								ShadowCasterMover;		// §29j.8 — proven to move, never bake
 	DecalMeshClass *				DecalMesh;
 
 	LightEnvironmentClass *		LightEnvironment;		// cached pointer to the light environment for this mesh

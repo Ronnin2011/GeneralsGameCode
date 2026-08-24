@@ -106,6 +106,8 @@ GlobalData* GlobalData::m_theOriginal = nullptr;
 	{ "DownwindAngle",							INI::parseReal,				nullptr,			offsetof( GlobalData, m_downwindAngle ) },
 	{ "UseShadowVolumes",						INI::parseBool,				nullptr,			offsetof( GlobalData, m_useShadowVolumes ) },
 	{ "UseShadowDecals",						INI::parseBool,				nullptr,			offsetof( GlobalData, m_useShadowDecals ) },
+	// Ronin @feature 23/08/2026 DX9: §29i.2. GameData.ini default; Options.ini overrides it later.
+	{ "ShadowQuality",							INI::parseInt,				nullptr,			offsetof( GlobalData, m_shadowMapQuality ) },
 	{ "TextureReductionFactor",			INI::parseInt,				nullptr,			offsetof( GlobalData, m_textureReductionFactor ) },
 	{ "UseBehindBuildingMarker",		INI::parseBool,				nullptr,			offsetof( GlobalData, m_enableBehindBuildingMarkers ) },
 	{ "WaterPositionX",							INI::parseReal,				nullptr,			offsetof( GlobalData, m_waterPositionX ) },
@@ -672,6 +674,9 @@ GlobalData::GlobalData()
 	m_downwindAngle = ( -0.785f );//Northeast!
 	m_useShadowVolumes = FALSE;
 	m_useShadowDecals = FALSE;
+	// Ronin @feature 24/08/2026 DX9: §29i.2. 2 = High = 2048 / 1200, i.e. exactly what shipped before the
+	// ladder existed, so an install with no ShadowQuality key does not change behaviour. 
+	m_shadowMapQuality = 2;
 	m_textureReductionFactor = -1;
 	m_enableBehindBuildingMarkers = TRUE;
 	m_scriptDebug = FALSE;
@@ -1246,6 +1251,9 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	// pre-existing installs without these keys keep their previous behavior.
 	TheWritableGlobalData->m_useS20PerMaterialSplat = optionPref.getSplatPerMaterialEnabled();
 	TheWritableGlobalData->m_useTerrainPOM = optionPref.getTerrainPOMEnabled();
+	// Ronin @feature 23/08/2026 DX9: §29i.2. Same rule — Options.ini wins over GameData.ini, and an
+	// absent key returns the value GameData already parsed, so the two sources compose.
+	TheWritableGlobalData->m_shadowMapQuality = optionPref.getShadowQuality(TheGlobalData->m_shadowMapQuality);
 
 
 	Int val=optionPref.getGammaValue();

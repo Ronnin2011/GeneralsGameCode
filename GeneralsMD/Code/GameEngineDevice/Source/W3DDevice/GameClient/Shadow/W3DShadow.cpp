@@ -53,6 +53,8 @@
 #include "WW3D2/statistics.h"
 #include "Common/Debug.h"
 #include "Common/PerfTimer.h"
+// Ronin @feature 12/08/2026 DX9: §29 shadow-map path, gated by TheUseShadowMaps.
+#include "W3DDevice/GameClient/W3DShadowMap.h"
 
 #define SUN_DISTANCE_FROM_GROUND	10000.0f	//distance of sun (our only light source).
 
@@ -94,9 +96,15 @@ void DoShadows(RenderInfoClass & rinfo, Bool stencilPass)
 
 			//This function gets called many times by the W3D renderer
 			//so we use this flag to make sure shadows rendered only once per frame.
-			if (TheW3DShadowManager->isShadowScene())
+			// Ronin @feature 12/08/2026 DX9: §29 — suppress volumes while the map drives, or every
+			// object gets shadowed twice and the A/B is unreadable.
+			const Bool shadowMapsDriving = (TheUseShadowMaps && W3DShadowMap::isAvailable()
+											&& !TheKeepShadowVolumesWithMaps);
+
+			if (TheW3DShadowManager->isShadowScene() && !shadowMapsDriving)
 				TheW3DVolumetricShadowManager->renderShadows(projectionCount);
 	}
+
 	if (TheW3DShadowManager && stencilPass)	//reset so no more shadow processing this frame.
 		TheW3DShadowManager->queueShadows(FALSE);
 
@@ -146,6 +154,14 @@ Bool W3DShadowManager::init()
 			result = TRUE;
 	}
 
+	// Ronin @feature 12/08/2026 DX9: §29 phase 0 — probe ALWAYS (the log is the deliverable);
+	// allocate the target only when the path is switched on.
+	W3DShadowMap::probeCapabilities();
+	// Ronin @feature 23/08/2026 DX9: §29i.2. applyQuality reads TheGlobalData->m_shadowMapQuality,
+	// sets TheUseShadowMaps and creates the target at the matching resolution — it replaces both the
+	// old unconditional init() and the hardcoded TheUseShadowMaps = TRUE default.
+	W3DShadowMap::applyQuality();
+
 	return result;
 }
 
@@ -169,6 +185,11 @@ Bool W3DShadowManager::ReAcquireResources()
 	if (TheW3DProjectedShadowManager && !TheW3DProjectedShadowManager->ReAcquireResources())
 		result = FALSE;
 
+	// Ronin @feature 12/08/2026 DX9: §29 — the shadow map is D3DPOOL_DEFAULT, so it rides the same
+	// release/reacquire pair as the other two managers (§27a).
+	if (TheUseShadowMaps)
+		W3DShadowMap::reacquireResources();
+
 	return result;
 }
 
@@ -178,6 +199,9 @@ void W3DShadowManager::ReleaseResources()
 		TheW3DVolumetricShadowManager->ReleaseResources();
 	if (TheW3DProjectedShadowManager)
 		TheW3DProjectedShadowManager->ReleaseResources();
+
+	// Ronin @feature 12/08/2026 DX9: §29 — see ReAcquireResources above.
+	W3DShadowMap::releaseResources();
 }
 
 Shadow *W3DShadowManager::addShadow( RenderObjClass *robj, Shadow::ShadowTypeInfo *shadowInfo, Drawable *draw)

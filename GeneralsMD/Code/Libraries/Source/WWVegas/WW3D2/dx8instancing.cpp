@@ -573,6 +573,32 @@ static unsigned g_SR_DrawCount      = 0;          // accumulating during the cur
 static unsigned g_SR_LastFrameCount = 0;          // total from the last COMPLETED frame (for the HUD)
 static unsigned g_SR_LastFrame      = 0xFFFFFFFFu;
 
+// Ronin @feature 12/08/2026 DX9: §29 phase 2 — shadow map pushed down from W3DShadowMap.
+static IDirect3DBaseTexture9* s_shadowMapTex   = nullptr;
+static float                  s_shadowLightVP[16] = { 0 };
+static float                  s_shadowTexelOfs  = 0.0f;
+static float                  s_shadowDepthBias = 0.0f;
+// Ronin @feature 17/08/2026 DX9: §29h-6. The receiver needs the sun direction (N.L fade) and the world
+// size of one shadow texel (normal-offset bias). Both are fit-dependent, so they ride down the same
+// channel as the matrix rather than being re-derived on this side.
+static float                  s_shadowLightDir[3] = { 0.0f, 0.0f, -1.0f };
+static float                  s_shadowTexelWorld  = 0.0f;
+
+void DX8InstanceManagerClass::Set_Shadow_Map(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
+                                             float texelOffset, float depthBias,
+                                             const float* lightTravelDir, float texelWorldSize)
+{
+	s_shadowMapTex     = tex;
+	s_shadowTexelOfs   = texelOffset;
+	s_shadowDepthBias  = depthBias;
+	s_shadowTexelWorld = texelWorldSize;
+	if (lightViewProjT != nullptr)
+		memcpy(s_shadowLightVP, lightViewProjT, sizeof(float) * 16);
+	if (lightTravelDir != nullptr)
+		memcpy(s_shadowLightDir, lightTravelDir, sizeof(float) * 3);
+}
+
+
 // Ronin @diagnostic 26/06/2026 DX9 P2: how many category flushes per frame (=> avg batch size).
 // Many tiny flushes => per-category pipeline re-setup is the cost; few big ones => it's per-mesh.
 static unsigned g_SR_FlushCount          = 0;
@@ -1079,7 +1105,6 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	if (selectedVS == nullptr || selectedPS == nullptr) {
 		return;
 	}
-
 	// Ensure stream 0 (category geometry VB) + index buffer + category texture/material/shader are on
 	// the device before we switch to the programmable pipeline.
 	DX8Wrapper::Apply_Render_State_Changes();
@@ -1170,6 +1195,29 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		dev->SetSamplerState(1, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
 	} else {
 		dev->SetTexture(1, nullptr);
+	}
+
+		// Ronin @feature 12/08/2026 DX9: §29 phase 2 — shadow map on s3, once per flush (batch-invariant).
+	// LINEAR filtering is what triggers hardware PCF on an NVIDIA depth texture.
+	if (s_shadowMapTex != nullptr) {
+		dev->SetPixelShaderConstantF(12, s_shadowLightVP, 4);
+		const float psC16[4] = { 1.0f, s_shadowDepthBias, s_shadowTexelOfs, s_shadowTexelOfs };
+		dev->SetPixelShaderConstantF(16, psC16, 1);
+		// Ronin @feature 17/08/2026 DX9: §29h-6. c17 = sun travel direction + texel world size, for the
+		// receiver's N.L fade and normal-offset bias.
+		const float psC17[4] = { s_shadowLightDir[0], s_shadowLightDir[1], s_shadowLightDir[2],
+								 s_shadowTexelWorld };
+		dev->SetPixelShaderConstantF(17, psC17, 1);
+		dev->SetTexture(3, s_shadowMapTex);
+		dev->SetSamplerState(3, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	} else {
+		const float psC16[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(16, psC16, 1);
+		dev->SetTexture(3, nullptr);
 	}
 
 	// Stage-0 (diffuse) sampler defaults for the programmable path. FFP categories normally set these

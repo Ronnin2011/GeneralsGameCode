@@ -741,6 +741,32 @@ Bool OptionPreferences::getTerrainPOMEnabled() const
 	return FALSE;
 }
 
+// Ronin @feature 24/08/2026 DX9: §29i.2. ShadowQuality = Off|Normal|High|Ultra, or 0..3.
+// Names first — that is how StaticGameLOD reads — with an integer fallback so a raw number works too.
+Int OptionPreferences::getShadowQuality(Int dflt) const
+{
+	OptionPreferences::const_iterator it = find("ShadowQuality");
+	if (it == end())
+		return dflt;
+
+	static const char *names[] = { "OFF", "NORMAL", "HIGH", "ULTRA" };
+	for (Int i = 0; i < 4; ++i)
+	{
+		if (stricmp(it->second.str(), names[i]) == 0)
+			return i;
+	}
+
+	// Ronin @bugfix 24/08/2026 DX9: LOW and MEDIUM merged into NORMAL. Accept the retired names, or an
+	// existing Options.ini falls through to atoi("Low") = 0 and silently turns shadows OFF.
+	if (stricmp(it->second.str(), "LOW") == 0 || stricmp(it->second.str(), "MEDIUM") == 0)
+		return 1;						// SHADOWQ_NORMAL
+
+	Int level = atoi(it->second.str());
+	if (level < 0) level = 0;
+	if (level > 3) level = 3;
+	return level;
+}
+
 Int OptionPreferences::getParticleCap()
 {
 	OptionPreferences::const_iterator it = find("MaxParticleCount");

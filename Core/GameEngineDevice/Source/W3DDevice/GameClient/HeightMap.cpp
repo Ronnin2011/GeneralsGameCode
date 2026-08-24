@@ -95,6 +95,16 @@
 #include "W3DDevice/GameClient/W3DPoly.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 #include "WW3D2/statistics.h"   // Ronin @diagnostic 02/08/2026: per-subsystem draw attribution ([DRAW])
+// Ronin @feature 14/08/2026 DX9: §29h terrain shadow receiver. Core-owned state struct, NOT
+// W3DShadowMap.h — this file compiles for the Generals target too, which has no such header.
+#include "W3DDevice/GameClient/W3DShadowMapState.h"
+#include "d3dx9math.h"
+
+TerrainShadowPassState TheTerrainShadowPass = { FALSE };
+
+// Ronin @feature 14/08/2026 DX9: §29h XYZDUV2 decl for the raw shadow tile loop. Created once;
+// leaked deliberately at shutdown rather than adding a lifecycle hook for one object.
+static IDirect3DVertexDeclaration9 *s_terrainShadowDecl = NULL;
 
 #include "Common/UnitTimings.h" //Contains the DO_UNIT_TIMINGS define jba.
 
@@ -2269,7 +2279,10 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 
 		m_bridgeBuffer->drawBridges(&rinfo.Camera, m_disableTextures, doCloud?m_stageTwoTexture:nullptr);
 
-		if (TheTerrainTracksRenderObjClassSystem)
+		// Ronin @perf 21/08/2026 DX9: §29j.9. Terrain tracks are flat decals ON the terrain — they cast
+		// nothing worth having in a depth map, and flushing them there costs a second dynamic-VB lock
+		// per frame. Same reasoning as excluding water (§29h-9) and particles.
+		if (TheTerrainTracksRenderObjClassSystem && !TheTerrainShadowPass.inDepthPass)
 			TheTerrainTracksRenderObjClassSystem->flush();
 
 		if (m_shroud && rinfo.Additional_Pass_Count())
@@ -2278,6 +2291,10 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 			renderTerrainPass(&rinfo.Camera);
 			rinfo.Peek_Additional_Pass(0)->UnInstall_Materials();
 		}
+
+		// Ronin @feature 14/08/2026 DX9: §29h terrain shadow receiver — its OWN pass, because the
+		// terrain PS holds all 16 samplers and s12..s15 stay reserved for multi-page normals.
+		renderTerrainShadowPass(&rinfo.Camera);
 
 		ShaderClass::Invalidate();
 		DX8Wrapper::Apply_Render_State_Changes();
@@ -2302,6 +2319,124 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 
 
 ///Performs additional terrain rendering pass, blending in the black shroud texture.
+// Ronin @feature 14/08/2026 DX9: §29h. Modulate pass — samples the shadow map and multiplies the
+// framebuffer. Route B: own shader, own sampler, terrainpermaterial_ps untouched.
+void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
+{
+	const TerrainShadowPassState &sm = TheTerrainShadowPass;
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (!sm.enabled || sm.vs == NULL || sm.ps == NULL || sm.shadowTex == NULL || dev == NULL)
+		return;
+
+	// Ronin @diagnostic 15/08/2026 DX9: §29h. LOCKED, or renderTerrainPass below re-tags every draw as
+	// SHROUD (HeightMap.cpp:2426) and this bucket reads 0 — which is where these draws have been hiding
+	// all along. Locked scope: nested Set_Draw_Subsystem is a no-op until the destructor unlocks.
+	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_SHADOWRECV, true);
+
+	// Ronin @bugfix 14/08/2026 DX9: §29h-3 — build the decl BEFORE touching any device state. The old
+	// order returned here with SRCBLEND=ZERO, a PS and the shadow map still bound, with no restore.
+	if (s_terrainShadowDecl == NULL)
+	{
+		static const D3DVERTEXELEMENT9 elems[] = {
+			{ 0,  0, D3DDECLTYPE_FLOAT3,   D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_POSITION, 0 },
+			{ 0, 12, D3DDECLTYPE_D3DCOLOR, D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_COLOR,    0 },
+			{ 0, 16, D3DDECLTYPE_FLOAT2,   D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 0 },
+			{ 0, 24, D3DDECLTYPE_FLOAT2,   D3DDECLMETHOD_DEFAULT, D3DDECLUSAGE_TEXCOORD, 1 },
+			D3DDECL_END()
+		};
+		if (FAILED(dev->CreateVertexDeclaration(elems, &s_terrainShadowDecl)))
+			s_terrainShadowDecl = NULL;
+	}
+
+	if (s_terrainShadowDecl == NULL)
+		return;
+
+	// Flush pending wrapper state FIRST: our raw device calls below bypass the cache, and
+	// Set_Transform(D3DTS_VIEW) only queues (dx8wrapper.h:1801) — the §29g blinking bug.
+	DX8Wrapper::Apply_Render_State_Changes();
+
+	D3DMATRIX viewMat, projMat;
+	dev->GetTransform(D3DTS_VIEW, &viewMat);
+	dev->GetTransform(D3DTS_PROJECTION, &projMat);
+	D3DXMATRIX dxView(viewMat), dxProj(projMat), dxVP, dxVPT;
+	D3DXMatrixMultiply(&dxVP, &dxView, &dxProj);
+	D3DXMatrixTranspose(&dxVPT, &dxVP);
+
+	dev->SetPixelShader(sm.ps);   // VS is set after the decl bind below
+	dev->SetVertexShaderConstantF(0, (const float *)&dxVPT, 4);
+	dev->SetPixelShaderConstantF(0, sm.lightViewProjT, 4);
+
+	const float psC4[4] = { 1.0f, sm.depthBias, sm.texelOffset, sm.texelOffset };
+	dev->SetPixelShaderConstantF(4, psC4, 1);
+
+	// Ronin @feature 17/08/2026 DX9: §29h-6. c5 = direction the light TRAVELS + world size of one
+	// shadow texel — the N.L fade and the normal-offset bias respectively. Both are fit-dependent, so
+	// they come from the published pass state, never re-derived here.
+	const float psC5[4] = { sm.lightTravelDir[0], sm.lightTravelDir[1], sm.lightTravelDir[2],
+							sm.texelWorldSize };
+	dev->SetPixelShaderConstantF(5, psC5, 1);
+
+	dev->SetTexture(0, sm.shadowTex);
+	dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);	// triggers hardware PCF
+	dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+	dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+	dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+
+	// Save EVERY state we touch. Relying on ShaderClass::Invalidate only works if the next draw goes
+	// through Set_Shader; trees do not, and a leaked SRCBLEND=ZERO made them multiply instead of
+	// blend — that was the flicker.
+	DWORD oldAlphaBlend, oldSrcBlend, oldDstBlend, oldZEnable, oldZFunc, oldZWrite, oldAlphaTest;
+	dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &oldAlphaBlend);
+	dev->GetRenderState(D3DRS_SRCBLEND,         &oldSrcBlend);
+	dev->GetRenderState(D3DRS_DESTBLEND,        &oldDstBlend);
+	dev->GetRenderState(D3DRS_ZENABLE,          &oldZEnable);
+	dev->GetRenderState(D3DRS_ZFUNC,            &oldZFunc);
+	dev->GetRenderState(D3DRS_ZWRITEENABLE,     &oldZWrite);
+	dev->GetRenderState(D3DRS_ALPHATESTENABLE,  &oldAlphaTest);
+
+	// Ronin @bugfix 16/08/2026 DX9: §29. The lookup was never the problem — with a COPY blend the
+	// terrain showed correct shadows. The MODULATE was being lost: these were raw dev->SetRenderState
+	// calls, and renderTerrainPass below calls Apply_Render_State_Changes per tile, which re-applies
+	// the wrapper's CACHED shader blend over ours. §12a, third time. Route them through the wrapper.
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, TRUE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND,  D3DBLEND_ZERO);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_SRCCOLOR);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZENABLE, TRUE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZWRITEENABLE, FALSE);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHATESTENABLE, FALSE);
+
+	// Bind a DECLARATION, not an FVF. Apply_Render_State_Changes re-asserts currentDecl and leaves the
+	// vertex shader alone (dx8wrapper.cpp:3215-3227); the FVF branch is the one that clears a
+	// programmable VS. With a decl bound, our shaders survive every Draw_Triangles.
+	DX8Wrapper::BindLayoutDecl(s_terrainShadowDecl, "renderTerrainShadowPass");
+	dev->SetVertexShader(sm.vs);   // AFTER the decl bind — BindLayoutDecl does not touch the VS
+
+	renderTerrainPass(pCamera);
+
+	// CRITICAL: put the wrapper back in FVF mode. BindLayoutDecl left render_state.currentDecl set,
+	// so every later subsystem's Apply_Render_State_Changes would bind OUR XYZDUV2 decl to THEIR
+	// geometry (dx8wrapper.cpp:3217) — that is what made trees flicker in and out.
+	// BindLayoutFVF clears the VS, the decl and currentDecl in one call.
+	DX8Wrapper::BindLayoutFVF(DX8_VERTEX_FORMAT, "renderTerrainShadowPass::restore");
+
+	dev->SetPixelShader(NULL);
+	dev->SetTexture(0, NULL);
+
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, oldAlphaBlend);
+	dev->SetRenderState(D3DRS_SRCBLEND,         oldSrcBlend);
+	dev->SetRenderState(D3DRS_DESTBLEND,        oldDstBlend);
+	dev->SetRenderState(D3DRS_ZENABLE,          oldZEnable);
+	dev->SetRenderState(D3DRS_ZFUNC,            oldZFunc);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE,     oldZWrite);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE,  oldAlphaTest);
+
+	// Our raw SetRenderState/SetTexture calls desynced the wrapper's cache (§12a) — force a resync.
+	ShaderClass::Invalidate();
+	DX8Wrapper::Invalidate_Cached_Render_States();
+}
+
 void HeightMapRenderObjClass::renderTerrainPass(CameraClass *pCamera)
 {
 	// Ronin @diagnostic 02/08/2026 DX9: the visible shroud is drawn HERE (W3DShroud::render only updates
@@ -2667,6 +2802,13 @@ void HeightMapRenderObjClass::renderPrimaryBlendControlPass()
 				// filter). Sampling is sub-rect-into-atlas, so address mode CLAMP is correct;
 				// the PS's own frac() wrap on worldXY happens BEFORE the atlas-region remap.
 				const Int normalPageCount = m_map->getPerMaterialNormalAtlasPageCount();
+				// Ronin @diagnostic 12/08/2026 §29: does any map need all 4 normal pages? Decides
+				// whether the shadow map can take s15 or needs its own terrain pass.
+				static Int s_loggedNormalPages = -1;
+				if (normalPageCount != s_loggedNormalPages) {
+					s_loggedNormalPages = normalPageCount;
+					WWDEBUG_SAY(("[SHADOWMAP] terrain normal pages in use: %d of 4", normalPageCount));
+				}
 				{
 					const Int kNormalSamplerBase = 12; // s12..s15 = up to 4 pages
 					const Int kMaxNormalSamplers = 4;

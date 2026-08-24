@@ -65,6 +65,7 @@ set(GAMEENGINEDEVICE_SRC
 #    Include/W3DDevice/GameClient/W3DShadow.h
 #    Include/W3DDevice/GameClient/W3DShroud.h
     Include/W3DDevice/GameClient/W3DSmudge.h
+    Include/W3DDevice/GameClient/W3DShadowMapState.h
     Include/W3DDevice/GameClient/W3DSnow.h
 #    Include/W3DDevice/GameClient/W3DStatusCircle.h
     Include/W3DDevice/GameClient/W3DTerrainBackground.h

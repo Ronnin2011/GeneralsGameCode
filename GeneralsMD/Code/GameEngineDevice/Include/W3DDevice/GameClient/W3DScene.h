@@ -70,6 +70,9 @@ public:
 	/// customizable renderer for the RTS3DScene
 	virtual void	Customized_Render( RenderInfoClass &rinfo ) override;
 	virtual void	Visibility_Check(CameraClass * camera) override;
+	// Ronin @perf 19/08/2026 DX9: §29j.7 — invalidate the static caster bake on set change.
+	virtual void	Add_Render_Object(RenderObjClass * obj) override;
+	virtual void	Remove_Render_Object(RenderObjClass * obj) override;
 	virtual void  Render(RenderInfoClass & rinfo) override;
 
 	void setCustomPassMode (CustomScenePassModes mode) {m_customPassMode = mode;}

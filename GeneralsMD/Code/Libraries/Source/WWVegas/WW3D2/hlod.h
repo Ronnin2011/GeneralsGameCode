@@ -170,6 +170,17 @@ public:
 	virtual int						Calculate_Cost_Value_Arrays(float screen_area, float *values, float *costs) const override;
 	virtual RenderObjClass *	Get_Current_LOD() override;
 
+	// Ronin @perf 19/08/2026 DX9: §29i.5 caster LOD. While set, Render() draws LOD 0 (the coarsest)
+	// instead of CurLod. A shadow map at ~0.6 world units per texel cannot resolve the detail the main
+	// camera picked, so the depth pass was paying for geometry it cannot represent. Deliberately a
+	// READ-ONLY override: Set_LOD_Level mutates CurLod and fires Notify_Removed/Notify_Added on the
+	// scene, which a second scene render must never do (§29h-5).
+	static void					Set_Force_Lowest_LOD(bool onoff)	{ s_ForceLowestLod = onoff; }
+	static bool					Is_Force_Lowest_LOD()				{ return s_ForceLowestLod; }
+private:
+	static bool					s_ForceLowestLod;
+public:
+
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	// Render Object Interface - Bounding Volumes
 	///////////////////////////////////////////////////////////////////////////////////////////////////////////////

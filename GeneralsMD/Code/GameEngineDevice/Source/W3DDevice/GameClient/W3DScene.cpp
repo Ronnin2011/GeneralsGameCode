@@ -53,6 +53,8 @@
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
+#include "W3DDevice/GameClient/W3DShadowMap.h"
+#include "W3DDevice/GameClient/W3DShadowMapState.h"
 #include "W3DDevice/GameClient/W3DStatusCircle.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
@@ -389,7 +391,22 @@ Bool RTS3DScene::castRay(RayCollisionTestClass & raytest, Bool testAll, Int coll
 	return hit;
 }
 
-//=============================================================================
+// Ronin @perf 19/08/2026 DX9: §29j.7. Only a STATIC caster dirties the bake — unit spawns and deaths
+// must not, or a producing base rebuilds every frame.
+void RTS3DScene::Add_Render_Object(RenderObjClass * obj)
+{
+	SimpleSceneClass::Add_Render_Object(obj);
+	if (W3DShadowMap::isStaticCaster(obj))
+		W3DShadowMap::invalidateStaticCasters();
+}
+
+void RTS3DScene::Remove_Render_Object(RenderObjClass * obj)
+{
+	if (W3DShadowMap::isStaticCaster(obj))
+		W3DShadowMap::invalidateStaticCasters();
+	SimpleSceneClass::Remove_Render_Object(obj);
+}
+
 // RTS3DScene::Visibility_Check
 //=============================================================================
 /** Custom visibility check method for the RTS3DScene, we can put optimized
@@ -465,7 +482,37 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 				robj->Set_Visible(false);
 			} else {
 
-				bool isVisible=!camera->Cull_Sphere(robj->Get_Bounding_Sphere());
+					bool isVisible=!camera->Cull_Sphere(robj->Get_Bounding_Sphere());
+
+					// Ronin @perf 19/08/2026 DX9: §29i.5 caster culling. In the depth pass `camera` is the
+					// LIGHT, whose ortho box is a SQUARE wrapped around the view's trapezoid and quantised
+					// to 64, so it admits casters whose shadows land nowhere near the screen. Measured at
+					// ~2.0 us per draw call with the depth pass issuing ~1200 of them.
+					// A caster is kept when its SHADOW can reach the visible area — not when the caster
+					// itself is visible. Sweep the bounding sphere along the light and test THAT against the
+					// main camera. Same trick W3DTreeBuffer::cull already uses (§29h-4.4); the sweep is what
+					// stops this re-creating the screen-edge gap that §29h-4.3 had to revert.
+					// Safe by construction: Visibility_Check re-runs on every scene render (see :1159), so
+					// the main pass recomputes visibility from scratch and nothing leaks.
+					if (isVisible && TheTerrainShadowPass.inDepthPass &&
+						TheTerrainShadowPass.sceneCamera != NULL)
+					{
+						const SphereClass &bs = robj->Get_Bounding_Sphere();
+						const Vector3 travel(TheTerrainShadowPass.lightTravelDir[0],
+											 TheTerrainShadowPass.lightTravelDir[1],
+											 TheTerrainShadowPass.lightTravelDir[2]);
+						const float lz    = (fabsf(travel.Z) > 0.2f) ? fabsf(travel.Z) : 0.2f;
+						// Object standing on terrain: its shadow reaches roughly its own size along the
+						// light. 2x is a deliberate over-estimate — RAISE IT if shadows start popping at
+						// the screen edge, that is the only knob here.
+						const float sweep = 2.0f * bs.Radius / lz;
+						// One sphere CONTAINING the whole swept capsule: centre at the midpoint, radius
+						// grown by half the sweep. Conservative on purpose — over-keeping costs one draw,
+						// under-keeping costs a missing shadow.
+						const SphereClass sweptBounds(bs.Center + travel * (sweep * 0.5f),
+													  bs.Radius + sweep * 0.5f);
+						isVisible = !TheTerrainShadowPass.sceneCamera->Cull_Sphere(sweptBounds);
+					}
 
 				if (isVisible)
 				{
@@ -592,6 +639,12 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 	Bool doExtraMaterialPop=FALSE;
 	Bool doExtraFlagsPop=FALSE;
 	LightClass **sceneLights=m_globalLight;
+
+	if (robj->Class_ID() == RenderObjClass::CLASSID_IMAGE3D	)
+	{
+		robj->Render(rinfo);	//notify decals system that this track is visible
+		return;	//decals are not lit by this system yet so skip rest of lighting
+	}
 
 	if (robj->Class_ID() == RenderObjClass::CLASSID_IMAGE3D	)
 	{
@@ -851,8 +904,17 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	// shadow draw calls. Originally just drawing shadows for trees would not properly prepare shadows.
 	PrepareShadows();
 
+	// Ronin @perf 19/08/2026 DX9: §29i.5 depth-pass trim. Decals and stencil volumes ARE shadows —
+	// drawing them into a shadow map is nonsense — and particles write no meaningful depth. Skipping
+	// them costs nothing visually; a depth map only needs opaque occluders.
+	// NOTE what is deliberately NOT skipped: the occlusion flush, the static sort lists, the translucent
+	// flush and SortingRenderer::Flush are DRAINS of lists TheDX8MeshRenderer.Flush has already filled.
+	// Skipping those would leak their contents into the main pass, which is a correctness bug, not a
+	// saving. The way to keep translucent geometry out of the depth pass is to not SUBMIT it.
+	const Bool depthPass = TheTerrainShadowPass.inDepthPass;
+
 	//don't draw shadows in this mode because they interfere with destination alpha or are invisible (wireframe)
-	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	if (!depthPass && m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 		DoShadows(rinfo, false);	//draw all non-stencil shadows (decals) since they fall under other objects.
 
 	TheDX8MeshRenderer.Flush();	//draw all non-translucent objects.
@@ -872,7 +934,7 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	DoTrees(rinfo);
 
 	//don't draw shadows in this mode because they interfere with destination alpha
-	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+	if (!depthPass && m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 		DoShadows(rinfo, true);	//draw all stencil shadows
 
 	WW3D::Render_And_Clear_Static_Sort_Lists(rinfo);	//draws things like water
@@ -884,7 +946,7 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 		//USE_PERF_TIMER(translucentRender)
 
 		//don't draw transparent in this mode because they interfere with destination alpha
-		if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+		if (!depthPass && m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 			DoParticles(rinfo);	//queue up particles for rendering.
 
 		SortingRendererClass::Flush();	//draw sorted translucent polygons like particles.
@@ -1200,9 +1262,14 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 		}
 	}
 
-	//Tell shadow manager to render shadows at the end of this frame
+		//Tell shadow manager to render shadows at the end of this frame
 	//Don't draw shadows if there is no terrain present.
+	// Ronin @perf 19/08/2026 DX9: §29i.5 / §29h-5. Neither of these belongs in the light's depth pass.
+	// Queueing shadows to draw INTO a shadow map is nonsense, and queueParticleRender is the "only render
+	// particles once per frame" call — running it for the light camera too is exactly the double-step that
+	// W3DScene.cpp:1136-1146 already guards On_Frame_Update against for the water reflection.
 	if (TheW3DShadowManager && terrainObject && !ShaderClass::Is_Backface_Culling_Inverted() &&
+		!TheTerrainShadowPass.inDepthPass &&
 		Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 	{
 		TheW3DShadowManager->queueShadows(TRUE);
@@ -1210,6 +1277,7 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 
 	// only render particles once per frame
 	if (terrainObject != nullptr && TheParticleSystemManager != nullptr &&
+		!TheTerrainShadowPass.inDepthPass &&
 		Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 	{
 		TheParticleSystemManager->queueParticleRender();

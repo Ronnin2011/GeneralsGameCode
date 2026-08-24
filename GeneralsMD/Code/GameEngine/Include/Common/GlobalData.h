@@ -178,6 +178,10 @@ public:
 	Bool m_useCloudPlane;
 	Bool m_useShadowVolumes;
 	Bool m_useShadowDecals;
+	// Ronin @feature 24/08/2026 DX9: §29i.2. 0=Off 1=Normal 2=High 3=Ultra. Drives resolution in
+	// W3DShadowMap; 0 leaves the map path off entirely and the stencil volumes / decals in charge.
+	// Options.ini key: ShadowQuality. Low and Medium merged into Normal — they measured identical.
+	Int  m_shadowMapQuality;
 	Int  m_textureReductionFactor;	//how much to cut texture resolution: 2 is half, 3 is quarter, etc.
 	Bool m_enableBehindBuildingMarkers;
 	Real m_waterPositionX;

@@ -2122,6 +2122,9 @@ int HLodClass::Get_Num_Polys() const
  * HISTORY:                                                                                    *
  *   1/26/00    gth : Created.                                                                 *
  *=============================================================================================*/
+// Ronin @perf 19/08/2026 DX9: §29i.5 caster LOD — see hlod.h. FALSE except inside the shadow depth pass.
+bool HLodClass::s_ForceLowestLod = false;
+
 void HLodClass::Render(RenderInfoClass & rinfo)
 {
 	int i;
@@ -2132,13 +2135,22 @@ void HLodClass::Render(RenderInfoClass & rinfo)
 
 	Animatable3DObjClass::Render(rinfo);
 
-	for (i = 0; i < Lod[CurLod].Count(); i++) {
-		if (Lod[CurLod][i].Model->Class_ID() != CLASSID_OBBOX)	///We have no use for these - MW
-			Lod[CurLod][i].Model->Render(rinfo);
+	// Ronin @perf 19/08/2026 DX9: §29i.5. In the shadow depth pass, draw the COARSEST LOD. Read-only on
+	// purpose — CurLod is untouched, so nothing leaks back into the main pass (§29h-5), and Set_LOD_Level
+	// is avoided entirely because it fires Notify_Removed/Notify_Added on the scene. Objects with a single
+	// LOD are unaffected: LodCount is always >= 1, so index 0 is valid.
+	const int lod = s_ForceLowestLod ? 0 : CurLod;
+
+	for (i = 0; i < Lod[lod].Count(); i++) {
+		if (Lod[lod][i].Model->Class_ID() != CLASSID_OBBOX)	///We have no use for these - MW
+			Lod[lod][i].Model->Render(rinfo);
 	}
 
 	if (Is_Sub_Objects_Match_LOD_Enabled()) {
 		for (i = 0; i < AdditionalModels.Count(); i++) {
+			// Deliberately NOT `lod`: this line MUTATES the sub-model. An off-screen caster is rendered
+			// by the depth pass but not by the main pass, so a forced 0 here would stick until it came
+			// back into view. Sub-objects keep the main camera's level.
 			AdditionalModels[i].Model->Set_LOD_Level(Get_LOD_Level());
 			AdditionalModels[i].Model->Render(rinfo);
 		}

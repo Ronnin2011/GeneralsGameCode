@@ -37,6 +37,7 @@ struct Geometry;	//forward reference
 struct PolyNeighbor;	//forward reference
 class W3DVolumetricShadow;	//forward reference
 class Drawable;	//forward reference
+class CameraClass;	//forward reference — §29 shadow-map caster pass
 
 struct W3DVolumetricShadowRenderTask : public W3DBufferManager::W3DRenderTask
 {

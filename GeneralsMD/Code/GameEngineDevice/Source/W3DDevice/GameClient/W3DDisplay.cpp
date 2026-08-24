@@ -72,6 +72,8 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DFileSystem.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DProfilerFrameCapture.h"
+// Ronin @feature 12/08/2026 DX9: §29 shadow-map render-to-texture pass.
+#include "W3DDevice/GameClient/W3DShadowMap.h"
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DScene.h"
@@ -1836,13 +1838,15 @@ static void drawSubsystemDrawReadout(Bool visible)
 	}
 
 	UnicodeString text2;
-	text2.format(L"[DRAW2] rigidFFP=%u  matpass=%u  fxLine=%u  fxPoint=%u  ui2D=%u  other=%u",
+	text2.format(L"[DRAW2] rigidFFP=%u  matpass=%u  fxLine=%u  fxPoint=%u  ui2D=%u  other=%u  shadowMap=%u  shadowRecv=%u",
 		perFrame[Debug_Statistics::DRAW_SUBSYS_RIGID_FFP],
 		perFrame[Debug_Statistics::DRAW_SUBSYS_MATPASS],
 		perFrame[Debug_Statistics::DRAW_SUBSYS_FX_LINE],
 		perFrame[Debug_Statistics::DRAW_SUBSYS_FX_POINT],
 		perFrame[Debug_Statistics::DRAW_SUBSYS_UI2D],
-		perFrame[Debug_Statistics::DRAW_SUBSYS_OTHER]);
+		perFrame[Debug_Statistics::DRAW_SUBSYS_OTHER],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_SHADOWMAP],
+		perFrame[Debug_Statistics::DRAW_SUBSYS_SHADOWRECV]);
 	s_drawString2->setText(text2);
 	s_drawString2->draw(x, y + 15, textColor, dropColor);
 }
@@ -2150,6 +2154,11 @@ AGAIN:
 			//before we enter main rendering loop.
 			if (TheW3DProjectedShadowManager)
 				TheW3DProjectedShadowManager->updateRenderTargetTextures();
+
+			// Ronin @feature 12/08/2026 DX9: §29 — the shadow-map depth pass is a render-to-texture,
+			// so it belongs HERE with the others, never inside DoShadows.
+			if (TheUseShadowMaps)
+				W3DShadowMap::updateRenderTargetTexture(primaryW3DView->get3DCamera(), m_3DScene);
 		}
 
 		Debug_Statistics::End_Statistics();	//record number of polygons rendered in RenderTargetTextures.
@@ -2253,6 +2262,10 @@ AGAIN:
 				}
 				// Ronin @diagnostic 02/08/2026: call every frame even when hidden (it takes the delta).
 				drawSubsystemDrawReadout(SHOW_DRAW_SUBSYSTEM_READOUT);
+
+				// Ronin @feature 12/08/2026 DX9: §29 — the light's-eye view, bottom-left. Gated by
+				// TheShowShadowMapDebug.
+				W3DShadowMap::drawDebugOverlay();
 
 #if defined(RTS_DEBUG)
 				if (TheGlobalData->m_benchmarkTimer > 0)

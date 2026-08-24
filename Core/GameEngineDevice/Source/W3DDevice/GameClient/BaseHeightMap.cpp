@@ -98,6 +98,7 @@
 #include "W3DDevice/GameClient/FlatHeightMap.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/W3DSnow.h"
+#include "W3DDevice/GameClient/W3DShadowMapState.h"	// Ronin 24/08/2026: §29h-5 depth-pass gate
 
 
 extern FlatHeightMapRenderObjClass *TheFlatHeightMap;
@@ -2420,7 +2421,10 @@ void BaseHeightMapRenderObjClass::updateCenter(CameraClass *camera, const Vector
 	// terrain PS path (renderPrimaryBlendControlPass) can push it as constant c82 for the
 	// POM raymarch. Captured here because updateCenter is the canonical place this class
 	// has access to the active CameraClass*.
-	if (camera != nullptr) {
+	// Ronin @bugfix 24/08/2026 DX9: §29h-5. NOT in the depth pass — that render passes the LIGHT camera,
+	// and this latch would hand the POM raymarch the light's eye as constant c82 for the whole frame.
+	// Same rule the tree sway and the decal queue already follow.
+	if (camera != nullptr && !TheTerrainShadowPass.inDepthPass) {
 		m_lastCameraPos = camera->Get_Position();
 	}
 

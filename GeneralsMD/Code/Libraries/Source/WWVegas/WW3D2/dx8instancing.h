@@ -81,6 +81,13 @@ public:
 	*/
 	bool Init();
 
+	// Ronin @feature 12/08/2026 DX9: §29 phase 2. WW3D2 cannot include GameEngineDevice, so the
+	// shadow map is pushed DOWN once per frame rather than pulled up.
+	static void Set_Shadow_Map(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
+	                           float texelOffset, float depthBias,
+	                           const float* lightTravelDir, float texelWorldSize);
+
+
 	/**
 	** Shutdown and release all D3D resources.
 	*/

@@ -119,6 +119,12 @@ public:
 	// Parallax Occlusion Mapping toggle through Options.ini, mirroring the AntiAliasing pattern. 
 	Bool getSplatPerMaterialEnabled() const;
 	Bool getTerrainPOMEnabled() const;
+	// Ronin @feature 24/08/2026 DX9: §29i.2 shadow quality ladder. Returns 0..3 (Off/Normal/High/Ultra),
+	// or `dflt` when the key is absent; the retired names Low and Medium both map to Normal. The default
+	// is PASSED IN, not read from TheGlobalData: this file compiles for the Generals target too, and that
+	// tree's GlobalData has no m_shadowMapQuality.
+	Int getShadowQuality(Int dflt) const;
+
 
 	Int getParticleCap();
 

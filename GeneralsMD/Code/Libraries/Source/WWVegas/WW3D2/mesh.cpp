@@ -125,6 +125,8 @@
 static unsigned MeshDebugIdCount;
 
 bool MeshClass::Legacy_Meshes_Fogged = true;
+// Ronin @perf 20/08/2026 DX9: §29j.8 — FALSE except inside the shadow depth pass.
+bool MeshClass::s_SkipBakedShadowCasters = false;
 static SimpleDynVecClass<uint32> temp_apt;
 
 /*
@@ -165,6 +167,8 @@ MeshClass::MeshClass() :
 	BaseVertexOffset(0),
 	NextVisibleSkin(nullptr),
 	IsDisabledByDebugger(false),
+	BakedShadowCaster(false),
+	ShadowCasterMover(false),
 	MeshDebugId(MeshDebugIdCount++),
 	m_alphaOverride(1.0f),
 	m_materialPassAlphaOverride(1.0f),
@@ -194,6 +198,8 @@ MeshClass::MeshClass(const MeshClass & that) :
 	BaseVertexOffset(that.BaseVertexOffset),
 	NextVisibleSkin(nullptr),
 	IsDisabledByDebugger(false),
+	BakedShadowCaster(false),
+	ShadowCasterMover(false),
 	MeshDebugId(MeshDebugIdCount++),
 	m_alphaOverride(1.0f),
 	m_materialPassAlphaOverride(1.0f),
@@ -661,6 +667,12 @@ void MeshClass::Render(RenderInfoClass & rinfo)
 {
 	WWPROFILE("Mesh::Render");
 	if (Is_Not_Hidden_At_All() == false) {
+		return;
+	}
+
+	// Ronin @perf 20/08/2026 DX9: §29j.8. This mesh is already in the static shadow bake, so the depth
+	// pass must not draw it again. The static is TRUE only inside WW3D::Render(scene, lightCamera).
+	if (s_SkipBakedShadowCasters && BakedShadowCaster) {
 		return;
 	}
 
