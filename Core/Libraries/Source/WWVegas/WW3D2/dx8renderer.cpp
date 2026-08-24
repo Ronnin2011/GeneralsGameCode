@@ -2721,11 +2721,14 @@ void DX8TextureCategoryClass::Render()
 							Peek_Texture(0),
 							stage1Texture,
 							allowProgrammableRigidFallback,
-							false,  // only the mapper UV offset is overridden here, and texGen IS snapshotted
+							// Ronin @bugfix 12/08/2026 DX9: opacity/diffuse above are restored before any
+							// deferred flush reads them — §17b.1, §23d.1.
+							true,
 							lenv,
 							vmaterial,
 							theShader,
 							*world_transform);
+
 
 
 						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF, 0x60);
