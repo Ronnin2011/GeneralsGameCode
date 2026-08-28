@@ -232,6 +232,31 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			continue;
 		}
 
+		// Ronin @perf 22/08/2026 DX9: visibility pre-pass — Mauller's TSH optimisation. A system whose
+		// particles are ALL off-screen used to cost a Get_Texture() hash lookup and, worse, a BATCH FLUSH:
+		// its key was compared before we knew it had nothing to draw, so it split a perfectly good batch
+		// around a system contributing zero particles. Culling first keeps those batches intact. Safe
+		// because a system that draws nothing imposes no ordering constraint on anything. The verdict is
+		// cached per Particle so the fill loop below reads a flag instead of redoing the tests.
+		Int visibleCount = 0;
+		for (Particle *cp = sys->getFirstParticle(); cp; cp = cp->m_systemNext)
+		{
+			const Coord3D *cpos = cp->getPosition();
+			const Real cpsize = cp->getSize();
+			const Bool culled =
+				WWMath::Fabs(cpos->x - bcX) > (beX + cpsize) ||
+				WWMath::Fabs(cpos->y - bcY) > (beY + cpsize) ||
+				WWMath::Fabs(cpos->z - bcZ) > (beZ + cpsize);
+			cp->setIsCulled(culled);
+			if (!culled) {
+				++visibleCount;
+			}
+		}
+
+		if (visibleCount == 0) {
+			continue;   // nothing to draw — leave the pending batch alone and skip the texture lookup
+		}
+
 		// Ronin @perf 09/08/2026 §19b.2 DX9: fetch the batch key BEFORE filling, so a key change flushes
 		// the pending batch first and this system's points start a fresh one. Streak and volume systems
 		// can't batch (their own renderers) — they flush the pending batch to keep draw order intact.
@@ -276,14 +301,9 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			pos = p->getPosition();
 			psize = p->getSize();
 
-			//Cull particle to edges of screen and terrain.
-			if (WWMath::Fabs(pos->x - bcX) > (beX + psize))
-				continue;
-
-			if (WWMath::Fabs(pos->y - bcY) > (beY + psize))
-				continue;
-
-			if (WWMath::Fabs(pos->z - bcZ) > (beZ + psize))
+			// Ronin @perf 22/08/2026 DX9: the pre-pass above already ran these three tests and cached the
+			// verdict on the particle, so this is a flag read instead of six Fabs comparisons.
+			if (p->isCulled())
 				continue;
 
 			m_fieldParticleCount += ( sys->getPriority() == AREA_EFFECT && sys->m_isGroundAligned != FALSE );
@@ -418,25 +438,30 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 					// Ronin @perf 09/08/2026 §19b.2 DX9: normally DO NOT DRAW HERE. The points are already
 					// sitting in the shared buffers at [startCount, count); record the key and let
 					// flushParticleBatch() issue ONE draw covering every system that matched it.
-					// batchTexture ADOPTS the Get_Texture ref for the batch's life; the flush releases it.
+					// Ronin @cleanup 22/08/2026 DX9: ONE ownership rule, matching the pre-fill adopt —
+					// batchTexture ALWAYS holds a ref of its own, and our Get_Texture ref is ALWAYS released
+					// here. Previously this site inherited the ref while the other Add_Ref'd it; both
+					// balanced, but two contracts for one invariant is how the next refcount bug gets written.
 					if ( batchTexture == nullptr ) {
 						batchTexture    = texture;
+						batchTexture->Add_Ref();
 						batchShaderType = sys->getShaderType();
 						batchBillboard  = sys->shouldBillboard();
-					} else {
-						texture->Release_Ref();	// same key as the pending batch — drop the duplicate ref
 					}
+					texture->Release_Ref();
 
 					// Ronin @bugfix 22/08/2026 DX9: flush immediately in two cases.
 					// (1) !canBatch — a system ruled UNBATCHABLE above must NOT be left pending, or it merges
 					//     with whatever follows. Reached by a streak system with fewer than 2 surviving
 					//     points: the streak branch declines it and it falls through here as a plain point
-					//     group. Draw it alone, exactly as the pre-batching code did.
+					//     group. Draw it alone, exactly as the pre-batching code did. Without this,
+					//     canBatch=false stops a system JOINING a batch but not STARTING one.
 					// (2) Buffer full — before batching each system had its own MAX_POINTS_PER_GROUP budget,
 					//     so without this a busy frame would silently drop particles once the buffer filled.
 					if ( !canBatch || count >= MAX_POINTS_PER_GROUP ) {
 						flushParticleBatch();
 					}
+
 				}
 			}
 			else
