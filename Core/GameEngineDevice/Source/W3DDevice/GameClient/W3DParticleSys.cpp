@@ -415,10 +415,10 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 
 				else
 				{
-					// Ronin @perf 09/08/2026 §19b.2 DX9: DO NOT DRAW HERE. The points are already sitting in
-					// the shared buffers at [startCount, count); record the key and let flushParticleBatch()
-					// issue ONE draw covering every system that matched it. batchTexture ADOPTS the
-					// Get_Texture ref for the life of the batch; the flush releases it.
+					// Ronin @perf 09/08/2026 §19b.2 DX9: normally DO NOT DRAW HERE. The points are already
+					// sitting in the shared buffers at [startCount, count); record the key and let
+					// flushParticleBatch() issue ONE draw covering every system that matched it.
+					// batchTexture ADOPTS the Get_Texture ref for the batch's life; the flush releases it.
 					if ( batchTexture == nullptr ) {
 						batchTexture    = texture;
 						batchShaderType = sys->getShaderType();
@@ -427,10 +427,14 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 						texture->Release_Ref();	// same key as the pending batch — drop the duplicate ref
 					}
 
-					// Buffer full: draw now so the next system starts on a fresh one. Before batching each
-					// system had its own MAX_POINTS_PER_GROUP budget, so without this a busy frame would
-					// silently drop particles once the shared buffer filled.
-					if ( count >= MAX_POINTS_PER_GROUP ) {
+					// Ronin @bugfix 22/08/2026 DX9: flush immediately in two cases.
+					// (1) !canBatch — a system ruled UNBATCHABLE above must NOT be left pending, or it merges
+					//     with whatever follows. Reached by a streak system with fewer than 2 surviving
+					//     points: the streak branch declines it and it falls through here as a plain point
+					//     group. Draw it alone, exactly as the pre-batching code did.
+					// (2) Buffer full — before batching each system had its own MAX_POINTS_PER_GROUP budget,
+					//     so without this a busy frame would silently drop particles once the buffer filled.
+					if ( !canBatch || count >= MAX_POINTS_PER_GROUP ) {
 						flushParticleBatch();
 					}
 				}
