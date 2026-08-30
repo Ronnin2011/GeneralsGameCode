@@ -776,6 +776,7 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 		const bool cloudEnabled =
 			(TheGlobalData != nullptr) &&
 			TheGlobalData->m_useCloudMap &&
+			(TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) &&
 			(geometryFVF & D3DFVF_DIFFUSE) == 0;
 
 		TextureClass* rigidCloudTex = cloudEnabled ? Get_Valid_Rigid_Cloud_Texture() : nullptr;
@@ -1166,9 +1167,14 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	Upload_Rigid_View_Projection(dev, &dxView); // frame-constant: once per batch now, not per mesh
 
 	// Cloud (container-constant) ----------------------------------------------------------------
+	// Ronin @bugfix 26/08/2026 DX9: match the terrain's night rule (BaseHeightMapRenderObjClass::
+	// useCloud). Without it rigid meshes kept sampling the cloud after dark while terrain and trees
+	// had dropped it.
 	const bool cloudEnabled =
 		(TheGlobalData != nullptr) &&
 		TheGlobalData->m_useCloudMap &&
+		(TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) &&
+		(m_srFVF & D3DFVF_DIFFUSE) == 0;
 		(m_srFVF & D3DFVF_DIFFUSE) == 0;
 	TextureClass* rigidCloudTex = cloudEnabled ? Get_Valid_Rigid_Cloud_Texture() : nullptr;
 	const bool cloudActive = cloudEnabled && (rigidCloudTex != nullptr);
