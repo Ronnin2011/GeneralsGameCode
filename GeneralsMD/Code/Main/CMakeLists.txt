@@ -128,17 +128,19 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/ReflectiveRigid.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/ReflectiveRigid.pso"
-        COMMENT "Auto-deploying to Zero Hour installation folder"
-        # Ronin @build 14/08/2026 Deploy terrain shadows pixel shader to shaders subfolder.
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${SHADER_SOURCE_DIR}/TerrainShadow.pso"
-            "${ZEROHOUR_INSTALL_PATH}/shaders/TerrainShadow.pso"
-        COMMENT "Auto-deploying to Zero Hour installation folder"
         # Ronin @build 14/08/2026 Deploy terrain shadows vertex shader to shaders subfolder.
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/TerrainShadow.vso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/TerrainShadow.vso"
+        # Ronin @build 25/08/2026 §29i.4 Deploy tree shaders; override the vs_1_1 pair in ShadersZH.big.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/Trees.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/Trees.vso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/Trees.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/Trees.pso"
         COMMENT "Auto-deploying to Zero Hour installation folder"
+
 
     )
     

@@ -1479,7 +1479,7 @@ DECLARE_PERF_TIMER(Tree_Render)
 //=============================================================================
 /** Draws the trees.  Uses camera to cull. */
 //=============================================================================
-void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pDynamicLightsIterator)
+void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pDynamicLightsIterator, TextureClass *cloudTexture)
 {
 	USE_PERF_TIMER(Tree_Render)
 	if (!m_isTerrainPass) {
@@ -1700,7 +1700,8 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 	DX8Wrapper::Set_DX8_Texture_Stage_State(1,  D3DTSS_TEXCOORDINDEX, 1);
 	// Draw all the trees.
 	DX8Wrapper::Apply_Render_State_Changes();
-	W3DShaderManager::setShroudTex(1);
+	// Ronin @feature 25/08/2026 DX9: §29i.4 stage 2. FALSE when there is no shroud; s1 stays NULL.
+	const Bool shroudBound = (W3DShaderManager::setShroudTex(1) != FALSE);
 	DX8Wrapper::Apply_Render_State_Changes();
 
 	if (m_dwTreeVertexShader) {
@@ -1747,16 +1748,76 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 			DX8Wrapper::_Get_D3D_Device8()->SetVertexShaderConstantF(  33, (const float*)&offset,  1 );
 		}
 
-		//DX8Wrapper::Set_Vertex_Shader(m_dwTreeVertexShader);
+		// Ronin @feature 25/08/2026 DX9: Stage 4. Cloud projection, c34. Same layout as
+		// rigid's c14 so trees and rigid palms sample the same field.
+		Real cloudScale = 0.0f, cloudOfsX = 0.0f, cloudOfsY = 0.0f;
+		if (cloudTexture) {
+			W3DShaderManager::getCloudMapState(&cloudScale, &cloudOfsX, &cloudOfsY);
+		}
+		Vector4 cloudC34(0.0f, cloudScale, cloudOfsX, cloudOfsY);
+		DX8Wrapper::_Get_D3D_Device8()->SetVertexShaderConstantF( 34, (const float*)&cloudC34, 1 );
+
+		// Ronin @bugfix 25/08/2026 DX9: Bind the shader's own decl; VS branch never set a layout.
+		IDirect3DVertexDeclaration9 *treeDecl =
+			W3DShaderManager::GetShaderDeclaration(m_dwTreeVertexShader);
+		if (treeDecl) {
+			DX8Wrapper::BindLayoutDecl(treeDecl, "W3DTreeBuffer::drawTrees");
+		}
 		DX8Wrapper::_Get_D3D_Device8()->SetVertexShader(m_dwTreeVertexShader);
-#if 0
-		DX8Wrapper::Set_Pixel_Shader(m_dwTreePixelShader);
-		// a.c. 6/16 - allow switching between normal and 2X mode for terrain
-		Real mulTwoX = 0.5f;
-		if(TheGlobalData && TheGlobalData->m_useOverbright)
-			mulTwoX = 1.0f;
-		DX8Wrapper::_Get_D3D_Device8()->SetPixelShaderConstantF(1, D3DXVECTOR4(mulTwoX, mulTwoX, mulTwoX, mulTwoX), 1);
-#endif
+
+		// Ronin @feature 25/08/2026 DX9: Stage 2. PS reproduces the FFP combine exactly.
+		// c0.x gates the s1 sample — no shroud means s1 is NULL and an ungated sample renders black.
+		// Cast: Set_Pixel_Shader takes a DWORD handle. Go through the wrapper, not the device —
+		// its cache is what makes Set_Pixel_Shader(0) at teardown actually unbind.
+		if (m_dwTreePixelShader) {
+			LPDIRECT3DDEVICE8 psDev = DX8Wrapper::_Get_D3D_Device8();
+			DX8Wrapper::Set_Pixel_Shader((DWORD)(DWORD_PTR)m_dwTreePixelShader);
+			const float psC0[4] = { shroudBound ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+			psDev->SetPixelShaderConstantF(0, psC0, 1);
+
+			// Ronin @feature 25/08/2026 DX9: Stage 4. Cloud on s2, gated by c1.x.
+			const float psC1[4] = { cloudTexture ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+			psDev->SetPixelShaderConstantF(1, psC1, 1);
+			psDev->SetTexture(2, cloudTexture ? cloudTexture->Peek_D3D_Texture() : NULL);
+			if (cloudTexture) {
+				psDev->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+				psDev->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+				psDev->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+				psDev->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+				psDev->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+			}
+
+			psDev->SetPixelShaderConstantF(0, psC0, 1);
+
+			// Ronin @feature 25/08/2026 DX9: §29i.4 stage 3. Shadow receiver.
+			// OFF in the depth pass — the map IS the render target there (§29i.5).
+			const Bool shadowOn = (TheTerrainShadowPass.shadowTex != NULL &&
+								   !TheTerrainShadowPass.inDepthPass);
+			if (shadowOn) {
+				psDev->SetPixelShaderConstantF(12, TheTerrainShadowPass.lightViewProjT, 4);
+				const float psC16[4] = { 1.0f, TheTerrainShadowPass.depthBias,
+										 TheTerrainShadowPass.texelOffset,
+										 TheTerrainShadowPass.texelOffset };
+				psDev->SetPixelShaderConstantF(16, psC16, 1);
+				const float psC17[4] = { TheTerrainShadowPass.lightTravelDir[0],
+										 TheTerrainShadowPass.lightTravelDir[1],
+										 TheTerrainShadowPass.lightTravelDir[2],
+										 TheTerrainShadowPass.texelWorldSize };
+				psDev->SetPixelShaderConstantF(17, psC17, 1);
+				psDev->SetTexture(3, TheTerrainShadowPass.shadowTex);
+				// LINEAR is what triggers hardware PCF on a depth texture (§29h-6).
+				psDev->SetSamplerState(3, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+				psDev->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+				psDev->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+				psDev->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+				psDev->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+			} else {
+				const float psC16[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				psDev->SetPixelShaderConstantF(16, psC16, 1);
+				psDev->SetTexture(3, NULL);
+			}
+		}
+
 
 	} else {
 		// Use fixed-function pipeline with FVF

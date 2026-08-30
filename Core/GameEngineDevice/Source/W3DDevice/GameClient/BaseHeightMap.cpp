@@ -2989,7 +2989,7 @@ void BaseHeightMapRenderObjClass::renderTrees(CameraClass * camera)
 		DX8Wrapper::Set_Material(m_vertexMaterialClass);
 		RTS3DScene *pMyScene = (RTS3DScene *)Scene;
 		RefRenderObjListIterator pDynamicLightsIterator(pMyScene->getDynamicLights());
-		m_treeBuffer->drawTrees(camera, &pDynamicLightsIterator);
+		m_treeBuffer->drawTrees(camera, &pDynamicLightsIterator, useCloud() ? m_stageTwoTexture : nullptr);
 	}
 }
 
