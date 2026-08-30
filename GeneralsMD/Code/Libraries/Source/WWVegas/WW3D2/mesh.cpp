@@ -127,6 +127,8 @@ static unsigned MeshDebugIdCount;
 bool MeshClass::Legacy_Meshes_Fogged = true;
 // Ronin @perf 20/08/2026 DX9: §29j.8 — FALSE except inside the shadow depth pass.
 bool MeshClass::s_SkipBakedShadowCasters = false;
+// Ronin @perf 26/08/2026 DX9: §29i.5 — FALSE except inside the shadow depth-pass scene render.
+bool MeshClass::s_InShadowDepthPass = false;
 static SimpleDynVecClass<uint32> temp_apt;
 
 /*

@@ -2285,7 +2285,10 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 		if (TheTerrainTracksRenderObjClassSystem && !TheTerrainShadowPass.inDepthPass)
 			TheTerrainTracksRenderObjClassSystem->flush();
 
-		if (m_shroud && rinfo.Additional_Pass_Count())
+		// Ronin @perf 26/08/2026 DX9: §29i.5. The shroud is a flat overlay on the SAME tiles the terrain
+		// already wrote — it cannot add depth, so it is 64 wasted draws in the map. Same rule as the
+		// terrain tracks above, water (§29h-9) and particles (§29j.7).
+		if (m_shroud && rinfo.Additional_Pass_Count() && !TheTerrainShadowPass.inDepthPass)
 		{
 			rinfo.Peek_Additional_Pass(0)->Install_Materials();
 			renderTerrainPass(&rinfo.Camera);

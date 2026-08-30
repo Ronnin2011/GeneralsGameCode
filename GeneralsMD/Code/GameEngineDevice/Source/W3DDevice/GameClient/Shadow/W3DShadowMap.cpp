@@ -431,18 +431,17 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 	}
 
 	// Head-room for what STANDS on the terrain — buildings and trees receive too.
-	const Real RECEIVER_HEADROOM = 120.0f;
+	// Ronin @bugfix 26/08/2026 DX9: was 120 (~one building). Anything taller sat above the fitted
+	// volume and displaces laterally in light space, so it fell outside the box and read lit —
+	// receivers popping in/out at the boundary while panning. Scales with sun angle; a flat XY
+	// margin does not.
+	const Real RECEIVER_HEADROOM = 400.0f;
 	maxGroundZ += RECEIVER_HEADROOM;
 
-	// Ronin @perf 23/08/2026 DX9: §29i.3. WAS a bounding SPHERE. The sphere is rotation-invariant, which
-	// is why §29b chose it, but it wraps the ground trapezoid AND the terrain height range in ONE radius —
-	// and that radius sets texel size. Measured live: sphere r=576 against a light-space box of 278x253,
-	// i.e. 2.07x of linear texel density thrown away, most of it paying for VERTICAL extent that should
-	// only ever have cost DEPTH RANGE. Fitting in light space separates them: XY sets the texel, Z sets
-	// the depth. Free — no extra pass, no extra memory, no receiver change.
-	// THE TRADE: rotation invariance is gone. Half-extents are quantised to 64 exactly as the radius was,
-	// so yaw STEPS the texel size instead of sliding it. This camera does not yaw in normal play, and
-	// anyone who mods rotation in has the stencil path.
+	// Ronin @perf 23/08/2026 DX9: §29i.3/§29j.10. Light-space BOX, not a bounding sphere — the sphere
+	// wrapped trapezoid AND height range in one radius, and that radius set the texel (measured r=576
+	// vs box 278x253, 2.07x thrown away). Now XY sets the texel, Z sets the depth.
+	// TRADE: rotation invariance — half-extents quantise to EXTENT_STEP, so yaw STEPS the texel size.
 
 	// Sun direction FIRST — the fit is done in light space now, so the axes are needed before the extents.
 	// W3DShadow.cpp:114-118 NEGATES m_terrainLightPos to place the source, so light TRAVELS along it.
@@ -946,10 +945,12 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 		// is handed down again after the pass.
 		DX8InstanceManagerClass::Set_Shadow_Map(NULL, NULL, 0.0f, 0.0f, NULL, 0.0f);
 		MeshClass::Skip_Baked_Shadow_Casters(true);		// §29j.8 — baked meshes don't draw here
+		MeshClass::Set_In_Shadow_Depth_Pass(true);		// §29i.5 — colour writes are off past here
 		HLodClass::Set_Force_Lowest_LOD(true);
 		WW3D::Render(scene, m_lightCamera);
 		HLodClass::Set_Force_Lowest_LOD(false);
 		MeshClass::Skip_Baked_Shadow_Casters(false);
+		MeshClass::Set_In_Shadow_Depth_Pass(false);
 
 		// §29j.7 — the static casters the scene render just skipped, in a few draws.
 		drawStaticCasters();

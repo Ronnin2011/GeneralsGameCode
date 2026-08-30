@@ -2597,7 +2597,13 @@ void DX8TextureCategoryClass::Render()
 			!(!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) &&
 			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED) &&
 			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
-			mesh->Get_Alpha_Override() == 1.0f &&
+			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
+			// Ronin @perf 26/08/2026 DX9: §29i.5. Alpha-override meshes are normally excluded because a
+			// deferred flush reads the material AFTER the opacity restore, so they render opaque
+			// (materialStateIsTransient, :552). That is a COLOUR failure, and the depth pass has colour
+			// writes off. Geometry and transform are snapshotted at collect time, which is all depth
+			// needs — so the shadow is identical and ~97 draws collapse into the batch.
+			(mesh->Get_Alpha_Override() == 1.0f || MeshClass::s_InShadowDepthPass) &&
 			Programmable_Rigid_Material_Override_Is_Supported(mesh, vmaterial) &&
 			mesh->Get_ObjectScale() == 1.0f &&
 			mesh->Peek_Model()->Get_Pass_Count() == 1 && // multi-pass: some passes may qualify for the deferred batch while others draw inline (FFP), splitting a mesh's passes across two draw times -> order breaks. (The flush preserves collection order; the risk is the deferred-vs-inline split, not the flush.)

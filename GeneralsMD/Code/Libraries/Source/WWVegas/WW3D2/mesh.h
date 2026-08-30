@@ -167,6 +167,11 @@ public:
 	bool								Is_Shadow_Caster_Mover() const { return ShadowCasterMover; }
 	static void						Skip_Baked_Shadow_Casters(bool b) { s_SkipBakedShadowCasters = b; }
 	static bool						s_SkipBakedShadowCasters;
+	// Ronin @perf 26/08/2026 DX9: §29i.5. TRUE only inside the shadow depth-pass scene render.
+	// Separate from the flag above on purpose: that one means "skip baked casters", this one means
+	// "colour writes are off", and rigid instancing eligibility keys on the latter.
+	static void						Set_In_Shadow_Depth_Pass(bool b) { s_InShadowDepthPass = b; }
+	static bool						s_InShadowDepthPass;
 
 protected:
 
