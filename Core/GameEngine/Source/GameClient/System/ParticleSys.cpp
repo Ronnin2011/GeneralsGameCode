@@ -776,7 +776,7 @@ ParticleSystemInfo::ParticleSystemInfo()
 	m_windMotionEndAngleMax = TWO_PI;
 	m_windMotionEndAngle = m_windMotionEndAngleMin;
 	m_windMotionMovingToEndAngle = TRUE;
-	m_volumeParticleDepth = DEFAULT_VOLUME_PARTICLE_DEPTH;
+	m_volumeParticleDepth = INVALID_VOLUME_PARTICLE_DEPTH;
 
 }
 
@@ -1095,7 +1095,7 @@ ParticleSystem::ParticleSystem( const ParticleSystemTemplate *sysTemplate,
 
 
 	///@todo: further formalize this parameter with an UnsignedInt field in the editor
-	m_volumeParticleDepth = DEFAULT_VOLUME_PARTICLE_DEPTH;
+	m_volumeParticleDepth = sysTemplate->m_volumeParticleDepth;
 
 
 	m_driftVelocity = sysTemplate->m_driftVelocity;
@@ -2125,9 +2125,15 @@ Bool ParticleSystem::update( Int localPlayerIndex  )
 	// If we have been "destroyed", wait for all of our particles to die off,
 	// then destroy ourselves (return false).
 	//
+	// TheSuperHackers @bugfix Mauller 30/08/2026 Delay destruction to prevent finite-lifetime slave particle systems being orphaned.
+	// Orphaned particle systems lack positional data, render at the world origin and do not complete their full lifecycle.
 	if (m_isDestroyed && !m_systemParticlesHead)
-		return false;
+	{
+		if (m_slaveSystem && !m_slaveSystem->isSystemForever())
+			return true;
 
+		return false;
+	}
 
 	// monitor particle system lifetime
 	if (m_isForever == false)
@@ -2142,7 +2148,12 @@ Bool ParticleSystem::update( Int localPlayerIndex  )
 
 		// check if time is up
 		if (m_systemLifetimeLeft == 0)
-			return false;
+		{
+			if (m_slaveSystem && !m_slaveSystem->isSystemForever())
+				m_isDestroyed = true;
+			else
+				return false;
+		}
 	}
 
 	return true;
@@ -2689,6 +2700,9 @@ const FieldParse ParticleSystemTemplate::m_fieldParseTable[] =
 	{ "SizeRate",								INI::parseGameClientRandomVariable,	nullptr,		offsetof( ParticleSystemTemplate, m_sizeRate ) },
 	{ "SizeRateDamping",				INI::parseGameClientRandomVariable,	nullptr,		offsetof( ParticleSystemTemplate, m_sizeRateDamping ) },
 
+	// TheSuperHackers @feature Volume particle depth is now exposed for configuration
+	{ "VolParticleDepth",				INI::parseUnsignedInt,							nullptr,		offsetof(ParticleSystemTemplate, m_volumeParticleDepth) },
+
 	{ "Alpha1",									ParticleSystemTemplate::parseRandomKeyframe,	nullptr,		offsetof( ParticleSystemTemplate, m_alphaKey[0] ) },
 	{ "Alpha2",									ParticleSystemTemplate::parseRandomKeyframe,	nullptr,		offsetof( ParticleSystemTemplate, m_alphaKey[1] ) },
 	{ "Alpha3",									ParticleSystemTemplate::parseRandomKeyframe,	nullptr,		offsetof( ParticleSystemTemplate, m_alphaKey[2] ) },
@@ -2858,6 +2872,31 @@ ParticleSystemTemplate::~ParticleSystemTemplate()
 }
 
 // ------------------------------------------------------------------------------------------------
+void ParticleSystemTemplate::validate()
+{
+	// TheSuperHackers @info Initialise all volume particles that lack ini configuration to the optimum depth of 6
+	// In retail, volume particle depth was not configurable through ini and was hard coded to a particle depth of 6
+	if (m_particleType == ParticleSystemInfo::VOLUME_PARTICLE)
+	{
+		if (m_volumeParticleDepth == INVALID_VOLUME_PARTICLE_DEPTH)
+			m_volumeParticleDepth = OPTIMUM_VOLUME_PARTICLE_DEPTH;
+	}
+	else
+	{
+		m_volumeParticleDepth = DEFAULT_VOLUME_PARTICLE_DEPTH;
+	}
+
+#if PRESERVE_RETAIL_PARTICLES
+	// TheSuperHackers @info Hack to allow isUsingSmudge() functionality with retail smudge particles
+	// The retail data template for smudge particles is not correctly configured with the smudge particle type
+	if (m_particleType != ParticleSystemInfo::SMUDGE && m_particleTypeName.startsWithNoCase("SMUDGE."))
+	{
+		m_particleType = ParticleSystemInfo::SMUDGE;
+	}
+#endif
+}
+
+// ------------------------------------------------------------------------------------------------
 /** If returns non-null, it is a slave system for use ... the create slaves parameter
  * tells *this* slave system whether or not it should create any slaves itself
  * automatically during its own constructor */
@@ -3023,8 +3062,8 @@ void ParticleSystemManager::update()
 			if (sys->isUsingDrawables())
 				continue;
 
-			// temporary hack that checks if texture name starts with "SMUD" - if so, we can assume it's a smudge type
-			if (/*sys->isUsingSmudge()*/ *((DWORD *)sys->getParticleTypeName().str()) == 0x44554D53)
+			// Handle smudge type particles
+			if (sys->isUsingSmudge())
 			{
 				for (Particle *p = sys->getFirstParticle(); p; p = p->m_systemNext)
 				{

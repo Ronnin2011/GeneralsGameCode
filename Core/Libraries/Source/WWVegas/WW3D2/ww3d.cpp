@@ -107,6 +107,8 @@
 #include "dazzle.h"
 #include "meshmdl.h"
 #include "dx8renderer.h"
+#include "Backend/RenderBackend.h"
+#include "IRenderBackend.h"
 #include "render2d.h"
 #include "WWLib/bound.h"
 #include "rddesc.h"
@@ -117,7 +119,6 @@
 #include "WWLib/thread.h"
 #include "WWLib/cpudetect.h"
 #include "dx8texman.h"
-#include "formconv.h"
 #include "animatedsoundmgr.h"
 #include "static_sort_list.h"
 #include "shdlib.h"
@@ -174,6 +175,8 @@ bool														WW3D::IsSortingEnabled = true;
 float														WW3D::PixelCenterX = 0.0f;
 float														WW3D::PixelCenterY = 0.0f;
 
+
+IRenderBackend *									WW3D::RenderBackend = nullptr;
 
 bool														WW3D::IsInitted = false;
 bool														WW3D::IsRendering = false;
@@ -272,16 +275,20 @@ WW3DErrorType WW3D::Init(void *hwnd, char *defaultpal, bool lite)
     _Hwnd = (HWND)hwnd;
     Lite = lite;
 
-    /*
-    ** Initialize d3d, this also enumerates the available devices and resolutions.
-    */
-    Init_D3D_To_WW3_Conversion();
-		WWDEBUG_SAY(("Init DX8Wrapper"));
-		if (!DX8Wrapper::Init(_Hwnd, lite)) {
-			return(WW3D_ERROR_INITIALIZATION_FAILED);
-		}
-		WWDEBUG_SAY(("Allocate Debug Resources"));
-		Allocate_Debug_Resources();
+	// TheSuperHackers @refactor bobtista 07/08/2026 The backend object is created
+	// and initialized once here and destroyed in WW3D::Shutdown.
+	WWASSERT(RenderBackend == nullptr);
+	if (RenderBackend == nullptr)
+	{
+		RenderBackend = Create_Render_Backend(_Hwnd, lite);
+	}
+	if (RenderBackend == nullptr)
+	{
+		return(WW3D_ERROR_INITIALIZATION_FAILED);
+	}
+
+	WWDEBUG_SAY(("Allocate Debug Resources"));
+	Allocate_Debug_Resources();
 
 	MAYBE_UNUSED MMRESULT r=timeBeginPeriod(1);
 	WWASSERT(r==TIMERR_NOERROR);
@@ -367,9 +374,9 @@ WW3DErrorType WW3D::Shutdown()
 	}
 
 	DX8TextureManagerClass::Shutdown();
-	if (!Lite) {
-		DX8Wrapper::Shutdown();
-	}
+
+	delete RenderBackend;
+	RenderBackend = nullptr;
 
 	/*
 	** Clear the default static sort lists
@@ -883,27 +890,24 @@ WW3DErrorType WW3D::Begin_Render(bool clear,bool clearz,const Vector3 & color, f
 		// Unlike DX8, DX9 does not auto-initialize viewport to render target dimensions.
 		// When -nocinematic is used, Camera::Apply() never runs during startup,
 		// leaving viewport uninitialized and causing water shader artifacts.
-		D3DVIEWPORT8 vp;
+		RenderBackendViewport vp;
 		int width, height, bits;
 		bool windowed;
 		WW3D::Get_Render_Target_Resolution(width, height, bits, windowed);
-		vp.X = 0;
-		vp.Y = 0;
-		vp.Width = width;
-		vp.Height = height;
-		vp.MinZ = 0.0f;
-		vp.MaxZ = 1.0f;
-		DX8Wrapper::Set_Viewport(&vp);
+		vp.x = 0;
+		vp.y = 0;
+		vp.width = width;
+		vp.height = height;
+		vp.min_z = 0.0f;
+		vp.max_z = 1.0f;
+		Get_Render_Backend()->Set_Viewport(vp);
+		Get_Render_Backend()->Clear(clear, clearz, color, dest_alpha);
+	}
 
-		// If we want to clear the screen, do it now
-		if (clear || clearz) {
-			DX8Wrapper::Clear(clear, clearz, color, dest_alpha);
-		}
+	// Notify D3D that we are beginning to render the frame
+	Get_Render_Backend()->Begin_Scene();
 
-    // Notify D3D that we are beginning to render the frame
-		DX8Wrapper::Begin_Scene();
-
-    return WW3D_ERROR_OK;
+	return WW3D_ERROR_OK;
 }
 
 /***********************************************************************************************
@@ -1003,7 +1007,7 @@ WW3DErrorType WW3D::Render(SceneClass * scene,CameraClass * cam,bool clear,bool 
 
 	// Clear the viewport
 	if (clear || clearz) {
-		DX8Wrapper::Clear(clear, clearz, color);
+		Get_Render_Backend()->Clear(clear, clearz, color);
 	}
 
 	// set the rendering mode
@@ -1021,7 +1025,7 @@ WW3DErrorType WW3D::Render(SceneClass * scene,CameraClass * cam,bool clear,bool 
 
 	// Set the global ambient light value here.  If the scene is using the LightEnvironment system
 	// this setting will get overridden.
-	DX8Wrapper::Set_Ambient(scene->Get_Ambient_Light());
+	Get_Render_Backend()->Set_Ambient(scene->Get_Ambient_Light());
 
 	// render the scene
 
@@ -1073,7 +1077,7 @@ WW3DErrorType WW3D::Render(
 
 	// Install the lighting environment if one is supplied
 	if (rinfo.light_environment != nullptr) {
-		DX8Wrapper::Set_Light_Environment(rinfo.light_environment);
+		Get_Render_Backend()->Set_Light_Environment(rinfo.light_environment);
 	}
 
 	// Render the object
@@ -1168,6 +1172,11 @@ WW3DErrorType WW3D::End_Render(bool flip_frame)
     SortingRendererClass::Flush();
 
     IsRendering = false;
+	
+	{
+		WWPROFILE("IRenderBackend::End_Scene");
+		Get_Render_Backend()->End_Scene(flip_frame);
+	}
 
 		{
 			WWPROFILE("DX8Wrapper::End_Scene");
@@ -1235,7 +1244,7 @@ WW3DErrorType WW3D::End_Render(bool flip_frame)
  *=============================================================================================*/
 void WW3D::Flip_To_Primary()
 {
-	DX8Wrapper::Flip_To_Primary();
+	Get_Render_Backend()->Flip_To_Primary();
 }
 
 
@@ -2169,5 +2178,5 @@ void WW3D::Reset_Current_Static_Sort_Lists_To_Default()
 
 void WW3D::Set_Gamma(float gamma,float bright,float contrast,bool calibrate)
 {
-	DX8Wrapper::Set_Gamma(gamma,bright,contrast,calibrate);
+	Get_Render_Backend()->Set_Gamma(gamma,bright,contrast,calibrate);
 }

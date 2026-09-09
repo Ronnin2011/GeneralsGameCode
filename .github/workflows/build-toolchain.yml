@@ -3,6 +3,7 @@ name: Build Toolchain
 permissions:
   contents: read
   pull-requests: write
+  packages: write
 
 on:
   workflow_call:
@@ -25,6 +26,11 @@ on:
         default: false
         type: boolean
         description: "Build extras"
+      ffmpeg:
+        required: false
+        default: false
+        type: boolean
+        description: "Build with FFmpeg support"
 
 jobs:
   build:
@@ -33,9 +39,14 @@ jobs:
     timeout-minutes: 30
 
     env:
-      VCPKG_FILE_CACHE: ${{ github.workspace }}\vcpkg-bincache
-      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\vcpkg-bincache,readwrite
+      # Fork pull requests get a read-only GITHUB_TOKEN, so they restore from the
+      # feed but must not attempt to upload to it.
+      VCPKG_BINARY_SOURCES: "clear;nuget,https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json,${{ github.event.pull_request.head.repo.fork && 'read' || 'readwrite' }}"
+      VCPKG_NUGET_REPOSITORY: "https://github.com/${{ github.repository }}.git"
       VCPKG_FEATURE_FLAGS: manifests,versions,binarycaching
+      # Metrics make every vcpkg run open its own exe exclusively to copy itself into
+      # TEMP for the telemetry upload, which randomly blocks the next vcpkg launch.
+      VCPKG_DISABLE_METRICS: "1"
 
     steps:
       - name: Checkout Code
@@ -105,55 +116,29 @@ jobs:
         with:
           arch: x86
 
-      - name: Compute vcpkg cache key parts
-        if: startsWith(inputs.preset, 'win32')
-        id: vcpkg_key
-        shell: pwsh
-        run: |
-          $baseline = (Get-Content vcpkg.json | ConvertFrom-Json)."builtin-baseline"
-
-          $triplet = "x86-windows"
-          if ("${{ inputs.preset }}" -like "x64*") { $triplet = "x64-windows" }
-
-          "baseline=$baseline" >> $env:GITHUB_OUTPUT
-          "triplet=$triplet" >> $env:GITHUB_OUTPUT
-
-          Write-Host "vcpkg cache key parts: baseline=$baseline, triplet=$triplet"
-
-      - name: Restore vcpkg binary cache
-        if: startsWith(inputs.preset, 'win32')
-        id: vcpkg_cache
-        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
-        with:
-          path: ${{ github.workspace }}\vcpkg-bincache
-          key: vcpkg-bincache-v3-${{ runner.os }}-baseline${{ steps.vcpkg_key.outputs.baseline }}-${{ steps.vcpkg_key.outputs.triplet }}-${{ hashFiles('triplets/*.cmake') }}
-          restore-keys: |
-            vcpkg-bincache-v3-${{ runner.os }}-baseline${{ steps.vcpkg_key.outputs.baseline }}-
-            vcpkg-bincache-v3-${{ runner.os }}-
-
       - name: Setup vcpkg
-        uses: lukka/run-vcpkg@5e0cab206a5ea620130caf672fce3e4a6b5666a1 # v11.5
+        if: contains(inputs.preset, 'vcpkg')
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11.6
         with:
           runVcpkgInstall: false
           doNotCache: true
 
-      - name: Configure vcpkg to use cached directory
-        if: startsWith(inputs.preset, 'win32')
+      - name: Configure NuGet Source for vcpkg Binary Cache
+        if: contains(inputs.preset, 'vcpkg')
         shell: pwsh
         run: |
-          $cacheDir = "${{ github.workspace }}\vcpkg-bincache"
-          New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null
-
-          # lukka/run-vcpkg sets its own temp cache dir; override to force our cached dir
-          $env:VCPKG_DEFAULT_BINARY_CACHE = $cacheDir
-          $env:VCPKG_BINARY_SOURCES = "clear;files,$cacheDir,readwrite"
-
-          "VCPKG_DEFAULT_BINARY_CACHE=$cacheDir" >> $env:GITHUB_ENV
-          "VCPKG_BINARY_SOURCES=$env:VCPKG_BINARY_SOURCES" >> $env:GITHUB_ENV
-          "VCPKG_OVERLAY_TRIPLETS=${{ github.workspace }}\triplets" >> $env:GITHUB_ENV
+          $nuget = & "$env:VCPKG_ROOT\vcpkg.exe" fetch nuget | Select-Object -Last 1
+          & $nuget sources add `
+            -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" `
+            -StorePasswordInClearText `
+            -Name GitHubPackages `
+            -UserName "${{ github.repository_owner }}" `
+            -Password "${{ secrets.GITHUB_TOKEN }}"
+          & $nuget setapikey "${{ secrets.GITHUB_TOKEN }}" `
+            -Source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
           "VCPKG_INSTALL_OPTIONS=--x-abi-tools-use-exact-versions" >> $env:GITHUB_ENV
 
-      - name: Configure ${{ inputs.game }} with CMake Using ${{ inputs.preset }}${{ inputs.tools && '+t' || '' }}${{ inputs.extras && '+e' || '' }} Preset
+      - name: Configure ${{ inputs.game }} with CMake Using ${{ inputs.preset }}${{ inputs.tools && '+t' || '' }}${{ inputs.extras && '+e' || '' }}${{ inputs.ffmpeg && '+ffmpeg' || '' }} Preset
         shell: pwsh
         run: |
           $buildFlags = @(
@@ -166,6 +151,7 @@ jobs:
           $buildFlags += "-DRTS_BUILD_${gamePrefix}_TOOLS=${{ inputs.tools && 'ON' || 'OFF' }}"
           $buildFlags += "-DRTS_BUILD_CORE_EXTRAS=${{ inputs.extras && 'ON' || 'OFF' }}"
           $buildFlags += "-DRTS_BUILD_${gamePrefix}_EXTRAS=${{ inputs.extras && 'ON' || 'OFF' }}"
+          $buildFlags += "-DRTS_BUILD_OPTION_FFMPEG=${{ inputs.ffmpeg && 'ON' || 'OFF' }}"
 
           Write-Host "Build flags: $($buildFlags -join ' | ')"
           cmake --preset ${{ inputs.preset }} $buildFlags
@@ -174,14 +160,6 @@ jobs:
         shell: pwsh
         run: |
           cmake --build --preset ${{ inputs.preset }}
-
-      - name: Save vcpkg binary cache
-        # Only one job should save to avoid "Unable to reserve cache" conflicts.
-        if: ${{ startsWith(inputs.preset, 'win32') && steps.vcpkg_cache.outputs.cache-hit != 'true' && inputs.game == 'Generals' && inputs.preset == 'win32-vcpkg-debug' }}
-        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
-        with:
-          path: ${{ github.workspace }}\vcpkg-bincache
-          key: vcpkg-bincache-v3-${{ runner.os }}-baseline${{ steps.vcpkg_key.outputs.baseline }}-${{ steps.vcpkg_key.outputs.triplet }}-${{ hashFiles('triplets/*.cmake') }}
 
       - name: Collect ${{ inputs.game }} ${{ inputs.preset }}${{ inputs.tools && '+t' || '' }}${{ inputs.extras && '+e' || '' }} Artifact
         shell: pwsh

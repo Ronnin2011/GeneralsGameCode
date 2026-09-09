@@ -3739,7 +3739,7 @@ void Player::processSelectTeamGameMessage(Int hotkeyNum) {
 
 	m_currentSelection->clearSquad();
 
-	VecObjectPtr objectList = m_squads[hotkeyNum]->getLiveObjects();
+	const VecObjectPtr& objectList = m_squads[hotkeyNum]->getLiveObjects();
 	Int numObjs = objectList.size();
 
 	for (Int i = 0; i < numObjs; ++i)
@@ -3771,7 +3771,7 @@ void Player::processAddTeamGameMessage(Int hotkeyNum) {
 		m_currentSelection = newInstance( Squad );
 	}
 
-	VecObjectPtr objectList = m_squads[hotkeyNum]->getLiveObjects();
+	const VecObjectPtr& objectList = m_squads[hotkeyNum]->getLiveObjects();
 	Int numObjs = objectList.size();
 
 	for (Int i = 0; i < numObjs; ++i) {

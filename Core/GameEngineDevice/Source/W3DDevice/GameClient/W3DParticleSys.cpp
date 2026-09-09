@@ -203,7 +203,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			continue;
 
 		//temporary hack that checks if texture name starts with "SMUD" - if so, we can assume it's a smudge type
-		if (/*sys->isUsingSmudge()*/ *((DWORD *)sys->getParticleTypeName().str()) == 0x44554D53)
+		if (sys->isUsingSmudge())
 		{
 			if (drawSmudge)
 			{

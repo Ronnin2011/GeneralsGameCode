@@ -6664,7 +6664,7 @@ Bool ScriptEngine::isSpecialPowerTriggered( Int playerIndex, const AsciiString& 
 
 	for (ListAsciiStringObjectIDIt findIt = specialList->begin(); findIt != specialList->end(); ++findIt)
 	{
-		AsciiStringObjectIDPair pair = *findIt;
+		const AsciiStringObjectIDPair &pair = *findIt;
 		if (pair.first == completedPower && (sourceObj == INVALID_ID || sourceObj == pair.second))
 		{
 			if (removeFromList) {
@@ -6689,7 +6689,7 @@ Bool ScriptEngine::isSpecialPowerMidway( Int playerIndex, const AsciiString& com
 
 	for (ListAsciiStringObjectIDIt findIt = specialList->begin(); findIt != specialList->end(); ++findIt)
 	{
-		AsciiStringObjectIDPair pair = *findIt;
+		const AsciiStringObjectIDPair &pair = *findIt;
 		if (pair.first == completedPower && (sourceObj == INVALID_ID || sourceObj == pair.second))
 		{
 			if (removeFromList) {
@@ -6714,7 +6714,7 @@ Bool ScriptEngine::isSpecialPowerComplete( Int playerIndex, const AsciiString& c
 
 	for (ListAsciiStringObjectIDIt findIt = specialList->begin(); findIt != specialList->end(); ++findIt)
 	{
-		AsciiStringObjectIDPair pair = *findIt;
+		const AsciiStringObjectIDPair &pair = *findIt;
 		if (pair.first == completedPower && (sourceObj == INVALID_ID || sourceObj == pair.second))
 		{
 			if (removeFromList) {
@@ -6739,7 +6739,7 @@ Bool ScriptEngine::isUpgradeComplete( Int playerIndex, const AsciiString& upgrad
 
 	for (ListAsciiStringObjectIDIt findIt = specialList->begin(); findIt != specialList->end(); ++findIt)
 	{
-		AsciiStringObjectIDPair pair = *findIt;
+		const AsciiStringObjectIDPair &pair = *findIt;
 		if (pair.first == upgrade && (sourceObj == INVALID_ID || sourceObj == pair.second))
 		{
 			if (removeFromList) {
@@ -6856,7 +6856,7 @@ void ScriptEngine::adjustToppleDirection( Object *object, Coord2D *direction)
 //-------------------------------------------------------------------------------------------------
 void ScriptEngine::adjustToppleDirection( Object *object, Coord3D *direction)
 {
-	AsciiString objName = object->getName();
+	const AsciiString &objName = object->getName();
 	if (objName.isEmpty() || !direction) {
 		return;
 	}
@@ -9025,6 +9025,7 @@ static const std::string F_SIZE =					"Size";
 static const std::string F_STARTSIZERATE ="StartSizeRate";
 static const std::string F_SIZERATE =			"SizeRate";
 static const std::string F_SIZERATEDAMP =	"SizeRateDamping";
+static const std::string F_VOLPARTICLEDEPTH = "VolParticleDepth";
 
 static const std::string F_ALPHA1 =				"Alpha1";
 static const std::string F_ALPHA2 =				"Alpha2";
@@ -9186,6 +9187,9 @@ void _writeSingleParticleSystem( File *out, ParticleSystemTemplate *templ )
 	sprintf(buff1, FORMAT_STRING, templ->m_sizeRateDamping.getMinimumValue());
 	sprintf(buff2, FORMAT_STRING, templ->m_sizeRateDamping.getMaximumValue());
 	thisEntry.append(SEP_HEAD).append(F_SIZERATEDAMP).append(EQ_WITH_SPACES).append(buff1).append(SEP_SPACE).append(buff2).append(SEP_EOL);
+
+	sprintf(buff1, "%d", templ->m_volumeParticleDepth);
+	thisEntry.append(SEP_HEAD).append(F_VOLPARTICLEDEPTH).append(EQ_WITH_SPACES).append(buff1).append(SEP_EOL);
 
 	sprintf(buff1, FORMAT_STRING, templ->m_alphaKey[0].var.getMinimumValue());
 	sprintf(buff2, FORMAT_STRING, templ->m_alphaKey[0].var.getMaximumValue());
