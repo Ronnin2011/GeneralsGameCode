@@ -1508,6 +1508,12 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 	const Real timeScale = TheFramePacer->getActualLogicTimeScaleOverFpsRatio();
 	Vector3 swayFactor[MAX_SWAY_TYPES];
 	Int i;
+	// Ronin @bugfix 02/09/2026 DX9: §29j.12 found this array UNINITIALISED — the assignment below sits
+	// inside a guard that an offset landing exactly on NUM_SWAY_ENTRIES-1 skips, which then uploads
+	// stack garbage as a whole sway group's pose. One initialiser removes it as a variable.
+	for (i=0; i<MAX_SWAY_TYPES; i++)
+		swayFactor[i].Set(0.0f, 0.0f, 0.0f);
+
 	for (i=0; i<MAX_SWAY_TYPES; i++)
 	{
 		// Ronin @bugfix 14/08/2026 DX9: §29h-4.3 advance ONCE per frame, main pass only. Two renders
@@ -1816,6 +1822,59 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 				psDev->SetPixelShaderConstantF(16, psC16, 1);
 				psDev->SetTexture(3, NULL);
 			}
+
+			// Ronin @feature 07/09/2026 DX9: §29j.13n. Tree receiver accumulation, MRT. Main pass only:
+			// the depth pass has no colour writes, and the reflection pass is a mirrored camera whose
+			// history belongs to the main view (§29j.13l).
+			const Bool treeAccumOn = shadowOn && TheTerrainShadowPass.treeAccumSurf != NULL &&
+									 !ShaderClass::Is_Backface_Culling_Inverted();
+			if (treeAccumOn) {
+				IDirect3DSurface9 *oldRT = NULL;
+				D3DVIEWPORT9 savedVP;
+				D3DSURFACE_DESC rtd;
+				if (SUCCEEDED(psDev->GetViewport(&savedVP)) &&
+					SUCCEEDED(psDev->GetRenderTarget(0, &oldRT)) && oldRT != NULL &&
+					SUCCEEDED(oldRT->GetDesc(&rtd)) && rtd.Width > 0 && rtd.Height > 0) {
+					// D3D9 Clear hits EVERY bound target, so RT1 is cleared while it is the only one
+					// attached. Alpha 0 is the validity mask: "no canopy wrote here".
+					if (SUCCEEDED(psDev->SetRenderTarget(0, TheTerrainShadowPass.treeAccumSurf))) {
+						psDev->Clear(0, NULL, D3DCLEAR_TARGET, 0x00FFFFFF, 1.0f, 0);
+						psDev->SetRenderTarget(0, oldRT);
+						psDev->SetViewport(&savedVP);	// SetRenderTarget resets it (§29j.13h)
+						psDev->SetRenderTarget(1, TheTerrainShadowPass.treeAccumSurf);
+					}
+
+					// §29g: VIEW is cached by the wrapper and only reaches the device on a flush.
+					DX8Wrapper::Apply_Render_State_Changes();
+					D3DMATRIX viewM, projM;
+					psDev->GetTransform(D3DTS_VIEW, &viewM);
+					psDev->GetTransform(D3DTS_PROJECTION, &projM);
+					D3DXMATRIX dxV(viewM), dxP(projM), dxVP, prevT;
+					D3DXMatrixMultiply(&dxVP, &dxV, &dxP);
+					static D3DXMATRIX s_treePrevVP;
+					static Bool s_treePrevVPValid = FALSE;
+					D3DXMatrixTranspose(&prevT, s_treePrevVPValid ? &s_treePrevVP : &dxVP);
+					psDev->SetPixelShaderConstantF(18, (const float *)&prevT, 4);
+					s_treePrevVP = dxVP;
+					s_treePrevVPValid = TRUE;
+
+					const float psC22[4] = { 1.0f / (float)rtd.Width, 1.0f / (float)rtd.Height,
+											 TheTerrainShadowPass.accumWeight, 0.0f };
+					psDev->SetPixelShaderConstantF(22, psC22, 1);
+					const float psC23[4] = { (float)savedVP.X, (float)savedVP.Y,
+											 (float)savedVP.Width, (float)savedVP.Height };
+					psDev->SetPixelShaderConstantF(23, psC23, 1);
+
+					psDev->SetTexture(4, TheTerrainShadowPass.treeAccumPrev);
+					psDev->SetSamplerState(4, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+					psDev->SetSamplerState(4, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+					psDev->SetSamplerState(4, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+					psDev->SetSamplerState(4, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+					psDev->SetSamplerState(4, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+				}
+				if (oldRT != NULL)
+					oldRT->Release();
+			}
 		}
 
 
@@ -1845,6 +1904,9 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 		DX8Wrapper::Draw_Triangles(	0, m_curNumTreeIndices[bNdx]/3, 0,	m_curNumTreeVertices[bNdx]);
 	}
 
+	// Ronin @feature 07/09/2026 DX9: §29j.13n. Release RT1 and the history sampler.
+	DX8Wrapper::_Get_D3D_Device8()->SetRenderTarget(1, NULL);
+	DX8Wrapper::_Get_D3D_Device8()->SetTexture(4, NULL);
 	DX8Wrapper::BindLayoutFVF(DX8_FVF_XYZNDUV1, "W3DTreeBuffer::drawTrees cleanup");
 	DX8Wrapper::Set_Pixel_Shader(0);
 	DX8Wrapper::Invalidate_Cached_Render_States();	//code above mucks around with W3D states so make sure we reset

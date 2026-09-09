@@ -971,7 +971,7 @@ void W3DDisplay::init()
 	// measuring perf. Force the StatDebugDisplay callback on for release testing. The whole
 	// gather/draw chain (gatherDebugStats / drawDebugStats) already runs in release; only this
 	// switch was gated. Set to false before shipping.
-	static const bool RONIN_FORCE_STAT_HUD = true;
+	static const bool RONIN_FORCE_STAT_HUD = false;
 	if( TheGlobalData->m_displayDebug || RONIN_FORCE_STAT_HUD )
 	{
 		m_debugDisplayCallback = StatDebugDisplay;
@@ -1851,6 +1851,37 @@ static void drawSubsystemDrawReadout(Bool visible)
 	s_drawString2->draw(x, y + 15, textColor, dropColor);
 }
 
+// Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Shadow fit readout — own line, own switch. Texel moves
+// with zoom, yaw and sun, so it must be readable while the artifact is on screen.
+static void drawShadowFitReadout(Bool visible)
+{
+	if (!visible || TheDisplayStringManager == NULL || TheFontLibrary == NULL) {
+		return;
+	}
+	static DisplayString* s_shadowString = NULL;
+	if (s_shadowString == NULL) {
+		s_shadowString = TheDisplayStringManager->newDisplayString();
+		if (s_shadowString == NULL) {
+			return;
+		}
+		s_shadowString->setFont(TheFontLibrary->getFont("FixedSys", 8, FALSE));
+	}
+
+	UnicodeString text;
+	text.format(L"[SHADOW] texel=%.2f ext=%.0fx%.0f req=%.0f box=%.0fx%.0f bare=%.0fx%.0f hdrm=%.0f",
+		W3DShadowMap::getTexelWorldSize(),
+		W3DShadowMap::getFitExtentX(),
+		W3DShadowMap::getFitExtentY(),
+		W3DShadowMap::getFitRequired(),
+		W3DShadowMap::getFitBoxX(),
+		W3DShadowMap::getFitBoxY(),
+		W3DShadowMap::getFitBareBoxX(),
+		W3DShadowMap::getFitBareBoxY(),
+		W3DShadowMap::getHeadroom());
+	s_shadowString->setText(text);
+	s_shadowString->draw(3, 360, GameMakeColor(120, 200, 255, 255), GameMakeColor(0, 0, 0, 255));
+}
+
 //=============================================================================
 void StatDebugDisplay( DebugDisplayInterface *, void *, FILE *fp )
 {
@@ -2254,6 +2285,7 @@ AGAIN:
 				static const bool SHOW_SINGLE_RIGID_READOUT = true;  // [SR]   yellow, y=300
 				static const bool SHOW_INSTANCING_READOUT   = true;  // [INST] cyan,   y=315
 				static const bool SHOW_DRAW_SUBSYSTEM_READOUT = true; // [DRAW] orange, y=330
+				static const bool SHOW_SHADOW_FIT_READOUT = true;     // [SHADOW] blue, y=360
 				if (SHOW_SINGLE_RIGID_READOUT) {
 					drawSingleRigidPerfReadout();
 				}
@@ -2262,6 +2294,7 @@ AGAIN:
 				}
 				// Ronin @diagnostic 02/08/2026: call every frame even when hidden (it takes the delta).
 				drawSubsystemDrawReadout(SHOW_DRAW_SUBSYSTEM_READOUT);
+				drawShadowFitReadout(SHOW_SHADOW_FIT_READOUT);
 
 				// Ronin @feature 12/08/2026 DX9: §29 — the light's-eye view, bottom-left. Gated by
 				// TheShowShadowMapDebug.

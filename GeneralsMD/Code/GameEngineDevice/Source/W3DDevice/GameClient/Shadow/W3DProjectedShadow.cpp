@@ -59,7 +59,7 @@
 #include "GameClient/Drawable.h"
 #include "W3DDevice/GameClient/Module/W3DModelDraw.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
-
+#include "W3DDevice/GameClient/W3DShadowMapState.h"
 
 /** @todo: We're going to have a pool of a couple rendertargets to use
 in rare cases when dynamic shadows need to be generated.  Maybe we can
@@ -813,6 +813,12 @@ is an optimized system that only uses the render objects bounding box to determi
 */
 void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 {
+	// Ronin @feature 08/09/2026 DX9: §29 phase 4. The shadow map owns ground shadows now, so a blob
+	// under the same object is a double shadow. SHADOW_DECAL ONLY — ALPHA and ADDITIVE decals are not
+	// shadows at all (Shadow.h:46-47) and must keep drawing. Same `active` gate the tree decals use.
+	if (TheTerrainShadowPass.active && (shadow->m_type & SHADOW_DECAL))
+		return;
+
 	int i,j,k;
 	Vector3 hmapVertex,objPos;
 	AABoxClass box;

@@ -1,7 +1,7 @@
 // Ronin @feature 14/08/2026 DX9: §29 terrain shadow receiver. Separate pass, NOT a sampler stolen
 // from terrainpermaterial_ps (all 16 are reserved — see Terrain_Normal_Map_Design_NEW.md decision log).
 //
-// Compile with: fxc /T vs_2_0 /Fo TerrainShadow.vso TerrainShadow_vs.hlsl
+// Compile with: fxc /T vs_3_0 /Fo TerrainShadow.vso TerrainShadow_vs.hlsl
 //
 // The input struct MUST mirror DX8_FVF_XYZDUV2 (BaseHeightMap.h:82) even though only the position is
 // used — the FVF-declared stream has to map onto declared inputs. Terrain VB positions are already
@@ -39,3 +39,4 @@ VSOutput main(VSInput input)
 
     return output;
 }
+

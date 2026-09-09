@@ -57,10 +57,121 @@ Real			W3DShadowMap::m_maxShadowDistance = 1200.0f;
 Int				W3DShadowMap::m_quality		= W3DShadowMap::SHADOWQ_HIGH;
 TextureClass	*W3DShadowMap::m_colorTarget	= NULL;
 ZTextureClass	*W3DShadowMap::m_depthTarget	= NULL;
+IDirect3DTexture9	*W3DShadowMap::m_accumTex[2]  = { NULL, NULL };
+IDirect3DSurface9	*W3DShadowMap::m_accumSurf[2] = { NULL, NULL };
+IDirect3DTexture9	*W3DShadowMap::m_treeAccumTex[2]  = { NULL, NULL };
+IDirect3DSurface9	*W3DShadowMap::m_treeAccumSurf[2] = { NULL, NULL };
+Int				W3DShadowMap::m_accumIndex	= 0;
+Int				W3DShadowMap::m_accumW		= 0;
+Int				W3DShadowMap::m_accumH		= 0;
+
+// Ronin @feature 03/09/2026 DX9: §29j.13h. Screen-space accumulation pair.
+void W3DShadowMap::releaseAccumTargets(void)
+{
+	for (int i = 0; i < 2; ++i)
+	{
+		if (m_accumSurf[i] != NULL) { m_accumSurf[i]->Release(); m_accumSurf[i] = NULL; }
+		if (m_accumTex[i]  != NULL) { m_accumTex[i]->Release();  m_accumTex[i]  = NULL; }
+		if (m_treeAccumSurf[i] != NULL) { m_treeAccumSurf[i]->Release(); m_treeAccumSurf[i] = NULL; }
+		if (m_treeAccumTex[i]  != NULL) { m_treeAccumTex[i]->Release();  m_treeAccumTex[i]  = NULL; }
+	}
+	m_accumW = 0;
+	m_accumH = 0;
+}
+
+// Made lazily and re-made on a resolution change or a device reset: these are raw D3D objects in
+// POOL_DEFAULT, so nothing else recreates them. Failure is non-fatal — NULL means no accumulation.
+void W3DShadowMap::ensureAccumTargets(void)
+{
+	int w = 0, h = 0, bits = 0;
+	bool windowed = false;
+	WW3D::Get_Render_Target_Resolution(w, h, bits, windowed);
+	if (w <= 0 || h <= 0)
+		return;
+
+	// Ronin @bugfix 07/09/2026 DX9: §29j.13m. Latch a failed format probe — the early-out below needs
+	// non-NULL textures, so without this CheckDeviceFormat ran every frame on hardware with no float RT.
+	static Bool s_noFloatRT = FALSE;
+	if (s_noFloatRT)
+		return;
+
+	if (m_accumTex[0] != NULL && m_accumTex[1] != NULL && m_accumW == w && m_accumH == h)
+		return;
+
+	releaseAccumTargets();
+
+	IDirect3DDevice9 *accumDev = DX8Wrapper::_Get_D3D_Device8();
+	if (accumDev == NULL)
+		return;
+
+	// Ronin @bugfix 04/09/2026 DX9: §29j.13h. FLOAT, never A8R8G8B8 — the EMA increment rounds to zero
+	// at 8 bits and never converges. Four channels: the FFP composite leaves G and B undefined otherwise.
+	// Ronin @perf 06/09/2026 DX9: §29j.13m. 16-bit first, no 8-bit fallback. Doc §9.12b.
+	D3DFORMAT accumFmt = D3DFMT_UNKNOWN;
+	{
+		IDirect3D9 *d3d = NULL;
+		if (SUCCEEDED(accumDev->GetDirect3D(&d3d)) && d3d != NULL)
+		{
+			D3DDEVICE_CREATION_PARAMETERS cp;
+			D3DDISPLAYMODE dm;
+			if (SUCCEEDED(accumDev->GetCreationParameters(&cp)) &&
+				SUCCEEDED(accumDev->GetDisplayMode(0, &dm)))
+			{
+				if (SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, dm.Format,
+													 D3DUSAGE_RENDERTARGET, D3DRTYPE_TEXTURE,
+													 D3DFMT_A16B16G16R16F)))
+					accumFmt = D3DFMT_A16B16G16R16F;
+				else if (SUCCEEDED(d3d->CheckDeviceFormat(cp.AdapterOrdinal, cp.DeviceType, dm.Format,
+														  D3DUSAGE_RENDERTARGET, D3DRTYPE_TEXTURE,
+														  D3DFMT_A32B32G32R32F)))
+					accumFmt = D3DFMT_A32B32G32R32F;
+			}
+			d3d->Release();
+		}
+	}
+	if (accumFmt == D3DFMT_UNKNOWN)
+	{
+		s_noFloatRT = TRUE;		// latch it; the early-out below cannot, textures stay NULL
+		return;
+	}
+
+	for (int i = 0; i < 2; ++i)
+	{
+		if (FAILED(accumDev->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, accumFmt,
+										   D3DPOOL_DEFAULT, &m_accumTex[i], NULL)) ||
+			FAILED(m_accumTex[i]->GetSurfaceLevel(0, &m_accumSurf[i])) ||
+			FAILED(accumDev->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, accumFmt,
+										   D3DPOOL_DEFAULT, &m_treeAccumTex[i], NULL)) ||
+			FAILED(m_treeAccumTex[i]->GetSurfaceLevel(0, &m_treeAccumSurf[i])))
+		{
+#ifdef DEBUG_LOGGING
+			WWDEBUG_SAY(("[SHADOWACCUM] %dx%d fmt=%d creation FAILED — no temporal accumulation",
+						 w, h, (int)accumFmt));
+#endif
+			releaseAccumTargets();
+			return;
+		}
+	}
+
+	m_accumW = w;
+	m_accumH = h;
+}
+
+
 Matrix4x4		W3DShadowMap::m_lightViewProj(true);
 Real			W3DShadowMap::m_lastRadius	= 0.0f;
 Real			W3DShadowMap::m_lastSunCot	= 2.0f;	// ~27 deg sun until updateLightMatrices runs
 Real			W3DShadowMap::m_lastDepthHalf = 0.0f;
+Real			W3DShadowMap::m_lastRequired = 0.0f;	// §29j.13f — fit before the power-of-two round-up
+Real			W3DShadowMap::m_lastBoxX	= 0.0f;
+Real			W3DShadowMap::m_lastBoxY	= 0.0f;
+Real			W3DShadowMap::m_lastBareBoxX = 0.0f;
+Real			W3DShadowMap::m_lastBareBoxY = 0.0f;
+Real			W3DShadowMap::m_lastExtentX = 0.0f;
+Real			W3DShadowMap::m_lastExtentY = 0.0f;
+Real			W3DShadowMap::m_frameMaxReceiverZ = -1.0e30f;
+Real			W3DShadowMap::m_heldHeadroom = 400.0f;
+
 CameraClass		*W3DShadowMap::m_lightCamera	= NULL;
 IDirect3DVertexShader9	*W3DShadowMap::m_terrainShadowVS = NULL;
 IDirect3DPixelShader9	*W3DShadowMap::m_terrainShadowPS = NULL;
@@ -76,7 +187,9 @@ static DWORD *loadShaderBlob(const char *path, DWORD *outSize)
 		OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
 	if (hFile == INVALID_HANDLE_VALUE)
 	{
+#ifdef DEBUG_LOGGING
 		WWDEBUG_SAY(("[SHADOWMAP] could not open %s (error %d)", path, GetLastError()));
+#endif
 		return NULL;
 	}
 
@@ -135,7 +248,9 @@ static Bool checkShadowFormat(D3DFORMAT adapterFormat, DWORD usage, D3DRESOURCET
 	const D3DCAPS9 &caps = DX8Wrapper::Get_Current_Caps()->Get_DX8_Caps();
 	const Bool ok = SUCCEEDED(DX8Wrapper::_Get_D3D8()->CheckDeviceFormat(
 		caps.AdapterOrdinal, caps.DeviceType, adapterFormat, usage, type, format));
+#ifdef DEBUG_LOGGING
 	WWDEBUG_SAY(("[SHADOWMAP] %-30s : %s", label, ok ? "YES" : "no"));
+#endif
 	return ok;
 }
 
@@ -146,12 +261,16 @@ ShadowMapMode W3DShadowMap::probeCapabilities(void)
 
 	if (FAILED(DX8Wrapper::_Get_D3D8()->GetAdapterDisplayMode(caps.AdapterOrdinal, &mode)))
 	{
+#ifdef DEBUG_LOGGING
 		WWDEBUG_SAY(("[SHADOWMAP] GetAdapterDisplayMode FAILED — staying on stencil volumes"));
+#endif
 		m_mode = SHADOWMAP_UNAVAILABLE;
 		return m_mode;
 	}
 
+#ifdef DEBUG_LOGGING
 	WWDEBUG_SAY(("[SHADOWMAP] ---- capability probe (adapter fmt 0x%08X) ----", mode.Format));
+#endif
 
 	// NVIDIA-style hardware shadow maps: a DEPTH format usable as a texture, PCF free on sample.
 	const Bool d16  = checkShadowFormat(mode.Format, D3DUSAGE_DEPTHSTENCIL, D3DRTYPE_TEXTURE,
@@ -175,8 +294,18 @@ ShadowMapMode W3DShadowMap::probeCapabilities(void)
 	checkShadowFormat(mode.Format, D3DUSAGE_RENDERTARGET, D3DRTYPE_TEXTURE,
 					  D3DFMT_A16B16G16R16F, "A16B16G16R16F RT (WBOIT)");
 
+#ifdef DEBUG_LOGGING
 	WWDEBUG_SAY(("[SHADOWMAP] max texture %ux%u, PS version 0x%08X",
 		caps.MaxTextureWidth, caps.MaxTextureHeight, caps.PixelShaderVersion));
+
+	// Ronin @diagnostic 07/09/2026 DX9: §29j.13n. Decides the TREE receiver's shape before it is written.
+	// MRT needs 2+ targets AND independent bit depths: the backbuffer is A8R8G8B8 while the accum buffer
+	// must be float (§9.12). Without both, trees need a second pass instead.
+	WWDEBUG_SAY(("[SHADOWMAP] MRT: NumSimultaneousRTs=%u independentBitDepths=%s postPSBlend=%s",
+		caps.NumSimultaneousRTs,
+		(caps.PrimitiveMiscCaps & D3DPMISCCAPS_MRTINDEPENDENTBITDEPTHS) ? "YES" : "no",
+		(caps.PrimitiveMiscCaps & D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING) ? "YES" : "no"));
+#endif
 
 	// Ronin @bugfix 24/08/2026 DX9: §29a. D24S8 or nothing. SHADOWMAP_R32F is NOT selected: it is declared
 	// but has no receiver — both shaders do a hardware tex2Dproj compare that a colour target cannot
@@ -185,9 +314,11 @@ ShadowMapMode W3DShadowMap::probeCapabilities(void)
 	// stencil volumes, which is the graceful degradation §29a asked for and which already works.
 	m_mode = d24s8 ? SHADOWMAP_HW_DEPTH : SHADOWMAP_UNAVAILABLE;
 
+#ifdef DEBUG_LOGGING
 	WWDEBUG_SAY(("[SHADOWMAP] mode = %s",
 		m_mode == SHADOWMAP_HW_DEPTH ? "HW_DEPTH" :
 		m_mode == SHADOWMAP_R32F     ? "R32F"     : "UNAVAILABLE"));
+#endif
 
 	return m_mode;
 }
@@ -212,7 +343,9 @@ Bool W3DShadowMap::init(Int resolution)
 
 	if (m_colorTarget == NULL)
 	{
+#ifdef DEBUG_LOGGING
 		WWDEBUG_SAY(("[SHADOWMAP] %dx%d target creation FAILED", resolution, resolution));
+#endif
 		m_mode = SHADOWMAP_UNAVAILABLE;
 		return FALSE;
 	}
@@ -243,11 +376,15 @@ Bool W3DShadowMap::init(Int resolution)
 			HeapFree(GetProcessHeap(), 0, blob);
 		}
 
+#ifdef DEBUG_LOGGING
 		WWDEBUG_SAY(("[SHADOWMAP] terrain receiver shaders: vs=%s ps=%s",
 			m_terrainShadowVS ? "ok" : "MISSING", m_terrainShadowPS ? "ok" : "MISSING"));
+#endif
 	}
 
+#ifdef DEBUG_LOGGING
 	WWDEBUG_SAY(("[SHADOWMAP] created %dx%d", resolution, resolution));
+#endif
 	return TRUE;
 }
 
@@ -255,7 +392,9 @@ void W3DShadowMap::shutdown(void)
 {
 	REF_PTR_RELEASE(m_colorTarget);
 	REF_PTR_RELEASE(m_depthTarget);
+	releaseAccumTargets();
 	REF_PTR_RELEASE(m_lightCamera);
+
 
 	if (m_terrainShadowVS != NULL) { m_terrainShadowVS->Release(); m_terrainShadowVS = NULL; }
 	if (m_terrainShadowPS != NULL) { m_terrainShadowPS->Release(); m_terrainShadowPS = NULL; }
@@ -275,20 +414,9 @@ void W3DShadowMap::reacquireResources(void)
 }
 
 // Ronin @feature 23/08/2026 DX9: §29i.2 quality ladder.
-//
-// THE HAZARD THIS EXISTS TO AVOID: init() calls shutdown(), which releases the targets. Anything
-// still holding the old pointer — TheTerrainShadowPass.shadowTex, the rigid path's s_shadowMapTex —
-// is then aimed at a released texture. So both receivers are pushed to NULL FIRST, in the same order
-// the device-loss pair uses, and only then is the target rebuilt. The bake is dirtied for the same
-// reason: its chunks are still valid geometry, but the map it was measured against is gone.
-//
-// RESOLUTION IS THE ONLY LEVER, and that is a MEASURED result, not a simplification:
-//  * PCF. A/B'd 23/08/2026 by swapping a 1-tap .pso in for the 3x3 at both receivers: +10-20 fps on
-//    410, i.e. 0.06-0.11 ms against the 0.69 ms the whole map system costs over stencil (§29j.8b).
-//    Stripping the N.L fade and the normal-offset on top of that measured the SAME, and streaked the
-//    terrain. PCF is not a tier; it stays on everywhere. Do not re-litigate this with a shader variant.
-//  * Resolution below 1024. Measured 5-10 fps per step, and §29j.7 showed 1048 -> 2048 was 3.8x the
-//    fill for nothing. Below 1024 it only looks worse. 1024 is the floor.
+// HAZARD: init() calls shutdown(), which releases the targets — so both receivers are pushed to NULL
+// FIRST, then the target is rebuilt, and the bake is dirtied because its map is gone.
+// RESOLUTION IS THE ONLY LEVER, measured: PCF is not a tier and 1024 is the floor. Doc §6.
 Bool W3DShadowMap::applyQuality(void)
 {
 	Int level = (TheGlobalData != NULL) ? TheGlobalData->m_shadowMapQuality : (Int)SHADOWQ_HIGH;
@@ -314,7 +442,9 @@ Bool W3DShadowMap::applyQuality(void)
 	{
 		releaseResources();
 		m_resolution = 0;		// keeps reacquireResources a no-op while the path is off
+#ifdef DEBUG_LOGGING
 		WWDEBUG_SAY(("[SHADOWMAP] quality = Off — stencil volumes and decals back in charge"));
+#endif
 		return FALSE;
 	}
 
@@ -323,21 +453,18 @@ Bool W3DShadowMap::applyQuality(void)
 	// UNAVAILABLE or the target failed. DoShadows checks isAvailable() too, but a flag that lies is
 	// how the next caller gets it wrong.
 	TheUseShadowMaps = ok;
+#ifdef DEBUG_LOGGING
 	WWDEBUG_SAY(("[SHADOWMAP] quality = %d, resolution %d, max shadow distance %.0f, init %s",
 				 level, s_res[level], m_maxShadowDistance, ok ? "ok" : "FAILED"));
+#endif
 	return ok;
 }
 
 void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 {
-	// Fit to the CAMERA FRUSTUM, not to getMaximumVisibleBox — that one is a coarse particle-cull
-	// volume ("bounded by terrain and the sky") and is map-sized, which spread 1024 texels over the
-	// whole world. Corners 0-3 are near, 4-7 the matching far ones (frustum.h:65-72).
-	//
-	// Project the corner rays onto the GROUND, do not scale them by a fraction of zfar: an RTS zfar
-	// is thousands of units, so even 25% dragged the fitted centre far past the visible base.
-	// Ground plane = terrain height under the camera. NOT getMaximumVisibleBox's Center.Z — that box
-	// spans terrain-to-SKY, so its centre sits ~170 units in the air and dragged the whole fit up.
+	// Fit to the CAMERA FRUSTUM, not getMaximumVisibleBox — that is a map-sized particle-cull volume
+	// whose centre sits ~170 units in the air. Corners 0-3 near, 4-7 far (frustum.h:65-72).
+	// Project the corner rays onto the GROUND; a fraction of zfar is not a shadow range. Doc §9.2.
 	Real groundZ = 0.0f;
 	if (TheTerrainRenderObject != NULL)
 	{
@@ -350,17 +477,17 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 	// level, because this is the only lever on depth-pass draw count (§29j.7).
 	const Real MAX_SHADOW_DISTANCE = m_maxShadowDistance;
 
-	// Ronin @bugfix 17/08/2026 DX9: §29h-7, second cause. The ground plane used to be ONE sample under
-	// the camera, which is wrong the moment the camera sits over high ground and looks at low ground —
-	// a gorge, a shoreline, a cliff. Measured: eye z=152 over terrain at ~110, looking down at a
-	// shoreline at z~0, stopped every ray on the z=110 plane. Footprint 26..281 units ahead, r=128,
-	// fit centre 27 units in front of the eye; everything past it left the map and read RED. Zooming in
-	// lowers the eye, shrinks eye-to-plane clearance, and shrinks the footprint with it — which is why
-	// it got worse the closer you zoomed (r went 256 -> 128 as the eye went 242 -> 152).
-	//
-	// Fix: iterate. Project onto the current plane, sample the terrain over that footprint, drop the
-	// plane to the LOWEST ground found, project again. Each pass reaches further and can only find
-	// ground at or below the previous minimum, so it converges and never undershoots what you can see.
+	// Ronin @feature 31/08/2026 DX9: §29i.3 step 1. The fit is a BAND along the view ray now, which is
+	// exactly what one cascade split is. NEAR = 0 with FAR = MAX_SHADOW_DISTANCE is the single-map fit
+	// that shipped, so this step MUST measure identical — same extent, same centre, same picture.
+	// Footprint corners reach 397..1196 from the eye at default zoom (§29j.11), so a 4-way split of
+	// that range is roughly 400 / 600 / 800 / 1000 / 1200.
+	const Real SHADOW_FIT_NEAR = 0.0f;
+	const Real SHADOW_FIT_FAR  = MAX_SHADOW_DISTANCE;
+
+	// Ronin @bugfix 17/08/2026 DX9: §29h-7. Iterate the ground plane — project, sample terrain over the
+	// footprint, drop to the LOWEST ground found, project again. One sample under the camera is wrong
+	// whenever it sits over high ground looking at low. Converges, never undershoots. Doc §2.
 	const int FIT_PASSES     = 3;
 	const int HEIGHT_SAMPLES = 5;	// 25 lookups per pass, free next to the pass itself
 
@@ -390,8 +517,18 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 			Vector3 hit   = nearC + ray * t;
 			Vector3 delta = hit - nearC;
 			const Real len = delta.Length();
-			if (len > MAX_SHADOW_DISTANCE)
-				hit = nearC + delta * (MAX_SHADOW_DISTANCE / len);
+			// Ronin @feature 31/08/2026 DX9: §29i.3 step 1. Clamp BOTH ends, not just the far one — a
+			// cascade split is the ground band between two distances along the view ray, and the far
+			// clamp alone always started the footprint at the eye. The len guard is new and required:
+			// the near branch divides by len, which the old far-only branch could never reach with
+			// len == 0. With SHADOW_FIT_NEAR = 0 the near branch is dead and this is bit-identical.
+			if (len > 1e-4f)
+			{
+				if (len > SHADOW_FIT_FAR)
+					hit = nearC + delta * (SHADOW_FIT_FAR / len);
+				else if (len < SHADOW_FIT_NEAR)
+					hit = nearC + delta * (SHADOW_FIT_NEAR / len);
+			}
 
 			// Force to the plane. The two UPPER rays are near-horizontal at this pitch and can end up
 			// mid-air, which is what put the fitted centre 170 units up.
@@ -430,12 +567,24 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 		planeZ = minGroundZ;	// next pass reaches down to the lowest ground actually in view
 	}
 
-	// Head-room for what STANDS on the terrain — buildings and trees receive too.
-	// Ronin @bugfix 26/08/2026 DX9: was 120 (~one building). Anything taller sat above the fitted
-	// volume and displaces laterally in light space, so it fell outside the box and read lit —
-	// receivers popping in/out at the boundary while panning. Scales with sun angle; a flat XY
-	// margin does not.
-	const Real RECEIVER_HEADROOM = 400.0f;
+		// Head-room for what STANDS on the terrain — buildings and trees receive too.
+	// Ronin @perf 06/09/2026 DX9: §29j.13k. Adaptive, was a flat 400. Bounded [120,400] so it can never
+	// cover less than before. Grow at once, shrink 5%/frame. Input is one frame stale by construction.
+	const Real HEADROOM_MIN = 200.0f;
+	const Real HEADROOM_MAX = 400.0f;
+	{
+		Real needed = HEADROOM_MIN;
+		if (m_frameMaxReceiverZ > -1.0e29f)
+			needed = m_frameMaxReceiverZ - maxGroundZ;	// maxGroundZ is still bare terrain here
+		if (needed < HEADROOM_MIN) needed = HEADROOM_MIN;
+		if (needed > HEADROOM_MAX) needed = HEADROOM_MAX;
+		if (needed > m_heldHeadroom)
+			m_heldHeadroom = needed;
+		else
+			m_heldHeadroom += (needed - m_heldHeadroom) * 0.05f;
+		m_frameMaxReceiverZ = -1.0e30f;					// consumed; re-accumulated next frame
+	}
+	const Real RECEIVER_HEADROOM = m_heldHeadroom;
 	maxGroundZ += RECEIVER_HEADROOM;
 
 	// Ronin @perf 23/08/2026 DX9: §29i.3/§29j.10. Light-space BOX, not a bounding sphere — the sphere
@@ -476,35 +625,91 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 	const Vector3 lightZ = lightXform.Get_Z_Vector();
 
 	// The eight corners of the ground volume, in light space.
+	// Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Third Z per corner fits a parallel "bare" box (headroom
+	// removed) in the same loop, so the readout can price the headroom per axis.
+	const Real bareMaxZ = maxGroundZ - RECEIVER_HEADROOM;
 	Real loX = 1e30f, hiX = -1e30f, loY = 1e30f, hiY = -1e30f, loZ = 1e30f, hiZ = -1e30f;
+	Real bLoX = 1e30f, bHiX = -1e30f, bLoY = 1e30f, bHiY = -1e30f;
 	for (int i = 0; i < 4; ++i)
 	{
-		const Vector3 corner[2] = { Vector3(pts[i].X, pts[i].Y, minGroundZ),
-									Vector3(pts[i].X, pts[i].Y, maxGroundZ) };
-		for (int c = 0; c < 2; ++c)
+		const Vector3 corner[3] = { Vector3(pts[i].X, pts[i].Y, minGroundZ),
+									Vector3(pts[i].X, pts[i].Y, maxGroundZ),
+									Vector3(pts[i].X, pts[i].Y, bareMaxZ) };
+		for (int c = 0; c < 3; ++c)
 		{
 			const Real px = Vector3::Dot_Product(corner[c], lightX);
 			const Real py = Vector3::Dot_Product(corner[c], lightY);
-			const Real pz = Vector3::Dot_Product(corner[c], lightZ);
-			if (px < loX) loX = px;
-			if (px > hiX) hiX = px;
-			if (py < loY) loY = py;
-			if (py > hiY) hiY = py;
-			if (pz < loZ) loZ = pz;
-			if (pz > hiZ) hiZ = pz;
+			if (c < 2)			// corners 0 and 1 are the REAL box — behaviour unchanged
+			{
+				const Real pz = Vector3::Dot_Product(corner[c], lightZ);
+				if (px < loX) loX = px;
+				if (px > hiX) hiX = px;
+				if (py < loY) loY = py;
+				if (py > hiY) hiY = py;
+				if (pz < loZ) loZ = pz;
+				if (pz > hiZ) hiZ = pz;
+			}
+			if (c != 1)			// corners 0 and 2 are the same box WITHOUT the headroom
+			{
+				if (px < bLoX) bLoX = px;
+				if (px > bHiX) bHiX = px;
+				if (py < bLoY) bLoY = py;
+				if (py > bHiY) bHiY = py;
+			}
 		}
 	}
 
-	// Quantise, or zooming re-scales the map every frame and the shadows swim again — same reason and the
-	// same 64 the radius used. SQUARE texels: one extent drives both axes, so the snap below and
-	// getDepthBias stay single-valued. Measured box was 278x253, so max() costs almost nothing.
+
+	// Quantise, or zooming re-scales the map every frame and the shadows swim again.
+	// Ronin @perf 06/09/2026 DX9: §29j.13k. Both axes quantised and held independently.
+
 	const Real EXTENT_STEP = 16.0f;
-	const Real halfX = ceilf(((hiX - loX) * 0.5f) / EXTENT_STEP) * EXTENT_STEP;
-	const Real halfY = ceilf(((hiY - loY) * 0.5f) / EXTENT_STEP) * EXTENT_STEP;
-	const Real extent = (halfX > halfY) ? halfX : halfY;
-	if (extent <= 0.0f)
+	// Ronin @bugfix 08/09/2026 DX9: §29j.13p. Lateral margin for casters at the footprint edge — the
+	// power-of-two round-up was supplying this by accident. Doc §8.6.
+	const Real CASTER_MARGIN = 48.0f;
+	const Real halfX = ceilf(((hiX - loX) * 0.5f + CASTER_MARGIN) / EXTENT_STEP) * EXTENT_STEP;
+	const Real halfY = ceilf(((hiY - loY) * 0.5f + CASTER_MARGIN) / EXTENT_STEP) * EXTENT_STEP;
+	const Real required = (halfX > halfY) ? halfX : halfY;
+
+
+	if (required <= 0.0f)
 		return;
+
+	// Ronin @bugfix 02/09/2026 DX9: §29j.13f. Power-of-two extent — the texel lattice must NEST across a
+	// change or the whole map re-registers and edges flip. Grow at once, shrink below half.
+	// Ronin @perf 06/09/2026 DX9: §29j.13k. One held value per AXIS; each nests on its own.
+	// For cascades: one PAIR per split.
+	static Real s_heldExtentX = 0.0f;
+	static Real s_heldExtentY = 0.0f;
+	{
+		Real potX = EXTENT_STEP;
+		while (potX < halfX)
+			potX *= 2.0f;
+		if (potX > s_heldExtentX || halfX <= s_heldExtentX * 0.5f)
+			s_heldExtentX = potX;
+
+		Real potY = EXTENT_STEP;
+		while (potY < halfY)
+			potY *= 2.0f;
+		if (potY > s_heldExtentY || halfY <= s_heldExtentY * 0.5f)
+			s_heldExtentY = potY;
+	}
+	const Real extentX = s_heldExtentX;
+	const Real extentY = s_heldExtentY;
+	m_lastExtentX = extentX;
+	m_lastExtentY = extentY;
+
+	// Ronin @perf 06/09/2026 DX9: §29j.13k. POT is monotone, so max(X,Y) is the same number the single
+	// held value gave — every scalar consumer is unchanged.
+	const Real extent = (extentX > extentY) ? extentX : extentY;
 	m_lastRadius = extent;
+
+	// Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Fit numbers for the [SHADOW] readout.
+	m_lastRequired = required;
+	m_lastBoxX     = (hiX - loX) * 0.5f;
+	m_lastBoxY     = (hiY - loY) * 0.5f;
+	m_lastBareBoxX = (bHiX - bLoX) * 0.5f;
+	m_lastBareBoxY = (bHiY - bLoY) * 0.5f;
 
 	// Depth only has to clear the fitted volume plus any caster standing above it along the light. This is
 	// now INDEPENDENT of texel size — the whole point — so it can be generous for free.
@@ -518,31 +723,36 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 
 	// TEXEL SNAP: quantise the centre along the light's X/Y to whole shadow texels. Without this the texel
 	// grid slides under the geometry and every shadow edge crawls as the camera moves.
-	const Real texelSize = (extent * 2.0f) / (Real)m_resolution;
-	cx = floorf(cx / texelSize) * texelSize;
-	cy = floorf(cy / texelSize) * texelSize;
+	// Ronin @perf 06/09/2026 DX9: §29j.13k. One texel size PER AXIS. Each axis is independently
+	// power-of-two, so each axis's lattice still nests across a change and §29j.13f's rule survives whole.
+	const Real texelX = (extentX * 2.0f) / (Real)m_resolution;
+	const Real texelY = (extentY * 2.0f) / (Real)m_resolution;
+
+	// Ronin @feature 07/09/2026 DX9: §29j.13o. LATTICE JITTER. The quantisation is in the MAP, not the
+	// lookup: a canopy is rasterised as a texel-resolution coverage mask, so sub-texel sway changes
+	// nothing until a texel flips. Moving the grid's phase each frame makes it rasterise differently and
+	// the EMA integrates the coverage. §29j.13g measured this working ("it does break the hold-and-jump")
+	// and rejected it for shimmering — with no temporal filter to resolve it. Gated on the accumulation
+	// existing, because without the resolve it IS just shimmer.
+	Real jitterX = 0.0f, jitterY = 0.0f;
+	if (m_accumTex[0] != NULL)
+	{
+		static UnsignedInt s_jitterFrame = 0;
+		++s_jitterFrame;
+		// OFF until RIGID receivers have accumulation. Measured 07/09/2026: terrain resolves this to
+		// barely-visible at 0.125 (EMA attenuates ~5.7x, as predicted), but rigid has no EMA and sees it
+		// raw — trading stepping for shimmer on units. Set to 0.5 the day rigid accumulates. §29j.13o.
+		const Real JITTER_TEXELS = 0.0f;
+		const Real jf = (Real)s_jitterFrame;
+		jitterX = ((jf * 0.6180340f) - floorf(jf * 0.6180340f) - 0.5f) * JITTER_TEXELS;
+		jitterY = ((jf * 0.7548776f) - floorf(jf * 0.7548776f) - 0.5f) * JITTER_TEXELS;
+	}
+	cx = (floorf(cx / texelX) + jitterX) * texelX;
+	cy = (floorf(cy / texelY) + jitterY) * texelY;
 	const Vector3 snappedCenter = lightX * cx + lightY * cy + lightZ * cz;
 
-	// Logs on CHANGE, not once — quantisation throttles it, and zooming shows the new numbers. Keying on
-	// extent/sun alone meant a scripted camera (the shellmap) logged twice during load and never again, so
-	// we never saw whether the fit TRACKS the camera; the centre test is what makes that visible.
-	static Real s_loggedExtent = -1.0f;
-	static Vector3 s_loggedSun(0.0f, 0.0f, 0.0f);
-	static Vector3 s_loggedCentre(-99999.0f, -99999.0f, -99999.0f);
-	if (extent != s_loggedExtent
-		|| (lightDir - s_loggedSun).Length2() > 1e-6f
-		|| (snappedCenter - s_loggedCentre).Length2() > 64.0f)
-	{
-		s_loggedExtent = extent;
-		s_loggedSun    = lightDir;
-		s_loggedCentre = snappedCenter;
-		const Vector3 camPos = cameraFrustum.CameraTransform.Get_Translation();
-		WWDEBUG_SAY(("[SHADOWMAP] fit box=%.0fx%.0f extent=%.0f depthHalf=%.0f centre=(%.0f,%.0f,%.0f) camPos=(%.0f,%.0f,%.0f) texel=%.2f",
-			(hiX - loX) * 0.5f, (hiY - loY) * 0.5f, extent, depthHalf,
-			snappedCenter.X, snappedCenter.Y, snappedCenter.Z,
-			camPos.X, camPos.Y, camPos.Z, texelSize));
-	}
 
+	// Pull back far enough that the entire depth range sits in front of the near plane.
 	// Pull back far enough that the entire depth range sits in front of the near plane.
 	const Real pullBack = depthHalf + 1.0f;
 	const Vector3 eye = snappedCenter - lightDir * pullBack;
@@ -550,8 +760,11 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 
 	m_lightCamera->Set_Transform(lightXform);
 	m_lightCamera->Set_Projection_Type(CameraClass::ORTHO);
-	m_lightCamera->Set_View_Plane(Vector2(-extent, -extent), Vector2(extent, extent));
+	// Ronin @perf 06/09/2026 DX9: §29j.13k. PER-AXIS. Set_View_Plane always took separate X and Y — it
+	// was being handed the same number twice. Measured aspect 1.69:1, so X was paying 2.80x zoomed in.
+	m_lightCamera->Set_View_Plane(Vector2(-extentX, -extentY), Vector2(extentX, extentY));
 	m_lightCamera->Set_Clip_Planes(0.1f, pullBack + depthHalf * 2.0f);
+
 
 	// Ronin @feature 15/08/2026 DX9: §29i.2. Publish the fitted footprint. Snapped centre, so anything
 	// drawing over it rides the same texel grid the map does and cannot crawl relative to it.
@@ -839,6 +1052,7 @@ void W3DShadowMap::rebuildStaticCasters(SceneClass *scene)
 	}
 	flushCasterChunk();
 
+#ifdef DEBUG_LOGGING
 	int verts = 0, polys = 0;
 	for (int i = 0; i < s_casterChunkCount; ++i)
 	{
@@ -847,6 +1061,7 @@ void W3DShadowMap::rebuildStaticCasters(SceneClass *scene)
 	}
 	WWDEBUG_SAY(("[SHADOWMAP] static casters baked: %d chunks, %d verts, %d polys, %d meshes",
 				 s_casterChunkCount, verts, polys, s_bakedCount));
+#endif
 }
 
 // Draw the bake into the depth map. FFP, position only, world = identity.
@@ -883,6 +1098,11 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 	}
 
 	updateLightMatrices(sceneCam->Get_Frustum());
+
+	// Ronin @feature 03/09/2026 DX9: §29j.13h. Flip the accumulation pair. Reprojection makes the weight camera-independent.
+	ensureAccumTargets();
+	m_accumIndex ^= 1;
+
 	ensureStaticCasters(scene);		// §29j.7 — bake on first use
 	if (m_lightCamera == NULL)
 	{
@@ -921,28 +1141,19 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 		// depth pass tests against the view instead of the stepping light fit.
 		TheTerrainShadowPass.sceneCamera = sceneCam;
 
-		// Ronin @bugfix 17/08/2026 §29h-6 DX9: NO rasteriser bias — the hardware term is unusable here.
-		// D3DRS_SLOPESCALEDEPTHBIAS is zeroed from inside the scene render by ShroudTextureShader::set
-		// AND ::reset (W3DShaderManager.cpp:1291,1343), the post-reflective clear
-		// (dx8instancing.cpp:855-860) and W3DWaterTracks (:992), all through the wrapper — so the value
-		// AND the cache are overwritten and one set before WW3D::Render cannot survive. Measured: S=16
-		// implies 39 world units of bias (S * texel * cot(sun)), which would detach every shadow by ~77
-		// units; nothing changed, so it never reached the rasteriser. The bias lives on the RECEIVER
-		// instead (getDepthBias), which is the same quantity in the same units and cannot be zeroed.
+		// Ronin @bugfix 17/08/2026 §29h-6 DX9: NO rasteriser bias — four sites zero
+		// D3DRS_SLOPESCALEDEPTHBIAS from inside the scene render, so it cannot survive. The bias lives on
+		// the RECEIVER instead (getDepthBias). Doc §10.
 		{
 			const float zeroBias = 0.0f;
 			DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, *(const DWORD *)&zeroBias);
 			DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS,           *(const DWORD *)&zeroBias);
 		}
 
-		// Ronin @perf 19/08/2026 DX9: §29i.5 caster LOD. Kept even though it measured ~0 here (749k -> 747k
-		// polygons) — these models are effectively single-LOD. It costs nothing and pays on assets that do
-		// have levels.
-		// Ronin @bugfix 19/08/2026 DX9: UNBIND THE SHADOW MAP FIRST. m_depthTarget is the depth-stencil
-		// RENDER TARGET for this pass, and Flush_Single_Rigid binds that same texture to s3 for every
-		// caster. Reading a surface while it is bound as a target is undefined in D3D9 and drivers resolve
-		// it by flushing. It is also pure waste: nothing in a depth map needs a shadow lookup. The real map
-		// is handed down again after the pass.
+		// Ronin @perf 19/08/2026 DX9: §29i.5. Caster LOD — measured ~0 here (single-LOD models), kept
+		// because it costs nothing and pays on assets that have levels.
+		// Ronin @bugfix 19/08/2026 DX9: UNBIND THE SHADOW MAP FIRST — m_depthTarget is this pass's render
+		// target, and reading a bound surface is undefined. Handed back down after the pass.
 		DX8InstanceManagerClass::Set_Shadow_Map(NULL, NULL, 0.0f, 0.0f, NULL, 0.0f);
 		MeshClass::Skip_Baked_Shadow_Casters(true);		// §29j.8 — baked meshes don't draw here
 		MeshClass::Set_In_Shadow_Depth_Pass(true);		// §29i.5 — colour writes are off past here
@@ -1024,6 +1235,21 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 	TheTerrainShadowPass.vs          = m_terrainShadowVS;
 	TheTerrainShadowPass.ps          = m_terrainShadowPS;
 	TheTerrainShadowPass.shadowTex   = smap ? smap->Peek_D3D_Base_Texture() : NULL;
+	// Ronin @feature 03/09/2026 DX9: §29j.13h. 0.94 history weight is an EMA time constant of ~16
+	// frames, which is the tree step period measured in §29j.13g — anything shorter just adds one
+	// intermediate step to the jump and is invisible, which is exactly what the N=2 attempt proved.
+	// Zeroed the moment the camera moves, because there is no reprojection.
+	TheTerrainShadowPass.accumPrev   = m_accumTex[1 - m_accumIndex];
+	TheTerrainShadowPass.accumCur    = m_accumTex[m_accumIndex];
+	TheTerrainShadowPass.accumSurf   = m_accumSurf[m_accumIndex];
+	// §29j.13n — tree pair, same ping-pong phase so both receivers agree on which frame is "previous".
+	TheTerrainShadowPass.treeAccumPrev = m_treeAccumTex[1 - m_accumIndex];
+	TheTerrainShadowPass.treeAccumCur  = m_treeAccumTex[m_accumIndex];
+	TheTerrainShadowPass.treeAccumSurf = m_treeAccumSurf[m_accumIndex];
+	// Ronin @feature 06/09/2026 DX9: §29j.13l. Reprojection makes the weight camera-independent; the
+	// shader zeroes it per pixel where no history exists.
+	TheTerrainShadowPass.accumWeight = (m_accumTex[0] != NULL) ? 0.94f : 0.0f;
+
 	TheTerrainShadowPass.depthBias   = getDepthBias();
 	TheTerrainShadowPass.texelOffset = getTexelOffset();
 	TheTerrainShadowPass.texelWorldSize = getTexelWorldSize();

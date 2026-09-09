@@ -126,6 +126,20 @@ public:
 	{
 		return (m_resolution > 0) ? (2.0f * m_lastRadius / (Real)m_resolution) : 0.0f;
 	}
+	// Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Fit numbers for the [SHADOW] readout.
+	static Real getFitExtent(void)   { return m_lastRadius; }
+	static Real getFitRequired(void) { return m_lastRequired; }
+	static Real getFitBoxX(void)     { return m_lastBoxX; }
+	static Real getFitBoxY(void)     { return m_lastBoxY; }
+	static Real getFitBareBoxX(void) { return m_lastBareBoxX; }
+	static Real getFitBareBoxY(void) { return m_lastBareBoxY; }
+	static Real getFitExtentX(void)  { return m_lastExtentX; }
+	static Real getFitExtentY(void)  { return m_lastExtentY; }
+	static Real getHeadroom(void)    { return m_heldHeadroom; }
+	static void noteReceiverTopZ(Real topZ)
+	{
+		if (topZ > m_frameMaxReceiverZ) m_frameMaxReceiverZ = topZ;
+	}
 
 	// Ronin @perf 19/08/2026 DX9: §29j.7 static caster bake.
 	static Bool isStaticCaster(RenderObjClass *robj);
@@ -144,12 +158,40 @@ private:
 	static Int				m_quality;
 	static TextureClass		*m_colorTarget;
 	static ZTextureClass	*m_depthTarget;
+	// Ronin @feature 03/09/2026 DX9: §29j.13h. Screen-space shadow accumulation, ping-ponged. RAW D3D
+	// textures, so DX8TextureManagerClass does NOT recreate them across a device reset the way
+	// Create_Render_Target's do — hence ensureAccumTargets(), which remakes them whenever the pointer
+	// or the resolution goes stale. NULL degrades cleanly to the direct-to-framebuffer path.
+	static IDirect3DTexture9	*m_accumTex[2];
+	static IDirect3DSurface9	*m_accumSurf[2];
+	static Int					m_accumIndex;
+	static Int					m_accumW;
+	static Int					m_accumH;
+	static void					ensureAccumTargets(void);
+	static void					releaseAccumTargets(void);
+
+	static IDirect3DTexture9	*m_treeAccumTex[2];
+	static IDirect3DSurface9	*m_treeAccumSurf[2];
+
+
 	static Matrix4x4		m_lightViewProj;
 	static Real				m_lastRadius;	// quantised HALF-EXTENT of the fitted square (§29i.3 box fit)
 	static Real				m_lastSunCot;	// cot(sun elevation), clamped — see updateLightMatrices
 	// Ronin @feature 23/08/2026 DX9: §29i.3. Half the ortho depth range. Once the fit became a BOX this
 	// stopped being proportional to m_lastRadius, so getDepthBias needs it explicitly.
 	static Real				m_lastDepthHalf;
+	// Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Fit readout state. Bare = box with headroom removed.
+	static Real				m_lastRequired;
+	static Real				m_lastBoxX;
+	static Real				m_lastBoxY;
+	static Real				m_lastBareBoxX;
+	static Real				m_lastBareBoxY;
+	static Real				m_lastExtentX;
+	static Real				m_lastExtentY;
+	// Ronin @perf 06/09/2026 DX9: §29j.13k. Adaptive headroom: highest receiver top the main pass saw
+	// last frame, and the hysteresis value derived from it.
+	static Real				m_frameMaxReceiverZ;
+	static Real				m_heldHeadroom;
 	static CameraClass		*m_lightCamera;
 
 	// Terrain receiver pass. Non-fatal if either fails to load — terrain simply gets no shadows.

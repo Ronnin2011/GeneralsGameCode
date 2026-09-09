@@ -1887,10 +1887,96 @@ void HeightMapRenderObjClass::updateCenter(CameraClass *camera, const Vector3 *c
 //=============================================================================
 //DECLARE_PERF_TIMER(Terrain_Render)
 
+// Ronin @perf 30/08/2026 DX9: §29i.3. Terrain tile culling, SHADOW DEPTH PASS ONLY.
+// An empty mask means keep everything — that is what the main and receiver passes see. Doc §6.6.
+static std::vector<unsigned char>	s_shadowTileKeep;
+
+// Slack around the fitted box, on top of the swept test. THE ONLY KNOB — raise it if terrain shadows
+// vanish at the edge of the lit area. Measured at zero. Doc §6.6.
+#define SHADOW_TILE_MARGIN	(0.0f)
+
+static Bool shadowDepthSkipTile(Int ti, Int tj, Int numX)
+{
+	if (!TheTerrainShadowPass.inDepthPass || s_shadowTileKeep.empty())
+		return FALSE;
+	const Int idx = tj * numX + ti;
+	if (idx < 0 || idx >= (Int)s_shadowTileKeep.size())
+		return FALSE;
+	return s_shadowTileKeep[idx] == 0;
+}
+
 void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 {
 	// Ronin @diagnostic 02/08/2026 DX9: attribute every draw issued below to "terrain" on the [DRAW] HUD.
 	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_TERRAIN);
+
+	// Ronin @perf 30/08/2026 DX9: §29i.3. Rebuilt every depth pass, never cached — the fit is
+	// texel-snapped and tracks the camera.
+	if (TheTerrainShadowPass.inDepthPass && m_map != nullptr)
+	{
+		const Int tileCount = m_numVBTilesX * m_numVBTilesY;
+		s_shadowTileKeep.assign((size_t)((tileCount > 0) ? tileCount : 0), 1);
+
+		// Published by updateLightMatrices before the depth pass, so this is THIS frame's fit.
+		const Real tight = TheTerrainShadowPass.fitRadius;
+		const Real ext   = tight + SHADOW_TILE_MARGIN;
+		const Real fcx   = TheTerrainShadowPass.fitCentre[0];
+		const Real fcy   = TheTerrainShadowPass.fitCentre[1];
+		const Real fcz   = TheTerrainShadowPass.fitCentre[2];
+		const Real tvx   = TheTerrainShadowPass.lightTravelDir[0];
+		const Real tvy   = TheTerrainShadowPass.lightTravelDir[1];
+		const Real tvz   = TheTerrainShadowPass.lightTravelDir[2];
+		const Real lz    = (WWMath::Fabs(tvz) > 0.2f) ? WWMath::Fabs(tvz) : 0.2f;
+
+		const Int border = m_map->getBorderSizeInline();
+		const Int orgX   = m_map->getDrawOrgX();
+		const Int orgY   = m_map->getDrawOrgY();
+
+		for (Int tj = 0; tj < m_numVBTilesY; ++tj)
+		{
+			for (Int ti = 0; ti < m_numVBTilesX; ++ti)
+			{
+				const Int lx0 = ti * VERTEX_BUFFER_TILE_LENGTH;
+				const Int ly0 = tj * VERTEX_BUFFER_TILE_LENGTH;
+				const Int mx0 = getXWithOrigin(lx0);
+				const Int my0 = getYWithOrigin(ly0);
+				const Int mx1 = getXWithOrigin(lx0 + VERTEX_BUFFER_TILE_LENGTH - 1);
+				const Int my1 = getYWithOrigin(ly0 + VERTEX_BUFFER_TILE_LENGTH - 1);
+
+				// A tile straddling the getXWithOrigin wrap holds two disjoint strips and cannot be
+				// bounded by one AABB. Keep it.
+				if (mx1 < mx0 || my1 < my0) continue;
+
+				Real zTop = fcz;
+				for (Int s = 0; s < 4; ++s)
+				{
+					const Int sx = (s & 1) ? mx1 : mx0;
+					const Int sy = (s & 2) ? my1 : my0;
+					const Real h = (Real)m_map->getHeight(sx, sy) * MAP_HEIGHT_SCALE;
+					if (h > zTop) zTop = h;
+				}
+
+				Real x0 = (Real)(mx0 + orgX     - border) * MAP_XY_FACTOR;
+				Real x1 = (Real)(mx1 + orgX + 1 - border) * MAP_XY_FACTOR;
+				Real y0 = (Real)(my0 + orgY     - border) * MAP_XY_FACTOR;
+				Real y1 = (Real)(my1 + orgY + 1 - border) * MAP_XY_FACTOR;
+
+				// SWEPT, not a naked box test: a ridge OUTSIDE the fit still casts INTO it under a low
+				// sun — the §29h-4.4 screen-edge failure in a new place. Grow the box, never shrink it.
+				const Real reach = (zTop > fcz) ? ((zTop - fcz) / lz) : 0.0f;
+				if (tvx < 0.0f) x0 += tvx * reach; else x1 += tvx * reach;
+				if (tvy < 0.0f) y0 += tvy * reach; else y1 += tvy * reach;
+
+				if (!(x1 >= fcx - ext && x0 <= fcx + ext &&
+					  y1 >= fcy - ext && y0 <= fcy + ext))
+					s_shadowTileKeep[(size_t)(tj * m_numVBTilesX + ti)] = 0;
+				}
+			}
+		}
+		else
+		{
+			s_shadowTileKeep.clear();		// main pass and receiver pass: empty mask = keep everything
+		}
 
 	//USE_PERF_TIMER(Terrain_Render)
 
@@ -2174,9 +2260,13 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 			}
 		}
 
-		for (j=0; j<m_numVBTilesY; j++)
+				for (j=0; j<m_numVBTilesY; j++)
 			for (i=0; i<m_numVBTilesX; i++)
 			{
+				// Ronin @perf 30/08/2026 DX9: §29i.3. Depth pass only — FALSE in every other pass,
+				// so the main terrain render is untouched.
+				if (shadowDepthSkipTile(i, j, m_numVBTilesX))
+					continue;
 #ifdef PRE_TRANSFORM_VERTEX
 				if (m_xformedVertexBuffer && pass==0) {
 					// Note - m_xformedVertexBuffer should only be used for non T&L hardware.  jba.
@@ -2319,6 +2409,82 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 
 }
 
+// Ronin @feature 03/09/2026 DX9: §29j.13h. Multiply the accumulated shadow term into the framebuffer.
+// FFP modulate; the buffer is cleared white so uncovered pixels are untouched. Doc §8.
+static void compositeTerrainShadowAccum(IDirect3DDevice9 *dev, IDirect3DBaseTexture9 *accum)
+{
+	if (dev == NULL || accum == NULL)
+		return;
+
+	// Target size drives the quad. The accum buffer is created at this same resolution.
+	IDirect3DSurface9 *rt = NULL;
+	D3DSURFACE_DESC rtDesc;
+	if (FAILED(dev->GetRenderTarget(0, &rt)) || rt == NULL)
+		return;
+	const HRESULT descHr = rt->GetDesc(&rtDesc);
+	rt->Release();
+	if (FAILED(descHr) || rtDesc.Width == 0 || rtDesc.Height == 0)
+		return;
+
+	// Widen the viewport to the whole target for this draw so a pre-transformed quad needs no offset
+	// maths and the UVs stay 0..1. Outside the 3D view the buffer is still white, so it changes nothing.
+	D3DVIEWPORT9 savedVP;
+	const Bool haveVP = SUCCEEDED(dev->GetViewport(&savedVP));
+	D3DVIEWPORT9 fullVP;
+	fullVP.X = 0;
+	fullVP.Y = 0;
+	fullVP.Width  = rtDesc.Width;
+	fullVP.Height = rtDesc.Height;
+	fullVP.MinZ = 0.0f;
+	fullVP.MaxZ = 1.0f;
+	dev->SetViewport(&fullVP);
+
+	struct SCREENVERT { float x, y, z, rhw, u, v; };
+	const float w = (float)rtDesc.Width;
+	const float h = (float)rtDesc.Height;
+	const SCREENVERT quad[4] = {			// -0.5 puts texel centres on pixel centres (D3D9)
+		{ -0.5f,    -0.5f,    0.0f, 1.0f, 0.0f, 0.0f },
+		{ w - 0.5f, -0.5f,    0.0f, 1.0f, 1.0f, 0.0f },
+		{ -0.5f,    h - 0.5f, 0.0f, 1.0f, 0.0f, 1.0f },
+		{ w - 0.5f, h - 0.5f, 0.0f, 1.0f, 1.0f, 1.0f },
+	};
+
+	DWORD oldCull = D3DCULL_CCW;
+	dev->GetRenderState(D3DRS_CULLMODE, &oldCull);	// not in the caller's saved set
+
+	dev->SetVertexShader(NULL);
+	dev->SetPixelShader(NULL);
+	dev->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1);
+
+	dev->SetTexture(0, accum);
+	dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);	// 1:1 blit, no filtering wanted
+	dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+	dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+	dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+	dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	dev->SetTextureStageState(0, D3DTSS_COLOROP,   D3DTOP_SELECTARG1);
+	dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
+	dev->SetTextureStageState(0, D3DTSS_ALPHAOP,   D3DTOP_SELECTARG1);
+	dev->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
+	dev->SetTextureStageState(1, D3DTSS_COLOROP,   D3DTOP_DISABLE);
+	dev->SetTextureStageState(1, D3DTSS_ALPHAOP,   D3DTOP_DISABLE);
+
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+	dev->SetRenderState(D3DRS_SRCBLEND,  D3DBLEND_ZERO);
+	dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_SRCCOLOR);
+	dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+	dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+
+	dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(SCREENVERT));
+
+	dev->SetTexture(0, NULL);
+	if (haveVP)
+		dev->SetViewport(&savedVP);
+	dev->SetRenderState(D3DRS_CULLMODE, oldCull);
+}
+
 
 
 ///Performs additional terrain rendering pass, blending in the black shroud texture.
@@ -2369,8 +2535,30 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 	dev->SetVertexShaderConstantF(0, (const float *)&dxVPT, 4);
 	dev->SetPixelShaderConstantF(0, sm.lightViewProjT, 4);
 
-	const float psC4[4] = { 1.0f, sm.depthBias, sm.texelOffset, sm.texelOffset };
+	// Ronin @feature 03/09/2026 DX9: §29j.13h. c4.x is the EMA history weight.
+	// Ronin @bugfix 06/09/2026 DX9: §29j.13l. Zero it in the reflection pass — the history buffer and the
+	// c7 matrix both belong to the MAIN view, so blending them into a mirrored render is wrong.
+	const float emaWeight = ShaderClass::Is_Backface_Culling_Inverted() ? 0.0f : sm.accumWeight;
+	const float psC4[4] = { emaWeight, sm.depthBias, sm.texelOffset, sm.texelOffset };
 	dev->SetPixelShaderConstantF(4, psC4, 1);
+
+	// Ronin @bugfix 05/09/2026 DX9: §29j.13h. RENDER TARGET size, not the viewport — VPOS is in
+	// render-target space and the two differ by the command bar. Doc §9.14.
+	{
+		IDirect3DSurface9 *curRT = NULL;
+		D3DSURFACE_DESC rtd;
+		if (SUCCEEDED(dev->GetRenderTarget(0, &curRT)) && curRT != NULL)
+		{
+			const HRESULT rtdHr = curRT->GetDesc(&rtd);
+			curRT->Release();
+			if (SUCCEEDED(rtdHr) && rtd.Width > 0 && rtd.Height > 0)
+			{
+				const float psC6[4] = { 1.0f / (float)rtd.Width, 1.0f / (float)rtd.Height,
+										(float)rtd.Width, (float)rtd.Height };
+				dev->SetPixelShaderConstantF(6, psC6, 1);
+			}
+		}
+	}
 
 	// Ronin @feature 17/08/2026 DX9: §29h-6. c5 = direction the light TRAVELS + world size of one
 	// shadow texel — the N.L fade and the normal-offset bias respectively. Both are fit-dependent, so
@@ -2379,12 +2567,48 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 							sm.texelWorldSize };
 	dev->SetPixelShaderConstantF(5, psC5, 1);
 
+	// Ronin @feature 06/09/2026 DX9: §29j.13l. c7..c10 = last frame's view-projection, c11 = viewport
+	// rect in target pixels. Only the main pass advances the history matrix. Doc §8.3.
+	{
+		static D3DXMATRIX s_prevVP;
+		static Bool s_prevVPValid = FALSE;
+		D3DXMATRIX prevVPT;
+		D3DXMatrixTranspose(&prevVPT, s_prevVPValid ? &s_prevVP : &dxVP);
+		dev->SetPixelShaderConstantF(7, (const float *)&prevVPT, 4);
+		dev->SetPixelShaderConstantF(12, (const float *)&dxVPT, 4);
+
+		D3DVIEWPORT9 vpNow;
+		if (SUCCEEDED(dev->GetViewport(&vpNow)))
+		{
+			const float psC11[4] = { (float)vpNow.X, (float)vpNow.Y,
+									 (float)vpNow.Width, (float)vpNow.Height };
+			dev->SetPixelShaderConstantF(11, psC11, 1);
+		}
+
+		if (!ShaderClass::Is_Backface_Culling_Inverted())
+		{
+			s_prevVP      = dxVP;
+			s_prevVPValid = TRUE;
+		}
+	}
+
 	dev->SetTexture(0, sm.shadowTex);
 	dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);	// triggers hardware PCF
 	dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
 	dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
 	dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 	dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+
+	// §29j.13h: last frame's accumulation buffer. NEVER accumCur — that one is the render target this
+	// pass is writing to, and reading a bound target is undefined. fxc flattens the branch around a
+	// tex2D, so s1 is sampled even at weight 0; bind the shadow map as a harmless stand-in if there is
+	// no history yet, rather than leave a NULL sampler. POINT because the mapping is exactly 1:1.
+	dev->SetTexture(1, sm.accumPrev ? sm.accumPrev : sm.shadowTex);
+	dev->SetSamplerState(1, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);	// §29j.13l — reprojection lands between texels
+	dev->SetSamplerState(1, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(1, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+	dev->SetSamplerState(1, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+	dev->SetSamplerState(1, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 
 	// Save EVERY state we touch. Relying on ShaderClass::Invalidate only works if the next draw goes
 	// through Set_Shader; trees do not, and a leaked SRCBLEND=ZERO made them multiply instead of
@@ -2398,16 +2622,62 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 	dev->GetRenderState(D3DRS_ZWRITEENABLE,     &oldZWrite);
 	dev->GetRenderState(D3DRS_ALPHATESTENABLE,  &oldAlphaTest);
 
+	// Ronin @feature 03/09/2026 DX9: §29j.13h. Render the shadow term to an offscreen buffer so the next
+	// frame can blend it. Any failure falls through to the direct-to-framebuffer path. Doc §8.
+	IDirect3DSurface9 *oldRT = NULL;
+	D3DVIEWPORT9 savedVP;
+	const Bool haveVP = SUCCEEDED(dev->GetViewport(&savedVP));
+	// Ronin @bugfix 04/09/2026 DX9: §29j.13h. Skip accumulation in the reflection pass — mirrored camera
+	// into the same buffer. The receiver itself must still run; only the accumulation is skipped.
+	const Bool reflectionPass = ShaderClass::Is_Backface_Culling_Inverted();
+	if (haveVP && !reflectionPass && sm.accumSurf != NULL &&
+		SUCCEEDED(dev->GetRenderTarget(0, &oldRT)) && oldRT != NULL)
+
+	{
+		if (FAILED(dev->SetRenderTarget(0, sm.accumSurf)))
+		{
+			oldRT->Release();
+			oldRT = NULL;
+		}
+		else
+		{
+			// Ronin @bugfix 03/09/2026 DX9: §29j.13h. SetRenderTarget resets the viewport; the 3D view
+			// is a sub-rect, so restore it or the terrain rasterises at the wrong scale.
+			dev->SetViewport(&savedVP);
+		}
+	}
+	const Bool toAccum = (oldRT != NULL);
+
+
 	// Ronin @bugfix 16/08/2026 DX9: §29. The lookup was never the problem — with a COPY blend the
 	// terrain showed correct shadows. The MODULATE was being lost: these were raw dev->SetRenderState
 	// calls, and renderTerrainPass below calls Apply_Render_State_Changes per tile, which re-applies
 	// the wrapper's CACHED shader blend over ours. §12a, third time. Route them through the wrapper.
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, TRUE);
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND,  D3DBLEND_ZERO);
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_SRCCOLOR);
+	if (toAccum)
+	{
+		// Ronin @bugfix 06/09/2026 DX9: §29j.13h. Clear to white — the composite multiplies the WHOLE
+		// target, so pixels the terrain no longer covers must not keep last frame's shade.
+		dev->Clear(0, NULL, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, FALSE);	// WRITING the term, not modulating
+	}
+
+	else
+	{
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, TRUE);
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND,  D3DBLEND_ZERO);
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_SRCCOLOR);
+	}
+	// Ronin @bugfix 04/09/2026 DX9: §29j.13h. DEPTH TEST STAYS ON, in both branches. It was briefly
+	// disabled for the accumulation path on a z-fight theory that measured NO visual change — because
+	// the probe running at the time was a screen-space stripe pattern, identical for every tile, so
+	// tile ORDER could not affect it. With real per-tile shadow values it matters immediately: without
+	// the test a hidden tile drawn later overwrites a visible shadowed one at the same pixels, and the
+	// buffer fills with "lit". That wiped out nearly every terrain shadow.
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZENABLE, TRUE);
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZWRITEENABLE, FALSE);
+
+
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHATESTENABLE, FALSE);
 
 	// Bind a DECLARATION, not an FVF. Apply_Render_State_Changes re-asserts currentDecl and leaves the
@@ -2426,6 +2696,21 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 
 	dev->SetPixelShader(NULL);
 	dev->SetTexture(0, NULL);
+	// Ronin @feature 03/09/2026 DX9: §29j.13h. Stage 1 has held accumPrev since :2584. Release it here,
+	// after the last draw that reads it (renderTerrainPass at :2646), so it cannot leak onward.
+	dev->SetTexture(1, NULL);
+
+
+	// §29j.13h: back to the real target, then multiply the accumulated term in. SetRenderTarget RESETS
+	// the viewport, so it has to be restored on the way back too or every later draw uses the wrong rect.
+	if (toAccum)
+	{
+		dev->SetRenderTarget(0, oldRT);
+		oldRT->Release();
+		if (haveVP)
+			dev->SetViewport(&savedVP);
+		compositeTerrainShadowAccum(dev, sm.accumCur);
+	}
 
 	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, oldAlphaBlend);
 	dev->SetRenderState(D3DRS_SRCBLEND,         oldSrcBlend);
@@ -2437,6 +2722,7 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 
 	// Our raw SetRenderState/SetTexture calls desynced the wrapper's cache (§12a) — force a resync.
 	ShaderClass::Invalidate();
+
 	DX8Wrapper::Invalidate_Cached_Render_States();
 }
 
@@ -2805,13 +3091,15 @@ void HeightMapRenderObjClass::renderPrimaryBlendControlPass()
 				// filter). Sampling is sub-rect-into-atlas, so address mode CLAMP is correct;
 				// the PS's own frac() wrap on worldXY happens BEFORE the atlas-region remap.
 				const Int normalPageCount = m_map->getPerMaterialNormalAtlasPageCount();
-				// Ronin @diagnostic 12/08/2026 §29: does any map need all 4 normal pages? Decides
-				// whether the shadow map can take s15 or needs its own terrain pass.
-				static Int s_loggedNormalPages = -1;
-				if (normalPageCount != s_loggedNormalPages) {
-					s_loggedNormalPages = normalPageCount;
-					WWDEBUG_SAY(("[SHADOWMAP] terrain normal pages in use: %d of 4", normalPageCount));
-				}
+#ifdef DEBUG_LOGGING
+					// Ronin @diagnostic 12/08/2026 §29: does any map need all 4 normal pages? Decides
+					// whether the shadow map can take s15 or needs its own terrain pass.
+					static Int s_loggedNormalPages = -1;
+					if (normalPageCount != s_loggedNormalPages) {
+						s_loggedNormalPages = normalPageCount;
+						WWDEBUG_SAY(("[SHADOWMAP] terrain normal pages in use: %d of 4", normalPageCount));
+					}
+#endif
 				{
 					const Int kNormalSamplerBase = 12; // s12..s15 = up to 4 pages
 					const Int kMaxNormalSamplers = 4;
@@ -2933,6 +3221,9 @@ void HeightMapRenderObjClass::renderPrimaryBlendControlPass()
 
 			for (Int pmJ = 0; pmJ < m_numVBTilesY; ++pmJ) {
 				for (Int pmI = 0; pmI < m_numVBTilesX; ++pmI) {
+					// Ronin @perf 30/08/2026 DX9: §29i.3. Depth pass only — FALSE in every other pass.
+					if (shadowDepthSkipTile(pmI, pmJ, m_numVBTilesX))
+						continue;
 					DX8Wrapper::Set_Vertex_Buffer(getVertexBufferTile(pmI, pmJ));
 					if (Is_Hidden() == 0) {
 						DX8Wrapper::Draw_Triangles(0, HEIGHTMAP_POLYGON_NUM, 0, HEIGHTMAP_VERTEX_NUM);
