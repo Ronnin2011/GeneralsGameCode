@@ -886,21 +886,22 @@ WW3DErrorType WW3D::Begin_Render(bool clear,bool clearz,const Vector3 & color, f
     WWASSERT(!IsRendering);
     IsRendering = true;
 
-		// Ronin @bugfix 21/12/2025: DX9 requires explicit viewport initialization before BeginScene()
-		// Unlike DX8, DX9 does not auto-initialize viewport to render target dimensions.
-		// When -nocinematic is used, Camera::Apply() never runs during startup,
-		// leaving viewport uninitialized and causing water shader artifacts.
-		RenderBackendViewport vp;
-		int width, height, bits;
-		bool windowed;
-		WW3D::Get_Render_Target_Resolution(width, height, bits, windowed);
-		vp.x = 0;
-		vp.y = 0;
-		vp.width = width;
-		vp.height = height;
-		vp.min_z = 0.0f;
-		vp.max_z = 1.0f;
-		Get_Render_Backend()->Set_Viewport(vp);
+	// Ronin @bugfix 21/12/2025 DX9: set the viewport EVERY frame, not only when clearing — DX9 does not
+	// auto-initialise it, and with -nocinematic Camera::Apply() never runs. Caused water shader artifacts.
+	RenderBackendViewport vp;
+	int width, height, bits;
+	bool windowed;
+	WW3D::Get_Render_Target_Resolution(width, height, bits, windowed);
+	vp.x = 0;
+	vp.y = 0;
+	vp.width = width;
+	vp.height = height;
+	vp.min_z = 0.0f;
+	vp.max_z = 1.0f;
+	Get_Render_Backend()->Set_Viewport(vp);
+
+	// If we want to clear the screen, do it now
+	if (clear || clearz) {
 		Get_Render_Backend()->Clear(clear, clearz, color, dest_alpha);
 	}
 
