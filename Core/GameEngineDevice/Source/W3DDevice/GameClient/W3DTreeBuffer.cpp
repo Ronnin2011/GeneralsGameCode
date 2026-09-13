@@ -1816,10 +1816,26 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 				psDev->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
 				psDev->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 				psDev->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+				// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. c24..c27 far matrix, c28 its bias,
+				// texel size and cascade count. s5 gets the near map as a stand-in at count 1 —
+				// fxc cannot branch around tex2Dproj, so it is sampled either way.
+				psDev->SetPixelShaderConstantF(24, TheTerrainShadowPass.lightViewProjFarT, 4);
+				const float psC28[4] = { TheTerrainShadowPass.depthBiasFar,
+										 TheTerrainShadowPass.texelWorldSizeFar,
+										 TheTerrainShadowPass.cascadeCount, 0.0f };
+				psDev->SetPixelShaderConstantF(28, psC28, 1);
+				psDev->SetTexture(5, TheTerrainShadowPass.shadowTexFar ?
+									 TheTerrainShadowPass.shadowTexFar : TheTerrainShadowPass.shadowTex);
+				psDev->SetSamplerState(5, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+				psDev->SetSamplerState(5, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+				psDev->SetSamplerState(5, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+				psDev->SetSamplerState(5, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+				psDev->SetSamplerState(5, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 			} else {
 				const float psC16[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 				psDev->SetPixelShaderConstantF(16, psC16, 1);
 				psDev->SetTexture(3, NULL);
+				psDev->SetTexture(5, NULL);
 			}
 
 			// Ronin @feature 07/09/2026 DX9: §29j.13n. Tree receiver accumulation, MRT. Main pass only:
@@ -1906,6 +1922,7 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 	// Ronin @feature 07/09/2026 DX9: §29j.13n. Release RT1 and the history sampler.
 	DX8Wrapper::_Get_D3D_Device8()->SetRenderTarget(1, NULL);
 	DX8Wrapper::_Get_D3D_Device8()->SetTexture(4, NULL);
+	DX8Wrapper::_Get_D3D_Device8()->SetTexture(5, NULL);	// §29i.3 step 2 — far cascade
 	DX8Wrapper::BindLayoutFVF(DX8_FVF_XYZNDUV1, "W3DTreeBuffer::drawTrees cleanup");
 	DX8Wrapper::Set_Pixel_Shader(0);
 	DX8Wrapper::Invalidate_Cached_Render_States();	//code above mucks around with W3D states so make sure we reset

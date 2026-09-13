@@ -583,6 +583,11 @@ static float                  s_shadowDepthBias = 0.0f;
 // channel as the matrix rather than being re-derived on this side.
 static float                  s_shadowLightDir[3] = { 0.0f, 0.0f, -1.0f };
 static float                  s_shadowTexelWorld  = 0.0f;
+// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. FAR cascade state, same channel.
+static IDirect3DBaseTexture9* s_shadowMapTexFar     = nullptr;
+static float                  s_shadowLightVPFar[16] = { 0 };
+static float                  s_shadowDepthBiasFar   = 0.0f;
+static float                  s_shadowTexelWorldFar  = 0.0f;
 
 void DX8InstanceManagerClass::Set_Shadow_Map(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
                                              float texelOffset, float depthBias,
@@ -596,6 +601,18 @@ void DX8InstanceManagerClass::Set_Shadow_Map(IDirect3DBaseTexture9* tex, const f
 		memcpy(s_shadowLightVP, lightViewProjT, sizeof(float) * 16);
 	if (lightTravelDir != nullptr)
 		memcpy(s_shadowLightDir, lightTravelDir, sizeof(float) * 3);
+}
+
+// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. FAR cascade. Separate from Set_Shadow_Map so the
+// unbind call in the depth pass and every other caller keep working unchanged.
+void DX8InstanceManagerClass::Set_Shadow_Map_Far(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
+                                                 float depthBias, float texelWorldSize)
+{
+	s_shadowMapTexFar     = tex;
+	s_shadowDepthBiasFar  = depthBias;
+	s_shadowTexelWorldFar = texelWorldSize;
+	if (lightViewProjT != nullptr)
+		memcpy(s_shadowLightVPFar, lightViewProjT, sizeof(float) * 16);
 }
 
 
@@ -1220,11 +1237,26 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		dev->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
 		dev->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 		dev->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. c18..c21 far matrix, c22 its bias/texel/count.
+		// fxc cannot branch around tex2Dproj, so s4 is sampled even at count 1 — bind the near map as a
+		// stand-in rather than leave a NULL sampler.
+		dev->SetPixelShaderConstantF(18, s_shadowLightVPFar, 4);
+		const float psC22[4] = { s_shadowDepthBiasFar, s_shadowTexelWorldFar,
+								 (s_shadowMapTexFar != nullptr) ? 2.0f : 1.0f, 0.0f };
+		dev->SetPixelShaderConstantF(22, psC22, 1);
+		dev->SetTexture(4, (s_shadowMapTexFar != nullptr) ? s_shadowMapTexFar : s_shadowMapTex);
+		dev->SetSamplerState(4, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(4, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(4, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(4, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(4, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 	} else {
 		const float psC16[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 		dev->SetPixelShaderConstantF(16, psC16, 1);
 		dev->SetTexture(3, nullptr);
+		dev->SetTexture(4, nullptr);
 	}
+
 
 	// Stage-0 (diffuse) sampler defaults for the programmable path. FFP categories normally set these
 	// per texture; a container flush spans many, so use the common linear/wrap defaults once.

@@ -18,6 +18,7 @@ sampler2D g_CloudSampler : register(s1);
 sampler2D g_NormalSampler : register(s2);
 // Ronin @feature 12/08/2026 DX9: §29 phase 2 — hardware depth shadow map, PCF free on sample.
 sampler2D g_ShadowSampler : register(s3);
+sampler2D g_ShadowSamplerFar : register(s4);  // §29i.3 step 2 — far cascade
 
 float4 g_CloudParams : register(c0); // x = cloud enable
 float4 g_DebugParams : register(c1);
@@ -34,6 +35,9 @@ float4 g_PS_NumLights : register(c11); // x = number of lights (0..4)
 float4x4 g_LightViewProj : register(c12); // c12..c15, TRANSPOSED like g_ViewProj (§29d)
 float4 g_ShadowParams : register(c16); // x = enable, y = depth bias, zw = half-texel offset
 float4 g_ShadowParams2 : register(c17); // xyz = direction light TRAVELS, w = texel size in world units
+// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. Far cascade — matrix and its own bias/texel size.
+float4x4 g_LightViewProjFar : register(c18); // c18..c21, TRANSPOSED
+float4 g_CascadeParams : register(c22);  // x = far bias, y = far texel world size, z = cascade count
 
 struct PS_INPUT
 {
@@ -153,31 +157,47 @@ float4 main(PS_INPUT input) : COLOR0
         const float BACKFACE_SHADOW = 0.35f;
         float  geo = lerp(BACKFACE_SHADOW, 1.0f, smoothstep(0.0f, 0.35f, ndotl));
 
+        // Ronin @feature 09/09/2026 DX9: §29i.3 step 2. CASCADE SELECT from the UN-OFFSET position —
+        // the normal offset below is scaled by that cascade's own texel size, so pick the cascade first.
+        float4 selClip = mul(float4(input.worldPos, 1.0f), g_LightViewProj);
+        float2 selUV   = selClip.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
+        bool   inNear  = (g_CascadeParams.z < 1.5f)
+                         || (selUV.x == saturate(selUV.x) && selUV.y == saturate(selUV.y));
+        float texelWorld = inNear ? g_ShadowParams2.w : g_CascadeParams.y;
+
         const float NORMAL_OFFSET_TEXELS = 2.0f;
         float  slope     = sqrt(saturate(1.0f - ndotl * ndotl));
-        float3 samplePos = input.worldPos + Ns * (g_ShadowParams2.w * NORMAL_OFFSET_TEXELS * slope);
+        float3 samplePos = input.worldPos + Ns * (texelWorld * NORMAL_OFFSET_TEXELS * slope);
 
-        float4 lightClip  = mul(float4(samplePos, 1.0f), g_LightViewProj);
-        float2 shadowUV   = lightClip.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
-        float  lightDepth = lightClip.z - g_ShadowParams.y;
+        // Each cascade carries its OWN bias — a shared constant stripes the far split (doc §2).
+        float4 clipN = mul(float4(samplePos, 1.0f), g_LightViewProj);
+        float4 clipF = mul(float4(samplePos, 1.0f), g_LightViewProjFar);
+        float2 uvN   = clipN.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
+        float2 uvF   = clipF.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
+        float2 shadowUV = inNear ? uvN : uvF;
 
         // Outside the fitted map = lit, or everything beyond it goes dark.
         if (shadowUV.x == saturate(shadowUV.x) && shadowUV.y == saturate(shadowUV.y))
         {
             float texelUV = g_ShadowParams.z * 2.0f;
-            float sum = 0.0f;
+            float depthN  = clipN.z - g_ShadowParams.y;
+            float depthF  = clipF.z - g_CascadeParams.x;
+            // fxc cannot branch around tex2Dproj (X3528), so both cascades are sampled — 18 taps.
+            float sumN = 0.0f;
+            float sumF = 0.0f;
             [unroll]
             for (int y = -1; y <= 1; ++y)
             {
                 [unroll]
                 for (int x = -1; x <= 1; ++x)
                 {
-                    float2 uv = shadowUV + float2(x, y) * texelUV;
-                    sum += tex2Dproj(g_ShadowSampler, float4(uv, lightDepth, 1.0f)).r;
+                    float2 ofs = float2(x, y) * texelUV;
+                    sumN += tex2Dproj(g_ShadowSampler,    float4(uvN + ofs, depthN, 1.0f)).r;
+                    sumF += tex2Dproj(g_ShadowSamplerFar, float4(uvF + ofs, depthF, 1.0f)).r;
                 }
             }
             // A surface turning away from the sun can only get DARKER — min(), not lerp().
-            float lit = min(sum * (1.0f / 9.0f), geo);
+            float lit = min((inNear ? sumN : sumF) * (1.0f / 9.0f), geo);
             color.rgb *= lerp(0.45f, 1.0f, lit);
         }
     }

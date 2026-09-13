@@ -71,15 +71,26 @@ public:
 	static void releaseResources(void);		// device-lost hook
 	static void reacquireResources(void);	// device-reset hook
 
-	// Phase 1. Fits the light matrices to the visible ground, texel-snapped.
-	static void updateLightMatrices(const FrustumClass &cameraFrustum);
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. Cascades. ONE map covers the whole view; TWO add a sharp NEAR map over
+	// the middle of the screen, with the FAR map still covering the whole view.
+	static const Int MAX_SHADOW_SPLITS  = 4;
+	// Ronin @feature 13/09/2026 DX9: §29i.3. Per tier, not a constant — set by applyQuality: Normal one map, High and Ultra two.
+	static Int getSplitCount(void) { return m_splitCount; }
+	// Ronin @bugfix 13/09/2026 DX9: §29i.3. The near map covers this PERCENT of the screen's width and height, centred —
+	// an RTS view looks at the middle, not at the ground nearest the camera. Higher covers more; too high loses 0.25.
+	static const Int NEAR_SCREEN_PCT = 50;
+
+
+	// Phase 1. Fits the light matrices to the visible ground, texel-snapped. One call per split. screenFrac pulls the
+	// camera's corner rays toward the screen centre: 1 = the whole view.
+	static void updateLightMatrices(const FrustumClass &cameraFrustum, Int split, Real fitNear, Real fitFar, Real screenFrac);
 
 	// Fit + fill, in one call. MUST run BEFORE the main render loop — you cannot render to a
 	// texture while rendering to screen (W3DDisplay.cpp:2149).
 	static void updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *scene);
 
-	// Binds the shadow map as the render target and clears it. Pair with endDepthPass().
-	static Bool beginDepthPass(void);
+	// Binds THIS SPLIT's depth target and clears it. endDepthPass() once, after the last split.
+	static Bool beginDepthPass(Int split);
 	static void endDepthPass(void);
 
 	// Debug: blits the light's COLOUR view to a screen corner. Validates direction/fit/coverage,
@@ -91,7 +102,7 @@ public:
 	// HW_DEPTH samples the DEPTH texture, R32F samples the COLOUR one — they are sibling types,
 	// so the common base is the only safe return (§29).
 	static TextureBaseClass *peekShadowTexture(void);
-	static const Matrix4x4 &getLightViewProj(void) { return m_lightViewProj; }
+	static const Matrix4x4 &getLightViewProj(Int split) { return m_lightViewProj[(split >= 0 && split < MAX_SHADOW_SPLITS) ? split : 0]; }
 
 	// Phase 1b. ORTHO camera fitted to the light — also what phase (b) will render the scene with.
 	static CameraClass *getLightCamera(void) { return m_lightCamera; }
@@ -107,27 +118,30 @@ public:
 	// because depthHalf was 2*radius, so the radius CANCELLED — that was a property of the SPHERE fit,
 	// not a law, and the box fit decouples depth range from texel size. This is the general form and it
 	// collapses back to cot/(3*res) in the old geometry, so nothing regresses.
-	static Real getDepthBias(void)
+	static Real getDepthBias(Int split)
 	{
 		// Dimensionless. 1.0 = one texel of depth error, which is what cleared the ship deck. Raise
 		// slightly if stripes reappear — it is the only knob left in the whole bias path.
+		if (split < 0 || split >= MAX_SHADOW_SPLITS) split = 0;
 		const Real TEXEL_SPAN = 1.0f;
 		const Real res = (m_resolution > 0) ? (Real)m_resolution : 1024.0f;
-		const Real depthRange = 3.0f * m_lastDepthHalf;		// near 0.1 .. far 3*depthHalf+1
+		const Real depthRange = 3.0f * m_lastDepthHalf[split];	// near 0.1 .. far 3*depthHalf+1
 		if (depthRange <= 0.0f)
 			return 0.0f;
-		return (TEXEL_SPAN * ((2.0f * m_lastRadius) / res) * m_lastSunCot) / depthRange;
+		return (TEXEL_SPAN * ((2.0f * m_lastRadius[split]) / res) * m_lastSunCot) / depthRange;
 	}
 	static Real getTexelOffset(void) { return (m_resolution > 0) ? (0.5f / (Real)m_resolution) : 0.0f; }
 	static Int getResolution(void) { return m_resolution; }
 	// World size of one shadow texel. Unused today; it is the natural unit for the receiver-side
 	// normal-offset bias that comes next.
-	static Real getTexelWorldSize(void)
+	static Real getTexelWorldSize(Int split)
 	{
-		return (m_resolution > 0) ? (2.0f * m_lastRadius / (Real)m_resolution) : 0.0f;
+		if (split < 0 || split >= MAX_SHADOW_SPLITS) split = 0;
+		return (m_resolution > 0) ? (2.0f * m_lastRadius[split] / (Real)m_resolution) : 0.0f;
 	}
 	// Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Fit numbers for the [SHADOW] readout.
-	static Real getFitExtent(void)   { return m_lastRadius; }
+	static Real getFitExtent(void)   { return m_lastRadius[0]; }
+
 	static Real getFitRequired(void) { return m_lastRequired; }
 	static Real getFitBoxX(void)     { return m_lastBoxX; }
 	static Real getFitBoxY(void)     { return m_lastBoxY; }
@@ -140,6 +154,9 @@ public:
 	{
 		if (topZ > m_frameMaxReceiverZ) m_frameMaxReceiverZ = topZ;
 	}
+	// Ronin @feature 13/09/2026 DX9: §29i.3. Visibility_Check calls this for every MOVING caster it keeps in the depth
+	// pass. Marks its light-space disc in the current split's mask; a no-op outside a split's render.
+	static void noteMovingCaster(Real cx, Real cy, Real cz, Real radius);
 
 	// Ronin @perf 19/08/2026 DX9: §29j.7 static caster bake.
 	static Bool isStaticCaster(RenderObjClass *robj);
@@ -156,8 +173,11 @@ private:
 	// lever on depth-pass DRAW COUNT (§29j.7): 1200 -> 400 removed 397 draws and 0.81 ms.
 	static Real				m_maxShadowDistance;
 	static Int				m_quality;
-	static TextureClass		*m_colorTarget;
-	static ZTextureClass	*m_depthTarget;
+	static Int				m_splitCount;		// §29i.3 — set per tier by applyQuality, before init
+	// Ronin @bugfix 09/09/2026 DX9: §29i.3 step 2. ONE MATCHED PAIR PER SPLIT — colour AND depth. Two
+	// splits sharing a colour target make the second bind a silent no-op (dx8wrapper.cpp:4590).
+	static TextureClass		*m_colorTarget[MAX_SHADOW_SPLITS];
+	static ZTextureClass	*m_depthTarget[MAX_SHADOW_SPLITS];
 	// Ronin @feature 03/09/2026 DX9: §29j.13h. Screen-space shadow accumulation, ping-ponged. RAW D3D
 	// textures, so DX8TextureManagerClass does NOT recreate them across a device reset the way
 	// Create_Render_Target's do — hence ensureAccumTargets(), which remakes them whenever the pointer
@@ -172,14 +192,24 @@ private:
 
 	static IDirect3DTexture9	*m_treeAccumTex[2];
 	static IDirect3DSurface9	*m_treeAccumSurf[2];
+	// Ronin @feature 13/09/2026 DX9: §29i.3. MOVING-caster mask per split: a CPU grid filled during that split's depth
+	// render and uploaded right after. MANAGED pool, so a device reset needs none of the accum path's recreate logic.
+	enum { MOVING_MASK_RES = 128 };
+	static IDirect3DTexture9	*m_movingMaskTex[MAX_SHADOW_SPLITS];
+	static unsigned char		m_movingMaskGrid[MOVING_MASK_RES * MOVING_MASK_RES];
+	static Int					m_movingMaskSplit;		// split whose depth render is running; -1 outside it
+	static void					beginMovingMask(Int split);
+	static void					uploadMovingMask(Int split);
 
 
-	static Matrix4x4		m_lightViewProj;
-	static Real				m_lastRadius;	// quantised HALF-EXTENT of the fitted square (§29i.3 box fit)
-	static Real				m_lastSunCot;	// cot(sun elevation), clamped — see updateLightMatrices
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. PER SPLIT. The bias is texelWorld * cot / depthRange
+	// and both terms must come from that cascade's own fit, or the far split stripes (doc §2).
+	static Matrix4x4		m_lightViewProj[MAX_SHADOW_SPLITS];
+	static Real				m_lastRadius[MAX_SHADOW_SPLITS];	// quantised HALF-EXTENT, per split
+	static Real				m_lastSunCot;	// cot(sun elevation), clamped — identical for every split
 	// Ronin @feature 23/08/2026 DX9: §29i.3. Half the ortho depth range. Once the fit became a BOX this
 	// stopped being proportional to m_lastRadius, so getDepthBias needs it explicitly.
-	static Real				m_lastDepthHalf;
+	static Real				m_lastDepthHalf[MAX_SHADOW_SPLITS];
 	// Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Fit readout state. Bare = box with headroom removed.
 	static Real				m_lastRequired;
 	static Real				m_lastBoxX;

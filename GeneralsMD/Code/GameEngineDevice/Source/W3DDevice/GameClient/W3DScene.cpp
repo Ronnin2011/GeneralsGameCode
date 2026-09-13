@@ -521,16 +521,31 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 
 						// Ronin @perf 30/08/2026 DX9: §29i.3. A real light-box test — camera->Cull_Sphere
 						// above is a lateral no-op on an ORTHO camera, so the box clips but never culls.
-						// Tests the SWEPT bounds against the published footprint. Exists for the per-split
-						// boxes. fitRadius > 0 guards a degenerate fit, which would cull every caster.
-						if (isVisible && TheTerrainShadowPass.fitRadius > 0.0f)
+						// Ronin @bugfix 13/09/2026 DX9: §29i.3 step 2. EXACT, in LIGHT space, as the terrain tile cull.
+						// Ortho light: a caster's own light X/Y is what reaches the map, so test the UNSWEPT sphere.
+						if (isVisible && TheTerrainShadowPass.fitExtentX > 0.0f && TheTerrainShadowPass.fitExtentY > 0.0f)
 						{
-							const float ext = TheTerrainShadowPass.fitRadius + sweptBounds.Radius;
-							if (fabsf(sweptBounds.Center.X - TheTerrainShadowPass.fitCentre[0]) > ext ||
-								fabsf(sweptBounds.Center.Y - TheTerrainShadowPass.fitCentre[1]) > ext)
+							const float * const ax = TheTerrainShadowPass.lightAxisX;
+							const float * const ay = TheTerrainShadowPass.lightAxisY;
+							const float * const fc = TheTerrainShadowPass.fitCentre;
+							const float boxCX = fc[0] * ax[0] + fc[1] * ax[1] + fc[2] * ax[2];
+							const float boxCY = fc[0] * ay[0] + fc[1] * ay[1] + fc[2] * ay[2];
+							const float px = bs.Center.X * ax[0] + bs.Center.Y * ax[1] + bs.Center.Z * ax[2];
+							const float py = bs.Center.X * ay[0] + bs.Center.Y * ay[1] + bs.Center.Z * ay[2];
+							if (fabsf(px - boxCX) > TheTerrainShadowPass.fitExtentX + bs.Radius ||
+								fabsf(py - boxCY) > TheTerrainShadowPass.fitExtentY + bs.Radius)
 								isVisible = false;
 						}
+						// Ronin @feature 13/09/2026 DX9: §29i.3. Mark MOVING casters in this split's mask. Static casters (structures,
+						// immobile, client scenery) are left out, and so is anything without a drawable — terrain included.
+						if (isVisible && !W3DShadowMap::isStaticCaster(robj))
+						{
+							DrawableInfo *mdi = (DrawableInfo *)robj->Get_User_Data();
+							if (mdi != nullptr && mdi->m_drawable != nullptr)
+								W3DShadowMap::noteMovingCaster(bs.Center.X, bs.Center.Y, bs.Center.Z, bs.Radius);
+						}
 					}
+
 
 				if (isVisible)
 				{

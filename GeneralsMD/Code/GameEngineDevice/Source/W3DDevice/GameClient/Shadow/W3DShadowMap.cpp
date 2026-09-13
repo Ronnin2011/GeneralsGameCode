@@ -55,12 +55,16 @@ Int				W3DShadowMap::m_resolution	= 0;
 // until applyQuality runs.
 Real			W3DShadowMap::m_maxShadowDistance = 1200.0f;
 Int				W3DShadowMap::m_quality		= W3DShadowMap::SHADOWQ_HIGH;
-TextureClass	*W3DShadowMap::m_colorTarget	= NULL;
-ZTextureClass	*W3DShadowMap::m_depthTarget	= NULL;
+Int				W3DShadowMap::m_splitCount	= 2;
+TextureClass	*W3DShadowMap::m_colorTarget[W3DShadowMap::MAX_SHADOW_SPLITS] = { NULL };
+ZTextureClass	*W3DShadowMap::m_depthTarget[W3DShadowMap::MAX_SHADOW_SPLITS] = { NULL };
 IDirect3DTexture9	*W3DShadowMap::m_accumTex[2]  = { NULL, NULL };
 IDirect3DSurface9	*W3DShadowMap::m_accumSurf[2] = { NULL, NULL };
 IDirect3DTexture9	*W3DShadowMap::m_treeAccumTex[2]  = { NULL, NULL };
 IDirect3DSurface9	*W3DShadowMap::m_treeAccumSurf[2] = { NULL, NULL };
+IDirect3DTexture9	*W3DShadowMap::m_movingMaskTex[W3DShadowMap::MAX_SHADOW_SPLITS] = { NULL };
+unsigned char		W3DShadowMap::m_movingMaskGrid[W3DShadowMap::MOVING_MASK_RES * W3DShadowMap::MOVING_MASK_RES] = { 0 };
+Int					W3DShadowMap::m_movingMaskSplit = -1;
 Int				W3DShadowMap::m_accumIndex	= 0;
 Int				W3DShadowMap::m_accumW		= 0;
 Int				W3DShadowMap::m_accumH		= 0;
@@ -158,10 +162,10 @@ void W3DShadowMap::ensureAccumTargets(void)
 }
 
 
-Matrix4x4		W3DShadowMap::m_lightViewProj(true);
-Real			W3DShadowMap::m_lastRadius	= 0.0f;
+Matrix4x4		W3DShadowMap::m_lightViewProj[W3DShadowMap::MAX_SHADOW_SPLITS];
+Real			W3DShadowMap::m_lastRadius[W3DShadowMap::MAX_SHADOW_SPLITS] = { 0.0f };
 Real			W3DShadowMap::m_lastSunCot	= 2.0f;	// ~27 deg sun until updateLightMatrices runs
-Real			W3DShadowMap::m_lastDepthHalf = 0.0f;
+Real			W3DShadowMap::m_lastDepthHalf[W3DShadowMap::MAX_SHADOW_SPLITS] = { 0.0f };
 Real			W3DShadowMap::m_lastRequired = 0.0f;	// §29j.13f — fit before the power-of-two round-up
 Real			W3DShadowMap::m_lastBoxX	= 0.0f;
 Real			W3DShadowMap::m_lastBoxY	= 0.0f;
@@ -227,14 +231,15 @@ static DWORD *loadShaderBlob(const char *path, DWORD *outSize)
 
 Bool W3DShadowMap::isAvailable(void)
 {
-	return m_mode != SHADOWMAP_UNAVAILABLE && m_colorTarget != NULL;
+	return m_mode != SHADOWMAP_UNAVAILABLE && m_colorTarget[0] != NULL;
 }
 
 TextureBaseClass *W3DShadowMap::peekShadowTexture(void)
 {
 	// On HW_DEPTH the depth texture IS the shadow map; the colour target is a bound dummy.
-	return (m_mode == SHADOWMAP_HW_DEPTH) ? (TextureBaseClass *)m_depthTarget
-										  : (TextureBaseClass *)m_colorTarget;
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. Split 0 is the NEAR map; the far one is published separately.
+	return (m_mode == SHADOWMAP_HW_DEPTH) ? (TextureBaseClass *)m_depthTarget[0]
+										  : (TextureBaseClass *)m_colorTarget[0];
 }
 
 
@@ -334,14 +339,30 @@ Bool W3DShadowMap::init(Int resolution)
 	if (m_mode == SHADOWMAP_UNAVAILABLE)
 		return FALSE;
 
+	// Ronin @feature 13/09/2026 DX9: §29i.3. A non-power-of-two size needs the card to allow one; otherwise fall to 2048.
+	const DWORD texCaps = DX8Wrapper::Get_Current_Caps()->Get_DX8_Caps().TextureCaps;
+	const Bool  isPow2  = ((resolution & (resolution - 1)) == 0);
+	if (!isPow2 && (texCaps & D3DPTEXTURECAPS_POW2) && !(texCaps & D3DPTEXTURECAPS_NONPOW2CONDITIONAL))
+		resolution = 2048;
 	m_resolution = resolution;
 
 	// Both targets go through TextureClass/ZTextureClass, so DX8TextureManagerClass recreates
 	// them across device reset with the render-target flag intact (§27c.1, verified).
-	DX8Wrapper::Create_Render_Target(resolution, resolution,
-		WW3D_FORMAT_X8R8G8B8, WW3D_ZFORMAT_D24S8, &m_colorTarget, &m_depthTarget);
+	// Ronin @bugfix 09/09/2026 DX9: §29i.3 step 2. ONE MATCHED PAIR PER SPLIT — a shared colour target
+	// makes the second split's bind a silent no-op, so its depth texture is never written.
+	// Ronin @feature 13/09/2026 DX9: §29i.3. Built here, NOT via Create_Render_Target — it rounds up to a power of two
+	// (dx8wrapper.cpp:4294), so 3072 would become a 4096 texture while every lookup assumes 3072.
+	for (Int i = 0; i < m_splitCount && i < MAX_SHADOW_SPLITS; ++i)
+	{
+		m_colorTarget[i] = NEW_REF(TextureClass, (resolution, resolution, WW3D_FORMAT_X8R8G8B8, MIP_LEVELS_1,
+												 TextureClass::POOL_DEFAULT, true));
+		if (m_colorTarget[i]->Peek_D3D_Base_Texture() == NULL)
+			REF_PTR_RELEASE(m_colorTarget[i]);
+		m_depthTarget[i] = NEW_REF(ZTextureClass, (resolution, resolution, WW3D_ZFORMAT_D24S8, MIP_LEVELS_1,
+												  TextureClass::POOL_DEFAULT));
+	}
 
-	if (m_colorTarget == NULL)
+	if (m_colorTarget[0] == NULL)
 	{
 #ifdef DEBUG_LOGGING
 		WWDEBUG_SAY(("[SHADOWMAP] %dx%d target creation FAILED", resolution, resolution));
@@ -350,11 +371,23 @@ Bool W3DShadowMap::init(Int resolution)
 		return FALSE;
 	}
 
+	// Ronin @feature 13/09/2026 DX9: §29i.3. Moving-caster masks, one per split. Non-fatal on failure: the receiver then
+	// samples NULL, which reads as black — no mask.
+	{
+		IDirect3DDevice9 *maskDev = DX8Wrapper::_Get_D3D_Device8();
+		for (Int i = 0; i < m_splitCount && i < MAX_SHADOW_SPLITS && maskDev != NULL; ++i)
+		{
+			if (FAILED(maskDev->CreateTexture(MOVING_MASK_RES, MOVING_MASK_RES, 1, 0, D3DFMT_A8R8G8B8,
+											  D3DPOOL_MANAGED, &m_movingMaskTex[i], NULL)))
+				m_movingMaskTex[i] = NULL;
+		}
+	}
 	// The light's ORTHO camera. Phase (b) will render the whole scene with this same camera.
 	m_lightCamera = NEW_REF(CameraClass, ());
 	m_lightCamera->Set_Projection_Type(CameraClass::ORTHO);
 
-	m_lightViewProj.Make_Identity();
+	for (Int i = 0; i < MAX_SHADOW_SPLITS; ++i)
+		m_lightViewProj[i].Make_Identity();
 
 	// Terrain receiver shaders. Non-fatal: without them terrain simply gets no shadows (§29h).
 	{
@@ -390,8 +423,13 @@ Bool W3DShadowMap::init(Int resolution)
 
 void W3DShadowMap::shutdown(void)
 {
-	REF_PTR_RELEASE(m_colorTarget);
-	REF_PTR_RELEASE(m_depthTarget);
+	for (Int i = 0; i < MAX_SHADOW_SPLITS; ++i)
+	{
+		REF_PTR_RELEASE(m_colorTarget[i]);
+		REF_PTR_RELEASE(m_depthTarget[i]);
+		if (m_movingMaskTex[i] != NULL) { m_movingMaskTex[i]->Release(); m_movingMaskTex[i] = NULL; }
+	}
+
 	releaseAccumTargets();
 	REF_PTR_RELEASE(m_lightCamera);
 
@@ -399,7 +437,8 @@ void W3DShadowMap::shutdown(void)
 	if (m_terrainShadowVS != NULL) { m_terrainShadowVS->Release(); m_terrainShadowVS = NULL; }
 	if (m_terrainShadowPS != NULL) { m_terrainShadowPS->Release(); m_terrainShadowPS = NULL; }
 
-	m_lastRadius = 0.0f;
+	for (Int i = 0; i < MAX_SHADOW_SPLITS; ++i)
+		m_lastRadius[i] = 0.0f;
 }
 
 void W3DShadowMap::releaseResources(void)
@@ -416,17 +455,21 @@ void W3DShadowMap::reacquireResources(void)
 // Ronin @feature 23/08/2026 DX9: §29i.2 quality ladder.
 // HAZARD: init() calls shutdown(), which releases the targets — so both receivers are pushed to NULL
 // FIRST, then the target is rebuilt, and the bake is dirtied because its map is gone.
-// RESOLUTION IS THE ONLY LEVER, measured: PCF is not a tier and 1024 is the floor. Doc §6.
+// RESOLUTION AND MAP COUNT are the levers, measured: PCF is not a tier. Doc §6.
 Bool W3DShadowMap::applyQuality(void)
 {
 	Int level = (TheGlobalData != NULL) ? TheGlobalData->m_shadowMapQuality : (Int)SHADOWQ_HIGH;
 	if (level < SHADOWQ_OFF)    level = SHADOWQ_OFF;
 	if (level >= SHADOWQ_COUNT) level = SHADOWQ_COUNT - 1;
 
-	static const Int  s_res[SHADOWQ_COUNT]  = {    0,   1024,    2048,    4096 };
-	static const Real s_dist[SHADOWQ_COUNT] = { 0.0f, 1200.0f, 1200.0f, 1200.0f };
+	// Ronin @feature 13/09/2026 DX9: §29i.3. Normal one 2048 (1024 measured the same cost), High two 2048, Ultra two 3072 —
+	// two 4096 measured +9.4 ms. init drops 3072 to 2048 on a card that needs power-of-two sizes. Doc §8.8.
+	static const Int  s_res[SHADOWQ_COUNT]    = {    0,    2048,    2048,    3072 };
+	static const Int  s_splits[SHADOWQ_COUNT] = {    1,       1,       2,       2 };
+	static const Real s_dist[SHADOWQ_COUNT]   = { 0.0f, 1200.0f, 1200.0f, 1200.0f };
 
 	m_quality           = level;
+	m_splitCount        = s_splits[level];
 	m_maxShadowDistance = s_dist[level];
 	TheUseShadowMaps    = (level != SHADOWQ_OFF);
 
@@ -460,8 +503,14 @@ Bool W3DShadowMap::applyQuality(void)
 	return ok;
 }
 
-void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
+// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. `split` selects the held-extent lattice; fitNear/fitFar
+// are the ground band along the view ray. Split 0 over 0..maxShadowDistance is the fit that shipped.
+// Ronin @bugfix 13/09/2026 DX9: §29i.3. screenFrac fits only the central fraction of the screen; 1 = the whole view.
+void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int split, Real fitNear, Real fitFar, Real screenFrac)
 {
+	if (split < 0) split = 0;
+	if (split >= MAX_SHADOW_SPLITS) split = MAX_SHADOW_SPLITS - 1;
+
 	// Fit to the CAMERA FRUSTUM, not getMaximumVisibleBox — that is a map-sized particle-cull volume
 	// whose centre sits ~170 units in the air. Corners 0-3 near, 4-7 far (frustum.h:65-72).
 	// Project the corner rays onto the GROUND; a fraction of zfar is not a shadow range. Doc §9.2.
@@ -477,13 +526,14 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 	// level, because this is the only lever on depth-pass draw count (§29j.7).
 	const Real MAX_SHADOW_DISTANCE = m_maxShadowDistance;
 
-	// Ronin @feature 31/08/2026 DX9: §29i.3 step 1. The fit is a BAND along the view ray now, which is
-	// exactly what one cascade split is. NEAR = 0 with FAR = MAX_SHADOW_DISTANCE is the single-map fit
-	// that shipped, so this step MUST measure identical — same extent, same centre, same picture.
-	// Footprint corners reach 397..1196 from the eye at default zoom (§29j.11), so a 4-way split of
-	// that range is roughly 400 / 600 / 800 / 1000 / 1200.
-	const Real SHADOW_FIT_NEAR = 0.0f;
-	const Real SHADOW_FIT_FAR  = MAX_SHADOW_DISTANCE;
+	// Ronin @feature 31/08/2026 DX9: §29i.3 step 1. The fit is a BAND along the view ray, which is
+	// exactly what one cascade split is. Footprint corners reach 397..1196 from the eye (§29j.11).
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. The band comes from the caller now, one per split.
+	// Clamped here so a bad band can never invert or outrun the quality tier's shadow distance.
+	Real SHADOW_FIT_NEAR = (fitNear > 0.0f) ? fitNear : 0.0f;
+	Real SHADOW_FIT_FAR  = (fitFar < MAX_SHADOW_DISTANCE) ? fitFar : MAX_SHADOW_DISTANCE;
+	if (SHADOW_FIT_FAR <= SHADOW_FIT_NEAR)
+		SHADOW_FIT_FAR = MAX_SHADOW_DISTANCE;
 
 	// Ronin @bugfix 17/08/2026 DX9: §29h-7. Iterate the ground plane — project, sample terrain over the
 	// footprint, drop to the LOWEST ground found, project again. One sample under the camera is wrong
@@ -496,6 +546,20 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 	Real minGroundZ = groundZ;
 	Real maxGroundZ = groundZ;
 
+	// Ronin @bugfix 13/09/2026 DX9: §29i.3. Pull the corner rays toward the screen CENTRE by screenFrac. Scaling the near
+	// and far corners about their own plane centres keeps each ray on the same point of the screen.
+	Real frac = (screenFrac > 0.05f) ? screenFrac : 0.05f;
+	if (frac > 1.0f) frac = 1.0f;
+	Vector3 nearCtr(0.0f, 0.0f, 0.0f);
+	Vector3 farCtr(0.0f, 0.0f, 0.0f);
+	for (int c = 0; c < 4; ++c)
+	{
+		nearCtr += cameraFrustum.Corners[c];
+		farCtr  += cameraFrustum.Corners[c + 4];
+	}
+	nearCtr *= 0.25f;
+	farCtr  *= 0.25f;
+
 	for (int pass = 0; pass < FIT_PASSES; ++pass)
 	{
 		// GROUND POINTS ONLY. The near corners sit at the camera EYE; averaging them in put the centre
@@ -503,8 +567,8 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 		// job, not the XY fit's.
 		for (int i = 0; i < 4; ++i)
 		{
-			const Vector3 nearC = cameraFrustum.Corners[i];
-			const Vector3 ray   = cameraFrustum.Corners[i + 4] - nearC;
+			const Vector3 nearC = nearCtr + (cameraFrustum.Corners[i] - nearCtr) * frac;
+			const Vector3 ray   = (farCtr + (cameraFrustum.Corners[i + 4] - farCtr) * frac) - nearC;
 
 			Real t = 1.0f;
 			if (fabsf(ray.Z) > 1e-4f)
@@ -567,11 +631,14 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 		planeZ = minGroundZ;	// next pass reaches down to the lowest ground actually in view
 	}
 
-		// Head-room for what STANDS on the terrain — buildings and trees receive too.
-	// Ronin @perf 06/09/2026 DX9: §29j.13k. Adaptive, was a flat 400. Bounded [120,400] so it can never
+	// Head-room for what STANDS on the terrain — buildings and trees receive too.
+	// Ronin @perf 06/09/2026 DX9: §29j.13k. Adaptive, was a flat 400. Bounded [200,400] so it can never
 	// cover less than before. Grow at once, shrink 5%/frame. Input is one frame stale by construction.
 	const Real HEADROOM_MIN = 200.0f;
 	const Real HEADROOM_MAX = 400.0f;
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. SPLIT 0 ONLY. Headroom is a frame property, and
+	// m_frameMaxReceiverZ is CONSUMED here — a later split would read it reset and collapse to MIN.
+	if (split == 0)
 	{
 		Real needed = HEADROOM_MIN;
 		if (m_frameMaxReceiverZ > -1.0e29f)
@@ -666,7 +733,9 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 	const Real EXTENT_STEP = 16.0f;
 	// Ronin @bugfix 08/09/2026 DX9: §29j.13p. Lateral margin for casters at the footprint edge — the
 	// power-of-two round-up was supplying this by accident. Doc §8.6.
-	const Real CASTER_MARGIN = 48.0f;
+	const Real CASTER_MARGIN = (split == 0 && m_splitCount > 1) ? 16.0f : 48.0f;
+	// Ronin @perf 09/09/2026 DX9: §29i.3 step 2. The NEAR split needs far less margin — a caster
+	// clipped from its box is still inside the FAR split's, which is what §8.6's 48 was insuring against.
 	const Real halfX = ceilf(((hiX - loX) * 0.5f + CASTER_MARGIN) / EXTENT_STEP) * EXTENT_STEP;
 	const Real halfY = ceilf(((hiY - loY) * 0.5f + CASTER_MARGIN) / EXTENT_STEP) * EXTENT_STEP;
 	const Real required = (halfX > halfY) ? halfX : halfY;
@@ -678,31 +747,33 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 	// Ronin @bugfix 02/09/2026 DX9: §29j.13f. Power-of-two extent — the texel lattice must NEST across a
 	// change or the whole map re-registers and edges flip. Grow at once, shrink below half.
 	// Ronin @perf 06/09/2026 DX9: §29j.13k. One held value per AXIS; each nests on its own.
-	// For cascades: one PAIR per split.
-	static Real s_heldExtentX = 0.0f;
-	static Real s_heldExtentY = 0.0f;
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. One PAIR PER SPLIT — sharing one pair makes the near
+	// split hold the far split's extent, which is the entire gain thrown away.
+	static Real s_heldExtentX[MAX_SHADOW_SPLITS] = { 0.0f };
+	static Real s_heldExtentY[MAX_SHADOW_SPLITS] = { 0.0f };
 	{
 		Real potX = EXTENT_STEP;
 		while (potX < halfX)
 			potX *= 2.0f;
-		if (potX > s_heldExtentX || halfX <= s_heldExtentX * 0.5f)
-			s_heldExtentX = potX;
+		if (potX > s_heldExtentX[split] || halfX <= s_heldExtentX[split] * 0.5f)
+			s_heldExtentX[split] = potX;
 
 		Real potY = EXTENT_STEP;
 		while (potY < halfY)
 			potY *= 2.0f;
-		if (potY > s_heldExtentY || halfY <= s_heldExtentY * 0.5f)
-			s_heldExtentY = potY;
+		if (potY > s_heldExtentY[split] || halfY <= s_heldExtentY[split] * 0.5f)
+			s_heldExtentY[split] = potY;
 	}
-	const Real extentX = s_heldExtentX;
-	const Real extentY = s_heldExtentY;
+	const Real extentX = s_heldExtentX[split];
+	const Real extentY = s_heldExtentY[split];
+
 	m_lastExtentX = extentX;
 	m_lastExtentY = extentY;
 
 	// Ronin @perf 06/09/2026 DX9: §29j.13k. POT is monotone, so max(X,Y) is the same number the single
 	// held value gave — every scalar consumer is unchanged.
 	const Real extent = (extentX > extentY) ? extentX : extentY;
-	m_lastRadius = extent;
+	m_lastRadius[split] = extent;
 
 	// Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Fit numbers for the [SHADOW] readout.
 	m_lastRequired = required;
@@ -714,7 +785,7 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 	// Depth only has to clear the fitted volume plus any caster standing above it along the light. This is
 	// now INDEPENDENT of texel size — the whole point — so it can be generous for free.
 	const Real depthHalf = ((hiZ - loZ) * 0.5f) + extent * 2.0f;
-	m_lastDepthHalf = depthHalf;
+	m_lastDepthHalf[split] = depthHalf;
 
 	// Box centre in light space. Z is NOT snapped: only the two axes carrying texels matter.
 	Real cx = (loX + hiX) * 0.5f;
@@ -771,12 +842,21 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum)
 	TheTerrainShadowPass.fitCentre[0] = snappedCenter.X;
 	TheTerrainShadowPass.fitCentre[1] = snappedCenter.Y;
 	TheTerrainShadowPass.fitCentre[2] = snappedCenter.Z;
-	TheTerrainShadowPass.fitRadius    = extent;
+	// Ronin @feature 13/09/2026 DX9: §29i.3 step 2. The same axes cx/cy were measured in, so a cull can test the
+	// box in light space instead of treating a light-space extent as a world-space width.
+	TheTerrainShadowPass.lightAxisX[0] = lightX.X;
+	TheTerrainShadowPass.lightAxisX[1] = lightX.Y;
+	TheTerrainShadowPass.lightAxisX[2] = lightX.Z;
+	TheTerrainShadowPass.lightAxisY[0] = lightY.X;
+	TheTerrainShadowPass.lightAxisY[1] = lightY.Y;
+	TheTerrainShadowPass.lightAxisY[2] = lightY.Z;
+	TheTerrainShadowPass.fitExtentX    = extentX;
+	TheTerrainShadowPass.fitExtentY    = extentY;
 
 	// Cache light view-projection for the RECEIVER (phase 2). D3D flavour: z maps to [0,1].
 	Matrix4x4 proj;
 	m_lightCamera->Get_D3D_Projection_Matrix(&proj);
-	Matrix4x4::Multiply(proj, m_lightCamera->Get_View_Matrix(), &m_lightViewProj);
+	Matrix4x4::Multiply(proj, m_lightCamera->Get_View_Matrix(), &m_lightViewProj[split]);
 }
 
 
@@ -1012,6 +1092,86 @@ Bool W3DShadowMap::isStaticCaster(RenderObjClass *robj)
 	return d->isKindOf(KINDOF_STRUCTURE) || d->isKindOf(KINDOF_IMMOBILE);
 }
 
+// Ronin @feature 13/09/2026 DX9: §29i.3. Start a split's moving-caster mask. Cleared every split every frame — the
+// light box moves with the camera, so a grid kept across frames would sit in the wrong place.
+void W3DShadowMap::beginMovingMask(Int split)
+{
+	m_movingMaskSplit = split;
+	memset(m_movingMaskGrid, 0, sizeof(m_movingMaskGrid));
+}
+
+// Ronin @feature 13/09/2026 DX9: §29i.3. Project a moving caster's bounding sphere through THIS split's light camera
+// — the same mapping the receiver's shadowUV uses — and fill its disc, dilated one texel for bilinear sampling.
+void W3DShadowMap::noteMovingCaster(Real cx, Real cy, Real cz, Real radius)
+{
+	if (m_movingMaskSplit < 0 || m_lightCamera == NULL)
+		return;
+
+	Vector3 ndc;
+	if (m_lightCamera->Project(ndc, Vector3(cx, cy, cz)) == CameraClass::OUTSIDE_NEAR_CLIP)
+		return;					// in front of the near plane: not in this split's map at all
+
+	Vector2 vpMin, vpMax;
+	m_lightCamera->Get_View_Plane(vpMin, vpMax);
+	const Real halfW = (vpMax.X - vpMin.X) * 0.5f;
+	const Real halfH = (vpMax.Y - vpMin.Y) * 0.5f;
+	if (halfW <= 0.0f || halfH <= 0.0f)
+		return;
+
+	// NDC to the receiver's UV, in texels: u = x*0.5+0.5, v = -y*0.5+0.5, exactly as TerrainShadow_ps builds shadowUV.
+	const Real res = (Real)MOVING_MASK_RES;
+	const Real u  = (ndc.X * 0.5f + 0.5f) * res;
+	const Real v  = (-ndc.Y * 0.5f + 0.5f) * res;
+	const Real ru = (radius / (2.0f * halfW)) * res + 1.0f;
+	const Real rv = (radius / (2.0f * halfH)) * res + 1.0f;
+
+	Int x0 = (Int)floorf(u - ru);
+	Int x1 = (Int)ceilf(u + ru);
+	Int y0 = (Int)floorf(v - rv);
+	Int y1 = (Int)ceilf(v + rv);
+	if (x1 < 0 || y1 < 0 || x0 >= MOVING_MASK_RES || y0 >= MOVING_MASK_RES)
+		return;
+	if (x0 < 0) x0 = 0;
+	if (y0 < 0) y0 = 0;
+	if (x1 >= MOVING_MASK_RES) x1 = MOVING_MASK_RES - 1;
+	if (y1 >= MOVING_MASK_RES) y1 = MOVING_MASK_RES - 1;
+
+	for (Int y = y0; y <= y1; ++y)
+	{
+		const Real dy = ((Real)y + 0.5f - v) / rv;
+		for (Int x = x0; x <= x1; ++x)
+		{
+			const Real dx = ((Real)x + 0.5f - u) / ru;
+			if (dx * dx + dy * dy <= 1.0f)
+				m_movingMaskGrid[y * MOVING_MASK_RES + x] = 255;
+		}
+	}
+}
+
+// Ronin @feature 13/09/2026 DX9: §29i.3. Copy the grid into this split's texture. MANAGED pool, so the lock writes
+// system memory only — none of §7's dynamic-buffer stall.
+void W3DShadowMap::uploadMovingMask(Int split)
+{
+	m_movingMaskSplit = -1;
+	if (split < 0 || split >= MAX_SHADOW_SPLITS || m_movingMaskTex[split] == NULL)
+		return;
+
+	D3DLOCKED_RECT lr;
+	if (FAILED(m_movingMaskTex[split]->LockRect(0, &lr, NULL, 0)))
+		return;
+	for (Int y = 0; y < MOVING_MASK_RES; ++y)
+	{
+		DWORD *row = (DWORD *)((BYTE *)lr.pBits + y * lr.Pitch);
+		const unsigned char *src = &m_movingMaskGrid[y * MOVING_MASK_RES];
+		for (Int x = 0; x < MOVING_MASK_RES; ++x)
+		{
+			const DWORD m = (DWORD)src[x];
+			row[x] = 0xFF000000 | (m << 16) | (m << 8) | m;
+		}
+	}
+	m_movingMaskTex[split]->UnlockRect(0);
+}
+
 // Flag only — releasing buffers mid-frame could pull them from under a bound draw.
 void W3DShadowMap::invalidateStaticCasters(void)
 {
@@ -1097,7 +1257,8 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 		return;
 	}
 
-	updateLightMatrices(sceneCam->Get_Frustum());
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. The fit moved INTO the depth pass, once per split.
+	// Nothing between here and beginDepthPass reads it, and each split must publish before it renders.
 
 	// Ronin @feature 03/09/2026 DX9: §29j.13h. Flip the accumulation pair. Reprojection makes the weight camera-independent.
 	ensureAccumTargets();
@@ -1111,7 +1272,9 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 		return;
 	}
 
-	if (!beginDepthPass())
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. beginDepthPass moved INTO the split loop — each split
+	// binds and clears its own target. Same guard, same early-out; isAvailable is all the old call tested.
+	if (!isAvailable())
 	{
 		TheTerrainShadowPass.enabled = FALSE;
 		TheTerrainShadowPass.active  = FALSE;
@@ -1158,13 +1321,58 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 		MeshClass::Skip_Baked_Shadow_Casters(true);		// §29j.8 — baked meshes don't draw here
 		MeshClass::Set_In_Shadow_Depth_Pass(true);		// §29i.5 — colour writes are off past here
 		HLodClass::Set_Force_Lowest_LOD(true);
-		WW3D::Render(scene, m_lightCamera);
+
+		// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. One fit + one scene render per split. The fit
+		// publishes fitCentre and the light-space box, so the tile cull and Visibility_Check re-cull per split.
+		// Ronin @diagnostic 09/09/2026 DX9: §29i.3 step 2. BACKWARDS so the LAST fit is split 0 and the
+		// [SHADOW] line shows the NEAR split — the far one is the whole box and tells us nothing.
+		for (Int split = m_splitCount - 1; split >= 0; --split)
+		{
+			// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. Bind and clear THIS split's own depth target
+			// before its fit runs — one shared target lets the second split destroy the first.
+			if (!beginDepthPass(split))
+				continue;
+			// Ronin @bugfix 13/09/2026 DX9: §29i.3. Both maps take the full distance band; the NEAR one fits only the central
+			// NEAR_SCREEN_PCT of the screen, the FAR one the whole view. At COUNT 1 this is the fit that shipped.
+			const Real screenFrac = (split == 0 && m_splitCount > 1) ? ((Real)NEAR_SCREEN_PCT * 0.01f) : 1.0f;
+			updateLightMatrices(sceneCam->Get_Frustum(), split, 0.0f, m_maxShadowDistance, screenFrac);
+			// Ronin @feature 13/09/2026 DX9: §29i.3. Visibility_Check marks moving casters into this split's mask during the
+			// render; the grid is uploaded once the split's draws are done.
+			beginMovingMask(split);
+			WW3D::Render(scene, m_lightCamera);
+			// §29j.7 — the static casters the scene render just skipped, in a few draws.
+			drawStaticCasters();
+			uploadMovingMask(split);
+
+
+			// Ronin @bugfix 12/08/2026 §29 DX9: re-Apply AFTER the render, then capture. Reading the
+			// device cold returned whatever drew last (particles set VIEW to identity) — the blinking.
+			// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. Per split, while m_lightCamera still holds
+			// THIS split's transform.
+			if (dev)
+			{
+				m_lightCamera->Apply();
+				// Set_Transform(D3DTS_VIEW) only CACHES + dirties (dx8wrapper.h:1801); the device keeps
+				// the stale view until this flush. Reading without it gave a half-stale matrix.
+				DX8Wrapper::Apply_Render_State_Changes();
+
+				D3DMATRIX viewMat, projMat;
+				dev->GetTransform(D3DTS_VIEW, &viewMat);
+				dev->GetTransform(D3DTS_PROJECTION, &projMat);
+				dev->GetTransform(D3DTS_VIEW, &viewMat);
+				dev->GetTransform(D3DTS_PROJECTION, &projMat);
+
+				D3DXMATRIX dxView(viewMat), dxProj(projMat), dxViewProj, dxViewProjT;
+				D3DXMatrixMultiply(&dxViewProj, &dxView, &dxProj);
+				D3DXMatrixTranspose(&dxViewProjT, &dxViewProj);
+				memcpy(&m_lightViewProj[split], &dxViewProjT, sizeof(float) * 16);
+			}
+		}
+
 		HLodClass::Set_Force_Lowest_LOD(false);
 		MeshClass::Skip_Baked_Shadow_Casters(false);
 		MeshClass::Set_In_Shadow_Depth_Pass(false);
 
-		// §29j.7 — the static casters the scene render just skipped, in a few draws.
-		drawStaticCasters();
 
 		if (dev)
 		{
@@ -1177,26 +1385,8 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 		TheTerrainShadowPass.inDepthPass = FALSE;
 	}
 
-	// Ronin @bugfix 12/08/2026 §29 DX9: re-Apply AFTER the render, then capture. Reading the device
-	// cold returned whatever drew last (particles set VIEW to identity) — that was the blinking.
-	if (dev)
-	{
-		m_lightCamera->Apply();
-		// Set_Transform(D3DTS_VIEW) only CACHES + dirties (dx8wrapper.h:1801); the device keeps the
-		// stale view until this flush. Reading without it gave a half-stale matrix — the blinking.
-		DX8Wrapper::Apply_Render_State_Changes();
-
-		D3DMATRIX viewMat, projMat;
-		dev->GetTransform(D3DTS_VIEW, &viewMat);
-		dev->GetTransform(D3DTS_PROJECTION, &projMat);
-		dev->GetTransform(D3DTS_VIEW, &viewMat);
-		dev->GetTransform(D3DTS_PROJECTION, &projMat);
-
-		D3DXMATRIX dxView(viewMat), dxProj(projMat), dxViewProj, dxViewProjT;
-		D3DXMatrixMultiply(&dxViewProj, &dxView, &dxProj);
-		D3DXMatrixTranspose(&dxViewProjT, &dxViewProj);
-		memcpy(&m_lightViewProj, &dxViewProjT, sizeof(float) * 16);
-	}
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. The capture moved INTO the split loop — sitting here
+	// it could only ever record the LAST split, so the far cascade never had a matrix of its own.
 
 	if (dev && !TheShowShadowMapDebug)
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE, oldColorWrite);
@@ -1218,11 +1408,20 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 	TextureBaseClass *smap = peekShadowTexture();
 	DX8InstanceManagerClass::Set_Shadow_Map(
 		smap ? smap->Peek_D3D_Base_Texture() : NULL,
-		(const float *)&m_lightViewProj,
+		(const float *)&m_lightViewProj[0],
 		getTexelOffset(),
-		getDepthBias(),
+		getDepthBias(0),
 		travelF,
-		getTexelWorldSize());
+		getTexelWorldSize(0));
+
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. FAR cascade for the rigid receiver.
+	TextureBaseClass *smapFarRigid = (m_splitCount > 1 && m_mode == SHADOWMAP_HW_DEPTH)
+									 ? (TextureBaseClass *)m_depthTarget[1] : NULL;
+	DX8InstanceManagerClass::Set_Shadow_Map_Far(
+		smapFarRigid ? smapFarRigid->Peek_D3D_Base_Texture() : NULL,
+		(const float *)&m_lightViewProj[1],
+		getDepthBias(1),
+		getTexelWorldSize(1));
 
 	// And down to the TERRAIN pass (§29h). Core/HeightMap.cpp cannot include this header — it is
 	// compiled for the Generals target too — so the state is pushed into a Core-owned struct.
@@ -1250,10 +1449,23 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 	// shader zeroes it per pixel where no history exists.
 	TheTerrainShadowPass.accumWeight = (m_accumTex[0] != NULL) ? 0.94f : 0.0f;
 
-	TheTerrainShadowPass.depthBias   = getDepthBias();
+	TheTerrainShadowPass.depthBias   = getDepthBias(0);
 	TheTerrainShadowPass.texelOffset = getTexelOffset();
-	TheTerrainShadowPass.texelWorldSize = getTexelWorldSize();
-	memcpy(TheTerrainShadowPass.lightViewProjT, &m_lightViewProj, sizeof(float) * 16);
+	TheTerrainShadowPass.texelWorldSize = getTexelWorldSize(0);
+	memcpy(TheTerrainShadowPass.lightViewProjT, &m_lightViewProj[0], sizeof(float) * 16);
+
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. FAR cascade. Only HW_DEPTH has a second depth
+	// texture; anything else publishes count 1 and the receiver stays on the near map alone.
+	TextureBaseClass *smapFar = (m_splitCount > 1 && m_mode == SHADOWMAP_HW_DEPTH)
+								? (TextureBaseClass *)m_depthTarget[1] : NULL;
+	TheTerrainShadowPass.shadowTexFar      = smapFar ? smapFar->Peek_D3D_Base_Texture() : NULL;
+	TheTerrainShadowPass.depthBiasFar      = getDepthBias(1);
+	TheTerrainShadowPass.texelWorldSizeFar = getTexelWorldSize(1);
+	TheTerrainShadowPass.cascadeCount      = (TheTerrainShadowPass.shadowTexFar != NULL) ? 2.0f : 1.0f;
+	memcpy(TheTerrainShadowPass.lightViewProjFarT, &m_lightViewProj[1], sizeof(float) * 16);
+	// Ronin @feature 13/09/2026 DX9: §29i.3. Moving-caster masks, in the same split order as the maps.
+	TheTerrainShadowPass.movingMaskNear = m_movingMaskTex[0];
+	TheTerrainShadowPass.movingMaskFar  = (m_splitCount > 1) ? m_movingMaskTex[1] : NULL;
 
 	// §29h-4.4: the same direction also drives caster sweeping in W3DTreeBuffer::cull().
 	TheTerrainShadowPass.lightTravelDir[0] = travel.X;
@@ -1263,7 +1475,7 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 
 void W3DShadowMap::drawDebugOverlay(void)
 {
-	if (!TheShowShadowMapDebug || !isAvailable() || m_colorTarget == NULL)
+	if (!TheShowShadowMapDebug || !isAvailable() || m_colorTarget[0] == NULL)
 		return;
 
 	LPDIRECT3DDEVICE8 dev = DX8Wrapper::_Get_D3D_Device8();
@@ -1285,7 +1497,7 @@ void W3DShadowMap::drawDebugOverlay(void)
 
 	DX8Wrapper::Invalidate_Cached_Render_States();
 
-	dev->SetTexture(0, m_colorTarget->Peek_D3D_Texture());
+	dev->SetTexture(0, m_colorTarget[0]->Peek_D3D_Texture());
 	dev->SetRenderState(D3DRS_ZENABLE, FALSE);
 	dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
 	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
@@ -1303,12 +1515,20 @@ void W3DShadowMap::drawDebugOverlay(void)
 	DX8Wrapper::Invalidate_Cached_Render_States();
 }
 
-Bool W3DShadowMap::beginDepthPass(void)
+Bool W3DShadowMap::beginDepthPass(Int split)
 {
 	if (!isAvailable())
 		return FALSE;
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. Clamp, then refuse a split whose target was never
+	// created — init only makes m_splitCount of them.
+	if (split < 0) split = 0;
+	if (split >= MAX_SHADOW_SPLITS) split = MAX_SHADOW_SPLITS - 1;
+	if (m_colorTarget[split] == NULL || m_depthTarget[split] == NULL)
+		return FALSE;
 
-	DX8Wrapper::Set_Render_Target_With_Z(m_colorTarget, m_depthTarget);
+	// Ronin @bugfix 09/09/2026 DX9: §29i.3 step 2. BOTH surfaces must be per-split. Set_Render_Target
+	// gates the whole bind — SetDepthStencilSurface included — on the COLOUR surface changing.
+	DX8Wrapper::Set_Render_Target_With_Z(m_colorTarget[split], m_depthTarget[split]);
 
 	// Ronin @bugfix 16/08/2026 DX9: §29h-11 ROOT CAUSE. This pass runs BEFORE WW3D::Begin_Render, on
 	// whatever state the projected-shadow render targets left on the device. With Z off there and the

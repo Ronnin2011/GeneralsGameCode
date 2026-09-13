@@ -1917,21 +1917,29 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 		s_shadowTileKeep.assign((size_t)((tileCount > 0) ? tileCount : 0), 1);
 
 		// Published by updateLightMatrices before the depth pass, so this is THIS frame's fit.
-		const Real tight = TheTerrainShadowPass.fitRadius;
-		const Real ext   = tight + SHADOW_TILE_MARGIN;
-		const Real fcx   = TheTerrainShadowPass.fitCentre[0];
-		const Real fcy   = TheTerrainShadowPass.fitCentre[1];
-		const Real fcz   = TheTerrainShadowPass.fitCentre[2];
-		const Real tvx   = TheTerrainShadowPass.lightTravelDir[0];
-		const Real tvy   = TheTerrainShadowPass.lightTravelDir[1];
-		const Real tvz   = TheTerrainShadowPass.lightTravelDir[2];
-		const Real lz    = (WWMath::Fabs(tvz) > 0.2f) ? WWMath::Fabs(tvz) : 0.2f;
+		// Ronin @bugfix 13/09/2026 DX9: §29i.3 step 2. Test in LIGHT space. The old world-axis square used a light-space
+		// radius as a world width, and the box's ground footprint is ~1/sin(sun) longer along the sun axis.
+		const Real ax0 = TheTerrainShadowPass.lightAxisX[0];
+		const Real ax1 = TheTerrainShadowPass.lightAxisX[1];
+		const Real ax2 = TheTerrainShadowPass.lightAxisX[2];
+		const Real ay0 = TheTerrainShadowPass.lightAxisY[0];
+		const Real ay1 = TheTerrainShadowPass.lightAxisY[1];
+		const Real ay2 = TheTerrainShadowPass.lightAxisY[2];
+		const Real fcx = TheTerrainShadowPass.fitCentre[0];
+		const Real fcy = TheTerrainShadowPass.fitCentre[1];
+		const Real fcz = TheTerrainShadowPass.fitCentre[2];
+		const Real boxCX = fcx * ax0 + fcy * ax1 + fcz * ax2;
+		const Real boxCY = fcx * ay0 + fcy * ay1 + fcz * ay2;
+		const Real boxEX = TheTerrainShadowPass.fitExtentX + SHADOW_TILE_MARGIN;
+		const Real boxEY = TheTerrainShadowPass.fitExtentY + SHADOW_TILE_MARGIN;
+		// No fit published yet — keep every tile rather than cull them all against a zero box.
+		const Bool haveBox = (TheTerrainShadowPass.fitExtentX > 0.0f && TheTerrainShadowPass.fitExtentY > 0.0f);
 
 		const Int border = m_map->getBorderSizeInline();
 		const Int orgX   = m_map->getDrawOrgX();
 		const Int orgY   = m_map->getDrawOrgY();
 
-		for (Int tj = 0; tj < m_numVBTilesY; ++tj)
+		for (Int tj = 0; tj < m_numVBTilesY && haveBox; ++tj)
 		{
 			for (Int ti = 0; ti < m_numVBTilesX; ++ti)
 			{
@@ -1946,28 +1954,53 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 				// bounded by one AABB. Keep it.
 				if (mx1 < mx0 || my1 < my0) continue;
 
-				Real zTop = fcz;
-				for (Int s = 0; s < 4; ++s)
+				// Ronin @bugfix 13/09/2026 DX9: §29i.3 step 2. Height RANGE over the whole tile, not its 4 corners —
+				// a cliff is a peak inside the tile.
+				Real zMin =  1.0e30f;
+				Real zMax = -1.0e30f;
+				const Int HEIGHT_STRIDE = 4;
+				for (Int sy = my0; ; sy += HEIGHT_STRIDE)
 				{
-					const Int sx = (s & 1) ? mx1 : mx0;
-					const Int sy = (s & 2) ? my1 : my0;
-					const Real h = (Real)m_map->getHeight(sx, sy) * MAP_HEIGHT_SCALE;
-					if (h > zTop) zTop = h;
+					if (sy > my1) sy = my1;
+					for (Int sx = mx0; ; sx += HEIGHT_STRIDE)
+					{
+						if (sx > mx1) sx = mx1;
+						// Ronin @bugfix 13/09/2026 DX9: §29i.3. DISPLAY height — sx/sy are draw-window indices, and
+						// getHeight takes whole-map ones, so it read terrain offset by the draw origin.
+						const Real h = (Real)m_map->getDisplayHeight(sx, sy) * MAP_HEIGHT_SCALE;
+						if (h < zMin) zMin = h;
+						if (h > zMax) zMax = h;
+						if (sx == mx1) break;
+					}
+					if (sy == my1) break;
 				}
 
-				Real x0 = (Real)(mx0 + orgX     - border) * MAP_XY_FACTOR;
-				Real x1 = (Real)(mx1 + orgX + 1 - border) * MAP_XY_FACTOR;
-				Real y0 = (Real)(my0 + orgY     - border) * MAP_XY_FACTOR;
-				Real y1 = (Real)(my1 + orgY + 1 - border) * MAP_XY_FACTOR;
+				const Real x0 = (Real)(mx0 + orgX     - border) * MAP_XY_FACTOR;
+				const Real x1 = (Real)(mx1 + orgX + 1 - border) * MAP_XY_FACTOR;
+				const Real y0 = (Real)(my0 + orgY     - border) * MAP_XY_FACTOR;
+				const Real y1 = (Real)(my1 + orgY + 1 - border) * MAP_XY_FACTOR;
 
-				// SWEPT, not a naked box test: a ridge OUTSIDE the fit still casts INTO it under a low
-				// sun — the §29h-4.4 screen-edge failure in a new place. Grow the box, never shrink it.
-				const Real reach = (zTop > fcz) ? ((zTop - fcz) / lz) : 0.0f;
-				if (tvx < 0.0f) x0 += tvx * reach; else x1 += tvx * reach;
-				if (tvy < 0.0f) y0 += tvy * reach; else y1 += tvy * reach;
+				// Ronin @bugfix 13/09/2026 DX9: §29i.3 step 2. EXACT — an ortho light puts a caster and what it shadows at
+				// the same light X/Y, so a tile can reach this map iff its bounds project into the box. No sweep needed.
+				Real pxMin =  1.0e30f;
+				Real pxMax = -1.0e30f;
+				Real pyMin =  1.0e30f;
+				Real pyMax = -1.0e30f;
+				for (Int c = 0; c < 8; ++c)
+				{
+					const Real wx = (c & 1) ? x1 : x0;
+					const Real wy = (c & 2) ? y1 : y0;
+					const Real wz = (c & 4) ? zMax : zMin;
+					const Real px = wx * ax0 + wy * ax1 + wz * ax2;
+					const Real py = wx * ay0 + wy * ay1 + wz * ay2;
+					if (px < pxMin) pxMin = px;
+					if (px > pxMax) pxMax = px;
+					if (py < pyMin) pyMin = py;
+					if (py > pyMax) pyMax = py;
+				}
 
-				if (!(x1 >= fcx - ext && x0 <= fcx + ext &&
-					  y1 >= fcy - ext && y0 <= fcy + ext))
+				if (pxMax < boxCX - boxEX || pxMin > boxCX + boxEX ||
+					pyMax < boxCY - boxEY || pyMin > boxCY + boxEY)
 					s_shadowTileKeep[(size_t)(tj * m_numVBTilesX + ti)] = 0;
 				}
 			}
@@ -2461,8 +2494,14 @@ static void compositeTerrainShadowAccum(IDirect3DDevice9 *dev, IDirect3DBaseText
 	dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
 	dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
 	dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+	// Ronin @feature 13/09/2026 DX9: §29i.3. RGB only — accum ALPHA carries the moving-caster memory, and this blend would
+	// multiply it into the frame's alpha. Raw get/set/restore, like oldCull, so the wrapper cache is never involved.
+	DWORD oldColorWrite = 0xF;
+	dev->GetRenderState(D3DRS_COLORWRITEENABLE, &oldColorWrite);
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
 
 	dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, quad, sizeof(SCREENVERT));
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, oldColorWrite);
 
 	dev->SetTexture(0, NULL);
 	if (haveVP)
@@ -2552,6 +2591,12 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 							sm.texelWorldSize };
 	dev->SetPixelShaderConstantF(5, psC5, 1);
 
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. c16..c19 = far cascade view-projection, c20 = its
+	// bias and texel world size plus the cascade count. At count 1 the shader ignores all of it.
+	dev->SetPixelShaderConstantF(16, sm.lightViewProjFarT, 4);
+	const float psC20[4] = { sm.depthBiasFar, sm.texelWorldSizeFar, sm.cascadeCount, 0.0f };
+	dev->SetPixelShaderConstantF(20, psC20, 1);
+
 	// Ronin @feature 06/09/2026 DX9: §29j.13l. c7..c10 = last frame's view-projection, c11 = viewport
 	// rect in target pixels. Only the main pass advances the history matrix. Doc §8.3.
 	{
@@ -2595,10 +2640,32 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 	dev->SetSamplerState(1, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 	dev->SetSamplerState(1, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. FAR cascade on s2. fxc cannot branch around
+	// tex2Dproj, so s2 is sampled even at count 1 — bind the near map as a stand-in, never NULL.
+	dev->SetTexture(2, sm.shadowTexFar ? sm.shadowTexFar : sm.shadowTex);
+	dev->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);	// triggers hardware PCF
+	dev->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+	dev->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+	dev->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+
+	// Ronin @feature 13/09/2026 DX9: §29i.3. Moving-caster masks on s3/s4, bilinear so a disc edge is soft rather than a
+	// hard texel square. A NULL mask samples black, which reads as "nothing moving here".
+	dev->SetTexture(3, sm.movingMaskNear);
+	dev->SetTexture(4, sm.movingMaskFar ? sm.movingMaskFar : sm.movingMaskNear);
+	for (DWORD ms = 3; ms <= 4; ++ms)
+	{
+		dev->SetSamplerState(ms, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(ms, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(ms, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(ms, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(ms, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	}
+
 	// Save EVERY state we touch. Relying on ShaderClass::Invalidate only works if the next draw goes
 	// through Set_Shader; trees do not, and a leaked SRCBLEND=ZERO made them multiply instead of
 	// blend — that was the flicker.
-	DWORD oldAlphaBlend, oldSrcBlend, oldDstBlend, oldZEnable, oldZFunc, oldZWrite, oldAlphaTest;
+	DWORD oldAlphaBlend, oldSrcBlend, oldDstBlend, oldZEnable, oldZFunc, oldZWrite, oldAlphaTest, oldColorWrite;
 	dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &oldAlphaBlend);
 	dev->GetRenderState(D3DRS_SRCBLEND,         &oldSrcBlend);
 	dev->GetRenderState(D3DRS_DESTBLEND,        &oldDstBlend);
@@ -2606,6 +2673,7 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 	dev->GetRenderState(D3DRS_ZFUNC,            &oldZFunc);
 	dev->GetRenderState(D3DRS_ZWRITEENABLE,     &oldZWrite);
 	dev->GetRenderState(D3DRS_ALPHATESTENABLE,  &oldAlphaTest);
+	dev->GetRenderState(D3DRS_COLORWRITEENABLE, &oldColorWrite);	// §29i.3 — both branches below now set it
 
 	// Ronin @feature 03/09/2026 DX9: §29j.13h. Render the shadow term to an offscreen buffer so the next
 	// frame can blend it. Any failure falls through to the direct-to-framebuffer path. Doc §8.
@@ -2644,6 +2712,9 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 		// target, so pixels the terrain no longer covers must not keep last frame's shade.
 		dev->Clear(0, NULL, D3DCLEAR_TARGET, 0xFFFFFFFF, 1.0f, 0);
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, FALSE);	// WRITING the term, not modulating
+		// Ronin @feature 13/09/2026 DX9: §29i.3. ALL channels — alpha carries the moving-caster memory into next frame.
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
+										 D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
 	}
 
 	else
@@ -2651,7 +2722,12 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHABLENDENABLE, TRUE);
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND,  D3DBLEND_ZERO);
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_SRCCOLOR);
+		// Ronin @feature 13/09/2026 DX9: §29i.3. RGB only — this path blends straight onto the frame, and the memory in
+		// alpha would multiply the frame's own alpha.
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
+										 D3DCOLORWRITEENABLE_BLUE);
 	}
+
 	// Ronin @bugfix 04/09/2026 DX9: §29j.13h. DEPTH TEST STAYS ON, in both branches. It was briefly
 	// disabled for the accumulation path on a z-fight theory that measured NO visual change — because
 	// the probe running at the time was a screen-space stripe pattern, identical for every tile, so
@@ -2684,7 +2760,9 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 	// Ronin @feature 03/09/2026 DX9: §29j.13h. Stage 1 has held accumPrev since :2584. Release it here,
 	// after the last draw that reads it (renderTerrainPass at :2646), so it cannot leak onward.
 	dev->SetTexture(1, NULL);
-
+	dev->SetTexture(2, NULL);		// §29i.3 step 2 — far cascade
+	dev->SetTexture(3, NULL);		// §29i.3 — moving-caster masks
+	dev->SetTexture(4, NULL);
 
 	// §29j.13h: back to the real target, then multiply the accumulated term in. SetRenderTarget RESETS
 	// the viewport, so it has to be restored on the way back too or every later draw uses the wrong rect.
@@ -2704,6 +2782,9 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 	dev->SetRenderState(D3DRS_ZFUNC,            oldZFunc);
 	dev->SetRenderState(D3DRS_ZWRITEENABLE,     oldZWrite);
 	dev->SetRenderState(D3DRS_ALPHATESTENABLE,  oldAlphaTest);
+	// Ronin @feature 13/09/2026 DX9: §29i.3. Through the WRAPPER — both branches set it through the wrapper, and a raw
+	// restore would leave its cache holding the branch value.
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE, oldColorWrite);
 
 	// Our raw SetRenderState/SetTexture calls desynced the wrapper's cache (§12a) — force a resync.
 	ShaderClass::Invalidate();

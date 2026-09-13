@@ -28,6 +28,7 @@ sampler2D g_DiffuseSampler : register(s0);   // tree texture atlas
 sampler2D g_ShroudSampler  : register(s1);   // shroud, UV from the VS (c32/c33), not texgen
 sampler2D g_CloudSampler   : register(s2);   // terrain cloud field, UV from the VS
 sampler2D g_ShadowSampler  : register(s3);   // s3 to match RigidInstance_ps
+sampler2D g_ShadowSamplerFar : register(s5); // §29i.3 step 2 — far cascade (s4 is the accum history)
 // Ronin @feature 07/09/2026 DX9: §29j.13n. Last frame's tree shadow term, screen-space. Alpha is the
 // validity mask: 0 means no canopy wrote that pixel, so there is nothing to blend.
 sampler2D g_TreeAccumPrev  : register(s4);
@@ -42,6 +43,10 @@ float4 g_ShadowParams2    : register(c17);   // xyz = direction light TRAVELS, w
 float4x4 g_PrevViewProj   : register(c18);   // c18..c21, TRANSPOSED
 float4 g_ScreenInvSize    : register(c22);   // xy = 1/render-target size, z = EMA weight, w unused
 float4 g_ViewportRect     : register(c23);   // xy = viewport origin, zw = viewport size, target pixels
+// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. c24+ deliberately — c18..c23 are already shared with
+// RigidInstance_ps, and PS constants are global device state, not per-shader.
+float4x4 g_LightViewProjFar : register(c24); // c24..c27, TRANSPOSED
+float4 g_CascadeParams : register(c28);      // x = far bias, y = far texel world size, z = cascade count
 
 struct PS_INPUT
 {
@@ -60,6 +65,40 @@ struct PS_OUTPUT
     float4 term  : COLOR1;
 };
 
+// 3x3 at one-texel spacing; each tap is a hardware 2x2 compare. Returns the term plus the
+// history-rejection bracket (§29j.13j), floored so a one-texel canopy step keeps its history.
+void pcf9(sampler2D smp, float2 uv, float depth, float texelUV,
+          out float lit, out float litMin, out float litMax)
+{
+    float sum   = 0.0f;
+    float sumSq = 0.0f;
+    litMin = 1.0f;
+    litMax = 0.0f;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            float2 tapUV = uv + float2(x, y) * texelUV;
+            float  t     = tex2Dproj(smp, float4(tapUV, depth, 1.0f)).r;
+            sum   += t;
+            sumSq += t * t;
+            litMin = min(litMin, t);
+            litMax = max(litMax, t);
+        }
+    }
+    lit = sum * (1.0f / 9.0f);
+    const float CLIP_GAMMA = 2.0f;
+    // Ronin @bugfix 13/09/2026 DX9: §29i.3. 0.34, not 1/9 — a one-texel step moves a pixel ~1/3, and 1/9 threw that
+    // history away, which is what let the canopy step. Same fix as TerrainShadow_ps.
+    const float CLIP_FLOOR = 0.34f;
+    float sd = sqrt(max(sumSq * (1.0f / 9.0f) - lit * lit, 0.0f));
+    litMin = max(litMin, lit - CLIP_GAMMA * sd);
+    litMax = min(litMax, lit + CLIP_GAMMA * sd);
+    litMin = min(litMin, lit - CLIP_FLOOR);
+    litMax = max(litMax, lit + CLIP_FLOOR);
+}
 
 PS_OUTPUT main(PS_INPUT input)
 {
@@ -97,45 +136,35 @@ PS_OUTPUT main(PS_INPUT input)
         // canopy. Reduces sway-driven self-shadow shimmer; raising it trades that for peter-panning.
         const float LIGHT_OFFSET_TEXELS = 4.0f;
         float3 toLight = -g_ShadowParams2.xyz;
-        float3 samplePos = input.worldPos + toLight * (g_ShadowParams2.w * LIGHT_OFFSET_TEXELS);
 
-        float4 lightClip  = mul(float4(samplePos, 1.0f), g_LightViewProj);
-        float2 shadowUV   = lightClip.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
-        float  lightDepth = lightClip.z - g_ShadowParams.y;
+        // Ronin @feature 09/09/2026 DX9: §29i.3 step 2. CASCADE SELECT from the UN-OFFSET position —
+        // the light offset is scaled by that cascade's own texel size, so pick the cascade first.
+        float4 selClip = mul(float4(input.worldPos, 1.0f), g_LightViewProj);
+        float2 selUV   = selClip.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
+        bool   inNear  = (g_CascadeParams.z < 1.5f)
+                         || (selUV.x == saturate(selUV.x) && selUV.y == saturate(selUV.y));
+        float texelWorld = inNear ? g_ShadowParams2.w : g_CascadeParams.y;
+
+        float3 samplePos = input.worldPos + toLight * (texelWorld * LIGHT_OFFSET_TEXELS);
+
+        // Each cascade carries its OWN bias — a shared constant stripes the far split (doc §2).
+        float4 clipN = mul(float4(samplePos, 1.0f), g_LightViewProj);
+        float4 clipF = mul(float4(samplePos, 1.0f), g_LightViewProjFar);
+        float2 uvN   = clipN.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
+        float2 uvF   = clipF.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
+        float2 shadowUV = inNear ? uvN : uvF;
 
         // Outside the fitted map = lit.
         if (shadowUV.x == saturate(shadowUV.x) && shadowUV.y == saturate(shadowUV.y))
         {
             float texelUV = g_ShadowParams.z * 2.0f;
-            float sum   = 0.0f;
-            float sumSq = 0.0f;
-            float litMin = 1.0f;
-            float litMax = 0.0f;
-            [unroll]
-            for (int y = -1; y <= 1; ++y)
-            {
-                [unroll]
-                for (int x = -1; x <= 1; ++x)
-                {
-                    float2 uv = shadowUV + float2(x, y) * texelUV;
-                    float  t  = tex2Dproj(g_ShadowSampler, float4(uv, lightDepth, 1.0f)).r;
-                    sum    += t;
-                    sumSq  += t * t;
-                    litMin  = min(litMin, t);
-                    litMax  = max(litMax, t);
-                }
-            }
-            float lit = sum * (1.0f / 9.0f);
-
-            // §29j.13j — variance clipping intersected with min/max, floored at the PCF quantum
-            // because sd is 0 wherever the taps agree and the box would otherwise reject everything.
-            const float CLIP_GAMMA = 2.0f;
-            const float CLIP_FLOOR = 1.0f / 9.0f;
-            float sd = sqrt(max(sumSq * (1.0f / 9.0f) - lit * lit, 0.0f));
-            litMin = max(litMin, lit - CLIP_GAMMA * sd);
-            litMax = min(litMax, lit + CLIP_GAMMA * sd);
-            litMin = min(litMin, lit - CLIP_FLOOR);
-            litMax = max(litMax, lit + CLIP_FLOOR);
+            // fxc cannot branch around tex2Dproj (X3528), so both cascades are sampled — 18 taps.
+            float litN, minN, maxN, litF, minF, maxF;
+            pcf9(g_ShadowSampler,    uvN, clipN.z - g_ShadowParams.y,  texelUV, litN, minN, maxN);
+            pcf9(g_ShadowSamplerFar, uvF, clipF.z - g_CascadeParams.x, texelUV, litF, minF, maxF);
+            float lit    = inNear ? litN : litF;
+            float litMin = inNear ? minN : minF;
+            float litMax = inNear ? maxN : maxF;
 
             float shade    = lerp(0.45f, 1.0f, lit);
             float shadeMin = lerp(0.45f, 1.0f, litMin);

@@ -1867,9 +1867,30 @@ static void drawShadowFitReadout(Bool visible)
 		s_shadowString->setFont(TheFontLibrary->getFont("FixedSys", 8, FALSE));
 	}
 
+	// Ronin @diagnostic 09/09/2026 DX9: §29i.3 step 2. Peak tracker — the near split's win is one
+	// quantiser step wide, so what matters is the WORST fit seen while moving, not this frame's.
+	static Real        s_reqPeak       = 0.0f;
+	static Real        s_extPeak       = 0.0f;
+	static UnsignedInt s_coarseFrames  = 0;
+	static UnsignedInt s_trackedFrames = 0;
+	if (TheGameLogic != NULL && TheGameLogic->getFrame() > 60)
+	{
+		const Real reqNow = W3DShadowMap::getFitRequired();
+		const Real exX    = W3DShadowMap::getFitExtentX();
+		const Real exY    = W3DShadowMap::getFitExtentY();
+		const Real extNow = (exX > exY) ? exX : exY;
+		if (reqNow > s_reqPeak) s_reqPeak = reqNow;
+		if (extNow > s_extPeak) s_extPeak = extNow;
+		if (extNow > 256.0f) ++s_coarseFrames;
+		++s_trackedFrames;
+	}
+
 	UnicodeString text;
-	text.format(L"[SHADOW] texel=%.2f ext=%.0fx%.0f req=%.0f box=%.0fx%.0f bare=%.0fx%.0f hdrm=%.0f",
-		W3DShadowMap::getTexelWorldSize(),
+	// Ronin @diagnostic 13/09/2026 DX9: §29i.3 step 2. texel is NEAR/FAR — both cascades are live at once on different
+	// parts of the screen. At one split the far value reads 0.00.
+	text.format(L"[SHADOW] texel=%.2f/%.2f ext=%.0fx%.0f req=%.0f box=%.0fx%.0f bare=%.0fx%.0f hdrm=%.0f  PEAK req=%.0f ext=%.0f coarsePct=%u",
+		W3DShadowMap::getTexelWorldSize(0),
+		(W3DShadowMap::getSplitCount() > 1) ? W3DShadowMap::getTexelWorldSize(1) : 0.0f,
 		W3DShadowMap::getFitExtentX(),
 		W3DShadowMap::getFitExtentY(),
 		W3DShadowMap::getFitRequired(),
@@ -1877,9 +1898,74 @@ static void drawShadowFitReadout(Bool visible)
 		W3DShadowMap::getFitBoxY(),
 		W3DShadowMap::getFitBareBoxX(),
 		W3DShadowMap::getFitBareBoxY(),
-		W3DShadowMap::getHeadroom());
+		W3DShadowMap::getHeadroom(),
+		s_reqPeak,
+		s_extPeak,
+		(s_trackedFrames > 0) ? (UnsignedInt)((s_coarseFrames * 100) / s_trackedFrames) : (UnsignedInt)0);
+
 	s_shadowString->setText(text);
+
 	s_shadowString->draw(3, 360, GameMakeColor(120, 200, 255, 255), GameMakeColor(0, 0, 0, 255));
+}
+
+// Ronin @diagnostic 09/09/2026 DX9: §29i.3 step 2. Run-mean perf line. Single frames drift with scene
+// activity all session, so a cascade A/B needs means over a tour, not one screenshot.
+static void drawRunMeanPerfReadout(Bool visible)
+{
+	static Int64       s_firstT  = 0;
+	static Int64       s_lastT   = 0;
+	static UnsignedInt s_frames  = 0;
+	static unsigned    s_prevSM  = 0;
+	static double      s_smSum   = 0.0;
+	static Real        s_worstMs = 0.0f;
+
+	// Monotonic counter — take the delta every frame, visible or not, or a hidden frame folds in.
+	const unsigned smNow   = Debug_Statistics::Get_Total_Draw_Calls_By_Subsystem(
+								 Debug_Statistics::DRAW_SUBSYS_SHADOWMAP);
+	const unsigned smDelta = smNow - s_prevSM;
+	s_prevSM = smNow;
+
+	const Int64 nowT = getPerformanceCounter();
+	if (TheGameLogic != NULL && TheGameLogic->getFrame() > 60)
+	{
+		if (s_firstT == 0)
+		{
+			s_firstT = nowT;		// first tracked frame has no predecessor to time against
+		}
+		else
+		{
+			const Real ms = (Real)((double)(nowT - s_lastT) * 1000.0
+								   / (double)getPerformanceCounterFrequency());
+			if (ms > s_worstMs) s_worstMs = ms;
+			s_smSum += (double)smDelta;
+			++s_frames;
+		}
+		s_lastT = nowT;
+	}
+
+	if (!visible || TheDisplayStringManager == NULL || TheFontLibrary == NULL) {
+		return;
+	}
+	static DisplayString* s_perfString = NULL;
+	if (s_perfString == NULL) {
+		s_perfString = TheDisplayStringManager->newDisplayString();
+		if (s_perfString == NULL) {
+			return;
+		}
+		s_perfString->setFont(TheFontLibrary->getFont("FixedSys", 8, FALSE));
+	}
+
+	const double secs   = (s_frames > 0)
+		? ((double)(nowT - s_firstT) / (double)getPerformanceCounterFrequency()) : 0.0;
+	const Real meanFps  = (secs > 0.0) ? (Real)((double)s_frames / secs) : 0.0f;
+	const Real meanMs   = (s_frames > 0) ? (Real)(secs * 1000.0 / (double)s_frames) : 0.0f;
+	const Real meanSM   = (s_frames > 0) ? (Real)(s_smSum / (double)s_frames) : 0.0f;
+
+	UnicodeString text;
+	text.format(L"[PERF] frames=%u  avgFps=%.1f  avgMs=%.3f  worstMs=%.1f  avgShadowMap=%.0f",
+		s_frames, meanFps, meanMs, s_worstMs, meanSM);
+	s_perfString->setText(text);
+	s_perfString->draw(3, 375, GameMakeColor(255, 230, 120, 255), GameMakeColor(0, 0, 0, 255));
 }
 
 //=============================================================================
@@ -2286,15 +2372,19 @@ AGAIN:
 				static const bool SHOW_INSTANCING_READOUT   = true;  // [INST] cyan,   y=315
 				static const bool SHOW_DRAW_SUBSYSTEM_READOUT = true; // [DRAW] orange, y=330
 				static const bool SHOW_SHADOW_FIT_READOUT = true;     // [SHADOW] blue, y=360
-				if (SHOW_SINGLE_RIGID_READOUT) {
-					drawSingleRigidPerfReadout();
-				}
-				if (SHOW_INSTANCING_READOUT) {
-					drawInstancedPerfReadout();
-				}
-				// Ronin @diagnostic 02/08/2026: call every frame even when hidden (it takes the delta).
-				drawSubsystemDrawReadout(SHOW_DRAW_SUBSYSTEM_READOUT);
-				drawShadowFitReadout(SHOW_SHADOW_FIT_READOUT);
+					static const bool SHOW_RUN_MEAN_READOUT   = true;     // [PERF]   amber, y=375
+					if (SHOW_SINGLE_RIGID_READOUT) {
+						drawSingleRigidPerfReadout();
+					}
+					if (SHOW_INSTANCING_READOUT) {
+						drawInstancedPerfReadout();
+					}
+					// Ronin @diagnostic 02/08/2026: call every frame even when hidden (it takes the delta).
+					drawSubsystemDrawReadout(SHOW_DRAW_SUBSYSTEM_READOUT);
+					drawShadowFitReadout(SHOW_SHADOW_FIT_READOUT);
+					// Ronin @diagnostic 09/09/2026 DX9: also every frame — it accumulates the run mean.
+					drawRunMeanPerfReadout(SHOW_RUN_MEAN_READOUT);
+
 
 				// Ronin @feature 12/08/2026 DX9: §29 — the light's-eye view, bottom-left. Gated by
 				// TheShowShadowMapDebug.

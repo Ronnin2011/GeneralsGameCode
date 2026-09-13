@@ -86,6 +86,10 @@ public:
 	static void Set_Shadow_Map(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
 	                           float texelOffset, float depthBias,
 	                           const float* lightTravelDir, float texelWorldSize);
+	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. FAR cascade, its own call so every existing caller
+	// of Set_Shadow_Map is untouched. tex == NULL means one cascade and the receiver ignores the rest.
+	static void Set_Shadow_Map_Far(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
+	                               float depthBias, float texelWorldSize);
 
 
 	/**
