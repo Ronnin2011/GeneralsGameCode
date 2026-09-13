@@ -1229,7 +1229,9 @@ void RTS3DScene::Customized_Render( RenderInfoClass &rinfo )
 		RenderObjClass * robj = it.Peek_Obj();
 		if (robj->Class_ID() == RenderObjClass::CLASSID_TILEMAP)
 			terrainObject=robj;	//found terrain object, store for later.
-		if (!ShaderClass::Is_Backface_Culling_Inverted()) {
+		// Ronin @perf 13/09/2026 DX9: §29i.3. Not in the shadow depth pass either — it ran once per map, so terrain was
+		// re-lit and W3D emitters emitted 2-3x per frame. The main pass still runs it, after the depth pass.
+		if (!ShaderClass::Is_Backface_Culling_Inverted() && !TheTerrainShadowPass.inDepthPass) {
 			// If we are doing water mirror, we draw with backface culling inverted.  In this case,
 			// we only want to call On_Frame_Update if we aren't drawing water, as otherwise
 			// we get 2 frame updates per frame, and it screws up the particle emitters.
