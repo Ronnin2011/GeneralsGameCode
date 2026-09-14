@@ -105,8 +105,13 @@ float4 main(PS_INPUT input) : COLOR0
     // own texel size, so which cascade owns this pixel has to be decided first.
     float4 selClip = mul(float4(input.worldPos, 1.0f), g_LightViewProj);
     float2 selUV   = selClip.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
+    // Ronin @bugfix 14/09/2026 DX9: §29i.3. Near only when the pixel is SEAM_TEXELS inside the near map. At its very edge the
+    // normal offset and the 3x3 PCF read past the map, the lookup counted as "outside = lit", and that drew a bright seam.
+    const float SEAM_TEXELS = 4.0f;             // NORMAL_OFFSET_TEXELS (2) + PCF radius (1) + the 2x2 compare, rounded up
+    float  seamUV  = g_ShadowParams.z * 2.0f * SEAM_TEXELS;
     bool   inNear  = (g_CascadeParams.z < 1.5f)
-                     || (selUV.x == saturate(selUV.x) && selUV.y == saturate(selUV.y));
+                     || (selUV.x >= seamUV && selUV.x <= 1.0f - seamUV && selUV.y >= seamUV && selUV.y <= 1.0f - seamUV);
+
     float texelWorld = inNear ? g_ShadowParams2.w : g_CascadeParams.y;
 
     // NORMAL-OFFSET: push the LOOKUP off the surface, not the depth along the light. Scaled by

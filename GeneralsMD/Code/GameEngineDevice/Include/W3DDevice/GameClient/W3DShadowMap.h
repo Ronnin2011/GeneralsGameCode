@@ -78,7 +78,8 @@ public:
 	static Int getSplitCount(void) { return m_splitCount; }
 	// Ronin @bugfix 13/09/2026 DX9: §29i.3. The near map covers this PERCENT of the screen's width and height, centred —
 	// an RTS view looks at the middle, not at the ground nearest the camera. Higher covers more; too high loses 0.25.
-	static const Int NEAR_SCREEN_PCT = 50;
+	// Ronin @feature 14/09/2026 DX9: §29i.3. 70 = the far map owns at most the outer 15% per side (user rule).
+	static const Int NEAR_SCREEN_PCT = 70;
 
 
 	// Phase 1. Fits the light matrices to the visible ground, texel-snapped. One call per split. screenFrac pulls the
@@ -218,10 +219,13 @@ private:
 	static Real				m_lastBareBoxY;
 	static Real				m_lastExtentX;
 	static Real				m_lastExtentY;
+
 	// Ronin @perf 06/09/2026 DX9: §29j.13k. Adaptive headroom: highest receiver top the main pass saw
 	// last frame, and the hysteresis value derived from it.
 	static Real				m_frameMaxReceiverZ;
 	static Real				m_heldHeadroom;
+	// Ronin @perf 14/09/2026 DX9: §29i.3. Near split only: real receiver height, no 200 floor.
+	static Real				m_heldNearHeadroom;
 	static CameraClass		*m_lightCamera;
 
 	// Terrain receiver pass. Non-fatal if either fails to load — terrain simply gets no shadows.

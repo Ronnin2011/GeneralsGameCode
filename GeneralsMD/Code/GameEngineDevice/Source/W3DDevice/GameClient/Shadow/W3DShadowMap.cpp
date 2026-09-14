@@ -167,7 +167,7 @@ Matrix4x4		W3DShadowMap::m_lightViewProj[W3DShadowMap::MAX_SHADOW_SPLITS];
 Real			W3DShadowMap::m_lastRadius[W3DShadowMap::MAX_SHADOW_SPLITS] = { 0.0f };
 Real			W3DShadowMap::m_lastSunCot	= 2.0f;	// ~27 deg sun until updateLightMatrices runs
 Real			W3DShadowMap::m_lastDepthHalf[W3DShadowMap::MAX_SHADOW_SPLITS] = { 0.0f };
-Real			W3DShadowMap::m_lastRequired = 0.0f;	// §29j.13f — fit before the power-of-two round-up
+Real			W3DShadowMap::m_lastRequired = 0.0f;	// §29j.13f — fit before the extent hold
 Real			W3DShadowMap::m_lastBoxX	= 0.0f;
 Real			W3DShadowMap::m_lastBoxY	= 0.0f;
 Real			W3DShadowMap::m_lastBareBoxX = 0.0f;
@@ -176,6 +176,8 @@ Real			W3DShadowMap::m_lastExtentX = 0.0f;
 Real			W3DShadowMap::m_lastExtentY = 0.0f;
 Real			W3DShadowMap::m_frameMaxReceiverZ = -1.0e30f;
 Real			W3DShadowMap::m_heldHeadroom = 400.0f;
+// Ronin @perf 14/09/2026 DX9: §29i.3. Near map's own held headroom, unfloored. Starts high like the far one.
+Real			W3DShadowMap::m_heldNearHeadroom = 400.0f;
 
 CameraClass		*W3DShadowMap::m_lightCamera	= NULL;
 IDirect3DVertexShader9	*W3DShadowMap::m_terrainShadowVS = NULL;
@@ -644,6 +646,15 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int sp
 		Real needed = HEADROOM_MIN;
 		if (m_frameMaxReceiverZ > -1.0e29f)
 			needed = m_frameMaxReceiverZ - maxGroundZ;	// maxGroundZ is still bare terrain here
+		// Ronin @perf 14/09/2026 DX9: §29i.3. NEAR map: the real height, no 200 floor — it predates the light-space caster cull, and
+		// a receiver above the near volume still reads the far map. Nothing seen yet: needed is still the floor.
+		Real nearNeeded = needed;
+		if (nearNeeded < 0.0f)          nearNeeded = 0.0f;
+		if (nearNeeded > HEADROOM_MAX)  nearNeeded = HEADROOM_MAX;
+		if (nearNeeded > m_heldNearHeadroom)
+			m_heldNearHeadroom = nearNeeded;
+		else
+			m_heldNearHeadroom += (nearNeeded - m_heldNearHeadroom) * 0.05f;
 		if (needed < HEADROOM_MIN) needed = HEADROOM_MIN;
 		if (needed > HEADROOM_MAX) needed = HEADROOM_MAX;
 		if (needed > m_heldHeadroom)
@@ -652,8 +663,34 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int sp
 			m_heldHeadroom += (needed - m_heldHeadroom) * 0.05f;
 		m_frameMaxReceiverZ = -1.0e30f;					// consumed; re-accumulated next frame
 	}
-	const Real RECEIVER_HEADROOM = m_heldHeadroom;
+	const Real RECEIVER_HEADROOM = (split == 0 && m_splitCount > 1) ? m_heldNearHeadroom : m_heldHeadroom;
 	maxGroundZ += RECEIVER_HEADROOM;
+
+	// Ronin @bugfix 14/09/2026 DX9: §29h-7 sideways. A tall receiver at the screen's BOTTOM edge shows its roof over ground
+	// below the screen, so the ground outline extruded upward misses it. Trace the corner rays to the volume's TOP as well.
+	// Ronin @bugfix 14/09/2026 DX9: §29i.3. Same pulled-in rays as the ground fit. The near map fits ONLY the two outlines, the
+	// slab its rays can see; the far map keeps the columns too.
+	Vector3 topPts[4];
+	const Bool nearHullOnly = (frac < 1.0f);
+	for (int i = 0; i < 4; ++i)
+	{
+		const Vector3 nearC = nearCtr + (cameraFrustum.Corners[i] - nearCtr) * frac;
+		const Vector3 ray   = (farCtr + (cameraFrustum.Corners[i + 4] - farCtr) * frac) - nearC;
+		Real t = 1.0f;
+		if (fabsf(ray.Z) > 1e-4f)
+		{
+			// Camera below the top plane, or a ray that never comes down to it: the near corner is the bound.
+			const Real tHit = (maxGroundZ - nearC.Z) / ray.Z;
+			t = (tHit < 0.0f) ? 0.0f : ((tHit < 1.0f) ? tHit : 1.0f);
+		}
+		Vector3 hit = nearC + ray * t;
+		const Vector3 delta = hit - nearC;
+		const Real len = delta.Length();
+		if (len > SHADOW_FIT_FAR && len > 1e-4f)
+			hit = nearC + delta * (SHADOW_FIT_FAR / len);
+		hit.Z = maxGroundZ;
+		topPts[i] = hit;
+	}
 
 	// Ronin @perf 23/08/2026 DX9: §29i.3/§29j.10. Light-space BOX, not a bounding sphere — the sphere
 	// wrapped trapezoid AND height range in one radius, and that radius set the texel (measured r=576
@@ -688,6 +725,68 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int sp
 	// Orientation only, so we can fit and snap along the light's own axes.
 	Matrix3D lightXform;
 	lightXform.Look_At_Dir(Vector3(0.0f, 0.0f, 0.0f), lightDir, 0.0f);
+	// Ronin @perf 14/09/2026 DX9: §29i.3. Every map rolls to the angle whose box is SMALLEST. Camera screen-right measured no gain
+	// (exact 0.41 vs rot 0.33): the sun shears the fitted area in the light plane, so the angle is searched, not derived.
+	Real lightRoll = 0.0f;
+	{
+		// The box's own point set at roll 0 — ground outline, column tops (far map only), top outline — as the corner loop below.
+		const Vector3 baseX = lightXform.Get_X_Vector();
+		const Vector3 baseY = lightXform.Get_Y_Vector();
+		Real bpx[12], bpy[12];
+		int  np = 0;
+		for (int i = 0; i < 4; ++i)
+		{
+			const Vector3 g(pts[i].X, pts[i].Y, minGroundZ);
+			bpx[np] = Vector3::Dot_Product(g, baseX);
+			bpy[np] = Vector3::Dot_Product(g, baseY);
+			++np;
+			if (!nearHullOnly)
+			{
+				const Vector3 colTop(pts[i].X, pts[i].Y, maxGroundZ);
+				bpx[np] = Vector3::Dot_Product(colTop, baseX);
+				bpy[np] = Vector3::Dot_Product(colTop, baseY);
+				++np;
+			}
+			bpx[np] = Vector3::Dot_Product(topPts[i], baseX);
+			bpy[np] = Vector3::Dot_Product(topPts[i], baseY);
+			++np;
+		}
+		const int  ROLL_STEPS = 72;						// 1.25 deg over a quarter turn — a square box repeats every 90
+		const Real ROLL_STEP  = 1.5707963f / (Real)ROLL_STEPS;
+		static int s_heldRollStep[MAX_SHADOW_SPLITS] = { 0 };
+		Real bestSize = 1e30f;
+		Real heldSize = 1e30f;
+		int  bestStep = 0;
+		for (int a = 0; a < ROLL_STEPS; ++a)
+		{
+			const Real ca = cosf((Real)a * ROLL_STEP);
+			const Real sa = sinf((Real)a * ROLL_STEP);
+			Real loA = 1e30f, hiA = -1e30f, loB = 1e30f, hiB = -1e30f;
+			for (int k = 0; k < np; ++k)
+			{
+				const Real va =  ca * bpx[k] + sa * bpy[k];
+				const Real vb = -sa * bpx[k] + ca * bpy[k];
+				if (va < loA) loA = va;
+				if (va > hiA) hiA = va;
+				if (vb < loB) loB = vb;
+				if (vb > hiB) hiB = vb;
+			}
+			const Real size = ((hiA - loA) > (hiB - loB)) ? (hiA - loA) : (hiB - loB);
+			if (size < bestSize)
+			{
+				bestSize = size;
+				bestStep = a;
+			}
+			if (a == s_heldRollStep[split])
+				heldSize = size;
+		}
+		// Hold the angle unless another is 2% smaller — a new roll re-registers the whole map, so it must not flip between near-equal minima.
+		if (bestSize < heldSize * 0.98f)
+			s_heldRollStep[split] = bestStep;
+		// The search's X is cos(a)*X + sin(a)*Y; Look_At_Dir's is cos(roll)*X - sin(roll)*Y (matrix3d.cpp:406, matrix3d.h:901).
+		lightRoll = -(Real)s_heldRollStep[split] * ROLL_STEP;
+		lightXform.Look_At_Dir(Vector3(0.0f, 0.0f, 0.0f), lightDir, lightRoll);
+	}
 	const Vector3 lightX = lightXform.Get_X_Vector();
 	const Vector3 lightY = lightXform.Get_Y_Vector();
 	const Vector3 lightZ = lightXform.Get_Z_Vector();
@@ -707,7 +806,8 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int sp
 		{
 			const Real px = Vector3::Dot_Product(corner[c], lightX);
 			const Real py = Vector3::Dot_Product(corner[c], lightY);
-			if (c < 2)			// corners 0 and 1 are the REAL box — behaviour unchanged
+			// Ronin @bugfix 14/09/2026 DX9: §29i.3. Corners 0 and 1 are the REAL box; the near map drops 1, the column top.
+			if (c == 0 || (c == 1 && !nearHullOnly))
 			{
 				const Real pz = Vector3::Dot_Product(corner[c], lightZ);
 				if (px < loX) loX = px;
@@ -727,6 +827,19 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int sp
 		}
 	}
 
+	// Ronin @bugfix 14/09/2026 DX9: §29h-7 sideways. The top outline's corners — what covers a tall receiver at the bottom edge.
+	for (int i = 0; i < 4; ++i)
+	{
+		const Real px = Vector3::Dot_Product(topPts[i], lightX);
+		const Real py = Vector3::Dot_Product(topPts[i], lightY);
+		const Real pz = Vector3::Dot_Product(topPts[i], lightZ);
+		if (px < loX) loX = px;
+		if (px > hiX) hiX = px;
+		if (py < loY) loY = py;
+		if (py > hiY) hiY = py;
+		if (pz < loZ) loZ = pz;
+		if (pz > hiZ) hiZ = pz;
+	}
 
 	// Quantise, or zooming re-scales the map every frame and the shadows swim again.
 	// Ronin @perf 06/09/2026 DX9: §29j.13k. Both axes quantised and held independently.
@@ -734,9 +847,10 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int sp
 	const Real EXTENT_STEP = 16.0f;
 	// Ronin @bugfix 08/09/2026 DX9: §29j.13p. Lateral margin for casters at the footprint edge — the
 	// power-of-two round-up was supplying this by accident. Doc §8.6.
-	const Real CASTER_MARGIN = (split == 0 && m_splitCount > 1) ? 16.0f : 48.0f;
-	// Ronin @perf 09/09/2026 DX9: §29i.3 step 2. The NEAR split needs far less margin — a caster
-	// clipped from its box is still inside the FAR split's, which is what §8.6's 48 was insuring against.
+	// Ronin @perf 14/09/2026 DX9: §29i.3. NEAR map: none. Under an ortho light a shadow inside the box comes from geometry inside
+	// it, and the seam band already sends edge pixels to the far map. 16 was 5% of the near texel.
+	// Ronin @perf 14/09/2026 DX9: §29i.3. FAR / single map 48 -> 16: the top outline now covers the tall receivers 48 was hiding.
+	const Real CASTER_MARGIN = (split == 0 && m_splitCount > 1) ? 0.0f : 16.0f;
 	const Real halfX = ceilf(((hiX - loX) * 0.5f + CASTER_MARGIN) / EXTENT_STEP) * EXTENT_STEP;
 	const Real halfY = ceilf(((hiY - loY) * 0.5f + CASTER_MARGIN) / EXTENT_STEP) * EXTENT_STEP;
 	const Real required = (halfX > halfY) ? halfX : halfY;
@@ -745,25 +859,20 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int sp
 	if (required <= 0.0f)
 		return;
 
-	// Ronin @bugfix 02/09/2026 DX9: §29j.13f. Power-of-two extent — the texel lattice must NEST across a
-	// change or the whole map re-registers and edges flip. Grow at once, shrink below half.
-	// Ronin @perf 06/09/2026 DX9: §29j.13k. One held value per AXIS; each nests on its own.
+	// Ronin @perf 06/09/2026 DX9: §29j.13k. One held value per AXIS.
 	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. One PAIR PER SPLIT — sharing one pair makes the near
 	// split hold the far split's extent, which is the entire gain thrown away.
 	static Real s_heldExtentX[MAX_SHADOW_SPLITS] = { 0.0f };
 	static Real s_heldExtentY[MAX_SHADOW_SPLITS] = { 0.0f };
+	// Ronin @perf 14/09/2026 DX9: §29i.3. EXACT size, replaces §29j.13f's power-of-two step (near measured 0.50 -> 0.36, no popping).
+	// Grow at once with 4% slack, shrink only below 85%, so a pan never re-registers the map. Every map, far included.
 	{
-		Real potX = EXTENT_STEP;
-		while (potX < halfX)
-			potX *= 2.0f;
-		if (potX > s_heldExtentX[split] || halfX <= s_heldExtentX[split] * 0.5f)
-			s_heldExtentX[split] = potX;
-
-		Real potY = EXTENT_STEP;
-		while (potY < halfY)
-			potY *= 2.0f;
-		if (potY > s_heldExtentY[split] || halfY <= s_heldExtentY[split] * 0.5f)
-			s_heldExtentY[split] = potY;
+		const Real GROW_SLACK   = 1.04f;
+		const Real SHRINK_BELOW = 0.85f;
+		if (halfX > s_heldExtentX[split] || halfX < s_heldExtentX[split] * SHRINK_BELOW)
+			s_heldExtentX[split] = ceilf(halfX * GROW_SLACK / EXTENT_STEP) * EXTENT_STEP;
+		if (halfY > s_heldExtentY[split] || halfY < s_heldExtentY[split] * SHRINK_BELOW)
+			s_heldExtentY[split] = ceilf(halfY * GROW_SLACK / EXTENT_STEP) * EXTENT_STEP;
 	}
 	const Real extentX = s_heldExtentX[split];
 	const Real extentY = s_heldExtentY[split];
@@ -771,8 +880,7 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int sp
 	m_lastExtentX = extentX;
 	m_lastExtentY = extentY;
 
-	// Ronin @perf 06/09/2026 DX9: §29j.13k. POT is monotone, so max(X,Y) is the same number the single
-	// held value gave — every scalar consumer is unchanged.
+	// Ronin @perf 06/09/2026 DX9: §29j.13k. max(X,Y) is the scalar every single-value consumer (bias, texel readout) takes.
 	const Real extent = (extentX > extentY) ? extentX : extentY;
 	m_lastRadius[split] = extent;
 
@@ -828,7 +936,9 @@ void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int sp
 	// Pull back far enough that the entire depth range sits in front of the near plane.
 	const Real pullBack = depthHalf + 1.0f;
 	const Vector3 eye = snappedCenter - lightDir * pullBack;
-	lightXform.Look_At_Dir(eye, lightDir, 0.0f);
+	// Ronin @perf 14/09/2026 DX9: §29i.3. Same roll as the fit, or the map renders on axes the box was not measured on.
+	lightXform.Look_At_Dir(eye, lightDir, lightRoll);
+
 
 	m_lightCamera->Set_Transform(lightXform);
 	m_lightCamera->Set_Projection_Type(CameraClass::ORTHO);

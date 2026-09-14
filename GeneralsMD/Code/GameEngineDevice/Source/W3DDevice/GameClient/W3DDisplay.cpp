@@ -1871,8 +1871,6 @@ static void drawShadowFitReadout(Bool visible)
 	// quantiser step wide, so what matters is the WORST fit seen while moving, not this frame's.
 	static Real        s_reqPeak       = 0.0f;
 	static Real        s_extPeak       = 0.0f;
-	static UnsignedInt s_coarseFrames  = 0;
-	static UnsignedInt s_trackedFrames = 0;
 	if (TheGameLogic != NULL && TheGameLogic->getFrame() > 60)
 	{
 		const Real reqNow = W3DShadowMap::getFitRequired();
@@ -1881,14 +1879,13 @@ static void drawShadowFitReadout(Bool visible)
 		const Real extNow = (exX > exY) ? exX : exY;
 		if (reqNow > s_reqPeak) s_reqPeak = reqNow;
 		if (extNow > s_extPeak) s_extPeak = extNow;
-		if (extNow > 256.0f) ++s_coarseFrames;
-		++s_trackedFrames;
 	}
 
 	UnicodeString text;
 	// Ronin @diagnostic 13/09/2026 DX9: §29i.3 step 2. texel is NEAR/FAR — both cascades are live at once on different
 	// parts of the screen. At one split the far value reads 0.00.
-	text.format(L"[SHADOW] texel=%.2f/%.2f ext=%.0fx%.0f req=%.0f box=%.0fx%.0f bare=%.0fx%.0f hdrm=%.0f  PEAK req=%.0f ext=%.0f coarsePct=%u",
+	// Ronin @diagnostic 14/09/2026 DX9: §29i.3. coarsePct dropped — extents are exact now, there is no 256 step to count.
+	text.format(L"[SHADOW] texel=%.2f/%.2f ext=%.0fx%.0f req=%.0f box=%.0fx%.0f bare=%.0fx%.0f hdrm=%.0f  PEAK req=%.0f ext=%.0f",
 		W3DShadowMap::getTexelWorldSize(0),
 		(W3DShadowMap::getSplitCount() > 1) ? W3DShadowMap::getTexelWorldSize(1) : 0.0f,
 		W3DShadowMap::getFitExtentX(),
@@ -1900,8 +1897,8 @@ static void drawShadowFitReadout(Bool visible)
 		W3DShadowMap::getFitBareBoxY(),
 		W3DShadowMap::getHeadroom(),
 		s_reqPeak,
-		s_extPeak,
-		(s_trackedFrames > 0) ? (UnsignedInt)((s_coarseFrames * 100) / s_trackedFrames) : (UnsignedInt)0);
+		s_extPeak);
+
 
 	s_shadowString->setText(text);
 

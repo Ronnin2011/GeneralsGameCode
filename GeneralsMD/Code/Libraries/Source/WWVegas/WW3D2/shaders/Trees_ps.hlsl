@@ -141,8 +141,12 @@ PS_OUTPUT main(PS_INPUT input)
         // the light offset is scaled by that cascade's own texel size, so pick the cascade first.
         float4 selClip = mul(float4(input.worldPos, 1.0f), g_LightViewProj);
         float2 selUV   = selClip.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
+        // Ronin @bugfix 14/09/2026 DX9: §29i.3. Near only when SEAM_TEXELS inside the near map — the light offset (4 texels) and
+        // the PCF left the map at its edge and read as lit: the bright seam.
+        const float SEAM_TEXELS = 6.0f;             // LIGHT_OFFSET_TEXELS (4) + PCF radius (1) + the 2x2 compare, rounded up
+        float  seamUV  = g_ShadowParams.z * 2.0f * SEAM_TEXELS;
         bool   inNear  = (g_CascadeParams.z < 1.5f)
-                         || (selUV.x == saturate(selUV.x) && selUV.y == saturate(selUV.y));
+                         || (selUV.x >= seamUV && selUV.x <= 1.0f - seamUV && selUV.y >= seamUV && selUV.y <= 1.0f - seamUV);
         float texelWorld = inNear ? g_ShadowParams2.w : g_CascadeParams.y;
 
         float3 samplePos = input.worldPos + toLight * (texelWorld * LIGHT_OFFSET_TEXELS);
