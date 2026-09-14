@@ -3558,6 +3558,14 @@ GameMessageDisposition CommandTranslator::translateGameMessage(const GameMessage
 			}
 			break;
 		}
+		// Ronin @feature 14/09/2026 DX9: debug panel toggle, through the Display interface — Core cannot call the device-side panel.
+		case GameMessage::MSG_META_TOGGLE_DEBUG_PANEL:
+		{
+			if (TheDisplay != nullptr)
+				TheDisplay->toggleDebugPanel();
+			disp = DESTROY_MESSAGE;
+			break;
+		}
 
 #if defined(_ALLOW_DEBUG_CHEATS_IN_RELEASE)//may be defined in GameCommon.h
     case GameMessage::MSG_CHEAT_RUNSCRIPT1:

@@ -72,6 +72,8 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DFileSystem.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DProfilerFrameCapture.h"
+// Ronin @feature 14/09/2026 DX9: debug panel that hosts the HUD readouts.
+#include "W3DDevice/GameClient/W3DDebugPanel.h"
 // Ronin @feature 12/08/2026 DX9: §29 shadow-map render-to-texture pass.
 #include "W3DDevice/GameClient/W3DShadowMap.h"
 #include "W3DDevice/GameClient/HeightMap.h"
@@ -1735,7 +1737,9 @@ static void drawSingleRigidPerfReadout()
 	const Int   y = 300; // independent slot; move if it overlaps the stats column
 	const Color textColor = GameMakeColor(255, 255, 0, 255); // yellow = "ours", not the white stats
 	const Color dropColor = GameMakeColor(0, 0, 0, 255);
-	s_srString->draw(x, y, textColor, dropColor);
+	// Ronin @feature 14/09/2026 DX9: debug panel row; the old fixed spot only when there is no panel this frame.
+	if (!W3DDebugPanel::setRow(W3DDebugPanel::ROW_SR, s_srString, textColor))
+		s_srString->draw(x, y, textColor, dropColor);
 }
 
 static void drawInstancedPerfReadout()
@@ -1773,7 +1777,9 @@ static void drawInstancedPerfReadout()
 	const Int   y = 315; // just below the [SR] line (y=300)
 	const Color textColor = GameMakeColor(0, 255, 255, 255); // cyan = instancing
 	const Color dropColor = GameMakeColor(0, 0, 0, 255);
-	s_instString->draw(x, y, textColor, dropColor);
+	// Ronin @feature 14/09/2026 DX9: debug panel row; the old fixed spot only when there is no panel this frame.
+	if (!W3DDebugPanel::setRow(W3DDebugPanel::ROW_INST, s_instString, textColor))
+		s_instString->draw(x, y, textColor, dropColor);
 }
 
 // Ronin @diagnostic 02/08/2026 DX9: [DRAW] — where the frame's draw calls come from. `total` includes
@@ -1824,7 +1830,9 @@ static void drawSubsystemDrawReadout(Bool visible)
 	const Int   y = 330; // below [INST] (y=315)
 	const Color textColor = GameMakeColor(255, 160, 0, 255); // orange = draw attribution
 	const Color dropColor = GameMakeColor(0, 0, 0, 255);
-	s_drawString->draw(x, y, textColor, dropColor);
+	// Ronin @feature 14/09/2026 DX9: debug panel row; the old fixed spot only when there is no panel this frame.
+	if (!W3DDebugPanel::setRow(W3DDebugPanel::ROW_DRAW, s_drawString, textColor))
+		s_drawString->draw(x, y, textColor, dropColor);
 
 	// Ronin @diagnostic 09/08/2026 §19b.2 DX9: second line for the `other` split — its own DisplayString
 	// so the [DRAW] line above stays readable in a screenshot. Throwaway with the split.
@@ -1848,7 +1856,9 @@ static void drawSubsystemDrawReadout(Bool visible)
 		perFrame[Debug_Statistics::DRAW_SUBSYS_SHADOWMAP],
 		perFrame[Debug_Statistics::DRAW_SUBSYS_SHADOWRECV]);
 	s_drawString2->setText(text2);
-	s_drawString2->draw(x, y + 15, textColor, dropColor);
+	// Ronin @feature 14/09/2026 DX9: debug panel row; the old fixed spot only when there is no panel this frame.
+	if (!W3DDebugPanel::setRow(W3DDebugPanel::ROW_DRAW2, s_drawString2, textColor))
+		s_drawString2->draw(x, y + 15, textColor, dropColor);
 }
 
 // Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Shadow fit readout — own line, own switch. Texel moves
@@ -1902,7 +1912,10 @@ static void drawShadowFitReadout(Bool visible)
 
 	s_shadowString->setText(text);
 
-	s_shadowString->draw(3, 360, GameMakeColor(120, 200, 255, 255), GameMakeColor(0, 0, 0, 255));
+	// Ronin @feature 14/09/2026 DX9: into the debug panel; the old fixed spot only when there is no panel this frame.
+	const Color shadowColor = GameMakeColor(120, 200, 255, 255);
+	if (!W3DDebugPanel::setRow(W3DDebugPanel::ROW_SHADOW, s_shadowString, shadowColor))
+		s_shadowString->draw(3, 360, shadowColor, GameMakeColor(0, 0, 0, 255));
 }
 
 // Ronin @diagnostic 09/09/2026 DX9: §29i.3 step 2. Run-mean perf line. Single frames drift with scene
@@ -1962,7 +1975,9 @@ static void drawRunMeanPerfReadout(Bool visible)
 	text.format(L"[PERF] frames=%u  avgFps=%.1f  avgMs=%.3f  worstMs=%.1f  avgShadowMap=%.0f",
 		s_frames, meanFps, meanMs, s_worstMs, meanSM);
 	s_perfString->setText(text);
-	s_perfString->draw(3, 375, GameMakeColor(255, 230, 120, 255), GameMakeColor(0, 0, 0, 255));
+	// Ronin @feature 14/09/2026 DX9: debug panel row; the old fixed spot only when there is no panel this frame.
+	if (!W3DDebugPanel::setRow(W3DDebugPanel::ROW_PERF, s_perfString, GameMakeColor(255, 230, 120, 255)))
+		s_perfString->draw(3, 375, GameMakeColor(255, 230, 120, 255), GameMakeColor(0, 0, 0, 255));
 }
 
 // Ronin @diagnostic 14/09/2026 DX9: §19e.3. [TERRAIN] — splat bake under channel reuse: materials, channels in use, cells left with
@@ -1993,7 +2008,9 @@ static void drawTerrainSplatReadout(Bool visible)
 		map->getTerrainTexturePageCount(),
 		map->getSplatMaxPerTile());
 	s_terrainString->setText(text);
-	s_terrainString->draw(3, 405, GameMakeColor(255, 255, 255, 255), GameMakeColor(0, 0, 0, 255));
+	// Ronin @feature 14/09/2026 DX9: debug panel row; the old fixed spot only when there is no panel this frame.
+	if (!W3DDebugPanel::setRow(W3DDebugPanel::ROW_TERRAIN, s_terrainString, GameMakeColor(255, 255, 255, 255)))
+		s_terrainString->draw(3, 405, GameMakeColor(255, 255, 255, 255), GameMakeColor(0, 0, 0, 255));
 }
 
 //=============================================================================
@@ -2340,6 +2357,12 @@ AGAIN:
 				// draw all views of the world
 				drawViews();
 
+				// Ronin @feature 14/09/2026 DX9: debug panel — find/recreate and size it BEFORE the window manager draws it. false = no
+				// panel window at all, every readout draws at its old fixed spot. Ctrl+Shift+D shows/hides the panel at runtime.
+				static const bool USE_DEBUG_PANEL = true;
+				if (USE_DEBUG_PANEL)
+					W3DDebugPanel::update();
+
 				// draw the user interface
 				TheInGameUI->DRAW();
 
@@ -2582,6 +2605,12 @@ void W3DDisplay::toggleLetterBox()
 	{
 		TheTacticalView->setZoomLimited( !m_letterBoxEnabled );
 	}
+}
+
+// Ronin @feature 14/09/2026 DX9: Ctrl+Shift+D. The panel owns its visibility — no GlobalData flag needed any more.
+void W3DDisplay::toggleDebugPanel()
+{
+	W3DDebugPanel::toggleVisible();
 }
 
 void W3DDisplay::enableLetterBox(Bool enable)

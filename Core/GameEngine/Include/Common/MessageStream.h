@@ -278,6 +278,7 @@ public:
 		MSG_META_TOGGLE_PAUSE_ALT,									///< TheSuperHackers @feature Toggle game pause (alternative mapping)
 		MSG_META_STEP_FRAME,												///< TheSuperHackers @feature Step one frame
 		MSG_META_STEP_FRAME_ALT,										///< TheSuperHackers @feature Step one frame (alternative mapping)
+		MSG_META_TOGGLE_DEBUG_PANEL,								///< Ronin @feature 14/09/2026 DX9: show/hide the HUD readout panel
 		MSG_META_DEMO_INSTANT_QUIT,									///< bail out of game immediately
 
 

@@ -126,6 +126,7 @@ public:
 	virtual void toggleMovieCapture() override;			//enable AVI or frame capture mode.
 
 	virtual void toggleLetterBox() override;	///<enabled letter-boxed display
+	virtual void toggleDebugPanel() override;	///< Ronin @feature 14/09/2026 DX9: show/hide the debug panel
 	virtual void enableLetterBox(Bool enable) override;	///<forces letter-boxed display on/off
 
 	virtual Bool isLetterBoxFading() override;	///<returns true while letterbox fades in/out

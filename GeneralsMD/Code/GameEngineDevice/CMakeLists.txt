@@ -38,6 +38,7 @@ set(GAMEENGINEDEVICE_SRC
     Include/W3DDevice/GameClient/W3DBufferManager.h
     Include/W3DDevice/GameClient/W3DCustomScene.h
     Include/W3DDevice/GameClient/W3DDebugDisplay.h
+    Include/W3DDevice/GameClient/W3DDebugPanel.h
     Include/W3DDevice/GameClient/W3DDebugIcons.h
     Include/W3DDevice/GameClient/W3DDisplay.h
     Include/W3DDevice/GameClient/W3DDisplayString.h
@@ -148,6 +149,7 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/W3DBibBuffer.cpp
     Source/W3DDevice/GameClient/W3DBridgeBuffer.cpp
     Source/W3DDevice/GameClient/W3DDebugDisplay.cpp
+    Source/W3DDevice/GameClient/W3DDebugPanel.cpp
     Source/W3DDevice/GameClient/W3DDebugIcons.cpp
     Source/W3DDevice/GameClient/W3DDisplay.cpp
     Source/W3DDevice/GameClient/W3DDisplayString.cpp

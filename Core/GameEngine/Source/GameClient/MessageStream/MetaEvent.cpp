@@ -189,6 +189,7 @@ static const LookupListRec GameMessageMetaTypeNames[] =
 	{ "TOGGLE_PAUSE_ALT",													GameMessage::MSG_META_TOGGLE_PAUSE_ALT },
 	{ "STEP_FRAME",																GameMessage::MSG_META_STEP_FRAME },
 	{ "STEP_FRAME_ALT",														GameMessage::MSG_META_STEP_FRAME_ALT },
+	{ "TOGGLE_DEBUG_PANEL",												GameMessage::MSG_META_TOGGLE_DEBUG_PANEL },
 	{ "DEMO_INSTANT_QUIT",												GameMessage::MSG_META_DEMO_INSTANT_QUIT },
 
 #if defined(_ALLOW_DEBUG_CHEATS_IN_RELEASE)//may be defined in GameCommon.h
@@ -912,6 +913,17 @@ void MetaMap::generateMetaMap()
 			map->m_key = MK_O;
 			map->m_transition = DOWN;
 			map->m_modState = SHIFT; // Requires modifier to avoid key conflicts as a player.
+			map->m_usableIn = COMMANDUSABLE_EVERYWHERE;
+		}
+	}
+	{
+		// Ronin @feature 14/09/2026 DX9: debug panel toggle, Ctrl+Shift+D unless CommandMap.ini already binds this message.
+		MetaMapRec *map = getMetaMapRec(GameMessage::MSG_META_TOGGLE_DEBUG_PANEL);
+		if (map->m_key == MK_NONE)
+		{
+			map->m_key = MK_D;
+			map->m_transition = DOWN;
+			map->m_modState = SHIFT_CTRL;
 			map->m_usableIn = COMMANDUSABLE_EVERYWHERE;
 		}
 	}
