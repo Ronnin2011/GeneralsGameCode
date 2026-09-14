@@ -42,6 +42,7 @@
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "GameClient/Drawable.h"
 #include "Common/KindOf.h"
+#include "GameClient/GameClient.h"		// Ronin @bugfix 13/09/2026 DX9: §29j.7 — TheGameClient->findDrawableByID
 
 Bool TheUseShadowMaps = TRUE;
 Bool TheShowShadowMapDebug = FALSE;
@@ -895,6 +896,9 @@ static Vector3		s_bakedPos[CASTER_MAX_BAKED];
 static Vector3		s_bakedAxis[CASTER_MAX_BAKED];
 static int			s_bakedCount = 0;
 static int			s_verifyCursor = 0;
+// Ronin @bugfix 13/09/2026 DX9: §29j.7. IDs, not pointers, of baked drawables that have a game object — the ones fog, stealth
+// or scripts can hide. Checked every frame by ensureStaticCasters.
+static std::vector<DrawableID>	s_bakedDrawables;
 
 static void releaseCasterChunks(void)
 {
@@ -912,6 +916,7 @@ static void releaseCasterChunks(void)
 	}
 	s_bakedCount = 0;
 	s_verifyCursor = 0;
+	s_bakedDrawables.clear();
 }
 
 // Commit the scratch arrays as one static VB/IB pair.
@@ -1180,6 +1185,21 @@ void W3DShadowMap::invalidateStaticCasters(void)
 
 void W3DShadowMap::ensureStaticCasters(SceneClass *scene)
 {
+	// Ronin @bugfix 13/09/2026 DX9: §29j.7. A baked building that has since become invisible to the player — shrouded,
+	// stealthed, hidden — would keep casting from the bake. Rebuild without it; an excluded one cannot trigger this again.
+	if (!s_casterCacheDirty && TheGameClient != NULL)
+	{
+		for (size_t i = 0; i < s_bakedDrawables.size(); ++i)
+		{
+			Drawable *draw = TheGameClient->findDrawableByID(s_bakedDrawables[i]);
+			if (draw != NULL && (draw->isDrawableEffectivelyHidden() || draw->getFullyObscuredByShroud()))
+			{
+				s_casterCacheDirty = TRUE;
+				break;
+			}
+		}
+	}
+
 	if (s_casterCacheDirty)
 	{
 		rebuildStaticCasters(scene);
@@ -1204,8 +1224,16 @@ void W3DShadowMap::rebuildStaticCasters(SceneClass *scene)
 			for (it->First(); !it->Is_Done(); it->Next())
 			{
 				RenderObjClass *robj = it->Current_Item();
-				if (isStaticCaster(robj))
-					bakeCasterObject(robj);
+				if (!isStaticCaster(robj))
+					continue;
+				// Ronin @bugfix 13/09/2026 DX9: §29j.7. Never bake what the player cannot see: it stays on the normal path, where
+				// Visibility_Check hides it (W3DScene.cpp:557). Baked, an unscouted enemy base cast its shadows through the shroud.
+				Drawable *draw = ((DrawableInfo *)robj->Get_User_Data())->m_drawable;
+				if (draw->isDrawableEffectivelyHidden() || draw->getFullyObscuredByShroud())
+					continue;
+				bakeCasterObject(robj);
+				if (draw->getObject() != NULL)
+					s_bakedDrawables.push_back(draw->getID());
 			}
 			scene->Destroy_Iterator(it);
 		}
