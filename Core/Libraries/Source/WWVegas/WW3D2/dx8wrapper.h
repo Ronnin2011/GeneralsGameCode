@@ -508,6 +508,10 @@ public:
 		render_state_changed |= VERTEX_BUFFER_CHANGED | INDEX_BUFFER_CHANGED;
 	}
 
+	// Ronin @bugfix 14/09/2026 DX9: after clearing texture stages straight on the device, call this — otherwise both texture
+	// caches still believe the old texture is bound and skip the next real bind (untextured, white infantry).
+	static void Invalidate_Texture_State(unsigned firstStage, unsigned stageCount);
+
 #ifdef WWDEBUG
 	// @debug Ronin 18/01/2026 DX9: Allow draw-site to tag subsequent DIP logs with a human-readable label
 	static void Set_Debug_Draw_Context(const char* label);

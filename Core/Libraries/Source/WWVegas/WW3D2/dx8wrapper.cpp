@@ -1066,6 +1066,22 @@ void DX8Wrapper::Reset_Pass_Render_States()
 #endif
 }
 
+// Ronin @bugfix 14/09/2026 DX9: for stages a caller cleared with raw SetTexture(stage, nullptr). Both caches are set to
+// match the device (nothing bound), so the next Set_Texture always reaches it.
+void DX8Wrapper::Invalidate_Texture_State(unsigned firstStage, unsigned stageCount)
+{
+	for (unsigned stage = firstStage; stage < firstStage + stageCount && stage < MAX_TEXTURE_STAGES; ++stage)
+	{
+		if (Textures[stage] != nullptr)
+		{
+			Textures[stage]->Release();
+			Textures[stage] = nullptr;
+		}
+		REF_PTR_RELEASE(render_state.Textures[stage]);
+		render_state_changed |= (TEXTURE0_CHANGED << stage);
+	}
+}
+
 void DX8Wrapper::Invalidate_Cached_Render_States()
 {
 	render_state_changed=0;

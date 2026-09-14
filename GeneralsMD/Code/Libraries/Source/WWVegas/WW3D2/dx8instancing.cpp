@@ -902,6 +902,8 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 
 	dev->SetTexture(1, nullptr);
 	dev->SetTexture(2, nullptr);
+	// Ronin @bugfix 14/09/2026 DX9: cleared raw — resync the wrapper's texture caches, same as Flush_Single_Rigid's teardown.
+	DX8Wrapper::Invalidate_Texture_State(1, 2);
 
 	if (normalMapTex != nullptr) {
 		normalMapTex->Release_Ref();
@@ -1457,6 +1459,9 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 
 	ShaderClass::Invalidate();
 	DX8Wrapper::Invalidate_Vertex_Buffer_State();
+	// Ronin @bugfix 14/09/2026 DX9: stages 0-2 were bound and cleared raw above — tell the wrapper, or the next skinned mesh
+	// with the same texture skips its bind and draws untextured (white infantry, Windowednew §23d.2).
+	DX8Wrapper::Invalidate_Texture_State(0, 3);
 }
 
 DX8InstanceManagerClass::~DX8InstanceManagerClass()
