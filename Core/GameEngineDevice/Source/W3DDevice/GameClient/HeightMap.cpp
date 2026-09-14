@@ -3015,48 +3015,47 @@ void HeightMapRenderObjClass::renderPrimaryBlendControlPass()
 
 	Bool drewAnyContribution = FALSE;
 
+	// Ronin @bugfix 14/09/2026 DX9: §19e.3. CHANNEL REUSE — per draw tile, the materials around its cells. Cached until the draw
+	// window slides or the bake reruns; same draw-local cell mapping as the paged-terrain cache above.
+	static std::vector<UnsignedInt64> s_tileMaterialMask;
+	static const WorldHeightMap* s_tileMaskMap = nullptr;
+	static Int s_tileMaskKey[6] = { -1, -1, -1, -1, -1, -1 };
+	{
+		const Int keyNow[6] = { m_originX, m_originY, m_map->getDrawOrgX(), m_map->getDrawOrgY(),
+								m_map->getSplatBakeSerial(), m_numVBTilesX * 4096 + m_numVBTilesY };
+		Bool stale = (s_tileMaskMap != m_map) || ((Int)s_tileMaterialMask.size() != m_numVBTilesX * m_numVBTilesY);
+		for (Int k = 0; k < 6; ++k) {
+			if (keyNow[k] != s_tileMaskKey[k]) stale = TRUE;
+		}
+		if (stale) {
+			s_tileMaskMap = m_map;
+			for (Int k = 0; k < 6; ++k) s_tileMaskKey[k] = keyNow[k];
+			s_tileMaterialMask.assign(m_numVBTilesX * m_numVBTilesY, 0);
+			for (Int tj = 0; tj < m_numVBTilesY; ++tj) {
+				for (Int ti = 0; ti < m_numVBTilesX; ++ti) {
+					Int ccX = VERTEX_BUFFER_TILE_LENGTH, ccY = VERTEX_BUFFER_TILE_LENGTH;
+					if (ti == m_numVBTilesX - 1 && m_numBlockColumnsInLastVB > 0) ccX = m_numBlockColumnsInLastVB;
+					if (tj == m_numVBTilesY - 1 && m_numBlockRowsInLastVB > 0) ccY = m_numBlockRowsInLastVB;
+					UnsignedInt64 mask = 0;
+					for (Int ly = 0; ly < ccY; ++ly) {
+						const Int mY = getYWithOrigin(tj * VERTEX_BUFFER_TILE_LENGTH + ly);
+						for (Int lx = 0; lx < ccX; ++lx)
+							mask |= m_map->getSplatCellMaskForCell(getXWithOrigin(ti * VERTEX_BUFFER_TILE_LENGTH + lx), mY);
+					}
+					s_tileMaterialMask[tj * m_numVBTilesX + ti] = mask;
+				}
+			}
+		}
+	}
+	const Int pmNumSlots = m_map->getActiveMaterialCount();	// weight channels in use; the shader loops this many slots
+
 	for (Int terrainPage = 0; terrainPage < terrainPageCount; ++terrainPage) {
 		TextureClass* pTerrainAtlas =
 			useMultiPageAccumulation ? m_map->getTerrainTexture(terrainPage) : m_stageZeroTexture;
 		if (pTerrainAtlas == nullptr) {
 			continue;
 		}
-
-		float pmRegionA[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS * 4];
-		float pmRegionB[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS * 4];
-		float pmSlotEnableMask[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS];
-
-		Int pmNumSlots = 0;
-		if (useMultiPageAccumulation) {
-			pmNumSlots = m_map->getSplatAtlasRegionsForActiveSetPage(
-				terrainPage, pmRegionA, pmRegionB, pmSlotEnableMask);
-		}
-		else {
-			pmNumSlots = m_map->getSplatAtlasRegionsForActiveSet(pmRegionA, pmRegionB);
-			for (Int s = 0; s < WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS; ++s) {
-				pmSlotEnableMask[s] = (s < pmNumSlots) ? 1.0f : 0.0f;
-			}
-		}
-
-		// @debug Ronin 03/05/2026 Splat S20: viz modes need to see ALL active slots so
-		// the heatmap / wSum reflects the full material set, not just one page's subset.
-		if (forceSinglePassForViz) {
-			for (Int s = 0; s < WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS; ++s) {
-				pmSlotEnableMask[s] = (s < pmNumSlots) ? 1.0f : 0.0f;
-			}
-		}
-
 		if (pmNumSlots <= 0) {
-			continue;
-		}
-
-		Int pageEnabledSlots = 0;
-		for (Int s = 0; s < pmNumSlots; ++s) {
-			if (pmSlotEnableMask[s] > 0.5f) {
-				++pageEnabledSlots;
-			}
-		}
-		if (pageEnabledSlots <= 0) {
 			continue;
 		}
 
@@ -3074,16 +3073,8 @@ void HeightMapRenderObjClass::renderPrimaryBlendControlPass()
 			IDirect3DDevice9* pPmDev = DX8Wrapper::_Get_D3D_Device8();
 			if (pPmDev) {
 				pPmDev->SetPixelShaderConstantF(0, pmControlParams, 1);
-				pPmDev->SetPixelShaderConstantF(1, pmRegionA, WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS);
-				pPmDev->SetPixelShaderConstantF(
-					1 + WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS,
-					pmRegionB,
-					WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS);
+				// Ronin @bugfix 14/09/2026 DX9: §19e.3. c1..c64 and c68..c75 go up per draw tile (channel reuse), not per pass.
 				pPmDev->SetPixelShaderConstantF(65, pmActiveCount, 1);
-				pPmDev->SetPixelShaderConstantF(
-					68,
-					pmSlotEnableMask,
-					WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS / 4);
 
 				{
 					// @bugfix Ronin 11/05/2026 Splat S20 / Normal-map N3: explicit sampler
@@ -3285,11 +3276,36 @@ void HeightMapRenderObjClass::renderPrimaryBlendControlPass()
 				}
 			}
 
+			// Ronin @bugfix 14/09/2026 DX9: §19e.3. Each tile uploads its OWN channel table. After the first accumulated draw, a tile
+			// with no material on this page adds nothing and is skipped.
+			const Bool passIsAdditive = useMultiPageAccumulation && drewAnyContribution;
+			IDirect3DDevice9* pTileDev = DX8Wrapper::_Get_D3D_Device8();
 			for (Int pmJ = 0; pmJ < m_numVBTilesY; ++pmJ) {
 				for (Int pmI = 0; pmI < m_numVBTilesX; ++pmI) {
 					// Ronin @perf 30/08/2026 DX9: §29i.3. Depth pass only — FALSE in every other pass.
 					if (shadowDepthSkipTile(pmI, pmJ, m_numVBTilesX))
 						continue;
+
+					float pmRegionA[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS * 4];
+					float pmRegionB[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS * 4];
+					float pmSlotEnableMask[WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS];
+					const Int tileEnabled = m_map->buildSplatRegionTable(
+						s_tileMaterialMask[pmJ * m_numVBTilesX + pmI],
+						useMultiPageAccumulation ? terrainPage : -1,
+						pmRegionA, pmRegionB, pmSlotEnableMask);
+					if (tileEnabled <= 0 && passIsAdditive)
+						continue;
+					if (forceSinglePassForViz) {
+						for (Int s = 0; s < WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS; ++s)
+							pmSlotEnableMask[s] = (s < pmNumSlots) ? 1.0f : 0.0f;
+					}
+					if (pTileDev) {
+						pTileDev->SetPixelShaderConstantF(1, pmRegionA, WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS);
+						pTileDev->SetPixelShaderConstantF(1 + WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS, pmRegionB,
+							WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS);
+						pTileDev->SetPixelShaderConstantF(68, pmSlotEnableMask, WorldHeightMap::SPLAT_MAX_ACTIVE_MATERIALS / 4);
+					}
+
 					DX8Wrapper::Set_Vertex_Buffer(getVertexBufferTile(pmI, pmJ));
 					if (Is_Hidden() == 0) {
 						DX8Wrapper::Draw_Triangles(0, HEIGHTMAP_POLYGON_NUM, 0, HEIGHTMAP_VERTEX_NUM);

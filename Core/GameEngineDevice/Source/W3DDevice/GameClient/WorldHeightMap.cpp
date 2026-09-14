@@ -2771,59 +2771,148 @@ Bool WorldHeightMap::buildPerMaterialWeightTextures(
 		return 0;
 		};
 
-	Bool isActive[SPLAT_MAX_ACTIVE_MATERIALS] = { FALSE };
-	auto markActive = [&](Int classIdx) {
-		if (classIdx >= 0 && classIdx < SPLAT_MAX_ACTIVE_MATERIALS) isActive[classIdx] = TRUE;
-		};
-
-	for (Int i = 0; i < m_dataSize; ++i) {
-		markActive(getLocalClass(m_tileNdxes[i]));
-		const Short bp = m_blendTileNdxes[i];
-		if (bp > 0 && bp < m_numBlendedTiles)
-			markActive(getLocalClass(m_blendedTiles[bp].blendNdx));
-		if (m_extraBlendTileNdxes != nullptr) {
-			const Short be = m_extraBlendTileNdxes[i];
-			if (be > 0 && be < m_numBlendedTiles)
-				markActive(getLocalClass(m_blendedTiles[be].blendNdx));
-		}
-	}
-
-	m_numActiveMaterials = 0;
-	for (Int i = 0; i < SPLAT_MAX_ACTIVE_MATERIALS; ++i) {
-		if (isActive[i]) {
-			m_activeMaterialIndices[m_numActiveMaterials++] = i;
-		}
-	}
-	if (m_numActiveMaterials == 0) return FALSE;
-
-	// @debug Ronin 26/04/2026 Splat S20-A1: warn if the SPLAT_MAX_ACTIVE_MATERIALS cap
-	// silently dropped any classes from the bake. Walks the cell array a second time
-	// counting DISTINCT base classes (no cap), then compares against the cap. If you
-	// see this WARNING in the log on a given map, that map has more terrain materials
-	// than the active bake can represent and some materials will be missing from the
-	// per-material weight set.
-
+	// Ronin @bugfix 14/09/2026 DX9: §19e.3. The WEIGHTABLE set — base classes plus the blends step 3 writes, never custom edges — is
+	// what gets weight channels; m_numActiveMaterials is set by the colouring at the end of this block.
 	{
-		Bool seenAny[NUM_TEXTURE_CLASSES] = { FALSE };
-		Int totalClassesSeen = 0;
+		Bool weightable[NUM_TEXTURE_CLASSES] = { FALSE };
 		for (Int i = 0; i < m_dataSize; ++i) {
-			const Int c = getLocalClass(m_tileNdxes[i]);
-			if (c >= 0 && c < NUM_TEXTURE_CLASSES && !seenAny[c]) {
-				seenAny[c] = TRUE;
-				++totalClassesSeen;
+			const Int bc = getLocalClass(m_tileNdxes[i]);
+			if (bc >= 0 && bc < NUM_TEXTURE_CLASSES) weightable[bc] = TRUE;
+			const Short bp = m_blendTileNdxes[i];
+			if (bp > 0 && bp < m_numBlendedTiles && m_blendedTiles[bp].customBlendEdgeClass < 0) {
+				const Int c1 = getLocalClass(m_blendedTiles[bp].blendNdx);
+				if (c1 >= 0 && c1 < NUM_TEXTURE_CLASSES) weightable[c1] = TRUE;
+			}
+			if (m_extraBlendTileNdxes != nullptr) {
+				const Short be = m_extraBlendTileNdxes[i];
+				if (be > 0 && be < m_numBlendedTiles && m_blendedTiles[be].customBlendEdgeClass < 0) {
+					const Int c2 = getLocalClass(m_blendedTiles[be].blendNdx);
+					if (c2 >= 0 && c2 < NUM_TEXTURE_CLASSES) weightable[c2] = TRUE;
+				}
 			}
 		}
-		if (totalClassesSeen > SPLAT_MAX_ACTIVE_MATERIALS) {
-			DEBUG_LOG(("[S20-A1] WARNING: map uses %d distinct base classes but cap is %d -- %d classes will be DROPPED from the bake.\n",
-				totalClassesSeen,
-				(Int)SPLAT_MAX_ACTIVE_MATERIALS,
-				totalClassesSeen - (Int)SPLAT_MAX_ACTIVE_MATERIALS));
+		m_splatWeightableClasses = 0;
+		for (Int i = 0; i < NUM_TEXTURE_CLASSES; ++i) {
+			if (weightable[i]) ++m_splatWeightableClasses;
 		}
-		else {
-			DEBUG_LOG(("[S20-A1] map uses %d distinct base classes (cap %d) -- all classes baked.\n",
-				totalClassesSeen, (Int)SPLAT_MAX_ACTIVE_MATERIALS));
+		m_splatDroppedCells = 0;
+
+		// Ronin @bugfix 14/09/2026 DX9: §19e.3. Materials meeting inside one terrain draw tile (32 cells + a 4-cell apron for blur,
+		// bilinear and the coarsest weight mip), coloured into weight channels. APRON assumes blur 1 cell and MIP_LEVELS_3 weights.
+		const Int APRON = 4;
+		const Int WIN   = VERTEX_BUFFER_TILE_LENGTH + 2 * APRON;
+		Int compact[NUM_TEXTURE_CLASSES];
+		Int numCompact = 0;
+		for (Int i = 0; i < NUM_TEXTURE_CLASSES; ++i)
+			compact[i] = (weightable[i] && numCompact < 64) ? numCompact++ : -1;
+		auto bitOf = [&](Int classIdx) -> UnsignedInt64 {
+			if (classIdx < 0 || classIdx >= NUM_TEXTURE_CLASSES || compact[classIdx] < 0) return 0;
+			return (UnsignedInt64)1 << compact[classIdx];
+			};
+
+		const Int cw = m_width;
+		const Int ch = m_height;
+		std::vector<UnsignedInt64> cellMask(cw * ch, 0);
+		for (Int i = 0; i < m_dataSize && i < cw * ch; ++i) {
+			UnsignedInt64 m = bitOf(getLocalClass(m_tileNdxes[i]));
+			const Short bp = m_blendTileNdxes[i];
+			if (bp > 0 && bp < m_numBlendedTiles && m_blendedTiles[bp].customBlendEdgeClass < 0)
+				m |= bitOf(getLocalClass(m_blendedTiles[bp].blendNdx));
+			if (m_extraBlendTileNdxes != nullptr) {
+				const Short be = m_extraBlendTileNdxes[i];
+				if (be > 0 && be < m_numBlendedTiles && m_blendedTiles[be].customBlendEdgeClass < 0)
+					m |= bitOf(getLocalClass(m_blendedTiles[be].blendNdx));
+			}
+			cellMask[i] = m;
 		}
+
+		// Every tile origin, not just today's grid: the draw window's origin moves with the camera.
+		std::vector<UnsignedInt64> rowOr(cw * ch, 0);
+		for (Int y = 0; y < ch; ++y) {
+			for (Int x0 = 0; x0 < cw; ++x0) {
+				const Int xa = (x0 - APRON > 0) ? (x0 - APRON) : 0;
+				const Int xb = (x0 - APRON + WIN < cw) ? (x0 - APRON + WIN) : cw;
+				UnsignedInt64 m = 0;
+				for (Int x = xa; x < xb; ++x) m |= cellMask[y * cw + x];
+				rowOr[y * cw + x0] = m;
+			}
+		}
+		UnsignedInt64 conflict[64] = { 0 };
+		m_splatMaxPerTile = 0;
+		for (Int y0 = 0; y0 < ch; ++y0) {
+			const Int ya = (y0 - APRON > 0) ? (y0 - APRON) : 0;
+			const Int yb = (y0 - APRON + WIN < ch) ? (y0 - APRON + WIN) : ch;
+			for (Int x0 = 0; x0 < cw; ++x0) {
+				UnsignedInt64 m = 0;
+				for (Int y = ya; y < yb; ++y) m |= rowOr[y * cw + x0];
+				Int n = 0;
+				for (Int b = 0; b < numCompact; ++b) {
+					if (m & ((UnsignedInt64)1 << b)) {
+						conflict[b] |= m;
+						++n;
+					}
+				}
+				if (n > m_splatMaxPerTile) m_splatMaxPerTile = n;
+			}
+		}
+
+		Int colour[64];
+		m_splatChannelsNeeded = 0;
+		for (Int b = 0; b < numCompact; ++b) {
+			UnsignedInt64 taken = 0;
+			for (Int o = 0; o < b; ++o) {
+				if (conflict[b] & ((UnsignedInt64)1 << o))
+					taken |= (UnsignedInt64)1 << colour[o];
+			}
+			Int c = 0;
+			while (c < 63 && (taken & ((UnsignedInt64)1 << c))) ++c;
+			colour[b] = c;
+			if (c + 1 > m_splatChannelsNeeded) m_splatChannelsNeeded = c + 1;
+		}
+
+		// Ronin @bugfix 14/09/2026 DX9: §19e.3. CHANNEL REUSE is live — the colouring above IS the channel assignment: materials that
+		// ever meet inside one draw tile (+apron) never share a channel, so a per-tile table says which one a channel means.
+		m_splatNumCompact = numCompact;
+		for (Int i = 0; i < NUM_TEXTURE_CLASSES; ++i) {
+			if (compact[i] >= 0) m_splatCompactClass[compact[i]] = i;
+		}
+		m_numActiveMaterials = 0;
+		for (Int b = 0; b < numCompact; ++b) {
+			m_splatCompactChannel[b] = (colour[b] < SPLAT_MAX_ACTIVE_MATERIALS) ? colour[b] : -1;
+			if (m_splatCompactChannel[b] >= 0) {
+				if (m_splatCompactChannel[b] + 1 > m_numActiveMaterials) m_numActiveMaterials = m_splatCompactChannel[b] + 1;
+				m_activeMaterialIndices[m_splatCompactChannel[b]] = m_splatCompactClass[b];	// a representative, for the debug dumps
+			}
+		}
+
+		// Per cell: every material within APRON cells. A draw tile ORs these over its cells to build its table.
+		std::vector<UnsignedInt64> rowDil(cw * ch, 0);
+		for (Int y = 0; y < ch; ++y) {
+			for (Int x = 0; x < cw; ++x) {
+				const Int xa = (x - APRON > 0) ? (x - APRON) : 0;
+				const Int xb = (x + APRON + 1 < cw) ? (x + APRON + 1) : cw;
+				UnsignedInt64 m = 0;
+				for (Int xx = xa; xx < xb; ++xx) m |= cellMask[y * cw + xx];
+				rowDil[y * cw + x] = m;
+			}
+		}
+		m_splatCellMask.assign(cw * ch, 0);
+		for (Int y = 0; y < ch; ++y) {
+			const Int ya = (y - APRON > 0) ? (y - APRON) : 0;
+			const Int yb = (y + APRON + 1 < ch) ? (y + APRON + 1) : ch;
+			for (Int x = 0; x < cw; ++x) {
+				UnsignedInt64 m = 0;
+				for (Int yy = ya; yy < yb; ++yy) m |= rowDil[yy * cw + x];
+				m_splatCellMask[y * cw + x] = m;
+			}
+		}
+		// Ronin @bugfix 14/09/2026 DX9: §19e.3. GLOBAL serial — a new map object can land at the old one's address and restart a
+		// per-object count, and the draw's tile cache would then keep the previous map's tables.
+		static Int s_splatBakeSerialCounter = 0;
+		m_splatBakeSerial = ++s_splatBakeSerialCounter;
 	}
+
+	if (m_numActiveMaterials == 0) return FALSE;
 
 	// @bugfix Ronin 26/04/2026 Splat S20-A1: classToActive must be indexed by class index
 	// (0..NUM_TEXTURE_CLASSES-1), NOT by slot (0..SPLAT_MAX_ACTIVE_MATERIALS-1). The
@@ -2835,10 +2924,11 @@ Bool WorldHeightMap::buildPerMaterialWeightTextures(
 	// safe to look up; classes outside the active set still map to -1 and skip.
 	Int classToActive[NUM_TEXTURE_CLASSES];
 	for (Int i = 0; i < NUM_TEXTURE_CLASSES; ++i) classToActive[i] = -1;
-	for (Int s = 0; s < m_numActiveMaterials; ++s) {
-		const Int classIdx = m_activeMaterialIndices[s];
+	// Ronin @bugfix 14/09/2026 DX9: §19e.3. Class -> its CHANNEL. Several classes share a channel, never inside one draw tile.
+	for (Int b = 0; b < m_splatNumCompact; ++b) {
+		const Int classIdx = m_splatCompactClass[b];
 		if (classIdx >= 0 && classIdx < NUM_TEXTURE_CLASSES) {
-			classToActive[classIdx] = s;
+			classToActive[classIdx] = m_splatCompactChannel[b];
 		}
 	}
 
@@ -2970,7 +3060,8 @@ Bool WorldHeightMap::buildPerMaterialWeightTextures(
 			const Int slotBase = activeSlotOf(baseClass);
 			const Int slotBlend1 = activeSlotOf(blend1Class);
 			const Int slotBlend2 = activeSlotOf(blend2Class);
-			if (slotBase < 0) continue;
+			// Ronin @diagnostic 14/09/2026 DX9: §19e.3. A cell whose base class has no slot gets zero weight in every channel.
+			if (slotBase < 0) { ++m_splatDroppedCells; continue; }
 
 			const float A1[4] = { cornerA1[0] / 255.0f, cornerA1[1] / 255.0f, cornerA1[2] / 255.0f, cornerA1[3] / 255.0f };
 			const float A2[4] = { cornerA2[0] / 255.0f, cornerA2[1] / 255.0f, cornerA2[2] / 255.0f, cornerA2[3] / 255.0f };
@@ -3041,8 +3132,9 @@ Bool WorldHeightMap::buildPerMaterialWeightTextures(
 		}
 	}
 
-	DEBUG_LOG(("[S20-A1] Built %d weight channels at %dx%d (texelsPerCell=%d, blur=%d cells).\n",
-		m_numActiveMaterials, W, H, texelsPerCell, blurRadiusCells));
+	// Ronin @bugfix 14/09/2026 DX9: §19e.3. Channel reuse: materials share channels, so report both — and any cell left without one.
+	DEBUG_LOG(("[S20-A1] Built %d weight channels for %d materials (max %d per draw tile, %d cells dropped) at %dx%d (texelsPerCell=%d, blur=%d cells).\n",
+		m_numActiveMaterials, m_splatWeightableClasses, m_splatMaxPerTile, m_splatDroppedCells, W, H, texelsPerCell, blurRadiusCells));
 	return TRUE;
 }
 
@@ -3566,6 +3658,52 @@ Int WorldHeightMap::getSplatAtlasRegionsForActiveSetPage(
 	}
 
 	return n;
+}
+
+// Ronin @bugfix 14/09/2026 DX9: §19e.3. Region table for ONE draw tile under channel reuse: each material around the tile fills
+// the slot of its channel. terrainPage < 0 = single-page atlas; otherwise only materials on that page are enabled.
+Int WorldHeightMap::buildSplatRegionTable(UnsignedInt64 presentMask, Int terrainPage,
+	float* outRegionA, float* outRegionB, float* outSlotEnableMask) const
+{
+	for (Int i = 0; i < SPLAT_MAX_ACTIVE_MATERIALS * 4; ++i) {
+		outRegionA[i] = 0.0f;
+		outRegionB[i] = 0.0f;
+	}
+	for (Int i = 0; i < SPLAT_MAX_ACTIVE_MATERIALS; ++i) {
+		outSlotEnableMask[i] = 0.0f;
+	}
+
+	Int atlasH = getTerrainTextureHeightForPage((terrainPage >= 0) ? terrainPage : 0);
+	if (atlasH <= 0 && terrainPage < 0) atlasH = m_terrainTexHeight;
+	if (atlasH <= 0) return 0;
+	const float invAtlasW = 1.0f / (float)TEXTURE_WIDTH;
+	const float invAtlasH = 1.0f / (float)atlasH;
+
+	Int enabled = 0;
+	for (Int b = 0; b < m_splatNumCompact; ++b) {
+		if ((presentMask & ((UnsignedInt64)1 << b)) == 0) continue;
+		const Int slot     = m_splatCompactChannel[b];
+		const Int classIdx = m_splatCompactClass[b];
+		if (slot < 0 || slot >= SPLAT_MAX_ACTIVE_MATERIALS) continue;
+		if (classIdx < 0 || classIdx >= m_numTextureClasses) continue;
+
+		const TXTextureClass& tc = m_textureClasses[classIdx];
+		if (terrainPage >= 0 && tc.texturePage != terrainPage) continue;
+
+		const Int width  = (tc.width > 0) ? tc.width : 1;
+		const Int pixExt = (tc.tilePixelExtent > 0) ? tc.tilePixelExtent : TILE_PIXEL_EXTENT;
+		const float worldPeriod = (float)(width * 2) * MAP_XY_FACTOR;
+
+		outRegionA[slot * 4 + 0] = (float)tc.positionInTexture.x * invAtlasW;
+		outRegionA[slot * 4 + 1] = (float)tc.positionInTexture.y * invAtlasH;
+		outRegionA[slot * 4 + 2] = (float)(width * pixExt) * invAtlasW;
+		outRegionA[slot * 4 + 3] = (float)(width * pixExt) * invAtlasH;
+		outRegionB[slot * 4 + 0] = (worldPeriod > 0.0f) ? (1.0f / worldPeriod) : 0.0f;
+		outRegionB[slot * 4 + 1] = outRegionB[slot * 4 + 0];
+		outSlotEnableMask[slot] = 1.0f;
+		++enabled;
+	}
+	return enabled;
 }
 
 // @feature Ronin 06/05/2026 Splat S20-A3: mark the per-material weight atlas as dirty.

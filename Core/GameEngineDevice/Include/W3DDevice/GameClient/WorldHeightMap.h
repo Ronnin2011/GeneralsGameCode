@@ -379,6 +379,22 @@ public:  // tile and texture info.
 		return (activeIdx >= 0 && activeIdx < m_numActiveMaterials)
 			? m_activeMaterialIndices[activeIdx] : -1;
 	}
+	// Ronin @diagnostic 14/09/2026 DX9: §19e.3. For the [TERRAIN] readout.
+	Int  getSplatWeightableClasses() const { return m_splatWeightableClasses; }
+	Int  getSplatDroppedCells() const      { return m_splatDroppedCells; }
+	Int  getSplatMaxPerTile() const        { return m_splatMaxPerTile; }
+	Int  getSplatChannelsNeeded() const    { return m_splatChannelsNeeded; }
+	// Ronin @bugfix 14/09/2026 DX9: §19e.3. Channel reuse — materials within the bake apron of a DRAW-LOCAL cell (same coordinates as
+	// getTerrainTexturePageForCell), as compact bits; OR these over a draw tile and hand the result to buildSplatRegionTable.
+	UnsignedInt64 getSplatCellMaskForCell(Int xIndex, Int yIndex) const {
+		const Int x = xIndex + m_drawOriginX;
+		const Int y = yIndex + m_drawOriginY;
+		return (x >= 0 && y >= 0 && x < m_width && y < m_height && (Int)m_splatCellMask.size() == m_width * m_height)
+			? m_splatCellMask[y * m_width + x] : 0;
+	}
+	Int  getSplatBakeSerial() const { return m_splatBakeSerial; }
+	Int  buildSplatRegionTable(UnsignedInt64 presentMask, Int terrainPage,
+		float* outRegionA, float* outRegionB, float* outSlotEnableMask) const;
 
 	// @feature Ronin 29/04/2026 Splat S20-A2d2: public read-only accessors for the
 	// weight-atlas pages allocated by ensurePerMaterialWeightAtlasTextures().
@@ -396,6 +412,18 @@ private:
 	// Bake state. Cleared by freeMapResources(); allocated by buildPerMaterialWeightTextures().
 	Int            m_numActiveMaterials = 0;
 	Int            m_activeMaterialIndices[SPLAT_MAX_ACTIVE_MATERIALS] = {};
+	// Ronin @diagnostic 14/09/2026 DX9: §19e.3. Bake readout: classes the bake can weight, cells left with no channel.
+	Int            m_splatWeightableClasses = 0;
+	Int            m_splatDroppedCells = 0;
+	Int            m_splatMaxPerTile = 0;
+	Int            m_splatChannelsNeeded = 0;
+	// Ronin @bugfix 14/09/2026 DX9: §19e.3. Channel reuse: compact material -> class and -> weight channel, per-cell material masks.
+	Int            m_splatNumCompact = 0;
+	Int            m_splatCompactClass[64] = {};
+	Int            m_splatCompactChannel[64] = {};
+	std::vector<UnsignedInt64> m_splatCellMask;
+	Int            m_splatBakeSerial = 0;
+
 	UnsignedByte* m_perMaterialWeightBytes = nullptr;   // [activeIdx][texelY*pitch + texelX], one byte per texel
 	Int            m_perMaterialWeightWidth = 0;
 	Int            m_perMaterialWeightHeight = 0;

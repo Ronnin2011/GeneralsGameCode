@@ -1965,6 +1965,37 @@ static void drawRunMeanPerfReadout(Bool visible)
 	s_perfString->draw(3, 375, GameMakeColor(255, 230, 120, 255), GameMakeColor(0, 0, 0, 255));
 }
 
+// Ronin @diagnostic 14/09/2026 DX9: §19e.3. [TERRAIN] — splat bake under channel reuse: materials, channels in use, cells left with
+// no channel (must be 0), atlas pages, most materials meeting in one draw tile.
+static void drawTerrainSplatReadout(Bool visible)
+{
+	if (!visible || TheDisplayStringManager == NULL || TheFontLibrary == NULL || TheTerrainRenderObject == NULL) {
+		return;
+	}
+	WorldHeightMap *map = TheTerrainRenderObject->getMap();
+	if (map == NULL) {
+		return;
+	}
+	static DisplayString* s_terrainString = NULL;
+	if (s_terrainString == NULL) {
+		s_terrainString = TheDisplayStringManager->newDisplayString();
+		if (s_terrainString == NULL) {
+			return;
+		}
+		s_terrainString->setFont(TheFontLibrary->getFont("FixedSys", 8, FALSE));
+	}
+
+	UnicodeString text;
+	text.format(L"[TERRAIN] materials=%d  channels=%d  droppedCells=%d  pages=%d  maxPerTile=%d",
+		map->getSplatWeightableClasses(),
+		map->getActiveMaterialCount(),
+		map->getSplatDroppedCells(),
+		map->getTerrainTexturePageCount(),
+		map->getSplatMaxPerTile());
+	s_terrainString->setText(text);
+	s_terrainString->draw(3, 405, GameMakeColor(255, 255, 255, 255), GameMakeColor(0, 0, 0, 255));
+}
+
 //=============================================================================
 void StatDebugDisplay( DebugDisplayInterface *, void *, FILE *fp )
 {
@@ -2381,6 +2412,8 @@ AGAIN:
 					drawShadowFitReadout(SHOW_SHADOW_FIT_READOUT);
 					// Ronin @diagnostic 09/09/2026 DX9: also every frame — it accumulates the run mean.
 					drawRunMeanPerfReadout(SHOW_RUN_MEAN_READOUT);
+					static const bool SHOW_TERRAIN_SPLAT_READOUT = false; // [TERRAIN] white, y=405
+					drawTerrainSplatReadout(SHOW_TERRAIN_SPLAT_READOUT);
 
 
 				// Ronin @feature 12/08/2026 DX9: §29 — the light's-eye view, bottom-left. Gated by
