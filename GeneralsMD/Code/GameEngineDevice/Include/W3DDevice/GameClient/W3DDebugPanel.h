@@ -29,6 +29,7 @@ public:
 		ROW_PERF,
 		ROW_DEPTH,
 		ROW_TERRAIN,
+		ROW_UI,			// Ronin @diagnostic 15/09/2026 DX9: input ownership, drawn by the panel itself
 		ROW_COUNT
 	};
 

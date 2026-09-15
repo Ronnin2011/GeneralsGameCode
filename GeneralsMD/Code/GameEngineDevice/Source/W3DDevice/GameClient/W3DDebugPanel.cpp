@@ -5,6 +5,7 @@
 
 // Ronin @feature 14/09/2026 DX9: debug panel. Design, steps and what the window system requires: docs/Debug_Panel_Design.md.
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "Common/GameEngine.h"
@@ -26,6 +27,7 @@
 #include "GameClient/SelectionXlat.h"
 #include "GameClient/View.h"
 #include "W3DDevice/GameClient/W3DDebugPanel.h"
+#include "W3DDevice/GameClient/W3DWater.h"
 
 namespace
 {
@@ -159,6 +161,25 @@ namespace
 			TheGameEngine->setQuitting(TRUE);
 	}
 
+	// Ronin @feature 15/09/2026 DX9: water on/off. `water` prints the switches; `water <flat|mesh> <0|1>` sets one.
+	void cmdWater(Int argc, const AsciiString *argv)
+	{
+		Bool ok = (argc == 1);
+		if (argc == 3)
+		{
+			const Bool on = (atoi(argv[2].str()) != 0);
+			if      (stricmp(argv[1].str(), "flat") == 0) { TheWaterDebug.skipFlat = !on; ok = TRUE; }
+			else if (stricmp(argv[1].str(), "mesh") == 0) { TheWaterDebug.skipMesh = !on; ok = TRUE; }
+		}
+		if (!ok)
+		{
+			printAscii(AsciiString("usage: water [flat|mesh 0|1]"), TRUE);
+			return;
+		}
+		AsciiString state;
+		state.format("water: flat=%d mesh=%d", TheWaterDebug.skipFlat ? 0 : 1, TheWaterDebug.skipMesh ? 0 : 1);
+		printAscii(state, FALSE);
+	}
 
 	void runCommand(const UnicodeString &line)
 	{
@@ -397,6 +418,7 @@ void W3DDebugPanel::update(void)
 		registerCommand("clear", "clear this output", cmdClear);
 		registerCommand("close", "hide this panel (Ctrl+Shift+D shows it again)", cmdClose);
 		registerCommand("shutdown", "quit the game to the desktop now", cmdShutdown);
+		registerCommand("water", "water [flat|mesh 0|1] - draw the flat water / the water grid mesh", cmdWater);
 	}
 
 	GameWindow *win = TheWindowManager->winGetWindowFromId(nullptr, PANEL_WINDOW_ID);
@@ -429,6 +451,34 @@ void W3DDebugPanel::update(void)
 	if (entry == nullptr)
 		entry = createEntry(win);
 	const Bool entryFocused = (entry != nullptr && TheWindowManager->winGetFocus() == entry);
+
+	// Ronin @diagnostic 15/09/2026 DX9: [UI] — who owns input right now, for "map clicks stop until the options menu opens".
+	// Panel window ids: 7DEB0001 panel, 7DEB0002 command box.
+	{
+		static DisplayString *s_uiString = nullptr;
+		if (s_uiString == nullptr && TheDisplayStringManager != nullptr)
+		{
+			s_uiString = TheDisplayStringManager->newDisplayString();
+			if (s_uiString != nullptr)
+				s_uiString->setFont(panelFont());
+		}
+		if (s_uiString != nullptr)
+		{
+			GameWindow *focus   = TheWindowManager->winGetFocus();
+			GameWindow *grab    = TheWindowManager->winGetGrabWindow();
+			GameWindow *capture = TheWindowManager->winGetCapture();
+			UnicodeString text;
+			text.format(L"[UI] input=%d selecting=%d mouseLock=%d focus=%08X grab=%08X capture=%08X",
+				(TheInGameUI != nullptr && TheInGameUI->getInputEnabled()) ? 1 : 0,
+				(TheInGameUI != nullptr && TheInGameUI->isSelecting()) ? 1 : 0,
+				(TheTacticalView != nullptr && TheTacticalView->isMouseLocked()) ? 1 : 0,
+				focus   ? (UnsignedInt)focus->winGetWindowId()   : 0u,
+				grab    ? (UnsignedInt)grab->winGetWindowId()    : 0u,
+				capture ? (UnsignedInt)capture->winGetWindowId() : 0u);
+			s_uiString->setText(text);
+			setRow(ROW_UI, s_uiString, GameMakeColor(200, 170, 255, 255));
+		}
+	}
 
 	// Ronin @feature 14/09/2026 DX9: the window manager never takes focus back on a click elsewhere, so a box left focused
 	// would keep swallowing hotkeys. A button press outside the panel hands the keys back to the game.

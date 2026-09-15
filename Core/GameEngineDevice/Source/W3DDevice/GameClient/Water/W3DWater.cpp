@@ -170,6 +170,8 @@ static ShaderClass zFillAlphaShader(SC_ZFILL_BLEND3);
 static ShaderClass blendStagesShader(SC_DETAIL_BLEND);
 
 WaterRenderObjClass *TheWaterRenderObj=nullptr; ///<global water rendering object
+// Ronin @feature 15/09/2026 DX9: water on/off switches for the debug panel (W3DWater.h).
+WaterDebugFlags TheWaterDebug = { FALSE, FALSE };
 
 static Int getRiverVertexDiffuse(W3DShroud *shroud, Real x, Real y, Real shadeR, Real shadeG, Real shadeB, Int diffuse)
 {
@@ -1580,9 +1582,11 @@ void WaterRenderObjClass::Render(RenderInfoClass & rinfo)
 	{
 		case WATER_TYPE_0_TRANSLUCENT:
 		case WATER_TYPE_3_GRIDMESH:
+			// Ronin @feature 15/09/2026 DX9: flat water / water mesh on-off from the debug panel `water` command. All off = normal.
 			//Draw the water surface as a bunch of alpha blended tiles covering areas where water is visible
-			renderWater();
-			if (!m_drawingRiver || m_disableRiver) {
+			if (!TheWaterDebug.skipFlat)
+				renderWater();
+			if ((!m_drawingRiver || m_disableRiver) && !TheWaterDebug.skipMesh) {
 				renderWaterMesh();	//Draw water surface as 3D deforming mesh if it's enabled on this map.
 			}
 			break;
@@ -2963,8 +2967,8 @@ void WaterRenderObjClass::drawRiverWater(PolygonTrigger *pTrig)
 	if (wireframeForDebug) {
 		DX8Wrapper::Set_DX8_Render_State(D3DRS_FILLMODE, D3DFILL_WIREFRAME);
 	}
-	// @bugfix Ronin 12/01/2026 Water: force correct fixed-function vertex layout for river polys
-	//DX8Wrapper::BindLayoutFVF(DX8_FVF_XYZNDUV2, "WaterRenderObjClass::drawRiverWater"); //Now obsolete since dynamic_fvf_type was fixed.
+	// Ronin @bugfix 15/09/2026 DX9: same stale-layout bug as drawTrapezoidWater — rivers use the same dynamic VB path.
+	DX8Wrapper::BindLayoutFVF(vb_access.FVF_Info().Get_FVF(), "WaterRenderObjClass::drawRiverWater");
 	DX8Wrapper::Draw_Triangles(0, rectangleCount * 2, 0, (rectangleCount + 1) * 2);
 
 
@@ -3371,8 +3375,9 @@ void WaterRenderObjClass::drawTrapezoidWater(Vector3 points[4])
 //#endif // FEATHER_WATER
 //#endif //WAVY_WATER
 
-		// @bugfix Ronin 12/01/2026 Water: force correct fixed-function vertex layout for trapezoid polys
-		//DX8Wrapper::BindLayoutFVF(DX8_FVF_XYZNDUV2, "WaterRenderObjClass::drawTrapezoidWater"); //Now obsolete since dynamic_fvf_type was fixed.
+		// Ronin @bugfix 15/09/2026 DX9: bind the layout explicitly again — Apply_Render_State_Changes re-uses the PREVIOUS draw's
+		// FVF/decl on a VB change (dx8wrapper.cpp:3473-3516), which streaked the ocean. Found through the new debug panel.
+		DX8Wrapper::BindLayoutFVF(vb_access.FVF_Info().Get_FVF(), "WaterRenderObjClass::drawTrapezoidWater");
 
 		DX8Wrapper::Draw_Triangles(0, rectangleCount * 2, 0, uCount* vCount);//lorenzen thinks this is where to itereate the soft shoreline effect
 

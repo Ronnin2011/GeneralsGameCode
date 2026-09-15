@@ -333,3 +333,11 @@ inline Bool WaterRenderObjClass::worldToGridSpace(Real worldX, Real worldY, Real
 }
 
 extern WaterRenderObjClass *TheWaterRenderObj; ///<global water rendering object
+
+// Ronin @feature 15/09/2026 DX9: water on/off from the debug panel `water` command (dev tool). All FALSE = normal drawing.
+struct WaterDebugFlags
+{
+	Bool skipFlat;		///< skip renderWater: flat water areas and rivers
+	Bool skipMesh;		///< skip renderWaterMesh: the deforming water grid
+};
+extern WaterDebugFlags TheWaterDebug;
