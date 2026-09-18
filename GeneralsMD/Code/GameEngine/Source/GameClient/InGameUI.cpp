@@ -1771,7 +1771,9 @@ void InGameUI::handleBuildPlacements()
 
 					if( m_placeIcon[ i ] == nullptr )
 					{
-						UnsignedInt drawableStatus = DRAWABLE_STATUS_NO_STATE_PARTICLES;
+						// Ronin @bugfix 18/09/2026 DX9: CURSOR_PREVIEW or the shadow code bakes these as static scenery
+						// (they have no object) and their shadows trail behind the cursor.
+						UnsignedInt drawableStatus = DRAWABLE_STATUS_NO_STATE_PARTICLES | DRAWABLE_STATUS_CURSOR_PREVIEW;
 						drawableStatus |= TheGlobalData->m_objectPlacementShadows ? DRAWABLE_STATUS_SHADOWS : 0;
 						m_placeIcon[ i ] = TheThingFactory->newDrawable( m_pendingPlaceType, drawableStatus );
 					}
@@ -3345,7 +3347,9 @@ void InGameUI::placeBuildAvailable( const ThingTemplate *build, Drawable *buildD
 
 			{
 				// create a drawable of what we are building to be "attached" at the cursor
-				UnsignedInt drawableStatus = DRAWABLE_STATUS_NO_STATE_PARTICLES;
+				// Ronin @bugfix 18/09/2026 DX9: CURSOR_PREVIEW or the shadow code bakes this as static scenery (it has no
+				// object) and its shadow trails behind the cursor when the preview is dragged quickly.
+				UnsignedInt drawableStatus = DRAWABLE_STATUS_NO_STATE_PARTICLES | DRAWABLE_STATUS_CURSOR_PREVIEW;
 				drawableStatus |= TheGlobalData->m_objectPlacementShadows ? DRAWABLE_STATUS_SHADOWS : 0;
 				draw = TheThingFactory->newDrawable( build, drawableStatus );
 			}

@@ -1202,7 +1202,12 @@ Bool W3DShadowMap::isStaticCaster(RenderObjClass *robj)
 
 	Drawable *d = info->m_drawable;
 	if (d->getObject() == NULL)
-		return TRUE;						// client-only scenery
+	{
+		// Ronin @bugfix 18/09/2026 DX9: object-less USUALLY means map scenery, which is baked and never marked in the moving
+		// mask. The build cursor's preview is object-less too and moves every frame: baked, its shadow stayed where the
+		// preview had been, and the terrain EMA kept its history — the trail behind a preview dragged quickly.
+		return !d->testDrawableStatus(DRAWABLE_STATUS_CURSOR_PREVIEW);
+	}
 
 	return d->isKindOf(KINDOF_STRUCTURE) || d->isKindOf(KINDOF_IMMOBILE);
 }

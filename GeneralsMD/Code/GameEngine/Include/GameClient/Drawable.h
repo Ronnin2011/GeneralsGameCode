@@ -234,6 +234,9 @@ enum DrawableStatus CPP_11(: DrawableStatusBits)
 	DRAWABLE_STATUS_SHADOWS								=	0x00000002,		///< use setShadowsEnabled() access method
 	DRAWABLE_STATUS_NO_STATE_PARTICLES		= 0x00000008,		///< do *not* auto-create particle systems based on model condition
 	DRAWABLE_STATUS_NO_SAVE								= 0x00000010,		///< do *not* save this drawable (UI fluff only). ignored (error, actually) if attached to an object
+	// Ronin @bugfix 18/09/2026 DX9: object-less normally means map scenery, which the shadow code bakes as a static caster.
+	// The build cursor's preview is object-less too and moves every frame, so it has to say so.
+	DRAWABLE_STATUS_CURSOR_PREVIEW				= 0x00000020,		///< object-less drawable that MOVES: placement preview, debug panel spawn ghosts
 
 	DRAWABLE_STATUS_DEFAULT = DRAWABLE_STATUS_SHADOWS,
 };
