@@ -2683,7 +2683,25 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 	// Ronin @bugfix 04/09/2026 DX9: §29j.13h. Skip accumulation in the reflection pass — mirrored camera
 	// into the same buffer. The receiver itself must still run; only the accumulation is skipped.
 	const Bool reflectionPass = ShaderClass::Is_Backface_Culling_Inverted();
-	if (haveVP && !reflectionPass && sm.accumSurf != NULL &&
+
+	// Ronin @bugfix 20/09/2026 DX9: accumulation CANNOT run with MSAA. This target is single-sampled and the pass
+	// depth-tests against the scene's depth, which is multisampled — D3D9 forbids that pairing, and making the
+	// target multisampled instead would make it unsamplable as a texture. Unbinding depth is not a way out either:
+	// the depth test is what stops a hidden tile overwriting a visible shadowed one (see :2737). So detect it and
+	// take the direct-to-framebuffer path deliberately, instead of issuing a bind that fails every frame.
+	Bool msaaFrame = FALSE;
+	{
+		IDirect3DSurface9 *curDepth = NULL;
+		D3DSURFACE_DESC dsd;
+		if (SUCCEEDED(dev->GetDepthStencilSurface(&curDepth)) && curDepth != NULL)
+		{
+			if (SUCCEEDED(curDepth->GetDesc(&dsd)) && dsd.MultiSampleType != D3DMULTISAMPLE_NONE)
+				msaaFrame = TRUE;
+			curDepth->Release();
+		}
+	}
+
+	if (haveVP && !reflectionPass && !msaaFrame && sm.accumSurf != NULL &&
 		SUCCEEDED(dev->GetRenderTarget(0, &oldRT)) && oldRT != NULL)
 
 	{
@@ -2700,6 +2718,28 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 		}
 	}
 	const Bool toAccum = (oldRT != NULL);
+
+	// Ronin @bugfix 20/09/2026 DX9: the fallback path is real — "any failure falls through to direct-to-framebuffer"
+	// — but c4.x (the EMA history weight) was uploaded at :2567, before this decision, and stage 1 still holds
+	// accumPrev. Without accumulation that history is never written and never cleared, so the receiver blended its
+	// shadow term into a buffer full of nothing: with MSAA on the terrain lost its shadows entirely while meshes
+	// kept theirs, since they sample the shadow map directly and never touch this buffer. No accumulation, no history.
+	if (!toAccum)
+	{
+		const float psC4NoHist[4] = { 0.0f, sm.depthBias, sm.texelOffset, sm.texelOffset };
+		dev->SetPixelShaderConstantF(4, psC4NoHist, 1);
+	}
+
+	// Ronin @bugfix 20/09/2026 DX9: the fallback path is real — "any failure falls through to direct-to-framebuffer"
+	// — but c4.x (the EMA history weight) was uploaded at :2567, before this decision, and stage 1 still holds
+	// accumPrev. Without accumulation that history is never written and never cleared, so the receiver blended its
+	// shadow term into a buffer full of nothing. Re-upload with the weight at zero: no accumulation, no history.
+	if (!toAccum)
+	{
+		const float psC4NoHist[4] = { 0.0f, sm.depthBias, sm.texelOffset, sm.texelOffset };
+		dev->SetPixelShaderConstantF(4, psC4NoHist, 1);
+	}
+
 
 
 	// Ronin @bugfix 16/08/2026 DX9: §29. The lookup was never the problem — with a COPY blend the

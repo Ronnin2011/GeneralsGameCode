@@ -4438,6 +4438,12 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 		if (DefaultRenderTarget != nullptr)
 		{
 			//DX8CALL(SetRenderTarget (DefaultRenderTarget, DefaultDepthBuffer));
+			// Ronin @bugfix 20/09/2026 DX9: UNBIND DEPTH FIRST. DX8's SetRenderTarget(target, z) set both atomically;
+			// DX9 split it in two, and D3D9 refuses a render target whose multisample type or size does not match the
+			// depth-stencil ALREADY bound. With MSAA on, the frame's depth is multisampled and every render-to-texture
+			// target is not, so this bind failed and the pass silently did nothing — shadow maps went dark. NULL first
+			// is always legal and makes the pair order-independent.
+			DX8CALL(SetDepthStencilSurface(nullptr));
 			DX8CALL(SetRenderTarget(0, DefaultRenderTarget));
 			if (DefaultDepthBuffer) {
 				DX8CALL(SetDepthStencilSurface(DefaultDepthBuffer));
@@ -4519,6 +4525,8 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 			if (use_default_depth_buffer)
 			{				
 				// DX8CALL(SetRenderTarget (CurrentRenderTarget, DefaultDepthBuffer));
+				// Ronin @bugfix 20/09/2026 DX9: unbind depth first — see the note in the restore branch above.
+				DX8CALL(SetDepthStencilSurface(nullptr));
 				DX8CALL(SetRenderTarget(0, CurrentRenderTarget));
 				if (DefaultDepthBuffer) {
 					DX8CALL(SetDepthStencilSurface(DefaultDepthBuffer));
@@ -4527,8 +4535,9 @@ DX8Wrapper::Set_Render_Target(IDirect3DSurface8 *render_target, bool use_default
 			else
 			{
 				//DX8CALL(SetRenderTarget (CurrentRenderTarget, NULL));
+				// Ronin @bugfix 20/09/2026 DX9: unbind depth first — see the note in the restore branch above.
+				DX8CALL(SetDepthStencilSurface(nullptr));
 				DX8CALL(SetRenderTarget(0, CurrentRenderTarget));
-				DX8CALL(SetDepthStencilSurface(NULL));
 			}
 		}
 	}
@@ -4575,6 +4584,12 @@ void DX8Wrapper::Set_Render_Target
 		if (DefaultRenderTarget != nullptr)
 		{
 			//DX8CALL(SetRenderTarget (DefaultRenderTarget, DefaultDepthBuffer));
+			// Ronin @bugfix 20/09/2026 DX9: UNBIND DEPTH FIRST. DX8's SetRenderTarget(target, z) set both atomically;
+			// DX9 split it in two, and D3D9 refuses a render target whose multisample type or size does not match the
+			// depth-stencil ALREADY bound. With MSAA on, the frame's depth is multisampled and every render-to-texture
+			// target is not, so this bind failed and the pass silently did nothing — shadow maps went dark. NULL first
+			// is always legal and makes the pair order-independent.
+			DX8CALL(SetDepthStencilSurface(nullptr));
 			DX8CALL(SetRenderTarget(0, DefaultRenderTarget));
 			if (DefaultDepthBuffer) {
 				DX8CALL(SetDepthStencilSurface(DefaultDepthBuffer));
@@ -4655,6 +4670,9 @@ void DX8Wrapper::Set_Render_Target
 			//	Switch render targets
 			//
 			//DX8CALL(SetRenderTarget (CurrentRenderTarget, CurrentDepthBuffer));
+			// Ronin @bugfix 20/09/2026 DX9: unbind depth first — see the note in the restore branch above. THIS is the
+			// bind Set_Render_Target_With_Z uses, so this is where MSAA killed the shadow maps.
+			DX8CALL(SetDepthStencilSurface(nullptr));
 			DX8CALL(SetRenderTarget(0, CurrentRenderTarget));
 			if (CurrentDepthBuffer) {
 				DX8CALL(SetDepthStencilSurface(CurrentDepthBuffer));
