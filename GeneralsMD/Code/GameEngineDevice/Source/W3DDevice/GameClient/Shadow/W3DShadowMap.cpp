@@ -1467,6 +1467,9 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 		DX8InstanceManagerClass::Set_Shadow_Map(NULL, NULL, 0.0f, 0.0f, NULL, 0.0f);
 		MeshClass::Skip_Baked_Shadow_Casters(true);		// §29j.8 — baked meshes don't draw here
 		MeshClass::Set_In_Shadow_Depth_Pass(true);		// §29i.5 — colour writes are off past here
+		// Ronin @bugfix 19/09/2026 DX9: a mover mesh marks ITSELF in the mask as it draws. Visibility_Check can only mark
+		// per object, and a flag's parent structure is a static caster, so its moving shadow kept full EMA history.
+		MeshClass::Set_Shadow_Mover_Note_Func(&W3DShadowMap::noteMovingCaster);
 		HLodClass::Set_Force_Lowest_LOD(true);
 
 		// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. One fit + one scene render per split. The fit

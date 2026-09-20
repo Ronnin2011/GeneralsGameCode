@@ -127,6 +127,8 @@ static unsigned MeshDebugIdCount;
 bool MeshClass::Legacy_Meshes_Fogged = true;
 // Ronin @perf 20/08/2026 DX9: §29j.8 — FALSE except inside the shadow depth pass.
 bool MeshClass::s_SkipBakedShadowCasters = false;
+// Ronin @bugfix 19/09/2026 DX9: set by W3DShadowMap so a mover mesh can mark itself in the moving-caster mask.
+MeshClass::ShadowMoverNoteFunc MeshClass::s_ShadowMoverNote = NULL;
 // Ronin @perf 26/08/2026 DX9: §29i.5 — FALSE except inside the shadow depth-pass scene render.
 bool MeshClass::s_InShadowDepthPass = false;
 static SimpleDynVecClass<uint32> temp_apt;
@@ -676,8 +678,18 @@ void MeshClass::Render(RenderInfoClass & rinfo)
 
 	// Ronin @perf 20/08/2026 DX9: §29j.8. This mesh is already in the static shadow bake, so the depth
 	// pass must not draw it again. The static is TRUE only inside WW3D::Render(scene, lightCamera).
-	if (s_SkipBakedShadowCasters && BakedShadowCaster) {
-		return;
+	if (s_SkipBakedShadowCasters) {
+		if (BakedShadowCaster) {
+			return;
+		}
+		// Ronin @bugfix 19/09/2026 DX9: a proven mover (flag, radar dish, turret) is kept out of the bake and drawn here
+		// every frame, so its shadow moves — but Visibility_Check marks the moving-caster mask per OBJECT, and the parent
+		// structure is a static caster, so nothing marked it and the terrain EMA blended full history under it. 
+		//  Mark THIS MESH's sphere: tight, so the rest of the building keeps its history.
+		if (ShadowCasterMover && s_ShadowMoverNote != NULL) {
+			const SphereClass &sphere = Get_Bounding_Sphere();
+			s_ShadowMoverNote(sphere.Center.X, sphere.Center.Y, sphere.Center.Z, sphere.Radius);
+		}
 	}
 
 	// If static sort lists are enabled and this mesh has a sort level, put it on the list instead

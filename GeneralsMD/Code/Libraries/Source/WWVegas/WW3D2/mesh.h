@@ -167,6 +167,12 @@ public:
 	bool								Is_Shadow_Caster_Mover() const { return ShadowCasterMover; }
 	static void						Skip_Baked_Shadow_Casters(bool b) { s_SkipBakedShadowCasters = b; }
 	static bool						s_SkipBakedShadowCasters;
+	// Ronin @bugfix 19/09/2026 DX9: a mover draws in the depth pass every frame, but the moving-caster mask is marked per
+	// OBJECT and a flag's parent structure is a static caster — so the terrain EMA kept history under a shadow that moves,
+	// and the flag/dish/turret trailed. The mesh marks itself instead. Set by W3DShadowMap; WW3D2 must not know about it.
+	typedef void					(*ShadowMoverNoteFunc)(float cx, float cy, float cz, float radius);
+	static void						Set_Shadow_Mover_Note_Func(ShadowMoverNoteFunc fn) { s_ShadowMoverNote = fn; }
+	static ShadowMoverNoteFunc		s_ShadowMoverNote;
 	// Ronin @bugfix 19/09/2026 DX9: TRUE when this mesh's last base draw sampled the shroud in its own pixel shader (the
 	// programmable rigid paths). Such a mesh must NOT also take the fixed-function shroud overlay, or it darkens twice.
 	void								Set_Shroud_Applied_In_Shader(bool b) { ShroudAppliedInShader = b; }
