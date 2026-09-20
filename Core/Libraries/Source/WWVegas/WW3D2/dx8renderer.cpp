@@ -2720,7 +2720,10 @@ void DX8TextureCategoryClass::Render()
 						DX8Wrapper::Apply_Render_State_Changes();
 						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF,(int)((float)0x60*mesh->Get_Alpha_Override()));
 
-						Render_Rigid_Mesh_With_Optional_Programmable_Effects(
+						// Ronin @bugfix 19/09/2026 DX9: a SINGLE_RIGID mesh sampled the shroud in its own pixel shader;
+						// record that so Render_Material_Pass drops the fixed-function shroud overlay for it instead
+						// of darkening it a second time.
+						const RigidRenderPathType alphaRigidPath = Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 							renderer,
 							mesh->Get_Base_Vertex_Offset(),
 							geometryFVF,
@@ -2735,7 +2738,7 @@ void DX8TextureCategoryClass::Render()
 							theShader,
 							*world_transform);
 
-
+						mesh->Set_Shroud_Applied_In_Shader(alphaRigidPath == RIGID_RENDER_PATH_SINGLE_RIGID);
 
 						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF, 0x60);
 						vmaterial->Set_Opacity(oldOpacity);	//restore previous value
@@ -2744,7 +2747,9 @@ void DX8TextureCategoryClass::Render()
 					}
 					else {
 
-					Render_Rigid_Mesh_With_Optional_Programmable_Effects(
+					// Ronin @bugfix 19/09/2026 DX9: a SINGLE_RIGID mesh sampled the shroud in its own pixel shader; record
+					// that so Render_Material_Pass drops the fixed-function shroud overlay instead of darkening it twice.
+					const RigidRenderPathType rigidPath = Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 						renderer,
 						mesh->Get_Base_Vertex_Offset(),
 						geometryFVF,
@@ -2756,6 +2761,8 @@ void DX8TextureCategoryClass::Render()
 						vmaterial,
 						theShader,
 						*world_transform);
+
+					mesh->Set_Shroud_Applied_In_Shader(rigidPath == RIGID_RENDER_PATH_SINGLE_RIGID);
 					}
 
 					if (oldMapper)	//did we override the uv offset?
@@ -2768,7 +2775,9 @@ void DX8TextureCategoryClass::Render()
 				}
 				else {
 
-					Render_Rigid_Mesh_With_Optional_Programmable_Effects(
+					// Ronin @bugfix 19/09/2026 DX9: a SINGLE_RIGID mesh sampled the shroud in its own pixel shader; record
+					// that so Render_Material_Pass drops the fixed-function shroud overlay instead of darkening it twice.
+					const RigidRenderPathType rigidPath = Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 						renderer,
 						mesh->Get_Base_Vertex_Offset(),
 						geometryFVF,
@@ -2780,6 +2789,8 @@ void DX8TextureCategoryClass::Render()
 						vmaterial,
 						theShader,
 						*world_transform);
+
+					mesh->Set_Shroud_Applied_In_Shader(rigidPath == RIGID_RENDER_PATH_SINGLE_RIGID);
 				}
 			}
 //--------------------------------------------------------------------

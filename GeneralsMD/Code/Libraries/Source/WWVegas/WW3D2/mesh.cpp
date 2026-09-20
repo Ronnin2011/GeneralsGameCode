@@ -171,6 +171,7 @@ MeshClass::MeshClass() :
 	IsDisabledByDebugger(false),
 	BakedShadowCaster(false),
 	ShadowCasterMover(false),
+	ShroudAppliedInShader(false),
 	MeshDebugId(MeshDebugIdCount++),
 	m_alphaOverride(1.0f),
 	m_materialPassAlphaOverride(1.0f),
@@ -202,6 +203,7 @@ MeshClass::MeshClass(const MeshClass & that) :
 	IsDisabledByDebugger(false),
 	BakedShadowCaster(false),
 	ShadowCasterMover(false),
+	ShroudAppliedInShader(false),
 	MeshDebugId(MeshDebugIdCount++),
 	m_alphaOverride(1.0f),
 	m_materialPassAlphaOverride(1.0f),
@@ -837,6 +839,12 @@ void MeshClass::Render(RenderInfoClass & rinfo)
  *=============================================================================================*/
 void MeshClass::Render_Material_Pass(MaterialPassClass * pass,IndexBufferClass * ib)
 {
+	// Ronin @bugfix 19/09/2026 DX9: this mesh's base draw already multiplied the shroud in its own pixel shader, so the
+	// fixed-function shroud overlay must not run over it a second time — see Set_Shroud_Applied_In_Shader.
+	if (ShroudAppliedInShader && pass != nullptr && pass->Is_Shroud_Pass()) {
+		return;
+	}
+
 	//Added to allow dynamic opacity on additional render passed
 	//without having to create a new material pass per object instance. -MW
 	float oldOpacity=-1.0f;

@@ -1281,15 +1281,20 @@ Int ShroudTextureShader::set(Int stage)
 	
 	// Ronin @bugfix 01/07/2026 DX9: was EQUAL, which only darkens pixels whose depth is bit-identical to the base.
     // LESSEQUAL lands the shroud on them and is identical to EQUAL for bit-exact FFP meshes (same depth -> both pass).
-	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC,D3DCMP_LESSEQUAL);
+	// Ronin @bugfix 19/09/2026 DX9: BACK TO EQUAL. LESSEQUAL also passes on pixels the mesh never wrote — the transparent
+	// texels of an alpha mesh, whose stored depth belongs to the terrain behind — so at a fog edge the shroud multiplied
+	// the background and drew a black box around every light and flag. EQUAL touches only what the mesh actually wrote.
+	// The programmable meshes this was loosened for no longer need it: they sample the shroud in their own pixel shader
+	// (RigidInstance_ps / ReflectiveRigid_ps) and skip this pass entirely — see MeshClass::Render_Material_Pass.
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC,D3DCMP_EQUAL);
 
-	// Ronin @bugfix 01/07/2026 DX9: the programmable single-rigid base writes depth from a CPU-precomputed
-	// View*Proj, ~1 depth-LSB off the FFP shroud's depth for the same geometry, so the LESSEQUAL shroud 
-	// z-fights those props (shimmer). This pass has Z-write OFF -> biasing it moves NO geometry 
-	// (unlike biasing the base, which sank props into the terrain). Slope-scaled adapts to distance/angle; 
-	// the tiny constant floor covers camera-facing faces.
-	const float shroudSlopeBias = 0.0f;  // slope term is ~0 on flat props but enormous on sloped shore terrain (blue-triangle artifacts); the constant term below is what actually lands the shroud on the props
-	const float shroudConstBias = -1.0e-6f;
+	// Ronin @bugfix 19/09/2026 DX9: bias back to zero. It only ever existed to stop the LESSEQUAL shroud z-fighting the
+	// programmable single-rigid base, whose depth came from a CPU-side View*Proj ~1 LSB off the FFP shroud's. Those
+	// meshes sample the shroud themselves now and skip this pass, and with ZFUNC back to EQUAL any bias breaks the
+	// compare outright — a biased depth is never bit-equal to the stored one.
+	const float shroudSlopeBias = 0.0f;
+	const float shroudConstBias = 0.0f;
+
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, *(DWORD *)(&shroudSlopeBias));
 	DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, *(DWORD *)(&shroudConstBias));
 
@@ -3179,6 +3184,38 @@ void W3DShaderManager::getCloudMapState(float* pScale, float* pOffsetX, float* p
 	if (pOffsetY != nullptr) {
 		*pOffsetY = terrainShader2Stage.m_yOffset;
 	}
+}
+
+// Ronin @bugfix 19/09/2026 DX9: the world->shroud UV mapping as numbers, identical to the matrix setShroudTex builds
+// (inverse view cancels the camera-space texgen, leaving (worldXY + offset) * scale). The programmable rigid path samples
+// the shroud with these instead of receiving the fixed-function overlay pass — that pass is depth-compared, and on an
+// alpha mesh it covered texels the mesh never wrote, which is the black box around lights and flags at the fog edge.
+Int W3DShaderManager::getShroudMapState(float* pOffsetX, float* pOffsetY, float* pScaleX, float* pScaleY)
+{
+	W3DShroud* shroud = (TheTerrainRenderObject != nullptr) ? TheTerrainRenderObject->getShroud() : nullptr;
+	if (shroud == nullptr || TheTerrainRenderObject->getMap() == nullptr) {
+		if (pOffsetX != nullptr) *pOffsetX = 0.0f;
+		if (pOffsetY != nullptr) *pOffsetY = 0.0f;
+		if (pScaleX  != nullptr) *pScaleX  = 0.0f;
+		if (pScaleY  != nullptr) *pScaleY  = 0.0f;
+		return FALSE;
+	}
+
+	// Origin is shifted by one cell so the unused border texels are skipped — same as setShroudTex.
+	const Real cellWidth  = shroud->getCellWidth();
+	const Real cellHeight = shroud->getCellHeight();
+
+	if (pOffsetX != nullptr) *pOffsetX = -(float)shroud->getDrawOriginX() + cellWidth;
+	if (pOffsetY != nullptr) *pOffsetY = -(float)shroud->getDrawOriginY() + cellHeight;
+	if (pScaleX  != nullptr) *pScaleX  = 1.0f / (cellWidth  * shroud->getTextureWidth());
+	if (pScaleY  != nullptr) *pScaleY  = 1.0f / (cellHeight * shroud->getTextureHeight());
+	return TRUE;
+}
+
+TextureClass* W3DShaderManager::getShroudTexture(void)
+{
+	W3DShroud* shroud = (TheTerrainRenderObject != nullptr) ? TheTerrainRenderObject->getShroud() : nullptr;
+	return (shroud != nullptr) ? shroud->getShroudTexture() : nullptr;
 }
 
 // W3DShaderManager::resetShader =======================================================

@@ -39,6 +39,13 @@ float4 g_ShadowParams2 : register(c17); // xyz = direction light TRAVELS, w = te
 float4x4 g_LightViewProjFar : register(c18); // c18..c21, TRANSPOSED
 float4 g_CascadeParams : register(c22);  // x = far bias, y = far texel world size, z = cascade count
 
+// Ronin @bugfix 19/09/2026 DX9: the shroud used to arrive as a SECOND fixed-function pass over this mesh, and which pixels
+// it covered was decided by a depth compare (ZFUNC). That painted the transparent texels of alpha meshes black at the fog
+// edge, and it only reached this path at all because the compare was loosened to LESSEQUAL. Sampled here it is per pixel,
+// carries this mesh's own alpha, and needs no depth equality. zw == 0 means the map has no shroud.
+sampler2D g_ShroudSampler : register(s5);
+float4 g_ShroudMap : register(c23);  // xy = world offset, zw = 1/(cellSize * textureSize)
+
 struct PS_INPUT
 {
     float4 diffuse : COLOR0;
@@ -207,6 +214,13 @@ float4 main(PS_INPUT input) : COLOR0
         }
     }
 
+    // Ronin @bugfix 19/09/2026 DX9: shroud / fog of war, last — so it multiplies the finished surface exactly as the old
+    // overlay pass multiplied the finished framebuffer. RGB only; alpha stays this mesh's own, like Trees_ps.
+    if (g_ShroudMap.z > 0.0f)
+    {
+        float2 shroudUV = (input.worldPos.xy + g_ShroudMap.xy) * g_ShroudMap.zw;
+        color.rgb *= tex2D(g_ShroudSampler, shroudUV).rgb;
+    }
 
     return color;
 }

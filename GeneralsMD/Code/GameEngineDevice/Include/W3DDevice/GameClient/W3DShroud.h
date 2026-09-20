@@ -45,7 +45,10 @@ public:
 	W3DShroudMaterialPassClass() : m_isTransparentObjectPass(FALSE) {}
 	virtual void	Install_Materials() const override;
 	virtual void	UnInstall_Materials() const override;
+	// Ronin @bugfix 19/09/2026 DX9: lets a mesh that already sampled the shroud in its own pixel shader skip this pass.
+	virtual bool	Is_Shroud_Pass() const override { return true; }
 	void enableTransparentObjectPass(Bool enable) {m_isTransparentObjectPass = enable;}
+
 protected:
 	//customized version to deal with transparent (alpha-tested) polys.
 	Bool m_isTransparentObjectPass;

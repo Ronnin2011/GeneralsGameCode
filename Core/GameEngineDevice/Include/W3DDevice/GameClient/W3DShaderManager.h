@@ -92,6 +92,11 @@ public:
 	// @feature Ronin 16/05/2026 DX9: expose the live terrain cloud projection
 	// state so rigid-mesh shaders can sample the same moving cloud field.
 	static void getCloudMapState(float* pScale, float* pOffsetX, float* pOffsetY);
+	// Ronin @bugfix 19/09/2026 DX9: the same world->shroud mapping setShroudTex builds for the fixed-function overlay, as
+	// plain numbers, so the programmable rigid shaders can sample the shroud themselves instead of taking a second,
+	// depth-compared pass that blackened alpha meshes at the fog edge. FALSE (and zeroes) when the map has no shroud.
+	static Int getShroudMapState(float* pOffsetX, float* pOffsetY, float* pScaleX, float* pScaleY);
+	static TextureClass* getShroudTexture(void);
 
 	// Info for a render to texture surface for special effects.
 	static Bool m_renderingToTexture;

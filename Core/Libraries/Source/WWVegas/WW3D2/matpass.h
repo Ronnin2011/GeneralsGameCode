@@ -71,6 +71,10 @@ public:
 	virtual void	Install_Materials() const;
 	virtual void	UnInstall_Materials() const { };	///< reset/cleanup D3D states
 
+	// Ronin @bugfix 19/09/2026 DX9: the shroud overlay is the one pass a mesh can already have applied to itself, in its own
+	// pixel shader. A mesh that did so skips it here rather than being darkened twice — see MeshClass::Render_Material_Pass.
+	virtual bool	Is_Shroud_Pass() const { return false; }
+
 	void							Set_Texture(TextureClass * Texture,int stage = 0);
 	void							Set_Shader(ShaderClass shader);
 	void							Set_Material(VertexMaterialClass * mat);

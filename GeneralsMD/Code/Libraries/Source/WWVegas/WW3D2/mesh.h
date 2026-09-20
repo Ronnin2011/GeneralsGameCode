@@ -167,6 +167,11 @@ public:
 	bool								Is_Shadow_Caster_Mover() const { return ShadowCasterMover; }
 	static void						Skip_Baked_Shadow_Casters(bool b) { s_SkipBakedShadowCasters = b; }
 	static bool						s_SkipBakedShadowCasters;
+	// Ronin @bugfix 19/09/2026 DX9: TRUE when this mesh's last base draw sampled the shroud in its own pixel shader (the
+	// programmable rigid paths). Such a mesh must NOT also take the fixed-function shroud overlay, or it darkens twice.
+	void								Set_Shroud_Applied_In_Shader(bool b) { ShroudAppliedInShader = b; }
+	bool								Is_Shroud_Applied_In_Shader() const { return ShroudAppliedInShader; }
+
 	// Ronin @perf 26/08/2026 DX9: §29i.5. TRUE only inside the shadow depth-pass scene render.
 	// Separate from the flag above on purpose: that one means "skip baked casters", this one means
 	// "colour writes are off", and rigid instancing eligibility keys on the latter.
@@ -187,6 +192,7 @@ protected:
 	MeshModelClass *				Model;
 	bool								BakedShadowCaster;		// §29j.8 — in the static shadow bake
 	bool								ShadowCasterMover;		// §29j.8 — proven to move, never bake
+	bool								ShroudAppliedInShader;	// last base draw sampled the shroud in its own PS
 	DecalMeshClass *				DecalMesh;
 
 	LightEnvironmentClass *		LightEnvironment;		// cached pointer to the light environment for this mesh

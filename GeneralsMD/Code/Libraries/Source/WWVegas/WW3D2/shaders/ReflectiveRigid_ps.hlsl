@@ -5,6 +5,11 @@
 sampler2D g_EnvSampler : register(s0); // this pass's stage-0 texture (lakedusk)
 float4    g_CameraPos  : register(c0); // world-space camera position (xyz)
 float4x4  g_View       : register(c1); // world->view; uploaded transposed (mirrors the VS g_ViewProj convention)
+// Ronin @bugfix 19/09/2026 DX9: this pass used to rely on the FFP shroud overlay reaching it (see the note below). That
+// overlay is depth-compared and blackened alpha meshes at the fog edge, so it no longer runs on programmable meshes — the
+// shroud is sampled here instead, same meaning as in RigidInstance_ps. zw == 0 means the map has no shroud.
+sampler2D g_ShroudSampler : register(s5);
+float4    g_ShroudMap  : register(c5);  // xy = world offset, zw = 1/(cellSize * textureSize)
 
 struct PS_INPUT {
     float4 col         : COLOR0;
@@ -31,7 +36,16 @@ float4 main(PS_INPUT i) : COLOR0
     // shroud/fog multiply (which DOES reach this mesh) left it the brightest object -> "stays bright
     // in fog". With the lighting factor it now dims with the scene and darkens under the shroud like
     // its neighbors, matching how the FFP env pass composited.
-    return float4(tex2D(g_EnvSampler, envUV).rgb * i.col.rgb, 1.0f);
+    float3 reflection = tex2D(g_EnvSampler, envUV).rgb * i.col.rgb;
+
+    // Ronin @bugfix 19/09/2026 DX9: shroud in-shader now that the overlay pass no longer reaches programmable meshes.
+    if (g_ShroudMap.z > 0.0f)
+    {
+        float2 shroudUV = (i.worldPos.xy + g_ShroudMap.xy) * g_ShroudMap.zw;
+        reflection *= tex2D(g_ShroudSampler, shroudUV).rgb;
+    }
+
+    return float4(reflection, 1.0f);
 
     // PBR/Fresnel extension point (later): weight by pow(1 - saturate(dot(-V,N)), 5).
 }

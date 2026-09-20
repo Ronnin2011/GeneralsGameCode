@@ -859,6 +859,33 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 		dev->SetPixelShaderConstantF(1, (const float*)&reflectiveViewT, 4);
 	}
 
+	// Ronin @bugfix 19/09/2026 DX9: shroud on s5 + c5, same meaning as in Flush_Single_Rigid — this pass no longer takes
+	// the depth-compared fixed-function overlay either (MeshClass::Render_Material_Pass skips it). c5.zw == 0 -> no shroud.
+	{
+		float reflShroudOfsX = 0.0f, reflShroudOfsY = 0.0f, reflShroudSclX = 0.0f, reflShroudSclY = 0.0f;
+		TextureClass* reflShroudTex = W3DShaderManager::getShroudTexture();
+		const bool reflShroudActive = (reflShroudTex != nullptr) &&
+			(W3DShaderManager::getShroudMapState(&reflShroudOfsX, &reflShroudOfsY,
+												 &reflShroudSclX, &reflShroudSclY) != 0);
+
+		const float reflPsC5[4] = { reflShroudOfsX, reflShroudOfsY, reflShroudSclX, reflShroudSclY };
+		dev->SetPixelShaderConstantF(5, reflPsC5, 1);
+
+		if (reflShroudActive) {
+			const DWORD reflShroudFilter =
+				(reflShroudTex->Get_Filter().Get_Min_Filter() == TextureFilterClass::FILTER_TYPE_NONE)
+					? D3DTEXF_POINT : D3DTEXF_LINEAR;
+			dev->SetTexture(5, reflShroudTex->Peek_D3D_Texture());
+			dev->SetSamplerState(5, D3DSAMP_MINFILTER, reflShroudFilter);
+			dev->SetSamplerState(5, D3DSAMP_MAGFILTER, reflShroudFilter);
+			dev->SetSamplerState(5, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+			dev->SetSamplerState(5, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+			dev->SetSamplerState(5, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		} else {
+			dev->SetTexture(5, nullptr);
+		}
+	}
+
 	// Ronin @feature DX9: reflective pass-0 depth bias. HISTORICAL: pass-0 (programmable) wrote depth
 	// ~1 LSB off the FFP pass-1 overlay, so the two z-fought -> shimmer, and we pushed pass-0 away so the
 	// overlay would land. As of the BLENDED_NRM change, pass-1 is ALSO programmable and shares pass-0's
@@ -902,8 +929,10 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 
 	dev->SetTexture(1, nullptr);
 	dev->SetTexture(2, nullptr);
+	dev->SetTexture(5, nullptr);	// Ronin @bugfix 19/09/2026 DX9: shroud stage
 	// Ronin @bugfix 14/09/2026 DX9: cleared raw — resync the wrapper's texture caches, same as Flush_Single_Rigid's teardown.
 	DX8Wrapper::Invalidate_Texture_State(1, 2);
+	DX8Wrapper::Invalidate_Texture_State(5, 1);
 
 	if (normalMapTex != nullptr) {
 		normalMapTex->Release_Ref();
@@ -1260,6 +1289,34 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	}
 
 
+	// Ronin @bugfix 19/09/2026 DX9: shroud on s5 + c23, once per flush (batch-invariant). It used to arrive as a SECOND
+	// fixed-function pass whose coverage was decided by a depth compare; on an alpha mesh that compare also passed on
+	// texels the mesh never wrote, so the fog edge painted a black box around every light and flag. Sampled here it is
+	// per pixel and carries this mesh's own alpha. c23.zw == 0 means the map has no shroud and the PS skips it.
+	float shroudOfsX = 0.0f, shroudOfsY = 0.0f, shroudSclX = 0.0f, shroudSclY = 0.0f;
+	TextureClass* shroudTex = W3DShaderManager::getShroudTexture();
+	const bool shroudActive = (shroudTex != nullptr) &&
+		(W3DShaderManager::getShroudMapState(&shroudOfsX, &shroudOfsY, &shroudSclX, &shroudSclY) != 0);
+
+	const float psC23[4] = { shroudOfsX, shroudOfsY, shroudSclX, shroudSclY };
+	dev->SetPixelShaderConstantF(23, psC23, 1);
+
+	if (shroudActive) {
+		// Match the overlay's own sampling: CLAMP both axes, no mips, and the shroud's point/linear option.
+		const DWORD shroudFilter =
+			(shroudTex->Get_Filter().Get_Min_Filter() == TextureFilterClass::FILTER_TYPE_NONE)
+				? D3DTEXF_POINT : D3DTEXF_LINEAR;
+		dev->SetTexture(5, shroudTex->Peek_D3D_Texture());
+		dev->SetSamplerState(5, D3DSAMP_MINFILTER, shroudFilter);
+		dev->SetSamplerState(5, D3DSAMP_MAGFILTER, shroudFilter);
+		dev->SetSamplerState(5, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(5, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(5, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	} else {
+		dev->SetTexture(5, nullptr);
+	}
+
+
 	// Stage-0 (diffuse) sampler defaults for the programmable path. FFP categories normally set these
 	// per texture; a container flush spans many, so use the common linear/wrap defaults once.
 	dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
@@ -1452,6 +1509,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	dev->SetTexture(0, nullptr);
 	dev->SetTexture(1, nullptr);
 	dev->SetTexture(2, nullptr);
+	dev->SetTexture(5, nullptr);	// Ronin @bugfix 19/09/2026 DX9: shroud stage
 
 	if (curNormalMap != nullptr) {
 		curNormalMap->Release_Ref();
@@ -1462,6 +1520,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	// Ronin @bugfix 14/09/2026 DX9: stages 0-2 were bound and cleared raw above — tell the wrapper, or the next skinned mesh
 	// with the same texture skips its bind and draws untextured (white infantry, Windowednew §23d.2).
 	DX8Wrapper::Invalidate_Texture_State(0, 3);
+	DX8Wrapper::Invalidate_Texture_State(5, 1);	// Ronin @bugfix 19/09/2026 DX9: shroud stage, same reason
 }
 
 DX8InstanceManagerClass::~DX8InstanceManagerClass()
