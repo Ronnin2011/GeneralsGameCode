@@ -3000,7 +3000,14 @@ void WaterRenderObjClass::setupFlatWaterShader()
 {
 
 	DX8Wrapper::Set_Texture(0,m_riverTexture);
+	// Ronin @bugfix 20/09/2026 DX9: force a re-apply, or the water draws with blending OFF and the soft shore edge's
+	// destination-alpha feather dies (hard waterline). FlatTerrainShaderPixelShader::set kills ALPHABLENDENABLE with a raw
+	// write (W3DShaderManager.cpp:4295); an alpha decal before us (ability radius = SHADOW_ALPHA_DECAL) then leaves
+	// _PresetAlphaShader cached, we ask for that same preset and Set_Shader early-outs (dx8wrapper.h:1787).
+	// MUST be here, not at the raw writer: ShaderDirty is a global ONE-SHOT, cleared by the next Apply (shader.cpp:417-430).
+	ShaderClass::Invalidate();
 	if (!TheWaterTransparency->m_additiveBlend)
+
 		DX8Wrapper::Set_Shader(ShaderClass::_PresetAlphaShader);
 	else
 		DX8Wrapper::Set_Shader(ShaderClass::_PresetAdditiveShader);
