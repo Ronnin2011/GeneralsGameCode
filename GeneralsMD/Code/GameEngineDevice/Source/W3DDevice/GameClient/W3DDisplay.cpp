@@ -76,6 +76,7 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DDebugPanel.h"
 // Ronin @feature 12/08/2026 DX9: §29 shadow-map render-to-texture pass.
 #include "W3DDevice/GameClient/W3DShadowMap.h"
+#include "W3DDevice/GameClient/W3DSsao.h"
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DScene.h"
@@ -473,7 +474,10 @@ W3DDisplay::~W3DDisplay()
 	// shutdown
 	Debug_Statistics::Shutdown_Statistics();
 	if (!TheGlobalData->m_headless)
+	{
 		W3DShaderManager::shutdown();
+		W3DSsao::shutdown();	// Ronin @feature 13/09/2026 DX9: SSAO step 1 — its shader, while the device exists
+	}
 	m_assetManager->Free_Assets();
 	delete m_assetManager;
 	if (!TheGlobalData->m_headless)
@@ -1980,6 +1984,39 @@ static void drawRunMeanPerfReadout(Bool visible)
 		s_perfString->draw(3, 375, GameMakeColor(255, 230, 120, 255), GameMakeColor(0, 0, 0, 255));
 }
 
+// Ronin @diagnostic 13/09/2026 DX9: SSAO step 1. [DEPTH] — can the card read scene depth, and did this frame use it.
+static void drawSceneDepthReadout(Bool visible)
+{
+	if (!visible || TheDisplayStringManager == NULL || TheFontLibrary == NULL) {
+		return;
+	}
+	static DisplayString* s_depthString = NULL;
+	if (s_depthString == NULL) {
+		s_depthString = TheDisplayStringManager->newDisplayString();
+		if (s_depthString == NULL) {
+			return;
+		}
+		s_depthString->setFont(TheFontLibrary->getFont("FixedSys", 8, FALSE));
+	}
+
+	UnicodeString text;
+	Int aoW = 0, aoH = 0;
+	W3DSsao::getTargetSize(&aoW, &aoH);
+	// Ronin @diagnostic 20/09/2026 DX9: aoRes/samples prove a quality change actually took effect. The tiers differ
+	// subtly by eye, so read the numbers, not the picture: they must change when SSAOQuality does.
+	text.format(L"[DEPTH] ssao=%d  intz=%d  active=%d  aa=%d  aoRes=%dx%d  samples=%d",
+		W3DSsao::getQuality(),
+		W3DSsao::isSupported() ? 1 : 0,
+		W3DSsao::isActive() ? 1 : 0,
+		DX8Wrapper::Get_Anti_Aliasing_Level(),
+		aoW, aoH,
+		W3DSsao::getSampleCount());
+	s_depthString->setText(text);
+	// Ronin @feature 14/09/2026 DX9: debug panel row; the old fixed spot only when there is no panel this frame.
+	if (!W3DDebugPanel::setRow(W3DDebugPanel::ROW_DEPTH, s_depthString, GameMakeColor(140, 255, 140, 255)))
+		s_depthString->draw(3, 390, GameMakeColor(140, 255, 140, 255), GameMakeColor(0, 0, 0, 255));
+}
+
 // Ronin @diagnostic 14/09/2026 DX9: §19e.3. [TERRAIN] — splat bake under channel reuse: materials, channels in use, cells left with
 // no channel (must be 0), atlas pages, most materials meeting in one draw tile.
 static void drawTerrainSplatReadout(Bool visible)
@@ -2354,6 +2391,10 @@ AGAIN:
 				if (numRenderTargetPolygons || numRenderTargetVertices)
 					Debug_Statistics::Record_DX8_Polys_And_Vertices(numRenderTargetPolygons,numRenderTargetVertices,ShaderClass::_PresetOpaqueShader);
 
+				// Ronin @feature 13/09/2026 DX9: SSAO step 1. The 3D views render into a readable depth buffer from here to
+				// W3DSsao::endFrame, just before End_Render.
+				W3DSsao::beginFrame();
+
 				// draw all views of the world
 				drawViews();
 
@@ -2365,6 +2406,7 @@ AGAIN:
 
 				// draw the user interface
 				TheInGameUI->DRAW();
+
 
 				TheGameClient->DRAW();
 
@@ -2419,11 +2461,11 @@ AGAIN:
 				// Ronin @diagnostic DX9: rigid-path HUD readouts (release too). Flip either to false to
 				// hide that line — this also removes its per-frame UnicodeString::format + DisplayString
 				// draw, so turn BOTH off when taking a clean fps measurement.
-				static const bool SHOW_SINGLE_RIGID_READOUT = true;  // [SR]   yellow, y=300
-				static const bool SHOW_INSTANCING_READOUT   = true;  // [INST] cyan,   y=315
+				static const bool SHOW_SINGLE_RIGID_READOUT = true;   // [SR]   yellow, y=300
+				static const bool SHOW_INSTANCING_READOUT   = true;   // [INST] cyan,   y=315
 				static const bool SHOW_DRAW_SUBSYSTEM_READOUT = true; // [DRAW] orange, y=330
 				static const bool SHOW_SHADOW_FIT_READOUT = true;     // [SHADOW] blue, y=360
-					static const bool SHOW_RUN_MEAN_READOUT   = true;     // [PERF]   amber, y=375
+				static const bool SHOW_RUN_MEAN_READOUT   = true;     // [PERF]   amber, y=375
 					if (SHOW_SINGLE_RIGID_READOUT) {
 						drawSingleRigidPerfReadout();
 					}
@@ -2435,9 +2477,10 @@ AGAIN:
 					drawShadowFitReadout(SHOW_SHADOW_FIT_READOUT);
 					// Ronin @diagnostic 09/09/2026 DX9: also every frame — it accumulates the run mean.
 					drawRunMeanPerfReadout(SHOW_RUN_MEAN_READOUT);
+					static const bool SHOW_SCENE_DEPTH_READOUT = true;    // [DEPTH]  green, y=390
+					drawSceneDepthReadout(SHOW_SCENE_DEPTH_READOUT);
 					static const bool SHOW_TERRAIN_SPLAT_READOUT = false; // [TERRAIN] white, y=405
 					drawTerrainSplatReadout(SHOW_TERRAIN_SPLAT_READOUT);
-
 
 				// Ronin @feature 12/08/2026 DX9: §29 — the light's-eye view, bottom-left. Gated by
 				// TheShowShadowMapDebug.
@@ -2469,6 +2512,11 @@ AGAIN:
 					m_profilerFrameCapture->Capture(getWidth(), getHeight());
 				}
 #endif
+				// Ronin @feature 13/09/2026 DX9: SSAO step 1. Device's own depth buffer back FIRST, then show ours — a bound
+				// depth buffer cannot be read.
+				W3DSsao::endFrame();
+				W3DSsao::drawDebugView(primaryW3DView ? primaryW3DView->get3DCamera() : NULL);
+
 				// render is all done!
 				WW3D::End_Render();
 			}

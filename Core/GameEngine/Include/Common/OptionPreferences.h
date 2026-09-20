@@ -124,7 +124,8 @@ public:
 	// is PASSED IN, not read from TheGlobalData: this file compiles for the Generals target too, and that
 	// tree's GlobalData has no m_shadowMapQuality.
 	Int getShadowQuality(Int dflt) const;
-
+	// Ronin @feature 13/09/2026 DX9: SSAO. 0..3 (Off/Normal/High/Ultra), or `dflt` when absent — passed in for the same reason.
+	Int getSSAOQuality(Int dflt) const;
 
 	Int getParticleCap();
 

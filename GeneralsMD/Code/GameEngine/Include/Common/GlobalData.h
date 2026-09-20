@@ -182,6 +182,8 @@ public:
 	// W3DShadowMap; 0 leaves the map path off entirely and the stencil volumes / decals in charge.
 	// Options.ini key: ShadowQuality. Low and Medium merged into Normal — they measured identical.
 	Int  m_shadowMapQuality;
+	// Ronin @feature 13/09/2026 DX9: SSAO. 0=Off 1=Normal 2=High 3=Ultra; Options.ini key SSAOQuality. Off by default.
+	Int  m_ssaoQuality;
 	Int  m_textureReductionFactor;	//how much to cut texture resolution: 2 is half, 3 is quarter, etc.
 	Bool m_enableBehindBuildingMarkers;
 	Real m_waterPositionX;

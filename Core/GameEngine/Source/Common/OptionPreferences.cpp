@@ -767,6 +767,26 @@ Int OptionPreferences::getShadowQuality(Int dflt) const
 	return level;
 }
 
+// Ronin @feature 13/09/2026 DX9: SSAO. SSAOQuality = Off|Normal|High|Ultra, or 0..3 — the same shape as ShadowQuality.
+Int OptionPreferences::getSSAOQuality(Int dflt) const
+{
+	OptionPreferences::const_iterator it = find("SSAOQuality");
+	if (it == end())
+		return dflt;
+
+	static const char *names[] = { "OFF", "NORMAL", "HIGH", "ULTRA" };
+	for (Int i = 0; i < 4; ++i)
+	{
+		if (stricmp(it->second.str(), names[i]) == 0)
+			return i;
+	}
+
+	Int level = atoi(it->second.str());
+	if (level < 0) level = 0;
+	if (level > 3) level = 3;
+	return level;
+}
+
 Int OptionPreferences::getParticleCap()
 {
 	OptionPreferences::const_iterator it = find("MaxParticleCount");

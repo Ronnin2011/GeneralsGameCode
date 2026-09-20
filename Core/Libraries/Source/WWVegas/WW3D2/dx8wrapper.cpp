@@ -184,6 +184,14 @@ IDirect3DSurface8 *			DX8Wrapper::CurrentDepthBuffer						= nullptr;
 IDirect3DSurface8 *			DX8Wrapper::DefaultRenderTarget						= nullptr;
 IDirect3DSurface8 *			DX8Wrapper::DefaultDepthBuffer						= nullptr;
 bool								DX8Wrapper::IsRenderToTexture							= false;
+// Ronin @feature 13/09/2026 DX9: SSAO step 1. INTZ — a depth-stencil format NVIDIA and AMD let a shader read.
+#define D3DFMT_INTZ_FOURCC ((D3DFORMAT)MAKEFOURCC('I','N','T','Z'))
+IDirect3DTexture9 *			DX8Wrapper::SceneDepthTexture							= nullptr;
+IDirect3DSurface9 *			DX8Wrapper::SceneDepthSurface							= nullptr;
+IDirect3DSurface9 *			DX8Wrapper::SceneDepthSaved								= nullptr;
+int								DX8Wrapper::SceneDepthSupport							= -1;
+bool								DX8Wrapper::SceneDepthWritten							= false;
+bool								DX8Wrapper::SceneDepthSuspended							= false;
 
 unsigned							DX8Wrapper::_MainThreadID								= 0;
 bool								DX8Wrapper::CurrentDX8LightEnables[MAX_LIGHTS];
@@ -1328,6 +1336,8 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 
 		// Ronin @bugfix 27/02/2026 DX9: Release D3DPOOL_DEFAULT instancing resources before Reset
 		TheDX8InstanceManager.Release_Resources();
+		// Ronin @feature 13/09/2026 DX9: SSAO step 1. The INTZ scene depth is D3DPOOL_DEFAULT too; Begin rebuilds it.
+		Release_Scene_Depth();
 
 		DynamicVBAccessClass::_Deinit();
 		DynamicIBAccessClass::_Deinit();
@@ -1377,6 +1387,9 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 void DX8Wrapper::Release_Device()
 {
 	if (D3DDevice) {
+		// Ronin @feature 13/09/2026 DX9: SSAO step 1. Before the device goes; the next device is probed afresh.
+		Release_Scene_Depth();
+		SceneDepthSupport = -1;
 
 		for (int a=0;a<MAX_TEXTURE_STAGES;++a)
 		{	//release references to any textures that were used in last rendering call
@@ -2624,11 +2637,14 @@ void DX8Wrapper::Clear(bool clear_color, bool clear_z_stencil, const Vector3 &co
 	{
 		D3DSURFACE_DESC desc;
 		depthbuffer->GetDesc(&desc);
+		// Ronin @feature 13/09/2026 DX9: SSAO step 1. INTZ carries 8 stencil bits too — without it here, every stencil
+		// clear during the main pass would be silently dropped.
 		has_stencil=
 		(
 			desc.Format==D3DFMT_D15S1 ||
 			desc.Format==D3DFMT_D24S8 ||
-			desc.Format==D3DFMT_D24X4S4
+			desc.Format==D3DFMT_D24X4S4 ||
+			desc.Format==D3DFMT_INTZ_FOURCC
 		);
 
 		// release ref
@@ -2643,6 +2659,142 @@ void DX8Wrapper::Clear(bool clear_color, bool clear_z_stencil, const Vector3 &co
 	{
 		DX8CALL(Clear(0, nullptr, flags, Convert_Color(color,dest_alpha), z, stencil));
 	}
+}
+
+// Ronin @feature 13/09/2026 DX9: SSAO step 1. Can INTZ be a texture on this adapter? Asked once per device, same call
+// shape as W3DShadowMap's probe.
+bool DX8Wrapper::Is_Scene_Depth_Supported()
+{
+	if (SceneDepthSupport < 0)
+	{
+		SceneDepthSupport = 0;
+		if (D3DInterface != nullptr && CurrentCaps != nullptr)
+		{
+			const D3DCAPS9 &caps = CurrentCaps->Get_DX8_Caps();
+			D3DDISPLAYMODE mode;
+			if (SUCCEEDED(D3DInterface->GetAdapterDisplayMode(caps.AdapterOrdinal, &mode)) &&
+				SUCCEEDED(D3DInterface->CheckDeviceFormat(caps.AdapterOrdinal, caps.DeviceType, mode.Format,
+					D3DUSAGE_DEPTHSTENCIL, D3DRTYPE_TEXTURE, D3DFMT_INTZ_FOURCC)))
+			{
+				SceneDepthSupport = 1;
+			}
+		}
+	}
+	return SceneDepthSupport == 1;
+}
+
+// Ronin @feature 13/09/2026 DX9: SSAO step 1. Swap the device's depth-stencil for a same-size INTZ texture and clear it.
+// Returns false and changes nothing when unsupported, already bound, or the depth buffer is multisampled.
+bool DX8Wrapper::Begin_Scene_Depth()
+{
+	SceneDepthWritten = false;
+	if (D3DDevice == nullptr || SceneDepthSaved != nullptr || !Is_Scene_Depth_Supported())
+		return false;
+
+	IDirect3DSurface9 *current = nullptr;
+	if (FAILED(D3DDevice->GetDepthStencilSurface(&current)) || current == nullptr)
+		return false;
+
+	// INTZ has no multisampled form — with AA on the frame keeps its own depth buffer.
+	D3DSURFACE_DESC cd;
+	if (FAILED(current->GetDesc(&cd)) || cd.MultiSampleType != D3DMULTISAMPLE_NONE)
+	{
+		current->Release();
+		return false;
+	}
+
+	// The device's own depth buffer is the size reference, so a resolution change rebuilds ours.
+	if (SceneDepthSurface != nullptr)
+	{
+		D3DSURFACE_DESC sd;
+		if (FAILED(SceneDepthSurface->GetDesc(&sd)) || sd.Width != cd.Width || sd.Height != cd.Height)
+			Release_Scene_Depth();
+	}
+
+	if (SceneDepthTexture == nullptr)
+	{
+		IDirect3DTexture9 *tex = nullptr;
+		if (FAILED(D3DDevice->CreateTexture(cd.Width, cd.Height, 1, D3DUSAGE_DEPTHSTENCIL, D3DFMT_INTZ_FOURCC,
+				D3DPOOL_DEFAULT, &tex, nullptr)) || tex == nullptr)
+		{
+			SceneDepthSupport = 0;		// the probe said yes and creation said no — stop retrying every frame
+			current->Release();
+			return false;
+		}
+		SceneDepthTexture = tex;
+
+		if (FAILED(SceneDepthTexture->GetSurfaceLevel(0, &SceneDepthSurface)) || SceneDepthSurface == nullptr)
+		{
+			SceneDepthSurface = nullptr;
+			Release_Scene_Depth();
+			SceneDepthSupport = 0;
+			current->Release();
+			return false;
+		}
+	}
+
+	if (FAILED(D3DDevice->SetDepthStencilSurface(SceneDepthSurface)))
+	{
+		current->Release();
+		return false;
+	}
+	SceneDepthSaved = current;		// keeps the reference GetDepthStencilSurface took
+
+	// Clear honours the viewport; WW3D::Begin_Render has just set it to the whole target.
+	D3DDevice->Clear(0, nullptr, D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, 0, 1.0f, 0);
+	SceneDepthWritten = true;
+	return true;
+}
+
+// Ronin @feature 13/09/2026 DX9: SSAO step 1. Give the device its own depth-stencil back. A no-op when Begin declined.
+void DX8Wrapper::End_Scene_Depth()
+{
+	SceneDepthSuspended = false;
+	if (SceneDepthSaved == nullptr)
+		return;
+	if (D3DDevice != nullptr)
+		D3DDevice->SetDepthStencilSurface(SceneDepthSaved);
+	SceneDepthSaved->Release();
+	SceneDepthSaved = nullptr;
+}
+
+// Ronin @feature 13/09/2026 DX9: SSAO step 3a. Take our depth-stencil off the device mid-frame. Only while it is bound and
+// written; the caller must switch to a target that needs no depth before drawing.
+bool DX8Wrapper::Suspend_Scene_Depth()
+{
+	if (D3DDevice == nullptr || SceneDepthSaved == nullptr || !SceneDepthWritten || SceneDepthSuspended)
+		return false;
+	if (FAILED(D3DDevice->SetDepthStencilSurface(nullptr)))
+		return false;
+	SceneDepthSuspended = true;
+	return true;
+}
+
+// Ronin @feature 13/09/2026 DX9: SSAO step 3a. Put it back — the rest of the frame keeps testing against it.
+void DX8Wrapper::Resume_Scene_Depth()
+{
+	if (!SceneDepthSuspended)
+		return;
+	SceneDepthSuspended = false;
+	if (D3DDevice != nullptr && SceneDepthSurface != nullptr)
+		D3DDevice->SetDepthStencilSurface(SceneDepthSurface);
+}
+
+// Ronin @feature 13/09/2026 DX9: SSAO step 1. D3DPOOL_DEFAULT — released before every Reset and before the device goes.
+void DX8Wrapper::Release_Scene_Depth()
+{
+	End_Scene_Depth();
+	if (SceneDepthSurface != nullptr)
+	{
+		SceneDepthSurface->Release();
+		SceneDepthSurface = nullptr;
+	}
+	if (SceneDepthTexture != nullptr)
+	{
+		SceneDepthTexture->Release();
+		SceneDepthTexture = nullptr;
+	}
+	SceneDepthWritten = false;
 }
 
 void DX8Wrapper::Set_Viewport(CONST D3DVIEWPORT8* pViewport)

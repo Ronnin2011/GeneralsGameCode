@@ -139,6 +139,22 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/Trees.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/Trees.pso"
+        # Ronin @build 13/09/2026 SSAO — screen quad, scene depth debug view, raw AO.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/ScreenQuad.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/ScreenQuad.vso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/SceneDepthDebug.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/SceneDepthDebug.pso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/SsaoRaw.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/SsaoRaw.pso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/SsaoBlur.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/SsaoBlur.pso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/SsaoShow.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/SsaoShow.pso"
         COMMENT "Auto-deploying to Zero Hour installation folder"
 
 

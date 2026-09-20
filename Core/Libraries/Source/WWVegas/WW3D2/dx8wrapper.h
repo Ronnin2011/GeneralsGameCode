@@ -624,6 +624,19 @@ public:
 
 	static void Clear(bool clear_color, bool clear_z_stencil, const Vector3 &color, float dest_alpha=0.0f, float z=1.0f, unsigned int stencil=0);
 
+	// Ronin @feature 13/09/2026 DX9: SSAO step 1. The main pass's depth-stencil as a READABLE texture (INTZ). Begin swaps
+	// it in for the device's own depth buffer and clears it; End puts the original back.
+	static bool Is_Scene_Depth_Supported();
+	static bool Begin_Scene_Depth();
+	static void End_Scene_Depth();
+	static void Release_Scene_Depth();
+	// Ronin @feature 13/09/2026 DX9: SSAO step 3a. Mid-frame read: Suspend takes ours off the device (no depth-stencil) so a
+	// pass can sample it; Resume puts it back. Always pair them.
+	static bool Suspend_Scene_Depth();
+	static void Resume_Scene_Depth();
+	// NULL while bound or not written this frame — reading a bound depth-stencil is undefined.
+	static IDirect3DTexture9* Peek_Scene_Depth_Texture() { return (SceneDepthWritten && (SceneDepthSaved == nullptr || SceneDepthSuspended)) ? SceneDepthTexture : nullptr; }
+
 	static void	Set_Viewport(CONST D3DVIEWPORT8* pViewport);
 
 	static void Set_Vertex_Buffer(const VertexBufferClass* vb, unsigned stream=0);
@@ -1025,6 +1038,13 @@ protected:
 	static IDirect3DSurface8 *			CurrentDepthBuffer;
 	static IDirect3DSurface8 *			DefaultRenderTarget;
 	static IDirect3DSurface8 *			DefaultDepthBuffer;
+	// Ronin @feature 13/09/2026 DX9: SSAO step 1. Scene depth as an INTZ texture — see Begin_Scene_Depth.
+	static IDirect3DTexture9 *			SceneDepthTexture;
+	static IDirect3DSurface9 *			SceneDepthSurface;
+	static IDirect3DSurface9 *			SceneDepthSaved;		// the device's own depth buffer while ours is bound
+	static int								SceneDepthSupport;		// -1 not probed, 0 no, 1 yes
+	static bool								SceneDepthWritten;
+	static bool								SceneDepthSuspended;	// ours is off the device mid-frame so a pass can read it
 
 	static unsigned							DrawPolygonLowBoundLimit;
 

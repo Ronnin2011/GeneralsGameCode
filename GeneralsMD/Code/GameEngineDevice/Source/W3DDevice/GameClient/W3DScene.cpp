@@ -54,6 +54,7 @@
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DShadowMap.h"
+#include "W3DDevice/GameClient/W3DSsao.h"
 #include "W3DDevice/GameClient/W3DShadowMapState.h"
 #include "W3DDevice/GameClient/W3DStatusCircle.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
@@ -959,6 +960,14 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 
 	// (gth) CNC3 Flush the shader meshes
 	SHD_FLUSH;
+
+	// Ronin @feature 13/09/2026 DX9: SSAO step 3a. Everything solid is in the depth buffer and nothing see-through has drawn.
+	// Main pass only: not the shadow depth pass, not the water mirror, not the special scene passes.
+	// Ronin @bugfix 14/09/2026 DX9: SSAO. BEFORE the trees — swaying alpha-tested foliage flickered in half-res AO. Trees keep
+	// their shadow-map shadows; temporal AO, which would let them back in, is deferred (docs/SSAO_Work.md §5).
+	if (!depthPass && !ShaderClass::Is_Backface_Culling_Inverted() && m_customPassMode == SCENE_PASS_DEFAULT &&
+		Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+		W3DSsao::renderPass(rinfo.Camera);
 
 	// Draw the trees last so they alpha blend onto everything correctly.
 	DoTrees(rinfo);
