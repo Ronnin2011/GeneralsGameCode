@@ -1158,6 +1158,9 @@ void W3DBridgeBuffer::drawBridges(CameraClass * camera, Bool wireframe, TextureC
 	// Setup the vertex buffer, shader & texture.
 	DX8Wrapper::Set_Index_Buffer(m_indexBridge,0);
 	DX8Wrapper::Set_Vertex_Buffer(m_vertexBridge);
+	// Ronin @bugfix 19/09/2026 DX9: bind our own layout — Apply_Render_State_Changes keeps the LAST bound FVF
+	// (dx8wrapper.cpp:3403), so the bridges drew with whatever the previous draw left. Same defect as the terrain tracks.
+	DX8Wrapper::BindLayoutFVF(m_vertexBridge->FVF_Info().Get_FVF(), "W3DBridgeBuffer::drawBridges");
 	DX8Wrapper::Set_Shader(detailAlphaShader);
 #ifdef RTS_DEBUG
 	//DX8Wrapper::Set_Shader(detailShader); // shows alpha clipping.
@@ -1190,6 +1193,9 @@ void W3DBridgeBuffer::drawBridges(CameraClass * camera, Bool wireframe, TextureC
 		DX8Wrapper::Set_Material(m_vertexMaterial);
 		DX8Wrapper::Set_Index_Buffer(m_indexBridge,0);
 		DX8Wrapper::Set_Vertex_Buffer(m_vertexBridge);
+	// Ronin @bugfix 19/09/2026 DX9: bind our own layout — Apply_Render_State_Changes keeps the LAST bound FVF
+	// (dx8wrapper.cpp:3403), so the bridges drew with whatever the previous draw left.
+	DX8Wrapper::BindLayoutFVF(m_vertexBridge->FVF_Info().Get_FVF(), "W3DBridgeBuffer::drawBridges");
 		DX8Wrapper::Apply_Render_State_Changes();
 		//Apply custom shroud projection shader.
 		W3DShaderManager::setTexture(0,TheTerrainRenderObject->getShroud()->getShroudTexture());

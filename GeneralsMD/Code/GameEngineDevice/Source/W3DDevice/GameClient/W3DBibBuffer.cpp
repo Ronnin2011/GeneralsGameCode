@@ -428,6 +428,9 @@ void W3DBibBuffer::renderBibs()
 	// Setup the vertex buffer, shader & texture.
 	DX8Wrapper::Set_Index_Buffer(m_indexBib,0);
 	DX8Wrapper::Set_Vertex_Buffer(m_vertexBib);
+	// Ronin @bugfix 19/09/2026 DX9: bind our own layout — Apply_Render_State_Changes keeps the LAST bound FVF
+	// (dx8wrapper.cpp:3403), so the bibs drew with whatever the previous draw left.
+	DX8Wrapper::BindLayoutFVF(m_vertexBib->FVF_Info().Get_FVF(), "W3DBibBuffer::drawBibs");
 	DX8Wrapper::Set_Shader(detailAlphaShader);
 	if (m_curNumNormalBibIndices) {
 		DX8Wrapper::Set_Texture(0,m_bibTexture);

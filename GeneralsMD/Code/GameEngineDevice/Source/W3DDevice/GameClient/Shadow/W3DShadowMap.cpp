@@ -1382,6 +1382,10 @@ void W3DShadowMap::drawStaticCasters(void)
 	{
 		DX8Wrapper::Set_Index_Buffer(s_casterChunk[i].ib, 0);
 		DX8Wrapper::Set_Vertex_Buffer(s_casterChunk[i].vb);
+		// Ronin @bugfix 19/09/2026 DX9: bind our own layout. These chunks are position-only (DX8_FVF_XYZ) and
+		// Apply_Render_State_Changes keeps the LAST bound FVF (dx8wrapper.cpp:3403), so the bake drew with whatever
+		// stride the previous draw left. Inside the loop: every chunk changes the vertex buffer.
+		DX8Wrapper::BindLayoutFVF(s_casterChunk[i].vb->FVF_Info().Get_FVF(), "W3DShadowMap::drawStaticCasters");
 		DX8Wrapper::Draw_Triangles(0, s_casterChunk[i].polyCount, 0, s_casterChunk[i].vertCount);
 	}
 }

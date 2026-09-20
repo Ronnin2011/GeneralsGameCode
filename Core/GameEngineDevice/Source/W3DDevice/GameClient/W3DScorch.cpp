@@ -124,6 +124,9 @@ void W3DScorch::drawScorches(WorldHeightMap& map)
 	}
 	DX8Wrapper::Set_Index_Buffer(m_indexScorch, 0);
 	DX8Wrapper::Set_Vertex_Buffer(m_vertexScorch);
+	// Ronin @bugfix 19/09/2026 DX9: bind our own layout — Apply_Render_State_Changes keeps the LAST bound FVF
+	// (dx8wrapper.cpp:3403), so this drew with whatever the previous draw left.
+	DX8Wrapper::BindLayoutFVF(m_vertexScorch->FVF_Info().Get_FVF(), "W3DScorch::drawScorches");
 	DX8Wrapper::Set_Shader(ShaderClass::_PresetAlphaShader);
 
 	DX8Wrapper::Set_Texture(0, m_scorchTexture);

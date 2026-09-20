@@ -765,6 +765,9 @@ void W3DTerrainBackground::drawVisiblePolys(RenderInfoClass & rinfo, Bool disabl
 	// Setup the vertex buffer, shader & texture.
 	DX8Wrapper::Set_Index_Buffer(m_indexTerrain,0);
 	DX8Wrapper::Set_Vertex_Buffer(m_vertexTerrain);
+	// Ronin @bugfix 19/09/2026 DX9: bind our own layout (dx8wrapper.cpp:3403 keeps the LAST bound FVF). This buffer is
+	// XYZDUV1 or XYZDUV2 depending on the path, so read the format back from it rather than naming one.
+	DX8Wrapper::BindLayoutFVF(m_vertexTerrain->FVF_Info().Get_FVF(), "W3DTerrainBackground::drawTerrain");
   if (!disableTextures) {
 		if (m_terrainTexture4X) {
 			DX8Wrapper::Set_Texture(1, m_terrainTexture4X);
@@ -785,6 +788,9 @@ void W3DTerrainBackground::drawVisiblePolys(RenderInfoClass & rinfo, Bool disabl
 	// Setup the vertex buffer, shader & texture.
 	DX8Wrapper::Set_Index_Buffer(m_indexTerrain,0);
 	DX8Wrapper::Set_Vertex_Buffer(m_vertexTerrain);
+	// Ronin @bugfix 19/09/2026 DX9: bind our own layout (dx8wrapper.cpp:3403 keeps the LAST bound FVF). This buffer is
+	// XYZDUV1 or XYZDUV2 depending on the path, so read the format back from it rather than naming one.
+	DX8Wrapper::BindLayoutFVF(m_vertexTerrain->FVF_Info().Get_FVF(), "W3DTerrainBackground::drawTerrain");
   if (!disableTextures) {
 		if (m_terrainTexture4X) {
 			DX8Wrapper::Set_Texture(0, m_terrainTexture4X);

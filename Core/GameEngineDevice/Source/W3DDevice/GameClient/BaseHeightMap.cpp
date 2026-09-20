@@ -2438,6 +2438,9 @@ void BaseHeightMapRenderObjClass::renderShoreLines(CameraClass *pCamera)
 		{
 			DX8Wrapper::Set_Index_Buffer(ib_access,0);
 			DX8Wrapper::Set_Vertex_Buffer(vb_access);
+			// Ronin @bugfix 19/09/2026 DX9: bind our own layout — Apply_Render_State_Changes keeps the LAST bound FVF
+			// (dx8wrapper.cpp:3403), so the shoreline drew with whatever the previous draw left.
+			DX8Wrapper::BindLayoutFVF(vb_access.FVF_Info().Get_FVF(), "BaseHeightMapRenderObjClass::drawShoreLine");
 			DX8Wrapper::Draw_Triangles(	0,indexCount/3, 0,	vertexCount);	//draw a quad, 2 triangles, 4 verts
 			m_numVisibleShoreLineTiles += indexCount/6;
 		}
@@ -2778,6 +2781,9 @@ flushVertexBuffer1:
 		{
 			DX8Wrapper::Set_Index_Buffer(ib_access,0);
 			DX8Wrapper::Set_Vertex_Buffer(vb_access);
+			// Ronin @bugfix 19/09/2026 DX9: bind our own layout — Apply_Render_State_Changes keeps the LAST bound FVF
+			// (dx8wrapper.cpp:3403), so the shoreline drew with whatever the previous draw left.
+			DX8Wrapper::BindLayoutFVF(vb_access.FVF_Info().Get_FVF(), "BaseHeightMapRenderObjClass::drawShoreLine");
 			DX8Wrapper::Draw_Triangles(	0,indexCount/3, 0,	vertexCount);	//draw a quad, 2 triangles, 4 verts
 			m_numVisibleShoreLineTiles += indexCount/6;
 		}

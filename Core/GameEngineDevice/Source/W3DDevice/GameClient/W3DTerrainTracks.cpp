@@ -899,8 +899,13 @@ Try improving the fit to vertical surfaces like cliffs.
 		DX8Wrapper::Set_Shader(m_shaderClass);
 		DX8Wrapper::Set_Index_Buffer(m_indexBuffer,0);
 		DX8Wrapper::Set_Vertex_Buffer(m_vertexBuffer);
+		// Ronin @bugfix 19/09/2026 DX9: bind our own layout. Apply_Render_State_Changes keeps the LAST bound FVF
+		// (dx8wrapper.cpp:3403) and only falls back to the buffer's own when nothing was ever bound, so these tracks were
+		// drawn with whatever the previous draw left — right stride on some maps, garbage on others.
+		DX8Wrapper::BindLayoutFVF(m_vertexBuffer->FVF_Info().Get_FVF(), "TerrainTracksRenderObjClassSystem::flush");
 
 		trackStartIndex=0;
+
 		mod=m_usedModules;
 		DX8Wrapper::Set_Transform(D3DTS_WORLD,mod->Transform);
 		while (mod)
