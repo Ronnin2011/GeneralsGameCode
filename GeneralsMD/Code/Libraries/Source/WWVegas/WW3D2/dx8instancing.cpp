@@ -1223,7 +1223,6 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		TheGlobalData->m_useCloudMap &&
 		(TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) &&
 		(m_srFVF & D3DFVF_DIFFUSE) == 0;
-		(m_srFVF & D3DFVF_DIFFUSE) == 0;
 	TextureClass* rigidCloudTex = cloudEnabled ? Get_Valid_Rigid_Cloud_Texture() : nullptr;
 	const bool cloudActive = cloudEnabled && (rigidCloudTex != nullptr);
 

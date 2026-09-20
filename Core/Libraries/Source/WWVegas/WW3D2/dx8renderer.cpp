@@ -2597,7 +2597,6 @@ void DX8TextureCategoryClass::Render()
 			!(!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT) && WW3D::Is_Sorting_Enabled()) &&
 			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ALIGNED) &&
 			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
-			!mesh->Peek_Model()->Get_Flag(MeshModelClass::ORIENTED) &&
 			// Ronin @perf 26/08/2026 DX9: §29i.5. Alpha-override meshes are normally excluded because a
 			// deferred flush reads the material AFTER the opacity restore, so they render opaque
 			// (materialStateIsTransient, :552). That is a COLOUR failure, and the depth pass has colour
