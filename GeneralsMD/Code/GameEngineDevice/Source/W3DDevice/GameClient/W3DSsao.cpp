@@ -14,6 +14,7 @@
 #include "WW3D2/texture.h"
 #include "Common/GlobalData.h"
 #include "W3DDevice/GameClient/W3DSsao.h"
+#include "W3DDevice/GameClient/W3DTaa.h"	// Ronin @feature 27/09/2026 DX9: trees AO follows TAA
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 2. The two tuning knobs, in world units and as a multiplier.
 static const float AO_RADIUS    = 20.0f;
@@ -59,6 +60,9 @@ static IDirect3DPixelShader9	*s_showPS           = NULL;
 static Bool						s_shadersTried      = FALSE;
 static Bool						s_activeThisFrame   = FALSE;
 static Bool						s_aoReadyThisFrame  = FALSE;
+// Ronin @feature 27/09/2026 DX9: `ssao trees` - AUTO (default) runs the pass after the trees only while TAA runs, so its
+// history smooths the foliage flicker; without TAA or under MSAA the pass stays before them, as on 14/09.
+static Int						s_aoTrees           = W3DSsao::TREES_AUTO;
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 3a. Half-resolution ping-pong pair. TextureClass render targets, so
 // DX8TextureManagerClass recreates them across a device reset — the shadow map's colour targets rely on the same.
@@ -292,9 +296,17 @@ void W3DSsao::beginFrame(void)
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 3a. Everything solid is in the depth buffer and nothing see-through has drawn.
 // Raw AO into target 0, then the depth-aware blur across into target 1 and down back into target 0.
-void W3DSsao::renderPass(const CameraClass &camera)
+void W3DSsao::setTrees(Int mode) { s_aoTrees = (mode < 0) ? TREES_AUTO : ((mode > 0) ? TREES_ON : TREES_OFF); }
+Int  W3DSsao::getTrees(void)     { return s_aoTrees; }
+Bool W3DSsao::treesNow(void)
 {
-	if (!s_activeThisFrame)
+	// TAA decides isActive in its beginFrame, which runs before the scene draws this pass.
+	return (s_aoTrees == TREES_ON || (s_aoTrees == TREES_AUTO && W3DTaa::isActive())) ? TRUE : FALSE;
+}
+
+void W3DSsao::renderPass(const CameraClass &camera, Bool afterTrees)
+{
+	if (!s_activeThisFrame || afterTrees != treesNow())
 		return;
 
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();

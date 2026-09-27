@@ -25,7 +25,13 @@ public:
 
 
 	static void beginFrame(void);							// after WW3D::Begin_Render, before the views draw
-	static void renderPass(const CameraClass &camera);		// RTS3DScene::Flush after the trees, main pass only
+	// Ronin @feature 26/09/2026 DX9: called twice by RTS3DScene::Flush, before and after the trees; runs at the one matching
+	// the trees mode. Trees get AO only where something smooths their flicker (the 14/09 reason for running before them).
+	static void renderPass(const CameraClass &camera, Bool afterTrees = FALSE);
+	enum { TREES_AUTO = -1, TREES_OFF = 0, TREES_ON = 1 };	// Ronin @feature 27/09/2026 DX9: AUTO = while TAA runs
+	static void setTrees(Int mode);
+	static Int  getTrees(void);
+	static Bool treesNow(void);								// what the mode resolves to this frame
 	static void endFrame(void);								// gives the device its own depth buffer back
 	static void drawDebugView(const CameraClass *camera);	// after endFrame — a bound depth buffer cannot be read
 	static Int  getQuality(void);							// TheGlobalData->m_ssaoQuality, 0 when unavailable
