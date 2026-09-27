@@ -92,7 +92,7 @@ GlobalData* GlobalData::m_theOriginal = nullptr;
 	{ "MultiPassTerrain",					INI::parseBool,				nullptr,			offsetof( GlobalData, m_multiPassTerrain ) },
 	{ "AdjustCliffTextures",			INI::parseBool,				nullptr,			offsetof( GlobalData, m_adjustCliffTextures ) },
 	{ "Use3WayTerrainBlends",			INI::parseInt,				nullptr,			offsetof( GlobalData, m_use3WayTerrainBlends ) },
-	{ "UseS20PerMaterialSplat",		INI::parseBool,				nullptr,			offsetof(GlobalData, m_useS20PerMaterialSplat) },
+	{ "DX9UseS20PerMaterialSplat",		INI::parseBool,				nullptr,			offsetof(GlobalData, m_useS20PerMaterialSplat) },
 	{ "StretchTerrain",						INI::parseBool,				nullptr,			offsetof( GlobalData, m_stretchTerrain ) },
 	{ "UseHalfHeightMap",					INI::parseBool,				nullptr,			offsetof( GlobalData, m_useHalfHeightMap ) },
 
@@ -107,8 +107,8 @@ GlobalData* GlobalData::m_theOriginal = nullptr;
 	{ "UseShadowVolumes",						INI::parseBool,				nullptr,			offsetof( GlobalData, m_useShadowVolumes ) },
 	{ "UseShadowDecals",						INI::parseBool,				nullptr,			offsetof( GlobalData, m_useShadowDecals ) },
 	// Ronin @feature 23/08/2026 DX9: §29i.2. GameData.ini default; Options.ini overrides it later.
-	{ "ShadowQuality",							INI::parseInt,				nullptr,			offsetof( GlobalData, m_shadowMapQuality ) },
-	{ "SSAOQuality",							INI::parseInt,				nullptr,			offsetof( GlobalData, m_ssaoQuality ) },
+	{ "DX9ShadowQuality",							INI::parseInt,				nullptr,			offsetof( GlobalData, m_shadowMapQuality ) },
+	{ "DX9SSAOQuality",							INI::parseInt,				nullptr,			offsetof( GlobalData, m_ssaoQuality ) },
 	{ "TextureReductionFactor",			INI::parseInt,				nullptr,			offsetof( GlobalData, m_textureReductionFactor ) },
 	{ "UseBehindBuildingMarker",		INI::parseBool,				nullptr,			offsetof( GlobalData, m_enableBehindBuildingMarkers ) },
 	{ "WaterPositionX",							INI::parseReal,				nullptr,			offsetof( GlobalData, m_waterPositionX ) },
@@ -652,7 +652,7 @@ GlobalData::GlobalData()
 	// @feature Ronin 12/05/2026 Normal-map N6: POM defaults. ON by default -- the visual win
 	// at close camera is large and the cost is bounded (raymarch is faded out beyond
 	// m_terrainPOMFadeEnd, completely skipped if g_normalParams.x == 0 i.e. no _NRM assets).
-	// Players on coal burning GPUs can flip UseTerrainPOM=No in INI.
+	// Players on coal burning GPUs can flip DX9UseTerrainPOM=No in INI.
 	m_useTerrainPOM = TRUE;
 	m_terrainPOMHeightScale = 3.0f;     // raymarch depth in MAP_XY_FACTOR units
 	m_terrainPOMFadeStart = 0.0f;   // world units; tune empirically
@@ -676,7 +676,7 @@ GlobalData::GlobalData()
 	m_useShadowVolumes = FALSE;
 	m_useShadowDecals = FALSE;
 	// Ronin @feature 24/08/2026 DX9: §29i.2. 2 = High = 2048 / 1200, i.e. exactly what shipped before the
-	// ladder existed, so an install with no ShadowQuality key does not change behaviour. 
+	// ladder existed, so an install with no DX9ShadowQuality key does not change behaviour. 
 	m_shadowMapQuality = 2;
 	// Ronin @feature 13/09/2026 DX9: SSAO. Off unless the player picks it — no cost for anyone who has not.
 	m_ssaoQuality = 0;
@@ -1262,7 +1262,7 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	// Ronin @feature 23/08/2026 DX9: §29i.2. Same rule — Options.ini wins over GameData.ini, and an
 	// absent key returns the value GameData already parsed, so the two sources compose.
 	TheWritableGlobalData->m_shadowMapQuality = optionPref.getShadowQuality(TheGlobalData->m_shadowMapQuality);
-	// Ronin @feature 13/09/2026 DX9: SSAO. Same rule as ShadowQuality — Options.ini wins, an absent key keeps GameData's value.
+	// Ronin @feature 13/09/2026 DX9: SSAO. Same rule as DX9ShadowQuality — Options.ini wins, an absent key keeps GameData's value.
 	TheWritableGlobalData->m_ssaoQuality = optionPref.getSSAOQuality(TheGlobalData->m_ssaoQuality);
 	// Ronin @feature 26/09/2026 DX9: TAA. Same rule.
 	TheWritableGlobalData->m_taaEnabled = optionPref.getTAA(TheGlobalData->m_taaEnabled);

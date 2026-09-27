@@ -2893,7 +2893,7 @@ void HeightMapRenderObjClass::renderTerrainPass(CameraClass *pCamera)
 // =====================================================================
 
 // @feature Ronin 29/04/2026 Splat S20-A2d2: render the live per-material terrain
-// splat pass. This pass is entered only when `UseS20PerMaterialSplat` is enabled
+// splat pass. This pass is entered only when `DX9UseS20PerMaterialSplat` is enabled
 // and `ST_TERRAIN_PER_MATERIAL` is available.
 // When the per-material path is not active, terrain stays
 // on the original `ST_TERRAIN_BASE*` renderer in `Render()`.

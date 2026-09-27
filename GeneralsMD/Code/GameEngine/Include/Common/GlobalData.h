@@ -180,9 +180,9 @@ public:
 	Bool m_useShadowDecals;
 	// Ronin @feature 24/08/2026 DX9: §29i.2. 0=Off 1=Normal 2=High 3=Ultra. Drives resolution in
 	// W3DShadowMap; 0 leaves the map path off entirely and the stencil volumes / decals in charge.
-	// Options.ini key: ShadowQuality. Low and Medium merged into Normal — they measured identical.
+	// Options.ini key: DX9ShadowQuality. Low and Medium merged into Normal — they measured identical.
 	Int  m_shadowMapQuality;
-	// Ronin @feature 13/09/2026 DX9: SSAO. 0=Off 1=Normal 2=High 3=Ultra; Options.ini key SSAOQuality. Off by default.
+	// Ronin @feature 13/09/2026 DX9: SSAO. 0=Off 1=Normal 2=High 3=Ultra; Options.ini key DX9SSAOQuality. Off by default.
 	Int  m_ssaoQuality;
 	// Ronin @feature 26/09/2026 DX9: TAA; Options.ini key DX9TAA = yes|no. Off by default, and never runs under MSAA.
 	Bool m_taaEnabled;

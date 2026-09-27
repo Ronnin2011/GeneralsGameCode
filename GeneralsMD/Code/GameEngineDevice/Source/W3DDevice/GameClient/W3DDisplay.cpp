@@ -2005,7 +2005,7 @@ static void drawSceneDepthReadout(Bool visible)
 	Int aoW = 0, aoH = 0;
 	W3DSsao::getTargetSize(&aoW, &aoH);
 	// Ronin @diagnostic 20/09/2026 DX9: aoRes/samples prove a quality change actually took effect. The tiers differ
-	// subtly by eye, so read the numbers, not the picture: they must change when SSAOQuality does.
+	// subtly by eye, so read the numbers, not the picture: they must change when DX9SSAOQuality does.
 	text.format(L"[DEPTH] ssao=%d  intz=%d  active=%d  aa=%d  aoRes=%dx%d  samples=%d",
 		W3DSsao::getQuality(),
 		W3DSsao::isSupported() ? 1 : 0,

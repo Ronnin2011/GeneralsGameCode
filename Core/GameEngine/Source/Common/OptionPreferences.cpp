@@ -719,7 +719,7 @@ Bool OptionPreferences::getBuildingOcclusionEnabled()
 
 Bool OptionPreferences::getSplatPerMaterialEnabled() const
 {
-	OptionPreferences::const_iterator it = find("UseS20PerMaterialSplat");
+	OptionPreferences::const_iterator it = find("DX9UseS20PerMaterialSplat");
 	if (it == end())
 		return TheGlobalData->m_useS20PerMaterialSplat;
 
@@ -731,7 +731,7 @@ Bool OptionPreferences::getSplatPerMaterialEnabled() const
 
 Bool OptionPreferences::getTerrainPOMEnabled() const
 {
-	OptionPreferences::const_iterator it = find("UseTerrainPOM");
+	OptionPreferences::const_iterator it = find("DX9UseTerrainPOM");
 	if (it == end())
 		return TheGlobalData->m_useTerrainPOM;
 
@@ -741,11 +741,11 @@ Bool OptionPreferences::getTerrainPOMEnabled() const
 	return FALSE;
 }
 
-// Ronin @feature 24/08/2026 DX9: §29i.2. ShadowQuality = Off|Normal|High|Ultra, or 0..3.
+// Ronin @feature 24/08/2026 DX9: §29i.2. DX9ShadowQuality = Off|Normal|High|Ultra, or 0..3.
 // Names first — that is how StaticGameLOD reads — with an integer fallback so a raw number works too.
 Int OptionPreferences::getShadowQuality(Int dflt) const
 {
-	OptionPreferences::const_iterator it = find("ShadowQuality");
+	OptionPreferences::const_iterator it = find("DX9ShadowQuality");
 	if (it == end())
 		return dflt;
 
@@ -767,10 +767,10 @@ Int OptionPreferences::getShadowQuality(Int dflt) const
 	return level;
 }
 
-// Ronin @feature 13/09/2026 DX9: SSAO. SSAOQuality = Off|Normal|High|Ultra, or 0..3 — the same shape as ShadowQuality.
+// Ronin @feature 13/09/2026 DX9: SSAO. DX9SSAOQuality = Off|Normal|High|Ultra, or 0..3 — the same shape as DX9ShadowQuality.
 Int OptionPreferences::getSSAOQuality(Int dflt) const
 {
-	OptionPreferences::const_iterator it = find("SSAOQuality");
+	OptionPreferences::const_iterator it = find("DX9SSAOQuality");
 	if (it == end())
 		return dflt;
 
