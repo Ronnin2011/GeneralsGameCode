@@ -3655,22 +3655,28 @@ void W3DModelDraw::reactToTransformChange( const Matrix3D* oldMtx,
 		m_renderObject->Set_Transform(mtx);
 	}
 
+	// Ronin @bugfix 16/09/2026 DX9: obj is null on a drawable with no object — the dozer's build cursor and the debug panel's
+	// spawn ghost. The stealth test read through it; only a vehicle reached here, since structures have no track marks. A
+	// preview also has no business laying tracks, so with no object we skip the whole thing.
 	if (m_trackRenderObject)
 	{
 		Object *obj = getDrawable()->getObject();
 		const Coord3D* pos = getDrawable()->getPosition();
 
-		if ( m_fullyObscuredByShroud || obj->testStatus( OBJECT_STATUS_STEALTHED ) == TRUE )
+		if (obj != nullptr)
 		{
-				m_trackRenderObject->addCapEdgeToTrack(pos->x, pos->y);
-		}
-		else
-		{
-			if (obj && obj->isSignificantlyAboveTerrain())
+			if ( m_fullyObscuredByShroud || obj->testStatus( OBJECT_STATUS_STEALTHED ) == TRUE )
 			{
-				m_trackRenderObject->setAirborne();
+					m_trackRenderObject->addCapEdgeToTrack(pos->x, pos->y);
 			}
-			m_trackRenderObject->addEdgeToTrack(pos->x, pos->y);
+			else
+			{
+				if (obj->isSignificantlyAboveTerrain())
+				{
+					m_trackRenderObject->setAirborne();
+				}
+				m_trackRenderObject->addEdgeToTrack(pos->x, pos->y);
+			}
 		}
 	}
 }
