@@ -34,6 +34,10 @@
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "W3DDevice/GameClient/W3DSsao.h"
 #include "Common/GlobalData.h"		// Ronin @feature 26/09/2026 DX9: Options.ini DX9TAA keys
+#include "W3DDevice/GameClient/W3DShadowMap.h"	// Ronin @bugfix 27/09/2026 DX9: the sun matrix, for the moving-shadow mask
+#include "GameClient/Drawable.h"				// Ronin @bugfix 27/09/2026 DX9: idle infantry - which object a mesh belongs to
+#include "GameClient/DrawableInfo.h"
+#include "Common/KindOf.h"
 
 Bool W3DTaa::s_enabled = FALSE;
 
@@ -84,14 +88,19 @@ enum { TAA_MESH_BITS = 12, TAA_MESH_SLOTS = 1 << TAA_MESH_BITS, TAA_MAX_MESH_DRA
 // Ronin @feature 26/09/2026 DX9: §14 stage 2 - a SKIN keeps its deformed WORLD positions for two frames in skin[]
 // (skinCur = this frame's). W3D deforms skins on the CPU, so there is no transform to diff.
 struct TaaMeshSlot { const void *key; Matrix3D prev; UnsignedInt stamp; UnsignedInt movedStamp;
-                     Vector3 *skin[2]; Int skinCap; Int skinCount; Int skinCur; };
+                     Vector3 *skin[2]; Int skinCap; Int skinCount; Int skinCur;
+                     Matrix3D prevRoot; UnsignedInt rootStamp; };	// Ronin @bugfix 27/09/2026 DX9: its object's transform
 struct TaaMeshDraw { MeshClass *mesh; Matrix3D cur; Matrix3D prev; Int kind;
                      const Vector3 *skinCur; const Vector3 *skinPrev; };	// skinCur NULL = rigid
 // Ronin @feature 24/09/2026 DX9: REACTIVE MASK. What a motion vector cannot describe: a texture scrolling on a still
 // surface (treads, conveyors - the engine's own time-variant mappers) and a MOVING translucent layer (a rotor), which
 // writes no depth. Flagged in the velocity alpha: 0 none, 0.4 reactive, 0.7 velocity + reactive, 1.0 velocity.
 // "a > 0.5 = velocity" still holds for every existing reader.
-enum { TAA_KIND_VEL = 0, TAA_KIND_VEL_REACT, TAA_KIND_REACT, TAA_KIND_TRANSLUCENT, TAA_KIND_STILL, TAA_KIND_GHOST };	// STILL: alpha 0.15
+enum { TAA_KIND_VEL = 0, TAA_KIND_VEL_REACT, TAA_KIND_REACT, TAA_KIND_TRANSLUCENT, TAA_KIND_STILL, TAA_KIND_GHOST,
+       TAA_KIND_VEL_IDLE };	// STILL: alpha 0.15
+// Ronin @bugfix 27/09/2026 DX9: VEL_IDLE (alpha 0.92) = a soldier standing still whose mesh only breathes. debug 15 measured it:
+// his head moves as far per frame as a flag near its pole, so distance cannot tell them apart; what he IS can. The resolve
+// keeps `taa disoccv` for him alone (resetting every breath popped his edges) and the shadow mask leaves him out.
 // Ronin @bugfix 27/09/2026 DX9: GHOST (alpha 0.3) = a MOVING runtime-translucent preview, or the placement bib. The resolve
 // keeps no history under it and resets where it just was; REACTIVE's single clamp let busy grass admit its grey edges.
 enum { TAA_MODEL_BITS = 10, TAA_MODEL_SLOTS = 1 << TAA_MODEL_BITS };
@@ -138,6 +147,113 @@ static IDirect3DVertexShader9 *s_velMeshVS = NULL;
 static IDirect3DVertexShader9 *s_velSkinVS = NULL;	// Ronin @feature 26/09/2026 DX9: §14 stage 2
 static IDirect3DPixelShader9  *s_velMeshPS = NULL;
 
+// Ronin @bugfix 27/09/2026 DX9: MOVING-SHADOW MASK (`taa shadowmask`). A mesh that moved casts a shadow that moved, onto still
+// ground with no motion vector and no depth change: the trail. Every mesh that moved this frame is drawn from the sun's view
+// (the shadow map's far cascade covers the whole view): its depth where it is now into RG, where it was last frame into BA.
+// The resolve clamps still pixels in or near that shadow, now or last frame. Not a threshold on colour.
+// Ronin @bugfix 27/09/2026 DX9: 2048 and 4096 were tried and changed nothing visible.
+enum { MOVER_MAP_RES = 1024 };
+// Ronin @bugfix 27/09/2026 DX9: world units round a moving shadow that are still treated; 4 and 8 were tried, no change.
+static const float MOVER_MARGIN_WORLD = 1.5f;
+static const float MOVER_BIAS_WORLD   = 1.0f;	// world units along the sun between a caster and what it shades
+static Bool            s_moverOn     = TRUE;		// `taa shadowmask 0|1`
+static Bool            s_moverCap    = TRUE;		// Ronin @bugfix 27/09/2026 DX9: `taa maskcap 0|1` - half weight where it changed
+static Bool            s_moverFailed = FALSE;	// targets could not be made; stop retrying
+static TextureClass   *s_moverTex    = NULL;
+static ZTextureClass  *s_moverZ      = NULL;
+static IDirect3DPixelShader9 *s_moverPS = NULL;
+static Bool            s_moverOK     = FALSE;	// drawn this frame
+static Int             s_moverDraws  = 0;		// meshes drawn into it this frame
+static float           s_moverToSunT[16];		// resolve c12..c15: screen clip -> sun clip, transposed
+static float           s_moverParams[4];		// resolve c16: x = bound, y = half texel, z = dilation (uv), w = depth bias
+
+// Ronin @diagnostic 27/09/2026 DX9: GPU TIME of postRender and of the mask pass, from timestamp queries read GPU_RING frames
+// later so nothing waits. The game is frame-capped, so fps cannot show what TAA costs. Shown on the [TAA] row.
+enum { GPU_RING = 4, GPU_MARKS = 4 };	// marks: 0 postRender start, 1 mask start, 2 mask end, 3 postRender end
+struct TaaGpuFrame { IDirect3DQuery9 *disjoint; IDirect3DQuery9 *freq; IDirect3DQuery9 *t[GPU_MARKS]; Bool issued; };
+static TaaGpuFrame s_gpu[GPU_RING];
+static Int   s_gpuSlot    = 0;
+static Bool  s_gpuOK      = FALSE;
+static float s_gpuTotalMs = -1.0f;
+static float s_gpuMaskMs  = -1.0f;
+
+static void gpuRelease(void)
+{
+	for (Int i = 0; i < GPU_RING; ++i)
+	{
+		TaaGpuFrame &f = s_gpu[i];
+		if (f.disjoint != NULL) { f.disjoint->Release(); f.disjoint = NULL; }
+		if (f.freq     != NULL) { f.freq->Release();     f.freq     = NULL; }
+		for (Int m = 0; m < GPU_MARKS; ++m)
+			if (f.t[m] != NULL) { f.t[m]->Release(); f.t[m] = NULL; }
+		f.issued = FALSE;
+	}
+	s_gpuOK = FALSE;
+}
+
+static void gpuCreate(IDirect3DDevice9 *dev)
+{
+	gpuRelease();
+	Bool ok = TRUE;
+	for (Int i = 0; i < GPU_RING && ok; ++i)
+	{
+		TaaGpuFrame &f = s_gpu[i];
+		ok = SUCCEEDED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMPDISJOINT, &f.disjoint)) &&
+			 SUCCEEDED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMPFREQ, &f.freq));
+		for (Int m = 0; m < GPU_MARKS && ok; ++m)
+			ok = SUCCEEDED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.t[m]));
+	}
+	if (ok)
+		s_gpuOK = TRUE;
+	else
+		gpuRelease();		// no timestamp support: the row shows n/a
+}
+
+static void gpuMark(Int m)
+{
+	if (s_gpuOK)
+		s_gpu[s_gpuSlot].t[m]->Issue(D3DISSUE_END);
+}
+
+// Reads this slot's previous frame, if the GPU has finished it, then opens it for this frame.
+static void gpuBegin(void)
+{
+	if (!s_gpuOK)
+		return;
+	TaaGpuFrame &f = s_gpu[s_gpuSlot];
+	if (f.issued)
+	{
+		BOOL   disjoint = TRUE;
+		UINT64 freq = 0, t[GPU_MARKS] = { 0, 0, 0, 0 };
+		Bool   ready = (f.disjoint->GetData(&disjoint, sizeof(disjoint), 0) == S_OK) &&
+					   (f.freq->GetData(&freq, sizeof(freq), 0) == S_OK);
+		for (Int m = 0; m < GPU_MARKS && ready; ++m)
+			ready = (f.t[m]->GetData(&t[m], sizeof(UINT64), 0) == S_OK);
+		if (ready && !disjoint && freq > 0 && t[3] >= t[0] && t[2] >= t[1])
+		{
+			const float total = (float)((double)(t[3] - t[0]) * 1000.0 / (double)freq);
+			const float mask  = (float)((double)(t[2] - t[1]) * 1000.0 / (double)freq);
+			s_gpuTotalMs = (s_gpuTotalMs < 0.0f) ? total : (s_gpuTotalMs * 0.9f + total * 0.1f);
+			s_gpuMaskMs  = (s_gpuMaskMs  < 0.0f) ? mask  : (s_gpuMaskMs  * 0.9f + mask  * 0.1f);
+		}
+		f.issued = FALSE;
+	}
+	f.disjoint->Issue(D3DISSUE_BEGIN);
+	f.t[0]->Issue(D3DISSUE_END);
+}
+
+static void gpuEnd(void)
+{
+	if (!s_gpuOK)
+		return;
+	TaaGpuFrame &f = s_gpu[s_gpuSlot];
+	f.t[3]->Issue(D3DISSUE_END);
+	f.freq->Issue(D3DISSUE_END);
+	f.disjoint->Issue(D3DISSUE_END);
+	f.issued  = TRUE;
+	s_gpuSlot = (s_gpuSlot + 1) % GPU_RING;
+}
+
 
 // Ronin @bugfix 23/09/2026 DX9: the 3D camera, cached in preRender. The view-projection is built from THIS, not
 // read off the device - see the note at the capture site.
@@ -159,6 +275,16 @@ float W3DTaa::getMipBias(void)        { return s_mipBias; }
 float W3DTaa::getSharpen(void)        { return s_sharpen; }
 void  W3DTaa::setClamp(float v)       { s_clamp = taaKnob(v, 0.0f, 1.0f, 1.0f); }
 float W3DTaa::getClamp(void)          { return s_clamp; }
+void  W3DTaa::setShadowMask(Bool on)  { s_moverOn = on; }
+Bool  W3DTaa::getShadowMask(void)     { return s_moverOn; }
+void  W3DTaa::setMaskCap(Bool on)     { s_moverCap = on; }
+Bool  W3DTaa::getMaskCap(void)        { return s_moverCap; }
+Int   W3DTaa::getShadowMaskDraws(void) { return s_moverOK ? s_moverDraws : -1; }
+void  W3DTaa::getGpuMs(float *total, float *mask)
+{
+	if (total != NULL) *total = s_gpuOK ? s_gpuTotalMs : -1.0f;
+	if (mask  != NULL) *mask  = s_gpuOK ? s_gpuMaskMs  : -1.0f;
+}
 
 
 void  W3DTaa::setWeight(float w)    { s_weight = taaKnob(w, 0.0f, 0.99f, 0.9f); s_historyValid = FALSE; }
@@ -306,7 +432,6 @@ static UnsignedInt   s_historyW     = 0;
 static UnsignedInt   s_historyH     = 0;
 static Int           s_historyIndex  = 0;
 
-Bool W3DTaa::getVelocityOK(void)   { return s_lastVelOK; }
 Int  W3DTaa::getMoverCount(void)   { return s_meshDrawCount; }
 Int  W3DTaa::getMeshSeen(void)     { return s_meshSeen; }
 void  W3DTaa::setReactive(float w) { s_reactiveW = taaKnob(w, 0.0f, 1.0f, 0.5f); }
@@ -432,6 +557,7 @@ static TaaMeshSlot *findMeshSlot(const void *key)
 	freeSlot->stamp      = 0;		// 0 = no previous transform yet
 	freeSlot->movedStamp = 0;
 	freeSlot->skinCount  = 0;		// buffers kept for reuse, contents invalid
+	freeSlot->rootStamp  = 0;
 	return freeSlot;
 }
 
@@ -593,6 +719,24 @@ void W3DTaa::noteMesh(MeshClass *mesh)
 	// Without it every pixel of a unit that just stopped read as vacated ground and reset: a second of shimmer.
 	else if (movedLast)
 		kind = TAA_KIND_STILL;
+	// Ronin @bugfix 27/09/2026 DX9: IDLE INFANTRY - the mesh moved but its object did not: the top render object (the one the
+	// scene holds, carrying the DrawableInfo) kept last frame's transform. Last frame's must be known, else it counts as moving.
+	if (kind == TAA_KIND_VEL)
+	{
+		RenderObjClass *top = mesh;
+		while (top->Get_Container() != NULL)
+			top = top->Get_Container();
+		const Matrix3D root = top->Get_Transform();
+		Bool rootStill = (sl->rootStamp != 0 && s_moverFrame - sl->rootStamp == 1) ? TRUE : FALSE;
+		for (Int r = 0; r < 3 && rootStill; ++r)
+			for (Int c = 0; c < 4; ++c)
+				if (fabsf(root[r][c] - sl->prevRoot[r][c]) > 1.0e-4f) { rootStill = FALSE; break; }
+		sl->prevRoot  = root;
+		sl->rootStamp = s_moverFrame;
+		const DrawableInfo *di = (const DrawableInfo *)top->Get_User_Data();
+		if (rootStill && di != NULL && di->m_drawable != NULL && di->m_drawable->isKindOf(KINDOF_INFANTRY))
+			kind = TAA_KIND_VEL_IDLE;
+	}
 	if (isSkin && kind == TAA_KIND_TRANSLUCENT)
 		kind = -1;		// skins draw after the translucent pass; none are translucent in practice
 	if (kind < 0 || s_meshDrawCount >= TAA_MAX_MESH_DRAWS)
@@ -607,7 +751,7 @@ void W3DTaa::noteMesh(MeshClass *mesh)
 	d.skinPrev = skinPrev;
 	if (isSkin)
 		++s_skinDrawCount;
-	if (kind != TAA_KIND_VEL && kind != TAA_KIND_STILL)
+	if (kind != TAA_KIND_VEL && kind != TAA_KIND_STILL && kind != TAA_KIND_VEL_IDLE)
 		++s_reactCount;
 }
 void W3DTaa::setVelocity(Bool on)  { s_velocityOn = on; }
@@ -800,6 +944,15 @@ static void ensureShaders(IDirect3DDevice9 *dev)
 			s_depthStorePS = NULL;
 		HeapFree(GetProcessHeap(), 0, blob);
 	}
+	// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask's pixel shader, and the GPU timer's queries.
+	blob = readShaderBlob("shaders\\TaaMoverLight.pso");
+	if (blob != NULL)
+	{
+		if (FAILED(dev->CreatePixelShader(blob, &s_moverPS)))
+			s_moverPS = NULL;
+		HeapFree(GetProcessHeap(), 0, blob);
+	}
+	gpuCreate(dev);
 }
 
 // Ronin @bugfix 20/09/2026 DX9: the filter is per stage and the difference matters.
@@ -817,6 +970,149 @@ static void setResolveSampler(IDirect3DDevice9 *dev, DWORD stage, Bool linearFil
 	dev->SetSamplerState(stage, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
 	dev->SetSamplerState(stage, D3DSAMP_ADDRESSU,  D3DTADDRESS_CLAMP);
 	dev->SetSamplerState(stage, D3DSAMP_ADDRESSV,  D3DTADDRESS_CLAMP);
+}
+
+// Ronin @bugfix 27/09/2026 DX9: POOL_DEFAULT through TextureClass/ZTextureClass, so DX8TextureManagerClass recreates both across
+// a device reset, like the shadow map's own pair.
+static Bool ensureMoverTargets(void)
+{
+	if (s_moverTex != NULL && s_moverZ != NULL)
+		return TRUE;
+	if (s_moverFailed)
+		return FALSE;
+	s_moverTex = NEW_REF(TextureClass, (MOVER_MAP_RES, MOVER_MAP_RES, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1,
+										TextureClass::POOL_DEFAULT, true));
+	s_moverZ   = NEW_REF(ZTextureClass, (MOVER_MAP_RES, MOVER_MAP_RES, WW3D_ZFORMAT_D24S8, MIP_LEVELS_1,
+										 TextureClass::POOL_DEFAULT));
+	if (s_moverTex->Peek_D3D_Base_Texture() == NULL || s_moverZ->Peek_D3D_Base_Texture() == NULL)
+	{
+		REF_PTR_RELEASE(s_moverTex);
+		REF_PTR_RELEASE(s_moverZ);
+		s_moverFailed = TRUE;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+// Ronin @bugfix 27/09/2026 DX9: draws the moving-shadow mask (see s_moverOn) and fills the resolve's c12..c16 for it. Only meshes
+// that MOVED: velocity, velocity + reactive and a moving ghost (the placement preview). Leaves the resolve's state as it was.
+static void renderMoverMask(IDirect3DDevice9 *dev, const D3DVIEWPORT9 &vp, Bool haveDepth)
+{
+	s_moverOK    = FALSE;
+	s_moverDraws = 0;
+	if (!s_moverOn || !haveDepth || !TheUseShadowMaps || !W3DShadowMap::isAvailable() || W3DShadowMap::getSplitCount() < 1 ||
+		s_meshDrawCount <= 0 || s_velMeshVS == NULL || s_moverPS == NULL || !s_curViewProjValid)
+		return;
+	Int movers = 0;
+	for (Int k = 0; k < s_meshDrawCount; ++k)
+	{
+		const Int kind = s_meshDraws[k].kind;
+		if (kind == TAA_KIND_VEL || kind == TAA_KIND_VEL_REACT || kind == TAA_KIND_GHOST)
+			++movers;
+	}
+	if (movers == 0 || !ensureMoverTargets())
+		return;
+
+	// Stored TRANSPOSED and ready to upload (W3DShadowMap.cpp, the capture after each split's render); back to row-vector.
+	const Matrix4x4 &sunStored = W3DShadowMap::getLightViewProj(W3DShadowMap::getSplitCount() - 1);
+	D3DXMATRIX sunT((const float *)&sunStored), sun;
+	D3DXMatrixTranspose(&sun, &sunT);
+
+	IDirect3DSurface9 *cSurf  = s_moverTex->Get_D3D_Surface_Level();
+	IDirect3DSurface9 *zSurf  = s_moverZ->Get_D3D_Surface_Level();
+	IDirect3DSurface9 *prevRT = NULL;
+	IDirect3DSurface9 *prevDS = NULL;
+	if (cSurf != NULL && zSurf != NULL && SUCCEEDED(dev->GetRenderTarget(0, &prevRT)) && prevRT != NULL)
+	{
+		dev->GetDepthStencilSurface(&prevDS);		// may be NULL
+		if (SUCCEEDED(dev->SetRenderTarget(0, cSurf)) && SUCCEEDED(dev->SetDepthStencilSurface(zSurf)))
+		{
+			// White = depth 1 on both pairs = nothing between the sun and anything.
+			dev->Clear(0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER, D3DCOLOR_ARGB(255, 255, 255, 255), 1.0f, 0);
+			dev->SetRenderState(D3DRS_ZENABLE,      D3DZB_TRUE);
+			dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+			dev->SetRenderState(D3DRS_ZFUNC,        D3DCMP_LESSEQUAL);
+			DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ, "W3DTaa::moverMask");
+			dev->SetVertexShader(s_velMeshVS);		// AFTER the layout bind - it clears the VS
+			dev->SetPixelShader(s_moverPS);
+			for (Int pass = 0; pass < 2; ++pass)		// 0 = where it is now (RG), 1 = where it was (BA)
+			{
+				if (pass == 1)
+					dev->Clear(0, NULL, D3DCLEAR_ZBUFFER, 0, 1.0f, 0);
+				dev->SetRenderState(D3DRS_COLORWRITEENABLE, (pass == 0)
+					? (D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN)
+					: (D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA));
+				for (Int k = 0; k < s_meshDrawCount; ++k)
+				{
+					TaaMeshDraw &md = s_meshDraws[k];
+					if (md.kind != TAA_KIND_VEL && md.kind != TAA_KIND_VEL_REACT && md.kind != TAA_KIND_GHOST)
+						continue;
+					MeshModelClass *mdl = md.mesh->Peek_Model();
+					if (mdl == NULL)
+						continue;
+					const Int vcount = mdl->Get_Vertex_Count();
+					const Int pcount = mdl->Get_Polygon_Count();
+					const TriIndex *polys = mdl->Get_Polygon_Array();
+					if (vcount <= 0 || pcount <= 0 || vcount > 65535 || polys == NULL)	// 16-bit indices
+						continue;
+					const Vector3 *verts = NULL;
+					D3DXMATRIX m;
+					if (md.skinCur != NULL)
+					{
+						verts = (pass == 0) ? md.skinCur : md.skinPrev;	// skins are already in world space
+						m     = sun;
+					}
+					else
+					{
+						verts = mdl->Get_Vertex_Array();
+						D3DXMATRIX w(To_D3DMATRIX((pass == 0) ? md.cur : md.prev));
+						D3DXMatrixMultiply(&m, &w, &sun);
+					}
+					if (verts == NULL)
+						continue;
+					D3DXMATRIX mT;
+					D3DXMatrixTranspose(&mT, &m);
+					dev->SetVertexShaderConstantF(0, (const float *)&mT, 4);
+					dev->SetVertexShaderConstantF(4, (const float *)&mT, 4);	// TaaVelMesh.vso's second output, unused
+					dev->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, (UINT)vcount, (UINT)pcount,
+												polys, D3DFMT_INDEX16, verts, sizeof(Vector3));
+					if (pass == 0)
+						++s_moverDraws;
+				}
+			}
+		}
+		dev->SetRenderTarget(0, prevRT);
+		dev->SetDepthStencilSurface(prevDS);
+		dev->SetRenderState(D3DRS_ZENABLE,      FALSE);
+		dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+		dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
+													D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
+		dev->SetViewport(&vp);		// SetRenderTarget reset it to the whole target
+		DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::postRender");
+		dev->SetVertexShader(s_quadVS);
+		dev->SetPixelShader(s_resolvePS);
+	}
+	if (prevRT != NULL) prevRT->Release();
+	if (prevDS != NULL) prevDS->Release();
+	if (cSurf  != NULL) cSurf->Release();
+	if (zSurf  != NULL) zSurf->Release();
+
+	// The resolve rebuilds each pixel's position from the scene depth: screen clip -> world -> sun clip, in one matrix.
+	D3DXMATRIX inv, toSun, toSunT;
+	if (s_moverDraws > 0 && D3DXMatrixInverse(&inv, NULL, &s_curViewProjClean) != NULL)
+	{
+		D3DXMatrixMultiply(&toSun, &inv, &sun);
+		D3DXMatrixTranspose(&toSunT, &toSun);
+		memcpy(s_moverToSunT, &toSunT, sizeof(s_moverToSunT));
+		// Sun clip units per world unit, across (x) and along the light (z) - ortho, so constant everywhere.
+		const float sx = sqrtf(sun._11 * sun._11 + sun._21 * sun._21 + sun._31 * sun._31);
+		const float sz = sqrtf(sun._13 * sun._13 + sun._23 * sun._23 + sun._33 * sun._33);
+		s_moverParams[0] = s_moverCap ? 2.0f : 1.0f;	// 2 = also cap the weight where the shadow changed
+		s_moverParams[1] = 0.5f / (float)MOVER_MAP_RES;
+		s_moverParams[2] = MOVER_MARGIN_WORLD * sx * 0.5f;		// clip spans 2 across the map, uv spans 1
+		s_moverParams[3] = MOVER_BIAS_WORLD * sz;
+		s_moverOK = TRUE;
+	}
 }
 
 void W3DTaa::shutdown(void)
@@ -844,6 +1140,13 @@ void W3DTaa::shutdown(void)
 	s_skinScratch    = NULL;
 	s_skinScratchCap = 0;
 	if (s_velMeshPS != NULL) { s_velMeshPS->Release(); s_velMeshPS = NULL; }
+	// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask and the GPU timer.
+	if (s_moverPS != NULL) { s_moverPS->Release(); s_moverPS = NULL; }
+	REF_PTR_RELEASE(s_moverTex);
+	REF_PTR_RELEASE(s_moverZ);
+	s_moverOK     = FALSE;
+	s_moverFailed = FALSE;
+	gpuRelease();
 	MeshClass::Set_Taa_Mesh_Note_Func(NULL);
 	s_shadersTried = FALSE;
 
@@ -971,6 +1274,7 @@ void W3DTaa::postRender(void)
 	WW3D::Get_Render_Target_Resolution(fbW, fbH, bits, windowed);
 	if (fbW <= 0 || fbH <= 0 || vp.Width == 0 || vp.Height == 0)
 		return;
+	gpuBegin();		// Ronin @diagnostic 27/09/2026 DX9: every return below this point is past gpuEnd
 
 	DWORD oldZ = 0, oldZW = 0, oldAB = 0, oldAT = 0, oldCull = 0, oldCW = 0;
 	dev->GetRenderState(D3DRS_ZENABLE,          &oldZ);
@@ -1129,13 +1433,14 @@ void W3DTaa::postRender(void)
 						continue;
 					if (md.kind != boundKind)
 					{
-						static const float kindC12[6][4] = {
+						static const float kindC12[7][4] = {
 							{ 1.0f, 0.0f, 0.0f, 0.0f },		// velocity
 							{ 0.7f, 0.0f, 0.0f, 0.0f },		// velocity + reactive
 							{ 0.4f, 0.0f, 1.0f, 0.0f },		// reactive, opaque
 							{ 0.4f, 1.0f, 1.0f, 0.0f },		// reactive, translucent: writes no depth, so one-sided
 							{ 0.15f, 0.0f, 1.0f, 0.0f },	// still: stopped this frame, present but no mover
-							{ 0.3f,  1.0f, 1.0f, 0.0f } };	// ghost: moving runtime-translucent, one-sided, reset by the resolve
+							{ 0.3f,  1.0f, 1.0f, 0.0f },		// ghost: moving runtime-translucent, one-sided, reset by the resolve
+							{ 0.92f, 0.0f, 0.0f, 0.0f } };	// Ronin @bugfix 27/09/2026 DX9: idle infantry - velocity, flagged
 						dev->SetPixelShaderConstantF(12, kindC12[md.kind], 1);
 						boundKind = md.kind;
 					}
@@ -1189,9 +1494,10 @@ void W3DTaa::postRender(void)
 							continue;
 						if (md.kind != boundKind)
 						{
-							static const float skinC12[6][4] = {
+							static const float skinC12[7][4] = {
 								{ 1.0f, 0.0f, 0.0f, 0.0f }, { 0.7f, 0.0f, 0.0f, 0.0f }, { 0.4f, 0.0f, 1.0f, 0.0f },
-								{ 0.4f, 1.0f, 1.0f, 0.0f }, { 0.15f, 0.0f, 1.0f, 0.0f }, { 0.3f, 1.0f, 1.0f, 0.0f } };	// as kindC12 above
+								{ 0.4f, 1.0f, 1.0f, 0.0f }, { 0.15f, 0.0f, 1.0f, 0.0f }, { 0.3f, 1.0f, 1.0f, 0.0f },
+								{ 0.92f, 0.0f, 0.0f, 0.0f } };	// as kindC12 above
 							dev->SetPixelShaderConstantF(12, skinC12[md.kind], 1);
 							boundKind = md.kind;
 						}
@@ -1225,6 +1531,11 @@ void W3DTaa::postRender(void)
 		dev->SetPixelShader(s_resolvePS);
 	}
 
+	// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask - after the velocity pass (it reads the same mover list), before
+	// the resolve reads it. Timed on its own.
+	gpuMark(1);
+	renderMoverMask(dev, vp, (depthTex != NULL) ? TRUE : FALSE);
+	gpuMark(2);
 
 	dev->SetTexture(0, sceneTex);
 	setResolveSampler(dev, 0);
@@ -1278,6 +1589,16 @@ void W3DTaa::postRender(void)
 				}
 				const float c11[4] = { 0.0f, 0.0f, s_disoccV, useAuto ? s_autoReact : 0.0f };
 				dev->SetPixelShaderConstantF(11, c11, 1);	// likewise after the velocity pass
+				// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask at s3, screen clip -> sun clip at c12..c15, its params at
+				// c16 (x = 0: not drawn this frame, the resolve skips it). After the velocity pass, which used c12.
+				static const float moverOff[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				if (s_moverOK)
+				{
+					dev->SetTexture(3, s_moverTex->Peek_D3D_Texture());
+					setResolveSampler(dev, 3);		// POINT - packed depths
+					dev->SetPixelShaderConstantF(12, s_moverToSunT, 4);
+				}
+				dev->SetPixelShaderConstantF(16, s_moverOK ? s_moverParams : moverOff, 1);
 
 				if (s_lastVelOK && s_velTex != NULL)
 				{
@@ -1299,6 +1620,7 @@ void W3DTaa::postRender(void)
 				dev->SetTexture(5, NULL);
 				dev->SetTexture(6, NULL);
 				dev->SetTexture(7, NULL);
+				dev->SetTexture(3, NULL);
 				wroteHistory = TRUE;
 			}
 			curSurf->Release();
@@ -1372,6 +1694,8 @@ void W3DTaa::postRender(void)
 		s_velTex     = t;
 		s_prevVelOK  = s_lastVelOK;
 	}
+
+	gpuEnd();		// Ronin @diagnostic 27/09/2026 DX9: closes gpuBegin's frame
 
 	dev->SetVertexShader(NULL);
 	dev->SetPixelShader(NULL);

@@ -66,7 +66,8 @@ public:
 	static Bool isActive(void);
 
 	// Ronin @diagnostic 20/09/2026 DX9: runtime knobs (`taa <knob> <value>`).
-	// weight - history cap; debug - 1 reproj delta, 2 depth, 3 samples, 4 history, 13 velocity/reactive mask;
+	// weight - history cap; debug - 1 reproj delta, 2 depth, 3 samples, 4 history, 13 velocity/reactive mask, 14 moving-shadow
+	// mask, 15 mesh motion per frame;
 	// sharpen - CAS strength 0..1 on the way to the screen, 0 = off; clamp - neighbourhood clamp strength where there is evidence of change.
 	static void  setWeight(float w);
 	static float getWeight(void);
@@ -79,13 +80,20 @@ public:
 	static float getMipBias(void);
 	static void  setClamp(float v);
 	static float getClamp(void);
+	// Ronin @bugfix 27/09/2026 DX9: shadowmask - clamp still pixels in or near a moving mesh's shadow, on/off.
+	static void  setShadowMask(Bool on);
+	static Bool  getShadowMask(void);
+	static void  setMaskCap(Bool on);		// Ronin @bugfix 27/09/2026 DX9: half history weight where a moving shadow changed
+	static Bool  getMaskCap(void);
+	static Int   getShadowMaskDraws(void);	// meshes drawn into the mask this frame, -1 = not drawn
+	// Ronin @diagnostic 27/09/2026 DX9: GPU ms of postRender and of the mask pass, smoothed; -1 = no timestamp queries.
+	static void  getGpuMs(float *total, float *mask);
 
 	// Ronin @feature 24/09/2026 DX9: §14 mesh motion vectors. MeshClass::Render reports every mesh it draws outside the
 	// shadow depth pass; a mesh that moved since last frame is re-drawn into the velocity target. vel - on/off.
 	static void noteMesh(MeshClass *mesh);
 	static void setVelocity(Bool on);
 	static Bool getVelocity(void);
-	static Bool getVelocityOK(void);
 	static Int  getMoverCount(void);		// meshes in the velocity pass this frame
 	static Int  getMeshSeen(void);
 
@@ -105,6 +113,7 @@ public:
 	static void  setDisocc(Int m);
 	static Int   getDisocc(void);
 	// Ronin @bugfix 26/09/2026 DX9: disoccv - a mover vacates a pixel only if it moved at least this many px (0 = any).
+	// Ronin @bugfix 27/09/2026 DX9: idle infantry only now (their breathing); every other mesh vacates at any distance.
 	static void  setDisoccV(float px);
 	static float getDisoccV(void);
 

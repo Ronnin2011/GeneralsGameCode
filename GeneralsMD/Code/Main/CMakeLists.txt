@@ -175,6 +175,10 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/TaaVelSkin.vso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/TaaVelSkin.vso"
+        # Ronin @build 27/09/2026 TAA — the moving-shadow mask (AntiAliasing_Work.md §18).
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TaaMoverLight.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TaaMoverLight.pso"
         COMMENT "Auto-deploying to Zero Hour installation folder"
 
 

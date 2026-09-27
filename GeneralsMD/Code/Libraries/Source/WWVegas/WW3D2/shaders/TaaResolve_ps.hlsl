@@ -25,6 +25,12 @@ float4   g_TaaDebug  : register(c6);     // x = debug view, yz = clip planes (th
 float4   g_TaaSharpen: register(c7);     // x = CAS strength (screen copy only), y = this frame's velocity is bound, w = clamp strength
 float4   g_TaaExtra  : register(c10);    // x = last frame's velocity is bound, y = `taa disocc` mode, z = `taa reactive`
 float4   g_TaaVel    : register(c11);    // z = `taa disoccv` px, w = `taa autoreact` threshold (0 = off or no snapshot)
+// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask (W3DTaa renderMoverMask) - sun depth of every mesh that moved this
+// frame, 16-bit packed: RG where it is now, BA where it was. c12..c15 take a screen clip position to the sun's.
+sampler2D g_MoverMap : register(s3);
+float4x4 g_ToSun     : register(c12);
+float4   g_MoverPrm  : register(c16);    // x = drawn this frame (2 = and `taa maskcap`), y = half texel, z = dilation (uv),
+                                         // w = depth bias
 
 // Ronin @feature 21/09/2026 DX9: Catmull-Rom history fetch, 9 taps.
 //
@@ -37,6 +43,12 @@ float4   g_TaaVel    : register(c11);    // z = `taa disoccv` px, w = `taa autor
 float unpackDepth(float4 enc)
 {
     return dot(enc.rgb, float3(1.0f, 1.0f / 255.0f, 1.0f / 65025.0f));
+}
+// Ronin @bugfix 27/09/2026 DX9: inverse of TaaMoverLight_ps's 16-bit pack.
+float unpack16(float2 e)
+{
+    float2 b = floor(e * 255.0f + 0.5f);
+    return (b.x * 256.0f + b.y) / 65535.0f;
 }
 
 float3 sampleHistoryCatmullRom(float2 uv, float2 texSize, float2 invTexSize)
@@ -97,6 +109,17 @@ float2 decodeVel(float4 vm)
     float  loY = b.z - loX * 16.0f;
     float2 e   = float2(b.x * 16.0f + loX, b.y * 16.0f + loY);
     return (e / 4095.0f - 0.5f) * 128.0f;
+}
+
+// Ronin @bugfix 27/09/2026 DX9: did the mesh in this velocity sample move away from the pixel? Idle infantry (alpha 0.92, a
+// soldier standing still, only breathing) need `taa disoccv` px - resetting every breath popped their edges. Any other mesh
+// vacates at any distance: a flag near its pole moves as little as a breath (debug 15), and kept its old edge - the outline.
+float vacates(float4 v, float2 camPx)
+{
+    if (v.a <= 0.5f)
+        return 0.0f;
+    float need = (v.a > 0.88f && v.a < 0.96f) ? g_TaaVel.z : 0.0f;
+    return (length(decodeVel(v) - camPx) >= need) ? 1.0f : 0.0f;
 }
 
 // Ronin @feature 26/09/2026 DX9: AMD FidelityFX CAS (contrast adaptive sharpening), the non-scaling form. Sharpens less
@@ -309,7 +332,24 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
             return float4(1.0f, 0.0f, 1.0f, 0.0f);
         if (da < 0.85f)
             return float4(1.0f, 1.0f, 0.0f, 0.0f);
+        if (da < 0.96f)
+            return float4(0.6f, 0.6f, 1.0f, 0.0f);		// Ronin @bugfix 27/09/2026 DX9: LAVENDER - idle infantry (breathing only)
         return float4(0.0f, 1.0f, 0.0f, 0.0f);
+    }
+
+    // Ronin @diagnostic 27/09/2026 DX9: DEBUG 15 - how far each moving mesh moved THIS frame, in pixels, camera motion removed.
+    // Measures whether breathing infantry and a waving flag separate by distance. Dim = no mesh velocity here.
+    // < 0.05 navy, < 0.1 blue, < 0.2 cyan, < 0.35 green, < 0.5 yellow, < 1 orange, 1+ red.
+    if (g_TaaDebug.x > 14.5f && g_TaaDebug.x < 15.5f)
+    {
+        float4 vm15 = (g_TaaSharpen.y > 0.5f) ? tex2Dlod(g_Velocity, float4(uv, 0.0f, 0.0f)) : float4(0.0f, 0.0f, 0.0f, 0.0f);
+        if (vm15.a <= 0.5f)
+            return float4(scene * 0.25f, 0.0f);
+        float  m15 = length(decodeVel(vm15) - (uv - camHistUV) / max(g_TaaParams.yz, 0.000001f));
+        float3 c15 = (m15 < 0.05f) ? float3(0.0f, 0.0f, 0.5f) : (m15 < 0.1f) ? float3(0.0f, 0.3f, 1.0f) :
+                     (m15 < 0.2f)  ? float3(0.0f, 1.0f, 1.0f) : (m15 < 0.35f) ? float3(0.0f, 1.0f, 0.0f) :
+                     (m15 < 0.5f)  ? float3(1.0f, 1.0f, 0.0f) : (m15 < 1.0f)  ? float3(1.0f, 0.5f, 0.0f) : float3(1.0f, 0.0f, 0.0f);
+        return float4(c15, 0.0f);
     }
 
     // ---- neighbourhood clamp ------------------------------------------------------------------------------------
@@ -359,7 +399,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
     // x9 into a smear. Motion vectors get the history approximately right and the clamp bounds the rest - the standard
     // pairing. A static pole never gets a velocity, so this does not bring its flicker back. `taa clamp 0` for an A/B.
     float clampNeed = saturate(max(max(speedPx * 0.5f, velTaken), reactive));
-    history = lerp(history, clamped, g_TaaSharpen.w * clampNeed);
+    // Ronin @bugfix 27/09/2026 DX9: applied after the depth block, which adds the moving-shadow band (`taa shadowmask 1`).
 
     // ---- history weight: a per-pixel sample counter ---------------------------------------------------------------
     // Ronin @feature 22/09/2026 DX9: CONFIDENCE ACCUMULATION, per the literature. Two parts, and both matter:
@@ -375,6 +415,9 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
     float curLinZ  = 0.0f;
     float prevLinZ = 0.0f;
     float depthBad = 0.0f;
+    float moverAny   = 0.0f;	// Ronin @bugfix 27/09/2026 DX9: in or near a moving shadow, now or last frame
+    float moverBand  = 0.0f;	// Ronin @bugfix 27/09/2026 DX9: near where a moving shadow arrived or left this frame
+    float moverIn    = 0.0f;	// in a moving shadow now (debug 14 only)
     if (g_TaaParams.w > 0.0f)
     {
         float dRaw = tex2Dlod(g_Depth, float4(uv, 0.0f, 0.0f)).r;
@@ -405,6 +448,38 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 
         float tol  = max(curLinZ * 0.01f, 0.5f);
         depthBad   = saturate((bestRev - tol) / max(tol, 0.0001f));
+
+        // Ronin @bugfix 27/09/2026 DX9: MOVING SHADOWS (`taa shadowmask`). A still pixel in or near the shadow of a mesh that moved,
+        // this frame or last, can have had its lighting changed by it - the trail carries no velocity and no depth change.
+        // Evidence from the geometry, not from colour: a fence or grass that only shimmers under the jitter is never in it.
+        // Still ground and buildings only - a mover's own pixels keep their velocity. Five taps widen it by c16.z.
+        if (g_MoverPrm.x > 0.5f)
+        {
+            float isMesh = (g_TaaSharpen.y > 0.5f) ? tex2Dlod(g_Velocity, float4(uv, 0.0f, 0.0f)).a : 0.0f;
+            if (isMesh < 0.1f)
+            {
+                float2 sn  = (uv - g_Viewport.xy) / g_Viewport.zw;
+                float4 sc  = mul(float4(sn.x * 2.0f - 1.0f, 1.0f - sn.y * 2.0f, dRaw, 1.0f), g_ToSun);
+                float3 sp  = sc.xyz / sc.w;
+                float2 suv = sp.xy * float2(0.5f, -0.5f) + 0.5f + g_MoverPrm.y;
+                if (suv.x > 0.0f && suv.x < 1.0f && suv.y > 0.0f && suv.y < 1.0f)
+                {
+                    float  rz  = sp.z - g_MoverPrm.w;		// in shadow = a caster nearer the sun than this, by the bias
+                    float  dl  = g_MoverPrm.z;
+                    float2 offs[5] = { float2(0.0f, 0.0f), float2(dl, 0.0f), float2(-dl, 0.0f), float2(0.0f, dl), float2(0.0f, -dl) };
+                    [unroll] for (int k = 0; k < 5; ++k)
+                    {
+                        float4 e   = tex2Dlod(g_MoverMap, float4(suv + offs[k], 0.0f, 0.0f));
+                        float  inN = (rz > unpack16(e.rg)) ? 1.0f : 0.0f;
+                        float  inP = (rz > unpack16(e.ba)) ? 1.0f : 0.0f;
+                        moverAny   = max(moverAny, max(inN, inP));
+                        moverBand  = max(moverBand, abs(inN - inP));
+                        if (k == 0)
+                            moverIn = inN;
+                    }
+                }
+            }
+        }
     }
 
     // n lives in alpha, normalised by TAA_MAX_N. Camera motion counts as evidence too, the same as before.
@@ -435,7 +510,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
         // off was reset: the dark outline in debug 3, the popping edges. Object motion = its velocity minus the camera's.
         float2 camPx    = (uv - camHistUV) / max(g_TaaParams.yz, 0.000001f);
         float4 wm       = tex2Dlod(g_VelPrev, float4(camHistUV, 0.0f, 0.0f));
-        float  wasMover = (wm.a > 0.5f && length(decodeVel(wm) - camPx) >= g_TaaVel.z) ? 1.0f : 0.0f;
+        float  wasMover = vacates(wm, camPx);
         if (wasMover > 0.5f && isHere < 0.1f)
             disocc = 1.0f;
         // Ronin @bugfix 27/09/2026 DX9: a ghost left this pixel. It has no velocity, so the mover test above never fires.
@@ -456,11 +531,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
             float4 n1 = tex2Dlod(g_VelPrev, float4(camHistUV - tx, 0.0f, 0.0f));
             float4 n2 = tex2Dlod(g_VelPrev, float4(camHistUV + ty, 0.0f, 0.0f));
             float4 n3 = tex2Dlod(g_VelPrev, float4(camHistUV - ty, 0.0f, 0.0f));
-            float wasNear = 0.0f;		// a neighbour that MOVED at least `taa disoccv` px, as above
-            if (n0.a > 0.5f && length(decodeVel(n0) - camPx) >= g_TaaVel.z) wasNear = 1.0f;
-            if (n1.a > 0.5f && length(decodeVel(n1) - camPx) >= g_TaaVel.z) wasNear = 1.0f;
-            if (n2.a > 0.5f && length(decodeVel(n2) - camPx) >= g_TaaVel.z) wasNear = 1.0f;
-            if (n3.a > 0.5f && length(decodeVel(n3) - camPx) >= g_TaaVel.z) wasNear = 1.0f;
+            // a neighbour whose mesh moved away, by the same rule as above
+            float wasNear = max(max(vacates(n0, camPx), vacates(n1, camPx)), max(vacates(n2, camPx), vacates(n3, camPx)));
             // Ronin @bugfix 27/09/2026 DX9: and a ghost's edge band, the preview's outline left in the jittered history.
             if ((n0.a > 0.25f && n0.a < 0.35f) || (n1.a > 0.25f && n1.a < 0.35f) ||
                 (n2.a > 0.25f && n2.a < 0.35f) || (n3.a > 0.25f && n3.a < 0.35f)) wasNear = 1.0f;
@@ -476,13 +548,30 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
                 disocc = 1.0f;
         }
     }
+    // Ronin @bugfix 27/09/2026 DX9: the WHOLE moving shadow is clamped, now and last frame. Not only the band where it changed:
+    // the mask is a separate drawing of the unit whose edge is not the real shadow's, and a pixel the band missed kept its lit
+    // history - white pixels inside the shadow. Not reset: that showed the raw frame, pixelated. Tested in game: no trail, no
+    // white pixels, no shimmer under moving shadows.
+    history = lerp(history, clamped, g_TaaSharpen.w * saturate(max(clampNeed, moverAny)));
     float invalid  = saturate(max(max(depthBad, motion), disocc));
+    // Ronin @bugfix 27/09/2026 DX9: DEBUG 14 - the moving-shadow mask. BLUE = in a moving mesh's shadow now, RED = clamped (in or
+    // near one now or last frame), YELLOW = also weight-capped (`taa maskcap`). Returned from pass 1, like 13.
+    if (g_TaaDebug.x > 13.5f && g_TaaDebug.x < 14.5f)
+    {
+        float3 dbg14 = lerp(scene * 0.25f + float3(0.0f, 0.0f, 0.45f) * moverIn, float3(1.0f, 0.0f, 0.0f), moverAny);
+        return float4((g_MoverPrm.x > 1.5f && moverBand > 0.5f) ? float3(1.0f, 1.0f, 0.0f) : dbg14, 0.0f);
+    }
     float n        = max(histAlpha * TAA_MAX_N, 1.0f);
     n              = lerp(min(n + 1.0f, TAA_MAX_N), 1.0f, invalid);
     // The caller's weight caps how much history a converged pixel may keep, so `taa weight` still means something.
     float effWeight = min(1.0f - 1.0f / n, g_TaaParams.x);
     if (reactive > 0.5f)
         effWeight = min(effWeight, g_TaaExtra.z);
+    // Ronin @bugfix 27/09/2026 DX9: where a moving shadow arrived or left this frame (`taa maskcap`), keep at most half the
+    // history - the rotor's treatment. The clamp alone left a faint trail on grass: its box holds dark blades, so a faint old
+    // shadow looked plausible there (none on the road, whose box is tight). Not a reset: that showed the raw frame.
+    if (g_MoverPrm.x > 1.5f && moverBand > 0.5f)
+        effWeight = min(effWeight, 0.5f);
 
 
     // DEBUG 4: the history WITHOUT the current frame mixed in — effWeight forced to 1. If the pole is steady here but
