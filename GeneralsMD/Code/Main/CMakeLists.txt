@@ -155,7 +155,28 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/SsaoShow.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/SsaoShow.pso"
+                # Ronin @build 20/09/2026 TAA — the resolve pass.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TaaResolve.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TaaResolve.pso"
+        # Ronin @build 23/09/2026 TAA — the depth history. This is the history-validation signal; a stale one
+        # silently disables it.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TaaDepthStore.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TaaDepthStore.pso"
+        # Ronin @build 24/09/2026 TAA — motion vectors drawn from the meshes (§14).
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TaaVelMesh.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TaaVelMesh.vso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TaaVelMesh.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TaaVelMesh.pso"
+        # Ronin @build 26/09/2026 TAA — skinned-mesh velocity (infantry), §14 stage 2.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TaaVelSkin.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TaaVelSkin.vso"
         COMMENT "Auto-deploying to Zero Hour installation folder"
+
 
 
     )

@@ -68,6 +68,8 @@
 #include "GameClient/TerrainVisual.h"
 #include "GameClient/Water.h"
 
+#include "W3DDevice/GameClient/W3DTaa.h"
+
 #include "GameLogic/AI.h"			///< For AI debug (yes, I'm cheating for now)
 #include "GameLogic/AIPathfind.h"			///< For AI debug (yes, I'm cheating for now)
 #include "GameLogic/ExperienceTracker.h"
@@ -873,6 +875,8 @@ void W3DView::init()
 
 	// create our 3D camera
 	m_3DCamera = NEW_REF( CameraClass, () );
+	// Ronin @feature 20/09/2026 DX9: TAA jitters ONLY the main 3D view. docs/AntiAliasing_Work.md.
+	m_3DCamera->Enable_TAA_Jitter(true);
 
 	// create our 2D camera for the GUI overlay
 	m_2DCamera = NEW_REF( CameraClass, () );
@@ -1867,6 +1871,11 @@ void W3DView::draw()
 
 	if (!skipRender)
 	{
+		// Ronin @feature 20/09/2026 DX9: TAA step 2. Redirect the scene into a texture so the resolve can read it back.
+		// The camera comes in so preRender can snapshot the UNJITTERED view-projection for next frame's reprojection.
+		// Returns FALSE and does nothing when TAA is off, or when a view filter above already took the redirect.
+		const Bool taaRedirected = W3DTaa::preRender(*m_3DCamera);
+
 		// Render 3D scene from our camera
 		W3DDisplay::m_3DScene->setCustomPassMode(customScenePassMode);
 		if (m_isWireFrameEnabled)
@@ -1874,6 +1883,10 @@ void W3DView::draw()
 		W3DDisplay::m_3DScene->doRender( m_3DCamera );
 		W3DDisplay::m_3DScene->Set_Extra_Pass_Polygon_Mode(SceneClass::EXTRA_PASS_DISABLE);
 		m_isWireFrameEnabled = m_nextWireFrameEnabled;
+
+		// Back to the frame buffer, then resolve the scene texture against the history. A no-op if preRender declined.
+		if (taaRedirected)
+			W3DTaa::postRender();
 	}
 
 	if (m_viewFilterMode &&

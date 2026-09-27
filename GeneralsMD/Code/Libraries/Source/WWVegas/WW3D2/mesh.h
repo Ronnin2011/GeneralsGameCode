@@ -184,6 +184,12 @@ public:
 	static void						Set_In_Shadow_Depth_Pass(bool b) { s_InShadowDepthPass = b; }
 	static bool						s_InShadowDepthPass;
 
+	// Ronin @feature 24/09/2026 DX9: TAA motion vectors. Every mesh drawn outside the shadow depth pass reports
+	// itself; TAA keeps its previous world transform and re-draws the ones that moved. docs/AntiAliasing_Work.md §14.
+	typedef void					(*TaaMeshNoteFunc)(MeshClass *mesh);
+	static void						Set_Taa_Mesh_Note_Func(TaaMeshNoteFunc fn) { s_TaaMeshNote = fn; }
+	static TaaMeshNoteFunc			s_TaaMeshNote;
+
 protected:
 
 	virtual void					Add_Dependencies_To_List (DynamicVectorClass<StringClass> &file_list, bool textures_only = false) override;

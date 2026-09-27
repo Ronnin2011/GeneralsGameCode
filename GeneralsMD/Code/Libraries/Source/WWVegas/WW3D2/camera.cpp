@@ -74,6 +74,7 @@
 #include <d3d9.h>  // Native DX9
 
 #include "camera.h"
+#include "W3DDevice/GameClient/W3DTaa.h"	// Ronin @feature 20/09/2026 DX9: TAA jitter
 #include "ww3d.h"
 #include "WWMath/matrix4.h"
 #include "dx8wrapper.h"
@@ -99,6 +100,7 @@ CameraClass::CameraClass() :
 	ZFar(1000.0f),										// far clip plane distance
 	ZBufferMin(0.0f),									// smallest value we'll write into the z-buffer
 	ZBufferMax(1.0f),									// largest value we'll write into the z-buffer
+	TAAJitter(false),									// Ronin @feature 20/09/2026 DX9: off unless the main view opts in
 	FrustumValid(false)
 {
 	Set_Transform(Matrix3D(true));
@@ -133,7 +135,8 @@ CameraClass::CameraClass(const CameraClass & src) :
 	CameraInvTransform(src.CameraInvTransform),
 	AspectRatio(src.AspectRatio),
 	ZBufferMin(src.ZBufferMin),
-	ZBufferMax(src.ZBufferMax)
+	ZBufferMax(src.ZBufferMax),
+	TAAJitter(src.TAAJitter)
 {
 	// just being paranoid in case any parent class doesn't completely copy the entire state...
 	FrustumValid = false;
@@ -751,6 +754,23 @@ void CameraClass::Apply()
 
 	Matrix4x4 d3dprojection;
 	Get_D3D_Projection_Matrix(&d3dprojection);
+
+	// Ronin @feature 20/09/2026 DX9: TAA subpixel jitter. It goes in HERE and nowhere else: d3dprojection is a LOCAL
+	// copy, so ProjectionTransform stays clean and picking, placement, culling and Get_View_Plane all keep the
+	// unjittered matrix. Row[0][2] / Row[1][2] are the off-centre frustum terms (matrix4.h Init_Perspective), which is
+	// exactly where a constant NDC shift belongs — it survives the perspective divide at every depth.
+	if (TAAJitter)
+	{
+		// Ronin @diagnostic 24/09/2026 DX9: hand TAA the CLEAN matrices this camera is about to send, before the jitter
+		// goes in - what the scene is actually drawn with, not what the camera holds by the time postRender reads it.
+		W3DTaa::noteCameraApplied(d3dprojection, CameraInvTransform);
+
+		float jitterX = 0.0f, jitterY = 0.0f;
+		W3DTaa::getJitterNDC(&jitterX, &jitterY);
+		d3dprojection[0][2] += jitterX;
+		d3dprojection[1][2] += jitterY;
+	}
+
 	DX8Wrapper::Set_Projection_Transform_With_Z_Bias(d3dprojection,ZNear,ZFar);
 	DX8Wrapper::Set_Transform(D3DTS_VIEW,CameraInvTransform);
 }

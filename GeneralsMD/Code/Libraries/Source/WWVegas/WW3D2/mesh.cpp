@@ -129,6 +129,8 @@ bool MeshClass::Legacy_Meshes_Fogged = true;
 bool MeshClass::s_SkipBakedShadowCasters = false;
 // Ronin @bugfix 19/09/2026 DX9: set by W3DShadowMap so a mover mesh can mark itself in the moving-caster mask.
 MeshClass::ShadowMoverNoteFunc MeshClass::s_ShadowMoverNote = NULL;
+// Ronin @feature 24/09/2026 DX9: set by W3DTaa so every main-pass mesh can report itself for motion vectors (§14).
+MeshClass::TaaMeshNoteFunc MeshClass::s_TaaMeshNote = NULL;
 // Ronin @perf 26/08/2026 DX9: §29i.5 — FALSE except inside the shadow depth-pass scene render.
 bool MeshClass::s_InShadowDepthPass = false;
 static SimpleDynVecClass<uint32> temp_apt;
@@ -674,6 +676,12 @@ void MeshClass::Render(RenderInfoClass & rinfo)
 	WWPROFILE("Mesh::Render");
 	if (Is_Not_Hidden_At_All() == false) {
 		return;
+	}
+
+	// Ronin @feature 24/09/2026 DX9: TAA motion vectors, §14. Main pass only - the shadow depth pass renders the
+	// scene again for the light, and a second note would read back the transform the first one just stored.
+	if (s_TaaMeshNote != NULL && !s_InShadowDepthPass) {
+		s_TaaMeshNote(this);
 	}
 
 	// Ronin @perf 20/08/2026 DX9: §29j.8. This mesh is already in the static shadow bake, so the depth

@@ -54,6 +54,7 @@
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DShadowMap.h"
+#include "W3DDevice/GameClient/W3DTaa.h"
 #include "W3DDevice/GameClient/W3DSsao.h"
 #include "W3DDevice/GameClient/W3DShadowMapState.h"
 #include "W3DDevice/GameClient/W3DStatusCircle.h"
@@ -980,6 +981,12 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 
 	if (m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 		flushTranslucentObjects(rinfo);	//draw all translucent meshes which don't need per-polygon sorting.
+
+	// Ronin @feature 26/09/2026 DX9: TAA auto-reactive. Copy the frame before particles and sorted translucency; the
+	// resolve clamps wherever the final frame differs. Main pass only, same gate as the SSAO pass above.
+	if (!depthPass && !ShaderClass::Is_Backface_Culling_Inverted() && m_customPassMode == SCENE_PASS_DEFAULT &&
+		Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+		W3DTaa::noteOpaqueDone();
 
 	{
 		//USE_PERF_TIMER(translucentRender)

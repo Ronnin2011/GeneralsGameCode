@@ -126,6 +126,11 @@ public:
 	Int getShadowQuality(Int dflt) const;
 	// Ronin @feature 13/09/2026 DX9: SSAO. 0..3 (Off/Normal/High/Ultra), or `dflt` when absent — passed in for the same reason.
 	Int getSSAOQuality(Int dflt) const;
+	// Ronin @feature 26/09/2026 DX9: DX9TAA = yes|no, or `dflt` when absent — passed in for the same reason.
+	Bool getTAA(Bool dflt) const;
+	// Ronin @feature 26/09/2026 DX9: DX9TAASharpness = 0..1 (CAS) and DX9TAAMipBias = -2..0, or `dflt` when absent.
+	Real getTAASharpness(Real dflt) const;
+	Real getTAAMipBias(Real dflt) const;
 
 	Int getParticleCap();
 

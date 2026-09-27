@@ -64,6 +64,7 @@
 #include "WW3D2/coltype.h"
 #include "WW3D2/coltest.h"
 #include "WW3D2/assetmgr.h"
+#include "W3DDevice/GameClient/W3DTaa.h"	// Ronin @bugfix 26/09/2026 DX9: the placement bib is reported to TAA
 
 
 
@@ -971,6 +972,8 @@ void W3DTerrainVisual::addFactionBibDrawable(Drawable *factionBuilding, Bool hig
 		mtx->Transform_Vector(*mtx, corners[1], &corners[1]);
 		mtx->Transform_Vector(*mtx, corners[2], &corners[2]);
 		mtx->Transform_Vector(*mtx, corners[3], &corners[3]);
+		// Ronin @bugfix 26/09/2026 DX9: TAA flags the placement bib reactive, or it leaves a trail behind the cursor.
+		W3DTaa::noteCursorBib(corners);
 		m_terrainRenderObject->addTerrainBibDrawable(corners, factionBuilding->getID(), highlight);
 	}
 }

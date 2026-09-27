@@ -680,6 +680,11 @@ GlobalData::GlobalData()
 	m_shadowMapQuality = 2;
 	// Ronin @feature 13/09/2026 DX9: SSAO. Off unless the player picks it — no cost for anyone who has not.
 	m_ssaoQuality = 0;
+	// Ronin @feature 26/09/2026 DX9: TAA off unless Options.ini says DX9TAA = yes.
+	m_taaEnabled = FALSE;
+	// Ronin @feature 26/09/2026 DX9: TAA sharpening off, texture mip bias -1 (the usual pairing with native-resolution TAA).
+	m_taaSharpness = 0.0f;
+	m_taaMipBias = -1.0f;
 	m_textureReductionFactor = -1;
 	m_enableBehindBuildingMarkers = TRUE;
 	m_scriptDebug = FALSE;
@@ -1259,6 +1264,10 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_shadowMapQuality = optionPref.getShadowQuality(TheGlobalData->m_shadowMapQuality);
 	// Ronin @feature 13/09/2026 DX9: SSAO. Same rule as ShadowQuality — Options.ini wins, an absent key keeps GameData's value.
 	TheWritableGlobalData->m_ssaoQuality = optionPref.getSSAOQuality(TheGlobalData->m_ssaoQuality);
+	// Ronin @feature 26/09/2026 DX9: TAA. Same rule.
+	TheWritableGlobalData->m_taaEnabled = optionPref.getTAA(TheGlobalData->m_taaEnabled);
+	TheWritableGlobalData->m_taaSharpness = optionPref.getTAASharpness(TheGlobalData->m_taaSharpness);
+	TheWritableGlobalData->m_taaMipBias = optionPref.getTAAMipBias(TheGlobalData->m_taaMipBias);
 
 
 	Int val=optionPref.getGammaValue();

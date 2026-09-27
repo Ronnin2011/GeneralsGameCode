@@ -231,6 +231,11 @@ public:
 	// apply this camera's settings into d3d.
 	void								Apply();
 
+	// Ronin @feature 20/09/2026 DX9: TAA. Opt-in per camera, because Apply() runs for the light camera and the water
+	// reflection camera too and neither must be jittered. Only the main 3D view sets this. docs/AntiAliasing_Work.md.
+	void								Enable_TAA_Jitter(bool onoff) { TAAJitter = onoff; }
+	bool								Is_TAA_Jitter_Enabled() const { return TAAJitter; }
+
 	// utility class to convert to old space of 0..1
 	static void	Convert_Old(Vector3 &pos);
 
@@ -246,6 +251,7 @@ protected:
 	float								ZFar;				// far clip plane distance
 	float								ZBufferMin;		// smallest value we'll write into the z-buffer (usually 0.0)
 	float								ZBufferMax;		// largest value we'll write into the z-buffer (usually 1.0)
+	bool								TAAJitter;		// this camera takes the TAA subpixel offset in Apply()
 
 	mutable bool					FrustumValid;
 	mutable FrustumClass			Frustum;							// world-space frustum and clip planes

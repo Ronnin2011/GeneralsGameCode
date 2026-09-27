@@ -184,6 +184,11 @@ public:
 	Int  m_shadowMapQuality;
 	// Ronin @feature 13/09/2026 DX9: SSAO. 0=Off 1=Normal 2=High 3=Ultra; Options.ini key SSAOQuality. Off by default.
 	Int  m_ssaoQuality;
+	// Ronin @feature 26/09/2026 DX9: TAA; Options.ini key DX9TAA = yes|no. Off by default, and never runs under MSAA.
+	Bool m_taaEnabled;
+	// Ronin @feature 26/09/2026 DX9: Options.ini DX9TAASharpness (0..1, CAS) and DX9TAAMipBias (-2..0). Defaults 0 and -1.
+	Real m_taaSharpness;
+	Real m_taaMipBias;
 	Int  m_textureReductionFactor;	//how much to cut texture resolution: 2 is half, 3 is quarter, etc.
 	Bool m_enableBehindBuildingMarkers;
 	Real m_waterPositionX;

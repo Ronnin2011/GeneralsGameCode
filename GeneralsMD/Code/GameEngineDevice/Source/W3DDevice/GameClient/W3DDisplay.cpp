@@ -77,6 +77,7 @@ static void drawFramerateBar();
 // Ronin @feature 12/08/2026 DX9: §29 shadow-map render-to-texture pass.
 #include "W3DDevice/GameClient/W3DShadowMap.h"
 #include "W3DDevice/GameClient/W3DSsao.h"
+#include "W3DDevice/GameClient/W3DTaa.h"
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DScene.h"
@@ -477,6 +478,7 @@ W3DDisplay::~W3DDisplay()
 	{
 		W3DShaderManager::shutdown();
 		W3DSsao::shutdown();	// Ronin @feature 13/09/2026 DX9: SSAO step 1 — its shader, while the device exists
+		W3DTaa::shutdown();		// Ronin @feature 20/09/2026 DX9: TAA — resolve shader and history targets, likewise
 	}
 	m_assetManager->Free_Assets();
 	delete m_assetManager;
@@ -2395,6 +2397,10 @@ AGAIN:
 				// W3DSsao::endFrame, just before End_Render.
 				W3DSsao::beginFrame();
 
+				// Ronin @feature 20/09/2026 DX9: TAA. Advance the sample sequence once per frame, before any view draws —
+				// every camera's Apply() in this frame must see the SAME offset or the passes disagree by a subpixel.
+				W3DTaa::beginFrame();
+
 				// draw all views of the world
 				drawViews();
 
@@ -2516,6 +2522,9 @@ AGAIN:
 				// depth buffer cannot be read.
 				W3DSsao::endFrame();
 				W3DSsao::drawDebugView(primaryW3DView ? primaryW3DView->get3DCamera() : NULL);
+				// Ronin @feature 20/09/2026 DX9: TAA. Ends the INTZ buffer only if TAA was the one that started it —
+				// when SSAO is on it owns that lifetime and this is a no-op.
+				W3DTaa::endFrame();
 
 				// render is all done!
 				WW3D::End_Render();

@@ -787,6 +787,39 @@ Int OptionPreferences::getSSAOQuality(Int dflt) const
 	return level;
 }
 
+// Ronin @feature 26/09/2026 DX9: DX9TAA = yes|no. Absent returns `dflt`; this file also builds for Generals.
+Bool OptionPreferences::getTAA(Bool dflt) const
+{
+	OptionPreferences::const_iterator it = find("DX9TAA");
+	if (it == end())
+		return dflt;
+	return (stricmp(it->second.str(), "yes") == 0) ? TRUE : FALSE;
+}
+
+// Ronin @feature 26/09/2026 DX9: DX9TAASharpness = 0..1, the CAS strength. Absent returns `dflt`.
+Real OptionPreferences::getTAASharpness(Real dflt) const
+{
+	OptionPreferences::const_iterator it = find("DX9TAASharpness");
+	if (it == end())
+		return dflt;
+	Real v = (Real)atof(it->second.str());
+	if (v < 0.0f) v = 0.0f;
+	if (v > 1.0f) v = 1.0f;
+	return v;
+}
+
+// Ronin @feature 26/09/2026 DX9: DX9TAAMipBias = -2..0, the texture mip bias while TAA runs. Absent returns `dflt`.
+Real OptionPreferences::getTAAMipBias(Real dflt) const
+{
+	OptionPreferences::const_iterator it = find("DX9TAAMipBias");
+	if (it == end())
+		return dflt;
+	Real v = (Real)atof(it->second.str());
+	if (v < -2.0f) v = -2.0f;
+	if (v > 0.0f) v = 0.0f;
+	return v;
+}
+
 Int OptionPreferences::getParticleCap()
 {
 	OptionPreferences::const_iterator it = find("MaxParticleCount");
