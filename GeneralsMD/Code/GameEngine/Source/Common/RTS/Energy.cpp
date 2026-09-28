@@ -61,6 +61,7 @@ Energy::Energy()
 	m_energyConsumption = 0;
 	m_owner = nullptr;
 	m_powerSabotagedTillFrame = 0;
+	m_unlimited = FALSE;	// Ronin @feature 28/09/2026 DX9: debug panel `power`
 }
 
 //-----------------------------------------------------------------------------
@@ -79,6 +80,13 @@ Real Energy::getEnergySupplyRatio() const
 {
 	DEBUG_ASSERTCRASH(m_energyProduction >= 0 && m_energyConsumption >= 0, ("neg Energy numbers"));
 
+	// Ronin @feature 28/09/2026 DX9: debug panel `power 1` - at least full supply, whatever the plants or a saboteur say.
+	if( m_unlimited )
+	{
+		const Real ratio = (m_energyConsumption == 0) ? (Real)m_energyProduction : (Real)m_energyProduction / (Real)m_energyConsumption;
+		return (ratio > 1.0f) ? ratio : 1.0f;
+	}
+
 	if( TheGameLogic->getFrame() < m_powerSabotagedTillFrame )
 	{
 		//Power sabotaged, therefore no power, no ratio.
@@ -94,12 +102,24 @@ Real Energy::getEnergySupplyRatio() const
 //-------------------------------------------------------------------------------------------------
 Bool Energy::hasSufficientPower() const
 {
+	if( m_unlimited )
+		return TRUE;	// Ronin @feature 28/09/2026 DX9: debug panel `power 1`
+
 	if( TheGameLogic->getFrame() < m_powerSabotagedTillFrame )
 	{
 		//Power sabotaged, therefore no power.
 		return FALSE;
 	}
 	return m_energyProduction >= m_energyConsumption;
+}
+
+//-------------------------------------------------------------------------------------------------
+// Ronin @feature 28/09/2026 DX9: debug panel `power 0|1`. Brownout re-evaluated now, so buildings switch at once.
+void Energy::setUnlimited( Bool on )
+{
+	m_unlimited = on;
+	if( m_owner != nullptr )
+		m_owner->onPowerBrownOutChange( !hasSufficientPower() );
 }
 
 //-------------------------------------------------------------------------------------------------

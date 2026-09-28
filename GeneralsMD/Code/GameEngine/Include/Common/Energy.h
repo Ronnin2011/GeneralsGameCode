@@ -71,6 +71,7 @@ public:
 		m_energyProduction = 0;
 		m_energyConsumption = 0;
 		m_powerSabotagedTillFrame = 0;
+		m_unlimited = FALSE;	// Ronin @feature 28/09/2026 DX9: debug panel `power`
 		m_owner = owner;
 	}
 
@@ -98,6 +99,11 @@ public:
 	void setPowerSabotagedTillFrame( UnsignedInt frame ) { m_powerSabotagedTillFrame = frame; }
 	UnsignedInt getPowerSabotagedTillFrame() const { return m_powerSabotagedTillFrame; }
 
+	// Ronin @feature 28/09/2026 DX9: debug panel `power 1` - never short of power. Production and consumption stay real, so
+	// the power bar still shows them. Not saved.
+	void setUnlimited( Bool on );
+	Bool isUnlimited() const { return m_unlimited; }
+
 	/**
 		return the percentage of energy needed that we actually produce, as a 0.0 ... 1.0 fraction.
 	*/
@@ -118,5 +124,6 @@ private:
 	Int		m_energyProduction;		///< level of energy production, in kw
 	Int		m_energyConsumption;	///< level of energy consumption, in kw
 	UnsignedInt m_powerSabotagedTillFrame; ///< If power is sabotaged, the frame will be greater than now.
+	Bool	m_unlimited;			///< Ronin @feature 28/09/2026 DX9: debug panel `power 1`
 	Player *m_owner;						///< Tight pointer to the Player I am intrinsic to.
 };

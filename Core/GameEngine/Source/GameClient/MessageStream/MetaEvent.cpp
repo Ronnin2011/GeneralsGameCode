@@ -917,11 +917,12 @@ void MetaMap::generateMetaMap()
 		}
 	}
 	{
-		// Ronin @feature 14/09/2026 DX9: debug panel toggle, Ctrl+Shift+D unless CommandMap.ini already binds this message.
+		// Ronin @feature 14/09/2026 DX9: debug panel toggle, unless CommandMap.ini already binds this message.
+		// Ronin @bugfix 28/09/2026 DX9: Ctrl+Shift+Z. D is the Debug build's time-of-day key (CommandMapDebug.ini).
 		MetaMapRec *map = getMetaMapRec(GameMessage::MSG_META_TOGGLE_DEBUG_PANEL);
 		if (map->m_key == MK_NONE)
 		{
-			map->m_key = MK_D;
+			map->m_key = MK_Z;
 			map->m_transition = DOWN;
 			map->m_modState = SHIFT_CTRL;
 			map->m_usableIn = COMMANDUSABLE_EVERYWHERE;

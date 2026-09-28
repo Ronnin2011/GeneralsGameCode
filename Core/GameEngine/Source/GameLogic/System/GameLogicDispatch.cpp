@@ -586,6 +586,22 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 			break;
 		}
 #endif
+		case GameMessage::MSG_DEV_SPAWN_OBJECT:
+		{
+			onDevSpawnObject(msg);
+			break;
+		}
+		// Ronin @feature 28/09/2026 DX9: debug panel `credits` and `power`.
+		case GameMessage::MSG_DEV_ADD_CASH:
+		{
+			onDevAddCash(msg);
+			break;
+		}
+		case GameMessage::MSG_DEV_SET_POWER:
+		{
+			onDevSetPower(msg);
+			break;
+		}
 
 		case GameMessage::MSG_ENTER:
 		{
@@ -1467,6 +1483,78 @@ bool GameLogic::onDebugKillObject(MAYBE_UNUSED GameMessage *msg)
 }
 
 #endif
+
+// Ronin @feature 15/09/2026 DX9: debug panel `spawn` (templateID, location, count, playerIndex, angle). GameLogic creates the
+// objects, so a skirmish replay reproduces them. Never in LAN/online — the panel refuses there, and so does this.
+bool GameLogic::onDevSpawnObject(MAYBE_UNUSED GameMessage *msg)
+{
+	if (isInMultiplayerGame() || msg->getArgumentCount() < 4)
+		return false;
+
+	const ThingTemplate *thing = TheThingFactory->findByTemplateID( (UnsignedShort)msg->getArgument( 0 )->integer );
+	const Coord3D centre = msg->getArgument( 1 )->location;
+	Int count = msg->getArgument( 2 )->integer;
+	Player *owner = ThePlayerList->getNthPlayer( msg->getArgument( 3 )->integer );
+	// Ronin @feature 16/09/2026 DX9: the facing the panel showed on the cursor.
+	const Real angle = (msg->getArgumentCount() >= 5) ? msg->getArgument( 4 )->real : 0.0f;
+	if (thing == nullptr || owner == nullptr || owner->getDefaultTeam() == nullptr)
+		return false;
+	if (count < 1)  count = 1;
+	if (count > 50) count = 50;
+
+	// Copies on a square grid, one footprint apart, so they do not spawn inside each other.
+	Int side = 1;
+	while (side * side < count)
+		++side;
+	const Real spacing = thing->getTemplateGeometryInfo().getBoundingCircleRadius() * 2.0f + 5.0f;
+
+	Region3D extent;
+	TheTerrainLogic->getExtent(&extent);
+	for (Int i = 0; i < count; ++i)
+	{
+		Coord3D pos = centre;
+		pos.x += ((Real)(i % side) - (Real)(side - 1) * 0.5f) * spacing;
+		pos.y += ((Real)(i / side) - (Real)(side - 1) * 0.5f) * spacing;
+		if (!extent.isInRegionNoZ(pos))
+			continue;
+		pos.z = TheTerrainLogic->getGroundHeight(pos.x, pos.y);
+
+		Object *obj = TheThingFactory->newObject( thing, owner->getDefaultTeam() );
+		if (obj != nullptr)
+		{
+			obj->setOrientation(angle);
+			obj->setPosition(&pos);
+		}
+	}
+	return true;
+}
+
+// Ronin @feature 28/09/2026 DX9: debug panel `credits <amount>` for the player who sent it. Not counted as income, so
+// cash-per-minute stays real. Never in LAN/online - the panel refuses there, and so does this.
+bool GameLogic::onDevAddCash(MAYBE_UNUSED GameMessage *msg)
+{
+	Player *msgPlayer = getMessagePlayer(msg);
+	if (isInMultiplayerGame() || msgPlayer == nullptr || msg->getArgumentCount() < 1 || msg->getArgument( 0 )->integer <= 0)
+		return false;
+
+	Money *money = msgPlayer->getMoney();
+	UnsignedInt amount = (UnsignedInt)msg->getArgument( 0 )->integer;
+	if (amount > 0xFFFFFFFFu - money->countMoney())
+		amount = 0xFFFFFFFFu - money->countMoney();	// the balance is unsigned: stop at the top instead of wrapping to 0
+	money->deposit( amount, TRUE, FALSE );
+	return true;
+}
+
+// Ronin @feature 28/09/2026 DX9: debug panel `power 0|1` for the player who sent it. Never in LAN/online.
+bool GameLogic::onDevSetPower(MAYBE_UNUSED GameMessage *msg)
+{
+	Player *msgPlayer = getMessagePlayer(msg);
+	if (isInMultiplayerGame() || msgPlayer == nullptr || msg->getArgumentCount() < 1)
+		return false;
+
+	msgPlayer->getEnergy()->setUnlimited( msg->getArgument( 0 )->integer != 0 );
+	return true;
+}
 
 bool GameLogic::onEnter(MAYBE_UNUSED GameMessage *msg, AIGroupPtr &currentlySelectedGroup)
 {

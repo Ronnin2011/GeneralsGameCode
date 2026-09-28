@@ -4,7 +4,8 @@
 */
 
 // Ronin @feature 14/09/2026 DX9: debug panel. A real GameWindow, so it drags and blocks clicks, drawn with a translucent
-// background; the readouts keep formatting their own DisplayStrings and hand them over as rows. docs/Debug_Panel_Design.md.
+// background. docs/Debug_Panel_Design.md.
+// Ronin @feature 28/09/2026 DX9: every readout is built in W3DDebugPanel.cpp now, each behind a `rows` switch.
 #pragma once
 
 #include "Lib/BaseType.h"
@@ -29,7 +30,9 @@ public:
 		ROW_PERF,
 		ROW_DEPTH,
 		ROW_TERRAIN,
-		ROW_UI,			// Ronin @diagnostic 15/09/2026 DX9: input ownership, drawn by the panel itself
+		ROW_UI,			// Ronin @diagnostic 15/09/2026 DX9: input ownership
+		ROW_RSTATE,		// Ronin @diagnostic 20/09/2026 DX9: device-call counters, off by default
+		ROW_TAA,		// Ronin @diagnostic 20/09/2026 DX9: TAA state; shown whenever TAA is on
 		ROW_COUNT
 	};
 
@@ -38,14 +41,13 @@ public:
 	typedef void (*CommandFunc)(Int argc, const AsciiString *argv);
 
 	// Ronin @feature 14/09/2026 DX9: once per frame, BEFORE the UI draws. Finds or recreates the window and its command
-	// box (a window-manager reset destroys every window), sizes it to the rows set last frame.
+	// box (a window-manager reset destroys every window), builds the rows and sizes the window to them.
 	static void update(void);
 
-	// Ronin @feature 14/09/2026 DX9: Ctrl+Shift+D, through Display::toggleDebugPanel. Session only, never saved.
+	// Ronin @feature 14/09/2026 DX9: Ctrl+Shift+Z, through Display::toggleDebugPanel. Session only, never saved.
 	static void toggleVisible(void);
 
-	// Ronin @feature 14/09/2026 DX9: a readout hands over its string for this frame. FALSE = no panel this frame; the
-	// caller draws at its old fixed spot instead.
+	// Ronin @feature 14/09/2026 DX9: a readout hands over its string for this frame. FALSE = no panel this frame.
 	static Bool setRow(Row row, DisplayString *text, Color color);
 
 	// Ronin @feature 14/09/2026 DX9: add a command; the same name again replaces it. FALSE when the table is full.

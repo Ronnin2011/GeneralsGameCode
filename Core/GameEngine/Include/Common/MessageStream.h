@@ -615,6 +615,12 @@ public:
 		MSG_DEBUG_KILL_OBJECT,
 #endif
 
+		// Ronin @feature 15/09/2026 DX9: debug panel `spawn`. Fixed value, inside the recorded range; refused in LAN/online.
+		MSG_DEV_SPAWN_OBJECT = 1990,								///< (Int templateID, Coord3D location, Int count, Int playerIndex, Real angle)
+		// Ronin @feature 28/09/2026 DX9: debug panel `credits` and `power`, same rules as spawn.
+		MSG_DEV_ADD_CASH = 1991,										///< (Int amount)
+		MSG_DEV_SET_POWER = 1992,										///< (Int 1 = unlimited, 0 = real output)
+
 //*********************************************************************************************************
 		MSG_END_NETWORK_MESSAGES = 1999,						///< MARKER TO DELINEATE MESSAGES THAT GO OVER THE NETWORK
 //*********************************************************************************************************

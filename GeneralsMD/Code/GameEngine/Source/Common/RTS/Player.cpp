@@ -3298,6 +3298,10 @@ static void doPowerDisable( Object *obj, void *userData )
 //-------------------------------------------------------------------------------------------------
 void Player::onPowerBrownOutChange( Bool brownOut )
 {
+	// Ronin @feature 28/09/2026 DX9: debug panel `power 1` - nothing browns this player out, a saboteur included.
+	if( m_energy.isUnlimited() )
+		brownOut = FALSE;
+
 	// Everything that changes due to Player's power supply goes in here.
 	if( brownOut )
 		disableRadar();
