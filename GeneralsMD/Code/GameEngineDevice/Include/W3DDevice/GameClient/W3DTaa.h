@@ -126,6 +126,16 @@ public:
 	// Ronin @bugfix 26/09/2026 DX9: W3DTerrainVisual::addFactionBibDrawable hands over the build-placement bib's 4 world
 	// corners; TAA flags that quad reactive for a few frames so the bib leaves no trail.
 	static void  noteCursorBib(const Vector3 *corners);
+	// Ronin @bugfix 29/09/2026 DX9: the map's water polygons are flagged reactive in the velocity pass - animated every frame,
+	// drawn by a custom render object neither the mesh pass nor the auto-reactive copy sees. `taa water 0|1`.
+	static void  setWaterMask(Bool on);
+	static Bool  getWaterMask(void);
+	static Int   getWaterMaskTris(void);	// water triangles flagged this frame
+	// Ronin @bugfix 03/10/2026 DX9: the water marks its own pixels (WaterSea_ps COLOR1). Around a water draw: begin binds
+	// the mask as render target 1 and returns TRUE - then call end after the draw. FALSE = not this frame: draw as usual.
+	static Bool  beginWaterMask(void);
+	static void  endWaterMask(void);
+	static Bool  getWaterMaskDrawn(void);	// last frame: the water marked itself (else the flat polygons)
 
 	// Samples in the sequence before it repeats. 8 is the usual choice: long enough to look supersampled, short enough
 	// that a stopped camera settles quickly.

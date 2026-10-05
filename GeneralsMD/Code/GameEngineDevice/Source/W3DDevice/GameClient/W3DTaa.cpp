@@ -38,6 +38,8 @@
 #include "GameClient/Drawable.h"				// Ronin @bugfix 27/09/2026 DX9: idle infantry - which object a mesh belongs to
 #include "GameClient/DrawableInfo.h"
 #include "Common/KindOf.h"
+#include "GameLogic/PolygonTrigger.h"			// Ronin @bugfix 29/09/2026 DX9: the water's polygons, for its reactive mask
+#include "W3DDevice/GameClient/W3DWater.h"
 
 Bool W3DTaa::s_enabled = FALSE;
 
@@ -124,6 +126,22 @@ static UnsignedInt  s_bibMovedFrame = 0;	// s_moverFrame when its corners last c
 // Ronin @bugfix 27/09/2026 DX9: flagged only while it MOVES (3 frames: InGameUI refreshes it every other frame). A bib
 // parked on an illegal spot keeps normal TAA; one that just vanished is reset for those frames, clearing its red.
 static inline Bool  cursorBibLive(void) { return s_bibMovedFrame != 0 && (s_moverFrame - s_bibMovedFrame) <= 3; }
+// Ronin @bugfix 29/09/2026 DX9: the water. It animates every frame but the mesh velocity pass never sees it, so it kept
+// full history and smeared: its polygons are flagged reactive in the velocity pass. `taa water`.
+enum { TAA_WATER_MAX_VERTS = 3 * 4096 };
+static Vector3 s_waterVerts[TAA_WATER_MAX_VERTS];
+static Int     s_waterVertCount = 0;
+static Bool    s_waterMask = TRUE;
+// Ronin @bugfix 03/10/2026 DX9: the water marks its OWN pixels - WaterSea_ps writes COLOR1 into this target (render target
+// 1 around each water draw) and the velocity pass copies the marks in. The flat polygons above are the fallback.
+static TextureClass          *s_waterMaskTex   = NULL;
+static UnsignedInt            s_waterMaskW     = 0;
+static UnsignedInt            s_waterMaskH     = 0;
+static IDirect3DPixelShader9 *s_waterMaskPS    = NULL;	// TaaWaterMask.pso
+static Bool                   s_waterMaskReady = FALSE;	// this frame's target is cleared and may be bound
+static Bool                   s_waterMaskDrawn = FALSE;	// a water draw bound it this frame
+static Bool                   s_waterMaskLast  = FALSE;	// the frame before's, for the panel
+static Int                    s_waterMaskCaps  = -1;		// -1 not asked yet; 1 = two render targets, blended
 static float s_disoccV    = 0.5f;	// Ronin @bugfix 26/09/2026 DX9: `taa disoccv` - px a mover must have moved to vacate a pixel
 static Int   s_reactCount = 0;
 // Ronin @diagnostic 25/09/2026 DX9: meshes that found no slot this frame, so no velocity at all. Should read 0.
@@ -389,6 +407,9 @@ void W3DTaa::setEnabled(Bool on)
 }
 
 
+// Ronin @bugfix 29/09/2026 DX9: TRUE between preRender and postRender - the main scene is drawing into the TAA target.
+static Bool s_redirected = FALSE;
+
 // Ronin @feature 20/09/2026 DX9: pixels -> NDC. A shift of one pixel is 2/width in NDC because NDC spans -1..1, and the
 // projection's off-centre terms (matrix4.h Init_Perspective: Row[0][2], Row[1][2]) are in exactly those units.
 // The sign is NEGATED because this port's frustum is column-vector with w = -z: adding j to Row[0][2] contributes
@@ -397,7 +418,9 @@ void W3DTaa::getJitterNDC(float *outX, float *outY)
 {
 	if (outX != NULL) *outX = 0.0f;
 	if (outY != NULL) *outY = 0.0f;
-	if (!s_active)
+	// Ronin @bugfix 29/09/2026 DX9: only the main scene jitters. The water mirror reuses the main camera BEFORE the redirect,
+	// into its own target: jittered, the reflection jumped every frame.
+	if (!s_active || !s_redirected)
 		return;
 
 	Int width = 0, height = 0, bits = 0;
@@ -422,7 +445,7 @@ void W3DTaa::getJitterNDC(float *outX, float *outY)
 static IDirect3DPixelShader9  *s_resolvePS    = NULL;
 static IDirect3DVertexShader9 *s_quadVS       = NULL;
 static Bool                    s_shadersTried = FALSE;
-static Bool                    s_redirected   = FALSE;
+// Ronin @bugfix 29/09/2026 DX9: s_redirected moved above getJitterNDC, which reads it.
 
 // Ronin @feature 20/09/2026 DX9: TAA step 2b-i. History ping-pong. POOL_DEFAULT render targets through TextureClass so
 // DX8TextureManagerClass recreates them across a device Reset — the same rule SSAO's targets follow.
@@ -454,6 +477,72 @@ void  W3DTaa::noteCursorBib(const Vector3 *corners)
 	}
 	if (moved)
 		s_bibMovedFrame = (s_moverFrame != 0) ? s_moverFrame : 1;
+}
+
+void W3DTaa::setWaterMask(Bool on)   { s_waterMask = on; }
+Bool W3DTaa::getWaterMask(void)      { return s_waterMask; }
+Int  W3DTaa::getWaterMaskTris(void)  { return s_waterVertCount / 3; }
+
+static inline void addWaterTri(const ICoord3D &a, const ICoord3D &b, const ICoord3D &c)
+{
+	if (s_waterVertCount + 3 > TAA_WATER_MAX_VERTS)
+		return;
+	s_waterVerts[s_waterVertCount++].Set((Real)a.x, (Real)a.y, (Real)a.z);
+	s_waterVerts[s_waterVertCount++].Set((Real)b.x, (Real)b.y, (Real)b.z);
+	s_waterVerts[s_waterVertCount++].Set((Real)c.x, (Real)c.y, (Real)c.z);
+}
+
+// Ronin @bugfix 29/09/2026 DX9: this frame's water triangles from the map's water polygons, in the shapes W3DWater.cpp
+// draws (quads fanned from point 0; river strips bank to bank). Nothing when the flat water is switched off.
+static void buildWaterMask(void)
+{
+	s_waterVertCount = 0;
+	if (!s_waterMask || TheWaterRenderObj == NULL || TheWaterDebug.skipFlat)
+		return;
+	for (PolygonTrigger *pTrig = PolygonTrigger::getFirstPolygonTrigger(); pTrig != NULL; pTrig = pTrig->getNext())
+	{
+		const Int n = pTrig->getNumPoints();
+		if (!pTrig->isWaterArea() || n <= 2)
+			continue;
+		if (pTrig->isRiver())
+		{
+			Int innerNdx = pTrig->getRiverStart();
+			Int outerNdx = innerNdx + 1;
+			if (innerNdx >= n - 1)
+				continue;	// drawRiverWater draws nothing either
+			ICoord3D prevA, prevB;
+			for (Int i = 0; i < n / 2; ++i)
+			{
+				const ICoord3D a = *pTrig->getPoint(outerNdx);	// drawRiverWater's vertex 2i
+				const ICoord3D b = *pTrig->getPoint(innerNdx);	// and 2i+1
+				outerNdx++;
+				innerNdx--;
+				if (innerNdx < 0)
+					innerNdx = n - 1;
+				if (outerNdx >= n)
+					outerNdx = 0;
+				if (i > 0)
+				{
+					addWaterTri(prevA, prevB, b);	// its (2i, 2i+1, 2i+3) and (2i, 2i+3, 2i+2), one step back
+					addWaterTri(prevA, b, a);
+				}
+				prevA = a;
+				prevB = b;
+			}
+		}
+		else
+		{
+			const ICoord3D p3 = *pTrig->getPoint(0);
+			for (Int k = 1; k < n - 1; k += 2)
+			{
+				const ICoord3D p2 = *pTrig->getPoint(k);
+				const ICoord3D p1 = *pTrig->getPoint(k + 1);
+				const ICoord3D p0 = (k + 2 < n) ? *pTrig->getPoint(k + 2) : p1;
+				addWaterTri(p0, p1, p2);
+				addWaterTri(p0, p2, p3);
+			}
+		}
+	}
 }
 
 // Ronin @feature 26/09/2026 DX9: called by RTS3DScene::Flush in the main pass, just before particles and the sorted
@@ -814,6 +903,91 @@ static Bool ensureVelocity(UnsignedInt width, UnsignedInt height)
 	return TRUE;
 }
 
+// Ronin @bugfix 03/10/2026 DX9: the water's own mask. preRender: make the target the frame buffer's size and clear it.
+static void prepareWaterMask(IDirect3DDevice9 *dev)
+{
+	if (!s_waterMask || s_waterMaskPS == NULL || s_quadVS == NULL)
+		return;
+	if (s_waterMaskCaps < 0)
+	{
+		D3DCAPS9 caps;
+		s_waterMaskCaps = (SUCCEEDED(dev->GetDeviceCaps(&caps)) && caps.NumSimultaneousRTs >= 2 &&
+						   (caps.PrimitiveMiscCaps & D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING) != 0) ? 1 : 0;
+	}
+	if (s_waterMaskCaps != 1)
+		return;
+	IDirect3DSurface9 *rt0 = NULL;
+	if (FAILED(dev->GetRenderTarget(0, &rt0)) || rt0 == NULL)
+		return;
+	D3DSURFACE_DESC desc;
+	if (SUCCEEDED(rt0->GetDesc(&desc)))
+	{
+		if (s_waterMaskTex == NULL || s_waterMaskW != desc.Width || s_waterMaskH != desc.Height)
+		{
+			REF_PTR_RELEASE(s_waterMaskTex);
+			s_waterMaskTex = NEW_REF(TextureClass, (desc.Width, desc.Height, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1,
+													TextureClass::POOL_DEFAULT, true));
+			if (s_waterMaskTex->Peek_D3D_Base_Texture() == NULL)
+				REF_PTR_RELEASE(s_waterMaskTex);
+			s_waterMaskW = desc.Width;
+			s_waterMaskH = desc.Height;
+		}
+		IDirect3DSurface9 *surf = (s_waterMaskTex != NULL) ? s_waterMaskTex->Get_D3D_Surface_Level() : NULL;
+		if (surf != NULL)
+		{
+			if (SUCCEEDED(dev->SetRenderTarget(0, surf)))
+			{
+				dev->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+				s_waterMaskReady = TRUE;
+			}
+			dev->SetRenderTarget(0, rt0);
+			if (s_viewportOK)
+				dev->SetViewport(&s_viewport);	// SetRenderTarget reset it to the whole target
+			surf->Release();
+		}
+	}
+	rt0->Release();
+}
+
+// Around a water draw (W3DWater.cpp). TRUE = render target 1 is the mask; call endWaterMask after the draw. Only inside
+// the TAA redirect and over a target the mask's size.
+Bool W3DTaa::beginWaterMask(void)
+{
+	if (!s_redirected || !s_waterMaskReady || s_waterMaskTex == NULL)
+		return FALSE;
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	IDirect3DSurface9 *rt0 = NULL;
+	if (dev == NULL || FAILED(dev->GetRenderTarget(0, &rt0)) || rt0 == NULL)
+		return FALSE;
+	D3DSURFACE_DESC desc;
+	const Bool same = (SUCCEEDED(rt0->GetDesc(&desc)) && desc.Width == s_waterMaskW && desc.Height == s_waterMaskH &&
+					   desc.MultiSampleType == D3DMULTISAMPLE_NONE) ? TRUE : FALSE;
+	rt0->Release();
+	if (!same)
+		return FALSE;
+	IDirect3DSurface9 *surf = s_waterMaskTex->Get_D3D_Surface_Level();
+	if (surf == NULL)
+		return FALSE;
+	const Bool ok = SUCCEEDED(dev->SetRenderTarget(1, surf)) ? TRUE : FALSE;
+	surf->Release();
+	if (ok)
+	{
+		dev->SetRenderState(D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
+													 D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
+		s_waterMaskDrawn = TRUE;
+	}
+	return ok;
+}
+
+void W3DTaa::endWaterMask(void)
+{
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev != NULL)
+		dev->SetRenderTarget(1, NULL);
+}
+
+Bool W3DTaa::getWaterMaskDrawn(void) { return s_waterMaskLast; }
+
 static Bool ensureHistory(UnsignedInt width, UnsignedInt height)
 {
 	if (s_history[0] != NULL && s_history[1] != NULL && s_historyW == width && s_historyH == height)
@@ -950,6 +1124,14 @@ static void ensureShaders(IDirect3DDevice9 *dev)
 	{
 		if (FAILED(dev->CreatePixelShader(blob, &s_moverPS)))
 			s_moverPS = NULL;
+		HeapFree(GetProcessHeap(), 0, blob);
+	}
+	// Ronin @bugfix 03/10/2026 DX9: the water's own mask, copied into the velocity target. Missing = the flat polygons.
+	blob = readShaderBlob("shaders\\TaaWaterMask.pso");
+	if (blob != NULL)
+	{
+		if (FAILED(dev->CreatePixelShader(blob, &s_waterMaskPS)))
+			s_waterMaskPS = NULL;
 		HeapFree(GetProcessHeap(), 0, blob);
 	}
 	gpuCreate(dev);
@@ -1162,11 +1344,20 @@ void W3DTaa::shutdown(void)
 	s_prevVelOK = FALSE;
 	s_velW = 0;
 	s_velH = 0;
+	// Ronin @bugfix 03/10/2026 DX9: the water's own mask.
+	if (s_waterMaskPS != NULL) { s_waterMaskPS->Release(); s_waterMaskPS = NULL; }
+	REF_PTR_RELEASE(s_waterMaskTex);
+	s_waterMaskW     = 0;
+	s_waterMaskH     = 0;
+	s_waterMaskReady = FALSE;
+	s_waterMaskDrawn = FALSE;
 }
 
 Bool W3DTaa::preRender(const CameraClass &camera)
 {
 	s_redirected = FALSE;
+	s_waterMaskReady = FALSE;	// Ronin @bugfix 03/10/2026 DX9: set below, once this frame's target is cleared
+	s_waterMaskDrawn = FALSE;
 	if (!s_active)
 		return FALSE;
 	s_camera = &camera;
@@ -1204,6 +1395,8 @@ Bool W3DTaa::preRender(const CameraClass &camera)
 	// Those are cinematic and rare: stand down for the frame rather than fight over it.
 	if (!W3DShaderManager::canRenderToTexture() || W3DShaderManager::isRenderingToTexture())
 		return FALSE;
+
+	prepareWaterMask(dev);	// Ronin @bugfix 03/10/2026 DX9: before the redirect - the target under it is still the frame buffer
 
 	W3DShaderManager::startRenderToTexture();
 	if (!W3DShaderManager::isRenderingToTexture())
@@ -1375,7 +1568,13 @@ void W3DTaa::postRender(void)
 	// previous world-view-projection. The pixel shader discards anything behind the scene depth, so only the visible
 	// surface writes - the ownership the rectangles never had. Depth test off, blend off, cull none: all already set
 	// for the resolve above.
-	if (s_velocityOn && (s_meshDrawCount > 0 || cursorBibLive()) && s_velMeshVS != NULL && s_velMeshPS != NULL &&
+	// Ronin @bugfix 03/10/2026 DX9: the water marked its own pixels this frame (beginWaterMask): no flat polygons then.
+	s_waterMaskLast = s_waterMaskDrawn;
+	if (s_waterMaskDrawn)
+		s_waterVertCount = 0;
+	else
+		buildWaterMask();	// Ronin @bugfix 29/09/2026 DX9: the water, flagged reactive below
+	if (s_velocityOn && (s_meshDrawCount > 0 || cursorBibLive() || s_waterVertCount > 0 || s_waterMaskDrawn) && s_velMeshVS != NULL && s_velMeshPS != NULL &&
 		depthTex != NULL && s_curViewProjValid && s_prevViewProjValid && ensureVelocity((UnsignedInt)fbW, (UnsignedInt)fbH))
 	{
 		IDirect3DSurface9 *vSurf  = s_velTex->Get_D3D_Surface_Level();
@@ -1389,6 +1588,31 @@ void W3DTaa::postRender(void)
 				// velocity texel lines up with the scene and depth texels it describes.
 				const D3DVIEWPORT9 vvp = s_meshVpValid ? s_meshVp : vp;
 				dev->SetViewport(&vvp);		// SetRenderTarget reset it to the whole target
+				// Ronin @bugfix 03/10/2026 DX9: the water's own marks, first - as the flat polygons were, so a ship on the
+				// water still overwrites them with its velocity. A 1:1 copy over the scene's viewport.
+				if (s_waterMaskDrawn && s_waterMaskTex != NULL && s_waterMaskPS != NULL)
+				{
+					const float mu0 = (float)vvp.X / (float)fbW;
+					const float mv0 = (float)vvp.Y / (float)fbH;
+					const float mu1 = (float)(vvp.X + vvp.Width)  / (float)fbW;
+					const float mv1 = (float)(vvp.Y + vvp.Height) / (float)fbH;
+					const float mhx = 1.0f / (float)vvp.Width;		// half a pixel in clip units, as the resolve's quad
+					const float mhy = 1.0f / (float)vvp.Height;
+					QuadVertex m[4];
+					m[0].x = -1.0f - mhx; m[0].y =  1.0f + mhy; m[0].u = mu0; m[0].v = mv0;
+					m[1].x =  1.0f - mhx; m[1].y =  1.0f + mhy; m[1].u = mu1; m[1].v = mv0;
+					m[2].x = -1.0f - mhx; m[2].y = -1.0f + mhy; m[2].u = mu0; m[2].v = mv1;
+					m[3].x =  1.0f - mhx; m[3].y = -1.0f + mhy; m[3].u = mu1; m[3].v = mv1;
+					for (int mi = 0; mi < 4; ++mi)
+						m[mi].z = 0.0f;
+					DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::waterMask");
+					dev->SetVertexShader(s_quadVS);		// AFTER the layout bind
+					dev->SetPixelShader(s_waterMaskPS);
+					dev->SetTexture(0, s_waterMaskTex->Peek_D3D_Texture());
+					setResolveSampler(dev, 0);		// POINT
+					dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, m, sizeof(QuadVertex));
+					dev->SetTexture(0, NULL);
+				}
 				DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ, "W3DTaa::velMesh");
 				dev->SetVertexShader(s_velMeshVS);	// AFTER the layout bind - BindLayoutFVF clears the VS
 				dev->SetPixelShader(s_velMeshPS);
@@ -1417,6 +1641,20 @@ void W3DTaa::postRender(void)
 					dev->SetVertexShaderConstantF(4, (const float *)&bpT, 4);
 					dev->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, 4, 2, bibIdx, D3DFMT_INDEX16,
 												s_bibCorners, sizeof(Vector3));
+				}
+
+				// Ronin @bugfix 29/09/2026 DX9: the water - reactive translucent (one-sided: it writes no depth), zero velocity. Before
+				// the meshes, so a ship on it overwrites it with its own velocity.
+				if (s_waterVertCount > 0)
+				{
+					static const float waterC12[4] = { 0.4f, 1.0f, 1.0f, 0.0f };
+					dev->SetPixelShaderConstantF(12, waterC12, 1);
+					D3DXMATRIX wcT, wpT;
+					D3DXMatrixTranspose(&wcT, &s_curViewProjClean);
+					D3DXMatrixTranspose(&wpT, &s_prevViewProj);
+					dev->SetVertexShaderConstantF(0, (const float *)&wcT, 4);
+					dev->SetVertexShaderConstantF(4, (const float *)&wpT, 4);
+					dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, (UINT)(s_waterVertCount / 3), s_waterVerts, sizeof(Vector3));
 				}
 
 				Int boundKind = -1;
