@@ -47,6 +47,11 @@
 #include "W3DDevice/GameClient/W3DTaa.h"
 #include "W3DDevice/GameClient/W3DSsao.h"	// Ronin @feature 26/09/2026 DX9: `ssao` command
 #include "W3DDevice/GameClient/W3DShadowMap.h"	// Ronin @feature 26/09/2026 DX9: `shadows` command
+// Ronin @diagnostic 28/09/2026 DX9: [WATER] row - chipset gate and the soft-edge test.
+#include "W3DDevice/GameClient/W3DShaderManager.h"
+#include "GameClient/Water.h"
+#include "W3DDevice/GameClient/W3DWaterSeaTuning.h"	// Ronin @feature 29/09/2026 DX9: the WaterSea look knobs
+#include "W3DDevice/GameClient/W3DWaterSeaIni.h"	// Ronin @feature 04/10/2026 DX9: `water save` / `water load`
 // Ronin @feature 28/09/2026 DX9: the readouts moved in from W3DDisplay.cpp.
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -77,7 +82,8 @@ namespace
 	const Int PICKER_HEIGHT   = 240;
 	const Int LABEL_HEIGHT    = 14;
 	// Ronin @feature 15/09/2026 DX9: OUTPUT_LINES 6 -> 10, `help` plus its echo no longer fitted.
-	enum { OUTPUT_LINES = 10, HISTORY_SIZE = 16, PANEL_MAX_COMMANDS = 64, MAX_ARGS = 16, PICK_ROWS = 400, MAX_SIDES = 48,
+	// Ronin @feature 03/10/2026 DX9: 10 -> 16 - the `water` table and its echo take 14.
+	enum { OUTPUT_LINES = 16, HISTORY_SIZE = 16, PANEL_MAX_COMMANDS = 64, MAX_ARGS = 16, PICK_ROWS = 400, MAX_SIDES = 48,
 		   // Ronin @feature 16/09/2026 DX9: copies per drop, and ghosts previewing them. Structures are big and rarely wanted
 		   // in bulk; units are cheap to look at and useful in numbers.
 		   PLACE_MAX_UNITS = 30, PLACE_MAX_STRUCTURES = 3, PLACE_MAX_COUNT = PLACE_MAX_UNITS };
@@ -121,9 +127,9 @@ namespace
 	// Ronin @feature 28/09/2026 DX9: `rows` switches, defaults as W3DDisplay.cpp's old SHOW_* constants. [DRAW2] shares draw's
 	// name, so one switch drives both.
 	const char    *const ROW_NAMES[W3DDebugPanel::ROW_COUNT] =
-		{ "sr", "inst", "draw", "draw", "shadow", "perf", "depth", "terrain", "ui", "rstate", "taa" };
+		{ "sr", "inst", "draw", "draw", "shadow", "perf", "depth", "terrain", "ui", "rstate", "taa", "water" };
 	Bool           s_rowOn[W3DDebugPanel::ROW_COUNT] =
-		{ TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, FALSE, TRUE };
+		{ TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, FALSE, TRUE, TRUE };
 	DisplayString *s_rowText[W3DDebugPanel::ROW_COUNT] = {};	// each row's string, made on first use
 	DisplayString *s_noPanel      = nullptr;
 
@@ -139,6 +145,7 @@ namespace
 	UnsignedInt    s_perfFrames   = 0;
 	double         s_perfSMSum    = 0.0;
 	Real           s_perfWorstMs  = 0.0f;
+	WaterDebugStats s_waterNow    = {};		// Ronin @diagnostic 28/09/2026 DX9: [WATER], last frame's copy of TheWaterStats
 
 	// Ronin @feature 16/09/2026 DX9: spawn picker. The categories it lists, in [Category] label order, with their row colour.
 	struct PickCategory
@@ -208,7 +215,8 @@ namespace
 		return s_rows[r].text != nullptr && s_rows[r].stamp == s_frame;
 	}
 
-	void printLine(const UnicodeString &text, Bool isError)
+	// Ronin @feature 03/10/2026 DX9: `color` 0 = the default grey (the `water` table colours its headers).
+	void printLine(const UnicodeString &text, Bool isError, Color color = 0)
 	{
 		if (TheDisplayStringManager == nullptr)
 			return;
@@ -232,13 +240,13 @@ namespace
 			s_out[s_outCount]->setFont(panelFont());
 		}
 		s_out[s_outCount]->setText(text);
-		s_outColor[s_outCount] = isError ? GameMakeColor(255, 120, 80, 255) : GameMakeColor(220, 220, 220, 255);
+		s_outColor[s_outCount] = isError ? GameMakeColor(255, 120, 80, 255) : (color != 0) ? color : GameMakeColor(220, 220, 220, 255);
 		++s_outCount;
 	}
 
 	// Ronin @bugfix 27/09/2026 DX9: the panel sizes to its widest line, so one long line pushed it past the screen edge and
 	// hid the command box. Wrapped at a space every OUTPUT_WRAP characters; continuation lines are indented.
-	void printAscii(const AsciiString &text, Bool isError)
+	void printAscii(const AsciiString &text, Bool isError, Color color = 0)
 	{
 		const char *s   = text.str();
 		Int         len = (Int)strlen(s);
@@ -266,7 +274,7 @@ namespace
 			buf[n + take] = 0;
 			UnicodeString u;
 			u.translate(AsciiString(buf));
-			printLine(u, isError);
+			printLine(u, isError, color);
 			s   += take;
 			len -= take;
 			while (len > 0 && *s == ' ')
@@ -317,22 +325,254 @@ namespace
 	}
 
 	// Ronin @feature 15/09/2026 DX9: water on/off. `water` prints the switches; `water <flat|mesh> <0|1>` sets one.
+	// Ronin @feature 04/10/2026 DX9: the WaterSea look knobs live in one table, TheWaterProfileKnobs /
+	// TheWaterGlobalKnobs (W3DWaterSeaTuning.h): the water ini reads the same one.
+
+	// Ronin @feature 03/10/2026 DX9: one column of the `water` table - a group's title and its `name=value` cells.
+	enum { WATER_COLUMN_ROWS = 10 };	// SWELL holds 9
+	struct WaterColumn
+	{
+		const char *title;
+		AsciiString cell[WATER_COLUMN_ROWS];
+		Int         count;
+	};
+
+	void waterCell(WaterColumn &col, const char *name, Real value)
+	{
+		if (col.count < WATER_COLUMN_ROWS)
+			col.cell[col.count++].format("%s=%.3g", name, value);
+	}
+
+	// Ronin @feature 03/10/2026 DX9: a knob's cell by its command name, so the table only shows names `water` takes.
+	void waterKnobCell(WaterColumn &col, const WaterSeaTuning &t, const char *name)
+	{
+		const WaterKnobInfo *k = WaterSea_FindKnob(TheWaterProfileKnobs, TheWaterProfileKnobCount, name);
+		if (k != nullptr)
+			waterCell(col, name, WaterSea_GetKnob(&t, *k));
+	}
+
+	// Ronin @feature 03/10/2026 DX9: the columns side by side, each as wide as its widest cell; headers in their own colour.
+	void printWaterTable(const WaterColumn *cols, Int colCount)
+	{
+		Int width[8] = {};
+		Int rows = 0;
+		for (Int c = 0; c < colCount && c < 8; c++)
+		{
+			width[c] = (Int)strlen(cols[c].title);
+			for (Int r = 0; r < cols[c].count; r++)
+				if ((Int)cols[c].cell[r].getLength() > width[c])
+					width[c] = (Int)cols[c].cell[r].getLength();
+			width[c] += 2;
+			if (cols[c].count > rows)
+				rows = cols[c].count;
+		}
+		for (Int r = -1; r < rows; r++)	// -1 = the header row
+		{
+			AsciiString line;
+			for (Int c = 0; c < colCount && c < 8; c++)
+			{
+				const char *text = (r < 0) ? cols[c].title : (r < cols[c].count) ? cols[c].cell[r].str() : "";
+				AsciiString one;
+				if (c + 1 < colCount)
+					one.format("%-*s", width[c], text);
+				else
+					one = text;	// no trailing pad: the panel sizes to its widest line
+				line.concat(one);
+			}
+			printAscii(line, FALSE, (r < 0) ? GameMakeColor(110, 190, 255, 255) : 0);
+		}
+	}
+
 	void cmdWater(Int argc, const AsciiString *argv)
 	{
+		// Ronin @feature 02/10/2026 DX9: phase 4 - the knobs and the profile switches edit the profile `water profile` selects;
+		// the other switches are global.
+		static const char *const kindNames[WATER_KIND_COUNT] = { "sea", "lake", "river" };
+		WaterSeaGlobal &g = TheWaterSeaGlobal;
+		if (argc == 3 && stricmp(argv[1].str(), "profile") == 0)
+		{
+			Int pick = -1;
+			for (Int k = 0; k < WATER_KIND_COUNT; k++)
+				if (stricmp(argv[2].str(), kindNames[k]) == 0)
+					pick = k;
+			if (pick < 0)
+			{
+				printAscii(AsciiString("usage: water profile sea|lake|river"), TRUE);
+				return;
+			}
+			g.edit = pick;	// then print the newly selected profile below
+		}
+		WaterSeaTuning &t = WaterSea_Profile(g.edit);
+		// Ronin @feature 03/10/2026 DX9: `water view` alone lists the debug views (it was a long tail on every `water` print).
+		if (argc == 2 && stricmp(argv[1].str(), "view") == 0)
+		{
+			AsciiString views;
+			views.format("view=%d: 0 water 1 fresnel 2 N.V 3 normal 4 sun 5 refl 6 body 7 depth 8 foam 9 shore 10 swell 11 shadow 12 opacity 13 shore gates 14 wakes",
+				g.view);
+			printAscii(views, FALSE);
+			return;
+		}
 		Bool ok = (argc == 1);
+		// Ronin @feature 04/10/2026 DX9: the water ini (W3DWaterSeaIni.h): `save` writes every knob as it stands, `load` reads
+		// the file again, `defaults` returns to the built-in look. Each then prints the state below.
+		if (argc == 2)
+		{
+			const AsciiString path = WaterSea_IniPath();
+			AsciiString note;
+			if (stricmp(argv[1].str(), "save") == 0)
+			{
+				ok = WaterSea_SaveIni(path.str());
+				note.format(ok ? "water: saved to %s" : "water: could not write %s", path.str());
+				printAscii(note, !ok);
+				if (!ok)
+					return;
+			}
+			else if (stricmp(argv[1].str(), "load") == 0)
+			{
+				Int skipped = 0;
+				const Int count = WaterSea_LoadIni(path.str(), &skipped);
+				if (count < 0)
+				{
+					note.format("water: no file %s", path.str());
+					printAscii(note, TRUE);
+					return;
+				}
+				note.format("water: %d values read from %s (%d lines skipped)", count, path.str(), skipped);
+				printAscii(note, skipped > 0);
+				ok = TRUE;
+			}
+			else if (stricmp(argv[1].str(), "defaults") == 0)
+			{
+				WaterSea_ResetDefaults();
+				printAscii(AsciiString("water: the built-in look (the file is untouched; `water save` to keep it)"), FALSE);
+				ok = TRUE;
+			}
+		}
 		if (argc == 3)
 		{
+			const char *name = argv[1].str();
 			const Bool on = (atoi(argv[2].str()) != 0);
-			if      (stricmp(argv[1].str(), "flat") == 0) { TheWaterDebug.skipFlat = !on; ok = TRUE; }
-			else if (stricmp(argv[1].str(), "mesh") == 0) { TheWaterDebug.skipMesh = !on; ok = TRUE; }
+			if      (stricmp(name, "profile") == 0) { ok = TRUE; }	// selected above
+			else if (stricmp(name, "flat") == 0) { TheWaterDebug.skipFlat = !on; ok = TRUE; }
+			else if (stricmp(name, "mesh") == 0) { TheWaterDebug.skipMesh = !on; ok = TRUE; }
+			// Ronin @feature 28/09/2026 DX9: shore waves - Water_Work.md F5, nearly all of [DRAW] water on ocean maps.
+			else if (stricmp(name, "waves") == 0) { TheWaterDebug.skipWaves = !on; ok = TRUE; }
+			// Ronin @feature 28/09/2026 DX9: WaterType 2 - the original infinite sea plane instead of the map's polygons.
+			else if (stricmp(name, "sea") == 0) { TheWaterDebug.seaPlane = on; ok = TRUE; }
+			// Ronin @feature 04/10/2026 DX9: every look switch and knob by its name: the selected profile's, then all water's
+			else
+			{
+				const WaterKnobInfo *k = WaterSea_FindKnob(TheWaterProfileKnobs, TheWaterProfileKnobCount, name);
+				void *base = &t;
+				if (k == nullptr)
+				{
+					k = WaterSea_FindKnob(TheWaterGlobalKnobs, TheWaterGlobalKnobCount, name);
+					base = &g;
+				}
+				if (k != nullptr)
+				{
+					WaterSea_SetKnob(base, *k, (Real)atof(argv[2].str()));
+					ok = TRUE;
+				}
+			}
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: water [flat|mesh 0|1]"), TRUE);
+			printAscii(AsciiString("usage: water profile sea|lake|river | water [normals|fresnel|swell|ownopacity|breakers 0|1] (the profile's) | water [flat|mesh|waves|sea|depth|oldwaves|oldwakes|refraction|mirrorclip|mirror 0|1] | water view <0..14> | water mirrorres <0..8> | water <knob> <value> | water save|load|defaults"), TRUE);
 			return;
 		}
+		// Ronin @feature 03/10/2026 DX9: the global switches, then the selected profile as a table, one column per group - one
+		// run-on line wrapped over four was hard to read.
 		AsciiString state;
-		state.format("water: flat=%d mesh=%d", TheWaterDebug.skipFlat ? 0 : 1, TheWaterDebug.skipMesh ? 0 : 1);
+		state.format("all water   flat=%d  mesh=%d  waves=%d  sea=%d  depth=%d  oldwaves=%d  refraction=%d  view=%d (`water view`)",
+			TheWaterDebug.skipFlat ? 0 : 1, TheWaterDebug.skipMesh ? 0 : 1, TheWaterDebug.skipWaves ? 0 : 1,
+			TheWaterDebug.seaPlane ? 1 : 0, g.depth ? 1 : 0, g.oldWaves ? 1 : 0, g.refraction ? 1 : 0, g.view);
+		printAscii(state, FALSE);
+		state.format("            mirror=%d  mirrorres=%d  mirrorclip=%d  mirrorfar=%.3g  ride=%.3g", g.mirror ? 1 : 0, g.mirrorRes,
+			g.mirrorClip ? 1 : 0, g.mirrorFar, g.ride);
+		printAscii(state, FALSE);
+		// Ronin @feature 03/10/2026 DX9: phase 5 - wakes
+		state.format("            wakes=%.3g  wakefoam=%.3g  wakeheight=%.3g  wakeshade=%.3g  wakerings=%.3g  wakesurge=%.3g  oldwakes=%d",
+			g.wakes, g.wakeFoam, g.wakeHeight, g.wakeShade, g.wakeRings, g.wakeSurge, g.oldWakes ? 1 : 0);
+		printAscii(state, FALSE);
+		state.format("profile %s  (`water profile sea|lake|river` picks the one these edit)", kindNames[g.edit]);
+		printAscii(state, FALSE, GameMakeColor(255, 220, 120, 255));
+
+		WaterColumn cols[6] = {};
+		cols[0].title = "REFLECTION";
+		waterKnobCell(cols[0], t, "refl");
+		waterCell(cols[0], "fresnel", t.fresnel ? 1.0f : 0.0f);
+		waterKnobCell(cols[0], t, "f0");
+		waterKnobCell(cols[0], t, "fpow");
+		waterKnobCell(cols[0], t, "fresnelripple");
+		waterKnobCell(cols[0], t, "distort");
+		cols[1].title = "RIPPLES";
+		waterCell(cols[1], "normals", t.normals ? 1.0f : 0.0f);
+		waterKnobCell(cols[1], t, "ripple");
+		waterKnobCell(cols[1], t, "speed");
+		waterKnobCell(cols[1], t, "tile");
+		waterKnobCell(cols[1], t, "refract");
+		waterKnobCell(cols[1], t, "bend");
+		cols[2].title = "LIGHT";
+		waterKnobCell(cols[2], t, "spec");
+		waterKnobCell(cols[2], t, "gloss");
+		waterKnobCell(cols[2], t, "sheen");
+		waterKnobCell(cols[2], t, "sheenpow");
+		waterKnobCell(cols[2], t, "shade");
+		waterKnobCell(cols[2], t, "shadow");
+		cols[3].title = "DEPTH";
+		waterKnobCell(cols[3], t, "deepdist");
+		waterKnobCell(cols[3], t, "deep");
+		waterCell(cols[3], "ownopacity", t.ownOpacity ? 1.0f : 0.0f);
+		waterKnobCell(cols[3], t, "opacity");
+		waterKnobCell(cols[3], t, "shore");
+		waterKnobCell(cols[3], t, "shoredepth");
+		waterKnobCell(cols[3], t, "texture");
+		cols[4].title = "FOAM";
+		waterKnobCell(cols[4], t, "foam");
+		waterKnobCell(cols[4], t, "foamwidth");
+		waterKnobCell(cols[4], t, "foamtile");
+		waterKnobCell(cols[4], t, "seafoam");
+		waterKnobCell(cols[4], t, "seafoamdepth");
+		waterKnobCell(cols[4], t, "seafoamtile");
+		waterKnobCell(cols[4], t, "whitecaps");
+		waterKnobCell(cols[4], t, "whitecapat");
+		waterCell(cols[4], "breakers", t.breakers ? 1.0f : 0.0f);
+		// Ronin @feature 03/10/2026 DX9: rivers never swell (no vertices mid-river; WaterSea_ps.hlsl): say so, not dead knobs.
+		cols[5].title = (g.edit == WATER_KIND_RIVER) ? "SWELL (unused on rivers)" : "SWELL";
+		waterCell(cols[5], "swell", t.swell ? 1.0f : 0.0f);
+		waterKnobCell(cols[5], t, "swellheight");
+		waterKnobCell(cols[5], t, "swellsize");
+		waterKnobCell(cols[5], t, "swellspeed");
+		waterKnobCell(cols[5], t, "swelldir");
+		waterKnobCell(cols[5], t, "swelldepth");
+		waterKnobCell(cols[5], t, "swellcell");
+		waterKnobCell(cols[5], t, "swellsharp");
+		waterKnobCell(cols[5], t, "swelltint");
+		printWaterTable(cols, 6);
+	}
+
+	// Ronin @feature 28/09/2026 DX9: [PERF] run mean. `perf reset` starts it over, so a runtime switch gets its own mean
+	// instead of one blended across the whole session.
+	void cmdPerf(Int argc, const AsciiString *argv)
+	{
+		if (argc == 2 && stricmp(argv[1].str(), "reset") == 0)
+		{
+			s_perfFirst   = 0;		// sampleReadouts restarts the run on its next tracked frame
+			s_perfLast    = 0;
+			s_perfFrames  = 0;
+			s_perfSMSum   = 0.0;
+			s_perfWorstMs = 0.0f;
+		}
+		else if (argc != 1)
+		{
+			printAscii(AsciiString("usage: perf [reset]"), TRUE);
+			return;
+		}
+		const double secs = (s_perfFrames > 0 && s_perfFreq > 0) ? ((double)(s_perfNow - s_perfFirst) / (double)s_perfFreq) : 0.0;
+		AsciiString state;
+		state.format("perf: frames=%u  avgMs=%.3f  worstMs=%.1f%s", s_perfFrames,
+			(s_perfFrames > 0) ? secs * 1000.0 / (double)s_perfFrames : 0.0, s_perfWorstMs, (argc == 2) ? "  (reset)" : "");
 		printAscii(state, FALSE);
 	}
 
@@ -412,10 +652,12 @@ namespace
 			else if (stricmp(argv[1].str(), "disoccv")  == 0) { W3DTaa::setDisoccV((float)atof(argv[2].str())); ok = TRUE; }
 			else if (stricmp(argv[1].str(), "reactive") == 0) { W3DTaa::setReactive((float)atof(argv[2].str())); ok = TRUE; }
 			else if (stricmp(argv[1].str(), "autoreact")== 0) { W3DTaa::setAutoReact((float)atof(argv[2].str())); ok = TRUE; }
+			// Ronin @bugfix 29/09/2026 DX9: the water's reactive mask - its polygons in the velocity pass.
+			else if (stricmp(argv[1].str(), "water")    == 0) { W3DTaa::setWaterMask(atoi(argv[2].str()) != 0); ok = TRUE; }
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: taa [0|1] | weight <0..0.99> | debug <0..15> | sharpen <0..1> | mipbias <-2..0> | clamp <0..1> | shadowmask <0|1> | maskcap <0|1> | vel <0|1> | disocc <0..2> | disoccv <px> | reactive <0..1> | autoreact <0..1>"), TRUE);
+			printAscii(AsciiString("usage: taa [0|1] | weight <0..0.99> | debug <0..15> | sharpen <0..1> | mipbias <-2..0> | clamp <0..1> | shadowmask <0|1> | maskcap <0|1> | vel <0|1> | disocc <0..2> | disoccv <px> | reactive <0..1> | autoreact <0..1> | water <0|1>"), TRUE);
 			printAscii(AsciiString("  debug 1=reproj 2=depth 3=samples 4=history 13=velocity/reactive mask (orange = auto-reactive) 14=moving shadows (blue = in one now, red = clamped, yellow = also capped) 15=mesh motion px/frame (navy<.05 blue<.1 cyan<.2 green<.35 yellow<.5 orange<1 red)"), FALSE);
 			return;
 		}
@@ -429,8 +671,16 @@ namespace
 			W3DTaa::getClamp(), W3DTaa::getShadowMask() ? 1 : 0, W3DTaa::getMaskCap() ? 1 : 0,
 			W3DTaa::getReactive(), W3DTaa::getAutoReact());
 		printAscii(state, FALSE);
-		state.format("  vel=%d  disocc=%d  disoccv=%.2f",
-			W3DTaa::getVelocity() ? 1 : 0, W3DTaa::getDisocc(), W3DTaa::getDisoccV());
+		// Ronin @bugfix 03/10/2026 DX9: the water mask's source - "own" = the water marked its pixels as it drew; else the
+		// flat polygons' triangle count (the fallback).
+		AsciiString maskFrom;
+		if (W3DTaa::getWaterMaskDrawn())
+			maskFrom = "own";
+		else
+			maskFrom.format("%d tris", W3DTaa::getWaterMaskTris());
+		state.format("  vel=%d  disocc=%d  disoccv=%.2f  water=%d (%s)",
+			W3DTaa::getVelocity() ? 1 : 0, W3DTaa::getDisocc(), W3DTaa::getDisoccV(),
+			W3DTaa::getWaterMask() ? 1 : 0, maskFrom.str());
 		printAscii(state, FALSE);
 	}
 
@@ -1569,6 +1819,27 @@ namespace
 			}
 			s_perfLast = s_perfNow;
 		}
+
+		// Ronin @diagnostic 28/09/2026 DX9: [WATER] - keep this frame's water draws, zero them for the next. W3DWater.cpp counts
+		// only while the row is on and the panel shown, so `rows water 0` keeps the check out of a [PERF] A/B.
+		s_waterNow = TheWaterStats;
+		TheWaterStats.flatDraws    = 0;
+		TheWaterStats.flatPSDraws  = 0;
+		TheWaterStats.riverDraws   = 0;
+		TheWaterStats.riverPSDraws = 0;
+		TheWaterStats.meshDraws    = 0;
+		TheWaterStats.meshPSDraws  = 0;
+		TheWaterStats.seaDraws     = 0;
+		TheWaterStats.seaPSDraws   = 0;
+		TheWaterStats.flatVerts    = 0;	// Ronin @diagnostic 29/09/2026 DX9: phase 2's grid
+		TheWaterStats.flatCell     = 0.0f;	// Ronin @bugfix 03/10/2026 DX9: its real cell in view
+		TheWaterStats.seaPolys     = 0;	// Ronin @diagnostic 01/10/2026 DX9: sea / lake
+		TheWaterStats.lakePolys    = 0;
+		TheWaterStats.wakeTrails   = 0;	// Ronin @feature 03/10/2026 DX9: phase 5 - wakes
+		TheWaterStats.wakeVerts    = 0;
+		TheWaterStats.wakeRipples  = 0;
+		TheWaterStats.wakeTexel    = 0.0f;
+		TheWaterStats.enabled      = (s_rowOn[W3DDebugPanel::ROW_WATER] && s_visible) ? TRUE : FALSE;
 	}
 
 	// Ronin @feature 28/09/2026 DX9: sets the row's text and hands it to the panel for this frame.
@@ -1584,6 +1855,18 @@ namespace
 			return;
 		s_rowText[row]->setText(text);
 		W3DDebugPanel::setRow(row, s_rowText[row], color);
+	}
+
+	// Ronin @diagnostic 28/09/2026 DX9: [WATER] - a water shader's last creation attempt as text.
+	void formatWaterShader(UnicodeString &out, Int stage, HRESULT hr)
+	{
+		switch (stage)
+		{
+			case WaterDebugStats::PS_OK:            out = L"ok"; break;
+			case WaterDebugStats::PS_ASM_FAILED:    out.format(L"FAIL(asm %08X)", (UnsignedInt)hr); break;
+			case WaterDebugStats::PS_CREATE_FAILED: out.format(L"FAIL(create %08X)", (UnsignedInt)hr); break;
+			default:                                out = L"not-tried"; break;
+		}
 	}
 
 	// Ronin @feature 28/09/2026 DX9: every row, each behind its `rows` switch. The first seven lived in W3DDisplay.cpp.
@@ -1798,6 +2081,90 @@ namespace
 				W3DTaa::getDebug(), gpu.str());
 			putRow(W3DDebugPanel::ROW_TAA, text, GameMakeColor(255, 200, 120, 255));
 		}
+
+		// Ronin @diagnostic 28/09/2026 DX9: [WATER] - Water_Work.md §5 step 1. flat/river/mesh = draws / draws with the water
+		// shader bound on the device; N/0 = the fixed-function fallback. other = the rest of [DRAW] water (sky, shore waves).
+		if (s_rowOn[W3DDebugPanel::ROW_WATER] && TheWaterRenderObj != nullptr)
+		{
+			UnicodeString flatPS, riverPS;
+			formatWaterShader(flatPS, TheWaterStats.flatPSStage, TheWaterStats.flatPSHr);
+			formatWaterShader(riverPS, TheWaterStats.riverPSStage, TheWaterStats.riverPSHr);
+			const unsigned all   = s_drawNow[Debug_Statistics::DRAW_SUBSYS_WATER];
+			const unsigned known = s_waterNow.flatDraws + s_waterNow.riverDraws + s_waterNow.meshDraws;
+			// the soft shore edge, the same three terms as W3DWater.cpp drawTrapezoidWater
+			const Bool edge = DX8Wrapper::getBackBufferFormat() == WW3D_FORMAT_A8R8G8B8 && TheGlobalData->m_showSoftWaterEdge &&
+				TheWaterTransparency->m_transparentWaterDepth != 0;
+			// Ronin @feature 28/09/2026 DX9: WaterType 2 - the ported sea shaders, the caust frames built, the sea's patch draws.
+			if (TheGlobalData->m_waterType == 2)
+			{
+				UnicodeString seaVS, seaPS;
+				formatWaterShader(seaVS, TheWaterStats.seaVSStage, TheWaterStats.seaVSHr);
+				formatWaterShader(seaPS, TheWaterStats.seaPSStage, TheWaterStats.seaPSHr);
+				// flat/river/sea = draws / with both WaterSea shaders bound; lvl = the mirror plane's height (lvl* = from GameData);
+				// s/l = standing polygons, sea / lake; D / O = the map's soft shore; nrm = the normal maps (docs/Debug_Panel_Design.md)
+				const wchar_t *nrm = (TheWaterStats.normalMap == 2) ? L"ok" : (TheWaterStats.normalMap == 1) ? L"missing" : L"none";
+				// Ronin @feature 02/10/2026 DX9: phase 4 - nrmLake / nrmRiver = WaterNormalLake / River.tga, the same codes (missing = the sea's)
+				const wchar_t *nrmLake = (TheWaterStats.normalMapLake == 2) ? L"ok" : (TheWaterStats.normalMapLake == 1) ? L"missing" : L"none";
+				const wchar_t *nrmRiver = (TheWaterStats.normalMapRiver == 2) ? L"ok" : (TheWaterStats.normalMapRiver == 1) ? L"missing" : L"none";
+				// Ronin @feature 29/09/2026 DX9: hmap = the terrain-height texture (F = R32F the vertex shader reads, L8 = no swell);
+				// verts = the flat grid's vertices; refr = the frame copy: ok, FAIL or off
+				const wchar_t *refr = (TheWaterStats.refraction == 2) ? L"ok" : (TheWaterStats.refraction == 1) ? L"FAIL" : L"off";
+				// Ronin @diagnostic 02/10/2026 DX9: compact - it ran off the screen. Detail only where something is wrong: sh = both
+				// shaders and all 4 PS builds, nrm = all three normal maps, bump only when short; lvl* = from the ini, not the map.
+				const Bool shOk  = (TheWaterStats.seaVSStage == WaterDebugStats::PS_OK && TheWaterStats.seaPSStage == WaterDebugStats::PS_OK &&
+					TheWaterStats.psVariants == 4) ? TRUE : FALSE;
+				const Bool nrmOk = (TheWaterStats.normalMap == 2 && TheWaterStats.normalMapLake == 2 && TheWaterStats.normalMapRiver == 2) ? TRUE : FALSE;
+				const wchar_t *hmap = (TheWaterStats.heightW <= 0) ? L"none" : (TheWaterStats.heightVTF ? L"F" : L"L8");
+				UnicodeString part;
+				if (shOk)
+					text.format(L"[WATER] type=2  sh=ok");
+				else
+					text.format(L"[WATER] type=2  VS=%s PS=%s psv=%d/4", seaVS.str(), seaPS.str(), TheWaterStats.psVariants);
+				if (TheWaterStats.bumpFrames != 32)
+				{
+					part.format(L"  bump=%d/32", TheWaterStats.bumpFrames);
+					text.concat(part);
+				}
+				if (nrmOk)
+					part.format(L"  nrm=ok");
+				else
+					part.format(L"  nrm=%s/%s/%s", nrm, nrmLake, nrmRiver);
+				text.concat(part);
+				// Ronin @bugfix 03/10/2026 DX9: c = the swell grid's real cell in view, world units (`swellcell`, or coarser
+				// when the view outgrows the vertex budget)
+				part.format(L"  hmap=%s  flat=%u/%u %uv c%.0f  river=%u/%u", hmap, s_waterNow.flatDraws, s_waterNow.flatPSDraws,
+					s_waterNow.flatVerts, s_waterNow.flatCell, s_waterNow.riverDraws, s_waterNow.riverPSDraws);
+				text.concat(part);
+				if (s_waterNow.seaDraws > 0)
+				{
+					part.format(L"  sea=%u/%u", s_waterNow.seaDraws, s_waterNow.seaPSDraws);
+					text.concat(part);
+				}
+				// Ronin @feature 03/10/2026 DX9: phase 5 - wake = trails drawn + rings (04/10) / their vertices, t = world units a wake
+				// texel; +m = the mesh rises too. off = `wakes` 0 or no WaterWake shaders, none = the card cannot (RGBA16F target)
+				if (s_waterNow.wakeState <= 1)
+					part.format(L"  wake=%s", (s_waterNow.wakeState == 1) ? L"none" : L"off");
+				else
+					part.format(L"  wake=%u+%ur/%uv t%.2g%s", s_waterNow.wakeTrails, s_waterNow.wakeRipples, s_waterNow.wakeVerts, s_waterNow.wakeTexel,
+						(s_waterNow.wakeState == 3) ? L"+m" : L"");
+				text.concat(part);
+				part.format(L"  s/l=%u/%u  lvl%s=%.1f  refr=%s  mir=%dx%d  D=%.1f O=%.2f", s_waterNow.seaPolys, s_waterNow.lakePolys,
+					TheWaterStats.seaLevelFromMap ? L"" : L"*", TheWaterStats.seaLevel, refr, TheWaterStats.mirrorW, TheWaterStats.mirrorH,
+					TheWaterTransparency->m_transparentWaterDepth, TheWaterTransparency->m_minWaterOpacity);
+				text.concat(part);
+			}
+			else
+			{
+				text.format(L"[WATER] type=%d  chip=%d  flatPS=%s  riverPS=%s  flat=%u/%u  river=%u/%u  mesh=%u/%u  other=%u  edge=%d",
+					TheGlobalData->m_waterType, (Int)W3DShaderManager::getChipset(), flatPS.str(), riverPS.str(),
+					s_waterNow.flatDraws, s_waterNow.flatPSDraws,
+					s_waterNow.riverDraws, s_waterNow.riverPSDraws,
+					s_waterNow.meshDraws, s_waterNow.meshPSDraws,
+					(all > known) ? (all - known) : 0u,
+					edge ? 1 : 0);
+			}
+			putRow(W3DDebugPanel::ROW_WATER, text, GameMakeColor(110, 190, 255, 255));
+		}
 	}
 
 	// Ronin @feature 28/09/2026 DX9: no panel window, so no rows. One line where the first row used to sit says so, instead of
@@ -1880,7 +2247,8 @@ void W3DDebugPanel::update(void)
 		registerCommand("clear", "clear this output", cmdClear);
 		registerCommand("close", "hide this panel (Ctrl+Shift+Z shows it again)", cmdClose);
 		registerCommand("shutdown", "quit the game to the desktop now", cmdShutdown);
-		registerCommand("water", "water [flat|mesh 0|1] - draw the flat water / the water grid mesh", cmdWater);
+		registerCommand("water", "water [profile sea|lake|river] | water <switch> 0|1 | water view [0..14] | water <knob> <v> | water save|load|defaults - `water` alone shows the table", cmdWater);
+		registerCommand("perf", "perf [reset] - the [PERF] run mean; reset starts it over (measure each switch state apart)", cmdPerf);
 		registerCommand("rows", "rows [<name>|all 0|1] - list the readout rows, or switch one or all", cmdRows);
 		registerCommand("taa", "taa [0|1] | taa <knob> <v> - temporal AA; the [TAA] row shows live state", cmdTaa);
 		registerCommand("ssao", "ssao [0..3] | ssao trees <auto|0|1> - ambient occlusion quality (not saved); trees: AO on trees", cmdSsao);
@@ -2060,7 +2428,15 @@ void W3DDebugPanel::update(void)
 	Int curW = 0, curH = 0;
 	win->winGetSize(&curW, &curH);
 	if (curW != panelW || curH != panelH)
+	{
 		win->winSetSize(panelW, panelH);
+		// Ronin @bugfix 03/10/2026 DX9: grown past the screen's bottom (the `water` table) - lift it back on.
+		Int px = 0, py = 0;
+		win->winGetPosition(&px, &py);
+		const Int maxY = (TheDisplay != nullptr) ? (Int)TheDisplay->getHeight() - panelH : py;
+		if (py > maxY)
+			win->winSetPosition(px, (maxY > 0) ? maxY : 0);
+	}
 
 	if (entry != nullptr)
 	{

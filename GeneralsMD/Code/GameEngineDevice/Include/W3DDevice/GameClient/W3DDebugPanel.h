@@ -33,6 +33,7 @@ public:
 		ROW_UI,			// Ronin @diagnostic 15/09/2026 DX9: input ownership
 		ROW_RSTATE,		// Ronin @diagnostic 20/09/2026 DX9: device-call counters, off by default
 		ROW_TAA,		// Ronin @diagnostic 20/09/2026 DX9: TAA state; shown whenever TAA is on
+		ROW_WATER,		// Ronin @diagnostic 28/09/2026 DX9: water shader load/use and draws, docs/Water_Work.md §5
 		ROW_COUNT
 	};
 
