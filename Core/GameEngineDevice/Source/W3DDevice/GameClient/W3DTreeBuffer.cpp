@@ -84,6 +84,7 @@ enum
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DShadowMapState.h"
+#include "W3DDevice/GameClient/W3DWaterMirror.h"	// Ronin @bugfix 01/10/2026 DX9: the mirror plane, for cull()
 #include "WW3D2/camera.h"
 #include "WW3D2/dx8wrapper.h"
 #include "WW3D2/dx8renderer.h"
@@ -332,6 +333,13 @@ void W3DTreeBuffer::cull(const CameraClass * camera)
 			swept.Center += lightTravel * (reach * 0.5f);
 			swept.Radius += reach * 0.5f;
 			visible = !camera->Cull_Sphere(swept);
+		}
+		// Ronin @bugfix 01/10/2026 DX9: keep a tree whose REFLECTION is on screen - the water mirror draws this set, so a tree
+		// just past the view's edge went missing from the water. Its sphere mirrored in the water plane (W3DWaterMirror.h).
+		if (!visible && TheWaterMirror.active) {
+			SphereClass mirrored = m_trees[curTree].bounds;
+			mirrored.Center.Z = 2.0f * TheWaterMirror.level - mirrored.Center.Z;
+			visible = !camera->Cull_Sphere(mirrored);
 		}
 		if (visible != m_trees[curTree].visible) {
 			m_trees[curTree].visible=visible;
@@ -1491,7 +1499,11 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 	// rebuild, the sway/topple stepping, the decal queue. Culling against the light frustum ate
 	// m_updateAllKeys (cull() clears it at :328) and rebuilt the VB from the light-visible set, so the
 	// main pass never re-culled — that was the popping.
-	const Bool depthPass = TheTerrainShadowPass.inDepthPass;
+	const Bool lightPass  = TheTerrainShadowPass.inDepthPass;
+	// Ronin @bugfix 29/09/2026 DX9: the water mirror is a side pass too: it renders before the main view and its cull ate
+	// m_updateAllKeys, so the main view drew the mirror's tree set. `depthPass` now means either side pass.
+	const Bool mirrorPass = ShaderClass::Is_Backface_Culling_Inverted();
+	const Bool depthPass  = lightPass || mirrorPass;
 
 	// if breeze changes, always process the full update, even if not visible,
 	// so that things offscreen won't 'pop' when first viewed
@@ -1553,10 +1565,11 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 	// texel-snapped (§29b), so it STEPS as the camera moves and edge trees drop out of the caster set —
 	// that is the shadow blinking. Both passes now agree on the visible set, so neither has to redo it.
 	const CameraClass *cullCamera = camera;
-	if (depthPass && TheTerrainShadowPass.sceneCamera != NULL) {
+	if (lightPass && TheTerrainShadowPass.sceneCamera != NULL) {
 		cullCamera = TheTerrainShadowPass.sceneCamera;
 	}
-	if (m_updateAllKeys) {
+	// Ronin @bugfix 29/09/2026 DX9: never cull in the mirror pass - it runs first and would hand the main view its set.
+	if (m_updateAllKeys && !mirrorPass) {
 		cull(cullCamera);
 	}
 
@@ -1889,6 +1902,11 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 				}
 				if (oldRT != NULL)
 					oldRT->Release();
+			} else if (shadowOn) {
+				// Ronin @bugfix 01/10/2026 DX9: no accumulation (the water mirror) - zero the history weight, as the terrain
+				// receiver does in reflections: c22 is device state, and the mirror's leaves popped while zooming.
+				const float psC22NoHist[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				psDev->SetPixelShaderConstantF(22, psC22NoHist, 1);
 			}
 		}
 

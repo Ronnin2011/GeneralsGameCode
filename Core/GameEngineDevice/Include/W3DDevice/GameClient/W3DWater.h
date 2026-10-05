@@ -138,6 +138,14 @@ public:
 	void ReleaseResources();	///< Release all dx8 resources so the device can be reset.
 	void ReAcquireResources();  ///< Reacquire all resources after device reset.
 	Real getWaterHeight(Real x, Real y);	///<return water height at given point - for use by WB.
+	// Ronin @feature 03/10/2026 DX9: phase 5 - the swell on the CPU, as the vertex shader draws it, for units that float.
+	Bool standingWater(Real x, Real y, Int *kind, Real *level) const;	///< a sea or lake polygon over this point: its kind and flat level
+	Real swellHeight(Real x, Real y, Int kind, Real level) const;		///< how far the surface stands above that level there
+	void rideSwell(Matrix3D &mtx, Real halfLength, Real halfWidth, Int kind, Real level) const;	///< lift and tilt a floating unit's transform by it
+	// Ronin @feature 03/10/2026 DX9: phase 5 - wakes: a unit in the water this frame - its trail grows (`wake`), then it
+	// rides the swell.
+	void floatUnit(UnsignedInt drawableID, Matrix3D &mtx, Real halfLength, Real halfWidth, Bool wake);
+	Bool ownsWake(UnsignedInt drawableID) const;	///< the water draws this unit's wake: its vanilla wake sprites can go
 	void setGridHeightClamps(Real minz, Real maxz);	///<set min/max height values alllowed in grid
 	void addVelocity( Real worldX, Real worldY, Real zVelocity, Real preferredHeight );	///< add velocity value
 	void changeGridHeight(Real x, Real y, Real delta);	///<change height of grid at world point including neighbors within falloff.
@@ -200,6 +208,13 @@ protected:
 	Int						m_vertexBufferD3DOffset;	///<location to start writing vertices
 	// Ronin @build DX9: Changed from DWORD handles to native DX9 shader pointers
 	IDirect3DPixelShader9*	m_dwWavePixelShader;	///<DX9 pixel shader pointer
+	// Ronin @feature 02/10/2026 DX9: phase 4 - the WaterSea variants beside m_dwWavePixelShader (standing water): with the
+	// debug views, rivers, rivers with the views. Any may be missing; pickWavePS falls back.
+	IDirect3DPixelShader9*	m_wavePSViews;
+	IDirect3DPixelShader9*	m_wavePSRiver;
+	IDirect3DPixelShader9*	m_wavePSRiverViews;
+	Int						m_bindKind;			///< the WaterKind bindWaterSea last bound, for bindReflectiveShaders
+	IDirect3DPixelShader9*	pickWavePS(Int kind) const;
 	IDirect3DVertexShader9*	m_dwWaveVertexShader;	///<DX9 vertex shader pointer
 	Int	m_numVertices;				///<number of vertices in D3D vertex buffer
 	Int m_numIndices;				///<number of indices in D3D index buffer
@@ -256,6 +271,80 @@ protected:
 	TextureClass *m_whiteTexture;		///< a texture containing only white used for null pixel shader stages.
 	TextureClass *m_waterNoiseTexture;
 	TextureClass *m_waterSparklesTexture;
+	TextureClass *m_waterNormalTexture;	///< Ronin @feature 28/09/2026 DX9: WaterSea surface normals, WaterNormal.tga
+	TextureClass *m_waterNormalLake;	///< Ronin @feature 02/10/2026 DX9: phase 4 - the lake's calm ripples, WaterNormalLake.tga
+	TextureClass *m_waterNormalRiver;	///< Ronin @feature 02/10/2026 DX9: phase 4 - the river's ripples, WaterNormalRiver.tga
+	// Ronin @feature 29/09/2026 DX9: phase 1 - the terrain heights as a texture (D3DPOOL_MANAGED), built per map in load().
+	IDirect3DTexture9 *m_heightTexture;
+	Int m_heightTexW, m_heightTexH, m_heightBorder;
+	Bool m_heightVTF;			///< Ronin @feature 29/09/2026 DX9: phase 2 - R32F the vertex shader can read (else L8, no swell)
+	void buildHeightTexture();	///< from TheTerrainRenderObject's height map; releases any previous one
+	// Ronin @feature 29/09/2026 DX9: phase 3 - the frame just before the flat water draws, for its refraction.
+	TextureClass *m_refractionTexture;	///< POOL_DEFAULT render target, the size of the current target
+	UnsignedInt m_refractionW, m_refractionH;
+	Bool m_refractionOK;		///< this frame's copy succeeded
+	void copyRefraction();		///< copy render target 0 into it, when the WaterSea shader will read it
+	void ensureReflectionTarget();	///< Ronin @diagnostic 29/09/2026 DX9: the mirror at `mirrorres` size
+	// Ronin @bugfix 01/10/2026 DX9: sea (a standing polygon reaching the map's edge) or lake, for the WaterSea opacity.
+	Bool m_standingIsSea;			///< the standing polygon renderWater is drawing
+	Bool isSeaPolygon(PolygonTrigger *pTrig) const;
+	Real m_swellCellNow;			///< Ronin @bugfix 03/10/2026 DX9: the swell grid's real cell under the draw being bound, world units
+	Real m_swellCellSea;			///< Ronin @feature 03/10/2026 DX9: phase 5 - the last real cell drawn in view, per kind:
+	Real m_swellCellLake;			///< swellHeight moves by the waves the grid carried
+	// Ronin @feature 03/10/2026 DX9: phase 5 - wakes. Each unit moving in the water keeps a trail of where its centre has
+	// been (128 points); once a frame the trails are drawn as ribbons into m_wakeTexture, which the WaterSea shaders read.
+	enum { WAKE_TRAILS = 24, WAKE_POINTS = 128 };
+	struct WakePoint
+	{
+		Real x, y;			///< where the unit's centre was
+		Real time;			///< the water clock then, seconds
+		Real path;			///< the trail's length to here
+		Real strength;		///< from the unit's speed, size and the depth there
+	};
+	struct WakeTrail
+	{
+		UnsignedInt id;		///< the unit's DrawableID, 0 = free
+		Real seen;			///< the water clock when it last drew
+		Real halfLength, halfWidth;
+		Real lastX, lastY;	///< its centre last frame
+		Real speed;			///< smoothed, world units a second
+		Real lead;			///< +1 the bow leads, -1 the stern (reversing)
+		Real headX, headY;	///< its centre now
+		Real dirX, dirY;	///< the way it travels now: its heading x lead
+		Real markX, markY;	///< that, at the last point dropped
+		Real headStrength;
+		Real idle;			///< Ronin @feature 04/10/2026 DX9: 0 moving .. 1 at rest, eased: how strong its rings are
+		Real idleScale;		///< their height by its beam and the depth
+		Real peak;			///< how fast it has lately been, as a share of a boat's full speed: a surge when it stops
+		Int  first, count;	///< a ring of points, oldest first
+		WakePoint pt[WAKE_POINTS];
+	};
+	WakeTrail m_wake[WAKE_TRAILS];
+	// Ronin @feature 04/10/2026 DX9: a ring leaving a hull: the surge ahead of a unit that stopped. Drawn into the wake
+	// texture with the trails (a resting unit's rings are drawn from its trail's `idle`).
+	enum { WAKE_RIPPLES = 48 };
+	struct WakeRipple
+	{
+		Real x, y;			///< the hull's centre when it left
+		Real dirX, dirY;	///< the hull's heading then
+		Real halfSeg;		///< half the hull's straight part: the ring keeps the hull's outline
+		Real start;			///< its distance from that at birth
+		Real time, life;	///< born (water clock), seconds it lasts; life 0 = free
+		Real speed, height;
+		Real ahead;			///< 0 all round (a ring), 1 ahead only (a surge)
+	};
+	WakeRipple m_ripple[WAKE_RIPPLES];
+	Int m_rippleNext;			///< the next to write: the oldest goes
+	void addRipple(Real x, Real y, Real dirX, Real dirY, Real halfLength, Real halfWidth, Real now, Real life, Real speed, Real height, Real ahead);
+	IDirect3DTexture9 *m_wakeTexture;		///< POOL_DEFAULT render target, A16B16G16R16F: xy slope, z foam, w height
+	IDirect3DVertexShader9 *m_wakeVS;		///< WaterWake.vso / .pso: one trail's ribbon into it
+	IDirect3DPixelShader9  *m_wakePS;
+	Int  m_wakeFormat;			///< -1 not asked; 0 the card cannot; 1 the PS reads it; 2 the VS too (the mesh moves)
+	Bool m_wakeLive;			///< this frame's texture holds a wake: bindWaterSea hands it to the standing water
+	Real m_wakeScale, m_wakeOffsetU, m_wakeOffsetV;	///< world xy -> its uv
+	void noteWake(UnsignedInt drawableID, const Matrix3D &mtx, Real halfLength, Real halfWidth, Real depth);
+	void renderWakes();			///< once a frame, before the water draws
+	void clearWakes();
 	Real m_riverXOffset;
 	Real m_riverYOffset;
 	Bool m_drawingRiver;
@@ -297,6 +386,12 @@ protected:
 	void setupFlatWaterShader();
 	void setupJbaWaterShader();
 	void cleanupJbaWaterShader();
+	// Ronin @feature 28/09/2026 DX9: reflective water (WaterType 2) on the map's own polygons, WaterSea_vs/_ps.
+	Bool useReflection() const;					///< WaterType 2 with both sea shaders and the reflection target
+	void setupReflectiveWater(Bool river);		///< state, textures, constants; the shaders go on in bindReflectiveShaders
+	void bindWaterSea(IDirect3DBaseTexture9 *water, IDirect3DBaseTexture9 *edge, Real edgeScaleU, Bool riverShroud, Bool standing);	///< fill and bind the W3DWaterSea.h inputs this object owns
+	void bindReflectiveShaders();				///< after the draw's BindLayoutFVF, which clears the vertex shader
+	void unbindReflectiveShaders(DWORD fvf);	///< back to fixed function, texture references dropped
 
 	//Methods used for GeForce3 specific water
 	HRESULT generateIndexBuffer(int sizeX, int sizeY);	///<Generate static index buufer
@@ -334,10 +429,54 @@ inline Bool WaterRenderObjClass::worldToGridSpace(Real worldX, Real worldY, Real
 
 extern WaterRenderObjClass *TheWaterRenderObj; ///<global water rendering object
 
-// Ronin @feature 15/09/2026 DX9: water on/off from the debug panel `water` command (dev tool). All FALSE = normal drawing.
+// Ronin @feature 15/09/2026 DX9: water switches for the debug panel `water` command (dev tool). The defaults draw normally.
 struct WaterDebugFlags
 {
 	Bool skipFlat;		///< skip renderWater: flat water areas and rivers
 	Bool skipMesh;		///< skip renderWaterMesh: the deforming water grid
+	// Ronin @feature 28/09/2026 DX9: shore waves, Water_Work.md F5.
+	Bool skipWaves;		///< skip WaterTracksRenderSystem::flush: the shore waves
+	// Ronin @feature 28/09/2026 DX9: WaterType 2. The look knobs live in W3DWaterSeaTuning.h (29/09).
+	Bool seaPlane;		///< draw the original infinite sea plane (drawSea) instead of the map's water polygons
 };
 extern WaterDebugFlags TheWaterDebug;
+
+// Ronin @diagnostic 28/09/2026 DX9: [WATER] panel row. W3DWater.cpp writes it; the panel reads it, zeroes the draw counts
+// every frame and sets `enabled`. docs/Water_Work.md §5 step 1.
+struct WaterDebugStats
+{
+	enum { PS_NOT_TRIED = 0, PS_ASM_FAILED, PS_CREATE_FAILED, PS_OK };
+	Bool        enabled;				///< count draws and check the bound shader only while TRUE
+	Int         flatPSStage;			///< m_trapezoidWaterPixelShader's last creation attempt, a PS_ value
+	Int         riverPSStage;			///< m_riverWaterPixelShader's last creation attempt
+	HRESULT     flatPSHr;				///< result of the call that failed
+	HRESULT     riverPSHr;
+	UnsignedInt flatDraws,  flatPSDraws;	///< this frame's draws / of them, with the water shader bound
+	UnsignedInt riverDraws, riverPSDraws;
+	UnsignedInt meshDraws,  meshPSDraws;
+	// Ronin @feature 28/09/2026 DX9: WaterType 2 sea (WaterSea_vs/_ps).
+	Int         seaVSStage, seaPSStage;	///< PS_OK, PS_CREATE_FAILED (load or create) or PS_NOT_TRIED
+	HRESULT     seaVSHr, seaPSHr;
+	Int         bumpFrames;				///< caust frames initBumpMap built, of NUM_BUMP_FRAMES
+	UnsignedInt seaDraws, seaPSDraws;
+	Real        seaLevel;				///< the sea plane's height, set per map in load()
+	Bool        seaLevelFromMap;		///< TRUE = a water area's height, FALSE = GameData WaterPositionZ
+	Int         normalMap;				///< WaterNormal.tga: 2 loaded, 1 missing (WW3D's placeholder), 0 not loaded
+	Int         normalMapLake;			///< Ronin @feature 02/10/2026 DX9: WaterNormalLake.tga, the same codes
+	Int         normalMapRiver;			///< Ronin @feature 02/10/2026 DX9: WaterNormalRiver.tga, the same codes
+	Int         psVariants;				///< Ronin @feature 02/10/2026 DX9: phase 4 - WaterSea pixel shader builds loaded, of 4
+	Int         heightW, heightH;		///< Ronin @feature 29/09/2026 DX9: the terrain-height texture, 0 x 0 = none
+	Bool        heightVTF;				///< Ronin @feature 29/09/2026 DX9: phase 2 - it is R32F and vertex-readable (the swell)
+	UnsignedInt flatVerts;				///< Ronin @feature 29/09/2026 DX9: this frame's flat-water grid vertices
+	Real        flatCell;				///< Ronin @bugfix 03/10/2026 DX9: the swell grid's largest real cell in view this frame, 0 = no swell grid
+	Int         refraction;				///< Ronin @feature 29/09/2026 DX9: phase 3 - 0 off, 1 copy failed, 2 ok
+	Int         mirrorW, mirrorH;		///< Ronin @diagnostic 29/09/2026 DX9: the mirror target's size
+	UnsignedInt seaPolys, lakePolys;	///< Ronin @diagnostic 01/10/2026 DX9: this frame's standing polygons by kind
+	// Ronin @feature 03/10/2026 DX9: phase 5 - wakes
+	Int         wakeState;				///< 0 off or no shaders, 1 the card cannot, 2 the PS reads the texture, 3 the mesh moves too
+	UnsignedInt wakeTrails, wakeVerts;	///< this frame's trails drawn and their ribbon vertices
+	UnsignedInt wakeRipples;			///< Ronin @feature 04/10/2026 DX9: this frame's rings and surges drawn
+	Real        wakeTexel;				///< world units a wake texel this frame, 0 = none drawn
+};
+extern WaterDebugStats TheWaterStats;
+

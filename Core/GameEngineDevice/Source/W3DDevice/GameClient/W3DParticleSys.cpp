@@ -34,6 +34,7 @@
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/W3DSnow.h"
+#include "W3DDevice/GameClient/W3DWaterFloat.h"	// Ronin @feature 03/10/2026 DX9: phase 5 - W3DWater_OwnsWake
 #include "WW3D2/camera.h"
 
 
@@ -200,6 +201,10 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 
 		// only look at particle/point style systems
 		if (sys->isUsingDrawables())
+			continue;
+
+		// Ronin @feature 03/10/2026 DX9: phase 5 - the water draws this unit's wake itself (`water oldwakes 1` = both)
+		if (sys->m_isGroundAligned && W3DWater_OwnsWake((unsigned int)sys->getAttachedDrawable()))
 			continue;
 
 		//temporary hack that checks if texture name starts with "SMUD" - if so, we can assume it's a smudge type

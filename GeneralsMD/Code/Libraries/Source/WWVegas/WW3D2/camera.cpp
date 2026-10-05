@@ -101,6 +101,7 @@ CameraClass::CameraClass() :
 	ZBufferMin(0.0f),									// smallest value we'll write into the z-buffer
 	ZBufferMax(1.0f),									// largest value we'll write into the z-buffer
 	TAAJitter(false),									// Ronin @feature 20/09/2026 DX9: off unless the main view opts in
+	ObliqueNear(false),									// Ronin @bugfix 29/09/2026 DX9: only the water mirror sets it
 	FrustumValid(false)
 {
 	Set_Transform(Matrix3D(true));
@@ -136,7 +137,8 @@ CameraClass::CameraClass(const CameraClass & src) :
 	AspectRatio(src.AspectRatio),
 	ZBufferMin(src.ZBufferMin),
 	ZBufferMax(src.ZBufferMax),
-	TAAJitter(src.TAAJitter)
+	TAAJitter(src.TAAJitter),
+	ObliqueNear(false)				// Ronin @bugfix 29/09/2026 DX9: a mirror pass's plane is never copied
 {
 	// just being paranoid in case any parent class doesn't completely copy the entire state...
 	FrustumValid = false;
@@ -769,6 +771,35 @@ void CameraClass::Apply()
 		W3DTaa::getJitterNDC(&jitterX, &jitterY);
 		d3dprojection[0][2] += jitterX;
 		d3dprojection[1][2] += jitterY;
+	}
+
+	// Ronin @bugfix 29/09/2026 DX9: water mirror - Lengyel's oblique near plane. The near plane becomes ObliquePlane (world,
+	// kept side positive), so the reflection drops what lies below the water, for fixed-function and shader draws alike.
+	if (ObliqueNear)
+	{
+		const Matrix3D &toWorld = Get_Transform();
+		Vector4 c;	// the plane in view space: c(v) = plane(toWorld * v)
+		c.X = toWorld[0][0] * ObliquePlane.X + toWorld[1][0] * ObliquePlane.Y + toWorld[2][0] * ObliquePlane.Z;
+		c.Y = toWorld[0][1] * ObliquePlane.X + toWorld[1][1] * ObliquePlane.Y + toWorld[2][1] * ObliquePlane.Z;
+		c.Z = toWorld[0][2] * ObliquePlane.X + toWorld[1][2] * ObliquePlane.Y + toWorld[2][2] * ObliquePlane.Z;
+		c.W = toWorld[0][3] * ObliquePlane.X + toWorld[1][3] * ObliquePlane.Y + toWorld[2][3] * ObliquePlane.Z + ObliquePlane.W;
+		if (c.W < 0.0f)	// the camera on the dropped side, else the plane would cut into the view itself
+		{
+			// the far corner opposite the plane (its clip-space x / y signs), in view space; the new z row puts it at z = w
+			const Matrix4x4 inv = d3dprojection.Inverse();
+			const float px = c.X * inv[0][0] + c.Y * inv[1][0] + c.Z * inv[2][0] + c.W * inv[3][0];
+			const float py = c.X * inv[0][1] + c.Y * inv[1][1] + c.Z * inv[2][1] + c.W * inv[3][1];
+			const float sx = (px > 0.0f) ? 1.0f : ((px < 0.0f) ? -1.0f : 0.0f);
+			const float sy = (py > 0.0f) ? 1.0f : ((py < 0.0f) ? -1.0f : 0.0f);
+			Vector4 q;
+			q.X = inv[0][0] * sx + inv[0][1] * sy + inv[0][2] + inv[0][3];
+			q.Y = inv[1][0] * sx + inv[1][1] * sy + inv[1][2] + inv[1][3];
+			q.Z = inv[2][0] * sx + inv[2][1] * sy + inv[2][2] + inv[2][3];
+			q.W = inv[3][0] * sx + inv[3][1] * sy + inv[3][2] + inv[3][3];
+			const float cq = c.X * q.X + c.Y * q.Y + c.Z * q.Z + c.W * q.W;
+			if (cq > 1.0e-6f)
+				d3dprojection[2] = Vector4(c.X / cq, c.Y / cq, c.Z / cq, c.W / cq);
+		}
 	}
 
 	DX8Wrapper::Set_Projection_Transform_With_Z_Bias(d3dprojection,ZNear,ZFar);

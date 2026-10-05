@@ -236,6 +236,10 @@ public:
 	void								Enable_TAA_Jitter(bool onoff) { TAAJitter = onoff; }
 	bool								Is_TAA_Jitter_Enabled() const { return TAAJitter; }
 
+	// Ronin @bugfix 29/09/2026 DX9: water mirror. A world-space plane (kept side positive) Apply() makes the near plane, so the
+	// reflection drops what lies below the water; nullptr = off. Set only around W3DWater::renderMirror.
+	void								Set_Oblique_Near_Plane(const Vector4 *plane) { ObliqueNear = (plane != nullptr); if (plane) ObliquePlane = *plane; }
+
 	// utility class to convert to old space of 0..1
 	static void	Convert_Old(Vector3 &pos);
 
@@ -252,6 +256,9 @@ protected:
 	float								ZBufferMin;		// smallest value we'll write into the z-buffer (usually 0.0)
 	float								ZBufferMax;		// largest value we'll write into the z-buffer (usually 1.0)
 	bool								TAAJitter;		// this camera takes the TAA subpixel offset in Apply()
+	// Ronin @bugfix 29/09/2026 DX9: water mirror - Apply() makes ObliquePlane the near plane while ObliqueNear is set.
+	bool								ObliqueNear;
+	Vector4							ObliquePlane;	// world space (n, d), kept where n.x + d >= 0
 
 	mutable bool					FrustumValid;
 	mutable FrustumClass			Frustum;							// world-space frustum and clip planes

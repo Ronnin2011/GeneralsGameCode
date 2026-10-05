@@ -2157,8 +2157,8 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 
 	// @feature Ronin 03/05/2026 Gate the original `ST_TERRAIN_BASE*` terrain loop
 	// off only when the live per-material terrain path is selected and usable.
+	// Ronin @bugfix 29/09/2026 DX9: the water mirror too - its legacy ps_1.x path (terrain.pso) drew the terrain black.
 	const Bool usePerMaterialTerrainPass =
-		!ShaderClass::Is_Backface_Culling_Inverted() &&
 		!m_disableTextures &&
 		!doMultiPassWireFrame &&
 		TheGlobalData->m_useS20PerMaterialSplat &&
@@ -2399,6 +2399,17 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 		if (m_shroud && rinfo.Additional_Pass_Count() && !TheTerrainShadowPass.inDepthPass)
 		{
 			rinfo.Peek_Additional_Pass(0)->Install_Materials();
+			// Ronin @bugfix 03/10/2026 DX9: in the water mirror the shroud's EQUAL depth test fails in patches (the oblique
+			// near plane): LESSEQUAL with the shroud's old bias there; UnInstall_Materials restores both. Water_Work.md §6.
+			if (ShaderClass::Is_Backface_Culling_Inverted())
+
+			{
+				const float mirrorSlopeBias = -1.0f;
+				const float mirrorConstBias = -1.0e-6f;
+				DX8Wrapper::Set_DX8_Render_State(D3DRS_ZFUNC, D3DCMP_LESSEQUAL);
+				DX8Wrapper::Set_DX8_Render_State(D3DRS_SLOPESCALEDEPTHBIAS, *(DWORD *)(&mirrorSlopeBias));
+				DX8Wrapper::Set_DX8_Render_State(D3DRS_DEPTHBIAS, *(DWORD *)(&mirrorConstBias));
+			}
 			renderTerrainPass(&rinfo.Camera);
 			rinfo.Peek_Additional_Pass(0)->UnInstall_Materials();
 		}

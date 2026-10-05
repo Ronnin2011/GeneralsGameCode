@@ -179,6 +179,49 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/TaaMoverLight.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/TaaMoverLight.pso"
+        # Ronin @build 03/10/2026 TAA - the water's own reactive mask, copied into the velocity target (Water_Work.md §6).
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TaaWaterMask.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TaaWaterMask.pso"
+        # Ronin @build 28/09/2026 Water — the WaterType 2 sea, SM3 ports of wave.nvv/.nvp (Water_Work.md §6).
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/WaterSea.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/WaterSea.vso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/WaterSea.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/WaterSea.pso"
+        # Ronin @build 02/10/2026 Water - the WaterSea variants (WaterSea_ps.hlsl's header): debug views, rivers, rivers + views
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/WaterSeaViews.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/WaterSeaViews.pso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/WaterSeaRiver.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/WaterSeaRiver.pso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/WaterSeaRiverViews.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/WaterSeaRiverViews.pso"
+        # Ronin @build 03/10/2026 Water - wakes: the pair that draws a unit's trail into the wake texture (Water_Work.md §6)
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/WaterWake.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/WaterWake.vso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/WaterWake.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/WaterWake.pso"
+        # Ronin @build 28/09/2026 Water — the WaterSea normal map (scripts/water/GenWaterNormal.ps1). Textures load from
+        # Art/Textures, which the install does not have yet.
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${ZEROHOUR_INSTALL_PATH}/Art/Textures"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/Textures/WaterNormal.tga"
+            "${ZEROHOUR_INSTALL_PATH}/Art/Textures/WaterNormal.tga"
+        # Ronin @build 02/10/2026 Water - the lake's normal map (GenWaterNormal.ps1, its lake recipe)
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/Textures/WaterNormalLake.tga"
+            "${ZEROHOUR_INSTALL_PATH}/Art/Textures/WaterNormalLake.tga"
+        # Ronin @build 02/10/2026 Water - the river's normal map (GenWaterNormal.ps1, its river recipe)
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/Textures/WaterNormalRiver.tga"
+            "${ZEROHOUR_INSTALL_PATH}/Art/Textures/WaterNormalRiver.tga"
         COMMENT "Auto-deploying to Zero Hour installation folder"
 
 

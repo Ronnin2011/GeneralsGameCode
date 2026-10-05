@@ -60,6 +60,7 @@
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/W3DTerrainTracks.h"
+#include "W3DDevice/GameClient/W3DWaterFloat.h"	// Ronin @feature 03/10/2026 DX9: water phase 5 - floating units ride the swell
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "WW3D2/hanim.h"
 #include "WW3D2/hlod.h"
@@ -2099,6 +2100,8 @@ void W3DModelDraw::doDrawModule(const Matrix3D* transformMtx)
 	{
 		Matrix3D mtx = *transformMtx;
 		adjustTransformMtx(mtx);
+		// Ronin @feature 03/10/2026 DX9: water phase 5 - a floating unit rides the swell. Draw only: the Object never moves.
+		W3DWater_RideSwell(getDrawable(), mtx);
 		m_renderObject->Set_Transform(mtx);
 	}
 
