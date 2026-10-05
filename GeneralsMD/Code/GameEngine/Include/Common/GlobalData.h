@@ -189,6 +189,8 @@ public:
 	// Ronin @feature 26/09/2026 DX9: Options.ini DX9TAASharpness (0..1, CAS) and DX9TAAMipBias (-2..0). Defaults 0 and -1.
 	Real m_taaSharpness;
 	Real m_taaMipBias;
+	// Ronin @feature 04/10/2026 DX9: the WaterType 2 mirror; Options.ini key DX9WaterReflections = yes|no. On by default.
+	Bool m_waterReflections;
 	Int  m_textureReductionFactor;	//how much to cut texture resolution: 2 is half, 3 is quarter, etc.
 	Bool m_enableBehindBuildingMarkers;
 	Real m_waterPositionX;

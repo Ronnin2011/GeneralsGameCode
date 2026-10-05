@@ -685,6 +685,8 @@ GlobalData::GlobalData()
 	// Ronin @feature 26/09/2026 DX9: TAA sharpening off, texture mip bias -1 (the usual pairing with native-resolution TAA).
 	m_taaSharpness = 0.0f;
 	m_taaMipBias = -1.0f;
+	// Ronin @feature 04/10/2026 DX9: the water's reflections on unless Options.ini says DX9WaterReflections = no.
+	m_waterReflections = TRUE;
 	m_textureReductionFactor = -1;
 	m_enableBehindBuildingMarkers = TRUE;
 	m_scriptDebug = FALSE;
@@ -1268,6 +1270,8 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_taaEnabled = optionPref.getTAA(TheGlobalData->m_taaEnabled);
 	TheWritableGlobalData->m_taaSharpness = optionPref.getTAASharpness(TheGlobalData->m_taaSharpness);
 	TheWritableGlobalData->m_taaMipBias = optionPref.getTAAMipBias(TheGlobalData->m_taaMipBias);
+	// Ronin @feature 04/10/2026 DX9: water reflections. Same rule.
+	TheWritableGlobalData->m_waterReflections = optionPref.getWaterReflections(TheGlobalData->m_waterReflections);
 
 
 	Int val=optionPref.getGammaValue();

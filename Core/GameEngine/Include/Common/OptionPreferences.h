@@ -131,6 +131,8 @@ public:
 	// Ronin @feature 26/09/2026 DX9: DX9TAASharpness = 0..1 (CAS) and DX9TAAMipBias = -2..0, or `dflt` when absent.
 	Real getTAASharpness(Real dflt) const;
 	Real getTAAMipBias(Real dflt) const;
+	// Ronin @feature 04/10/2026 DX9: DX9WaterReflections = yes|no, or `dflt` when absent.
+	Bool getWaterReflections(Bool dflt) const;
 
 	Int getParticleCap();
 
