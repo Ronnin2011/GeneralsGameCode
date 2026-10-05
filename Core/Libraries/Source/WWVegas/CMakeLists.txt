@@ -8,7 +8,9 @@ target_compile_definitions(core_wwcommon INTERFACE
 
 target_link_libraries(core_wwcommon INTERFACE
     d3d9
-    milesstub
+    deps_dbghelp
+    deps_miles
+    deps_usp10
     stlport
 )
 

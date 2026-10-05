@@ -7607,7 +7607,8 @@ Bool ScriptEngine::evaluateConditions( Script *pScript, Team *thisTeam, Player *
 			}
 			pCondition = pCondition->getNext();
 		}
-		if (andTerm) { // The outer list is OR'ed - so any true inner means we are true.
+		if (andTerm) {
+			// The outer list is OR'ed - so any true inner means we are true.
 			testValue = true;
 			break;
 		}
@@ -7791,6 +7792,13 @@ void ScriptEngine::removeAllSequentialScripts(Object *obj)
 		}
 		if (seqScript->m_objectID == id) {
 			it = cleanupSequentialScript(it, TRUE);
+
+#if RTS_GENERALS && RETAIL_COMPATIBLE_CRC
+			// TheSuperHackers @info Preserve the original (bugged) traversal behavior by skipping the next element, if any.
+			if (it != m_sequentialScripts.end()) {
+				++it;
+			}
+#endif
 		}
     else
 		  ++it;
@@ -8035,7 +8043,8 @@ void ScriptEngine::evaluateAndProgressAllSequentialScripts()
 						itAdvanced = true;
 					}
 
-					if (itAdvanced) {	// check to make sure they aren't dead.
+					if (itAdvanced) {
+						// check to make sure they aren't dead.
 						if (obj && obj->isEffectivelyDead()) {
 							it = cleanupSequentialScript(it, true);
 							continue;
@@ -9779,7 +9788,7 @@ static const std::string F_VOLSPHERERAD	=	"VolSphereRadius";
 static const std::string F_VOLCYLRAD =		"VolCylinderRadius";
 static const std::string F_VOLCYLLEN =		"VolCylinderLength";
 static const std::string F_ISHOLLOW =			"IsHollow";
-static const std::string F_ISXYPLANAR =		"IsGroundAligned";
+static const std::string F_PARTICLEALIGNMENT =		"IsGroundAligned";
 static const std::string F_ISEMITABOVEGROUNDONLY
 																			=		"IsEmitAboveGroundOnly";
 static const std::string F_ISPARTICLEUPTOWARDSEMITTER
@@ -10081,7 +10090,7 @@ void _writeSingleParticleSystem( File *out, ParticleSystemTemplate *templ )
 	}
 
 	thisEntry.append(SEP_HEAD).append(F_ISHOLLOW).append(EQ_WITH_SPACES).append((templ->m_isEmissionVolumeHollow ? STR_TRUE : STR_FALSE)).append(SEP_EOL);
-	thisEntry.append(SEP_HEAD).append(F_ISXYPLANAR).append(EQ_WITH_SPACES).append((templ->m_isGroundAligned ? STR_TRUE : STR_FALSE)).append(SEP_EOL);
+	thisEntry.append(SEP_HEAD).append(F_PARTICLEALIGNMENT).append(EQ_WITH_SPACES).append(GroundAlignmentTypeNames[templ->m_particleAlignment]).append(SEP_EOL);
 	thisEntry.append(SEP_HEAD).append(F_ISEMITABOVEGROUNDONLY).append(EQ_WITH_SPACES).append((templ->m_isEmitAboveGroundOnly ? STR_TRUE : STR_FALSE)).append(SEP_EOL);
 	thisEntry.append(SEP_HEAD).append(F_ISPARTICLEUPTOWARDSEMITTER).append(EQ_WITH_SPACES).append((templ->m_isParticleUpTowardsEmitter ? STR_TRUE : STR_FALSE)).append(SEP_EOL);
 
@@ -10197,7 +10206,8 @@ static void _reloadParticleSystemFromINI( AsciiString particleSystemName )
 			iniFile->nextLine(linebuff, INI_MAX_CHARS_PER_LINE);
 		}
 
-		{	// copy it to a temp file
+		{
+			// copy it to a temp file
 			if (iniFile->eof()) {
 				throw 0;
 			}

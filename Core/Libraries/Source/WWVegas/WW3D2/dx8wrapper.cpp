@@ -112,7 +112,7 @@ const char* DXGetErrorString9A(HRESULT hr)
 #include "formconv.h"
 #include "dx8texman.h"
 #include "WWLib/bound.h"
-#include "WWLib/DbgHelpGuard.h"
+#include "DbgHelpGuard.h"
 
 #include "shdlib.h"
 
@@ -1392,7 +1392,8 @@ void DX8Wrapper::Release_Device()
 		SceneDepthSupport = -1;
 
 		for (int a=0;a<MAX_TEXTURE_STAGES;++a)
-		{	//release references to any textures that were used in last rendering call
+		{
+			//release references to any textures that were used in last rendering call
 			DX8CALL(SetTexture(a,nullptr));
 		}
 
@@ -1770,7 +1771,8 @@ bool DX8Wrapper::Set_Render_Device(int dev, int width, int height, int bits, int
 		}
 
 		if (BitDepth==32 && D3DInterface->CheckDeviceType(0,D3DDEVTYPE_HAL,desktop_mode.Format,D3DFMT_A8R8G8B8, TRUE) == D3D_OK)
-		{	//promote 32-bit modes to include destination alpha
+		{
+			//promote 32-bit modes to include destination alpha
 			_PresentParameters.BackBufferFormat = D3DFMT_A8R8G8B8;
 		}
 
@@ -2216,7 +2218,8 @@ bool DX8Wrapper::Find_Color_And_Z_Mode(int resx,int resy,int bitdepth,D3DFORMAT 
 	}
 
 	if (bitdepth==32 && *set_colorbuffer == D3DFMT_X8R8G8B8 && D3DInterface->CheckDeviceType(0,D3DDEVTYPE_HAL,*set_colorbuffer,D3DFMT_A8R8G8B8, TRUE) == D3D_OK)
-	{	//promote 32-bit modes to include destination alpha when supported
+	{
+		//promote 32-bit modes to include destination alpha when supported
 		*set_backbuffer = D3DFMT_A8R8G8B8;
 	}
 
@@ -3097,7 +3100,7 @@ void DX8Wrapper::Draw(
 	// Debug feature to disable triangle drawing...
 	if (!_Is_Triangle_Draw_Enabled()) return;
 
-#ifdef MESH_RENDER_SNAPSHOT_ENABLED
+#ifdef DEBUG_LOGGING
 	if (WW3D::Is_Snapshot_Activated()) {
 		unsigned long passes=0;
 		SNAPSHOT_SAY(("ValidateDevice:"));
@@ -3145,10 +3148,9 @@ void DX8Wrapper::Draw(
 			break;
 		}
 	}
-#endif	// MESH_RENDER_SNAPSHOT_ENABLED
-
 
 	SNAPSHOT_SAY(("DX8 - draw %d polygons (%d vertices)",polygon_count,vertex_count));
+#endif
 
 	if (vertex_count<3) {
 		min_vertex_index=0;
@@ -3347,7 +3349,24 @@ void DX8Wrapper::Apply_Render_State_Changes()
 			if (render_state_changed & lmask) {
 				SNAPSHOT_SAY(("DX8 - apply light %d", index));
 				if (render_state.LightEnable[index]) {
-					Set_DX8_Light(index, &render_state.Lights[index]);
+#if defined(DEBUG_CRASHING) || defined(DEBUG_LOGGING)
+					if ( WW3D::Is_Snapshot_Activated() ) {
+						D3DLIGHT8 * light = &(render_state.Lights[index]);
+						static const char * _light_types[] = { "Unknown", "Point","Spot", "Directional" };
+						WWASSERT((light->Type >= 0) && (light->Type <= 3));
+
+						SNAPSHOT_SAY((" type = %s amb = %4.2f,%4.2f,%4.2f  diff = %4.2f,%4.2f,%4.2f spec = %4.2f, %4.2f, %4.2f",
+							_light_types[light->Type],
+							light->Ambient.r,light->Ambient.g,light->Ambient.b,
+							light->Diffuse.r,light->Diffuse.g,light->Diffuse.b,
+							light->Specular.r,light->Specular.g,light->Specular.b ));
+						SNAPSHOT_SAY((" pos = %f, %f, %f  dir = %f, %f, %f",
+							light->Position.x, light->Position.y, light->Position.z,
+							light->Direction.x, light->Direction.y, light->Direction.z ));
+					}
+#endif
+
+					Set_DX8_Light(index,&render_state.Lights[index]);
 				}
 				else {
 					Set_DX8_Light(index,nullptr);

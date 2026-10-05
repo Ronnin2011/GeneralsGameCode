@@ -32,6 +32,8 @@
 #include "Common/GlobalData.h"
 #include "Common/GameEngine.h"
 #include "GameClient/ClientInstance.h"
+#include "GameClient/MapUtil.h"
+#include "GameClient/MessageBox.h"
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/InGameUI.h"
@@ -47,6 +49,7 @@
 #include "Common/CRCDebug.h"
 #include "Common/OptionPreferences.h"
 #include "Common/version.h"
+#include "Lib/PathUtil.h"
 
 constexpr const char s_genrep[] = "GENREP";
 constexpr const UnsignedInt replayBufferBytes = 8192;
@@ -471,7 +474,7 @@ void RecorderClass::updateRecord()
 			 msg->getArgument(0)->integer != GAME_SINGLE_PLAYER && // Due to the massive amount of scripts that use <local player> in GC and single player, replays have been cut for them.
 			 msg->getArgument(0)->integer != GAME_NONE)
 		{
-			m_originalGameMode = msg->getArgument(0)->integer;
+			m_originalGameMode = (GameMode)msg->getArgument(0)->integer;
 			DEBUG_LOG(("RecorderClass::updateRecord() - original game is mode %d", m_originalGameMode));
 			lastFrame = 0;
 			GameDifficulty diff = DIFFICULTY_NORMAL;
@@ -516,7 +519,7 @@ void RecorderClass::updateRecord()
  * Start a new file for recording. This will always overwrite the "LastReplay.rep" file with the new one.
  * So don't call this unless you really mean it.
  */
-void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, Int rankPoints, Int maxFPS) {
+void RecorderClass::startRecording(GameDifficulty diff, GameMode originalGameMode, Int rankPoints, Int maxFPS) {
 	DEBUG_ASSERTCRASH(m_file == nullptr, ("Starting to record game while game is in progress."));
 
 	reset();
@@ -674,7 +677,7 @@ void RecorderClass::startRecording(GameDifficulty diff, Int originalGameMode, In
 	// Write maxFPS chosen
 	m_file->write(&maxFPS, sizeof(maxFPS));
 
-	DEBUG_LOG(("RecorderClass::startRecording() - diff=%d, mode=%d, FPS=%d", diff, originalGameMode, maxFPS));
+	DEBUG_LOG(("RecorderClass::startRecording() - diff=%d, mode=%d, FPS=%d", diff, (Int)originalGameMode, maxFPS));
 
 	/*
 	// Write the map name.
@@ -847,18 +850,17 @@ void RecorderClass::writeArgument(GameMessageArgumentDataType type, const GameMe
  * Read in a replay header, for (1) populating a replay listbox or (2) starting playback.  In
  * case (2), set FILE *m_file.
  */
-Bool RecorderClass::readReplayHeader(ReplayHeader& header)
+Bool RecorderClass::readReplayHeader(ReplayHeader& header, const AsciiString& filename, Bool forPlayback)
 {
-	AsciiString filepath = getReplayDir();
-	filepath.concat(header.filename.str());
+	header.filename = getReplayPathForRead(filename);
 
 	// TheSuperHackers @performance More buffered data reduces disk overhead and will improve fast forward playback
-	const UnsignedInt buffersize = header.forPlayback ? replayBufferBytes : File::BUFFERSIZE;
-	m_file = TheFileSystem->openFile(filepath.str(), File::READ | File::BINARY, buffersize);
+	const UnsignedInt buffersize = forPlayback ? replayBufferBytes : File::BUFFERSIZE;
+	m_file = TheFileSystem->openFile(header.filename.str(), File::READ | File::BINARY, buffersize);
 
 	if (m_file == nullptr)
 	{
-		DEBUG_LOG(("Can't open %s (%s)", filepath.str(), header.filename.str()));
+		DEBUG_LOG(("Can't open %s (%s)", header.filename.str(), filename.str()));
 		return FALSE;
 	}
 
@@ -926,13 +928,15 @@ Bool RecorderClass::readReplayHeader(ReplayHeader& header)
 		m_file = nullptr;
 		return FALSE;
 	}
+	// TheSuperHackers @bugfix bobtista 17/09/2026 Preserve the recorded local slot, including -1 for no local player.
+	m_gameInfo.setLocalSlotNum(header.localPlayerIndex);
 	if (header.localPlayerIndex >= 0)
 	{
 		Int localIP = m_gameInfo.getSlot(header.localPlayerIndex)->getIP();
 		m_gameInfo.setLocalIP(localIP);
 	}
 
-	if (!header.forPlayback)
+	if (!forPlayback)
 	{
 		m_gameInfo.endGame();
 		m_gameInfo.reset();
@@ -1050,9 +1054,7 @@ void RecorderClass::handleCRCMessage(UnsignedInt newCRC, Int playerIndex, Bool f
 Bool RecorderClass::replayMatchesGameVersion(AsciiString filename)
 {
 	ReplayHeader header;
-	header.forPlayback = TRUE;
-	header.filename = filename;
-	if ( readReplayHeader( header ) )
+	if ( readReplayHeader( header, filename, TRUE ) )
 	{
 		return replayMatchesGameVersion( header );
 	}
@@ -1073,6 +1075,61 @@ Bool RecorderClass::replayMatchesGameVersion(const ReplayHeader& header)
 	return true;
 }
 
+static void showQueuedReplayLoadFailure()
+{
+	UnicodeString title = TheGameText->FETCH_OR_SUBSTITUTE("GUI:ReplayLoadFailedTitle", L"REPLAY CANNOT BE LOADED");
+	UnicodeString body = TheGameText->FETCH_OR_SUBSTITUTE("GUI:ReplayLoadFailed", L"The replay file could not be opened or is invalid.");
+
+	MessageBoxOk(title, body, nullptr);
+}
+
+static void showQueuedReplayMapNotFound()
+{
+	UnicodeString title = TheGameText->FETCH_OR_SUBSTITUTE("GUI:ReplayMapNotFoundTitle", L"MAP NOT FOUND");
+	UnicodeString body = TheGameText->FETCH_OR_SUBSTITUTE("GUI:ReplayMapNotFound", L"This replay cannot be loaded because the map was not found on this device.");
+
+	MessageBoxOk(title, body, nullptr);
+}
+
+/**
+ * Play the replay requested on startup, after the shell has been initialized
+ */
+void RecorderClass::loadQueuedReplay()
+{
+	const AsciiString filename = TheGlobalData->m_loadReplayGame;
+	TheWritableGlobalData->m_loadReplayGame.clear();
+
+	ReplayHeader header;
+	if (!readReplayHeader(header, filename, FALSE))
+	{
+		DEBUG_LOG(("Replay '%s' could not be read", filename.str()));
+		showQueuedReplayLoadFailure();
+		return;
+	}
+
+	// A replay whose map is missing starts a game that cannot load, so reject it here instead
+	ReplayGameInfo gameInfo;
+	if (!ParseAsciiStringToGameInfo(&gameInfo, header.gameOptions))
+	{
+		DEBUG_LOG(("Replay '%s' contains invalid game options", filename.str()));
+		showQueuedReplayLoadFailure();
+		return;
+	}
+
+	if (TheMapCache == nullptr || TheMapCache->findMap(gameInfo.getMap()) == nullptr)
+	{
+		DEBUG_LOG(("Replay '%s' requires unavailable map '%s'", filename.str(), gameInfo.getMap().str()));
+		showQueuedReplayMapNotFound();
+		return;
+	}
+
+	if (!playbackFile(filename))
+	{
+		DEBUG_LOG(("Failed to play replay '%s'", filename.str()));
+		showQueuedReplayLoadFailure();
+	}
+}
+
 /**
  * Start playback of the file. Return true or false depending on if the file is
  * a valid replay file or not.
@@ -1088,9 +1145,7 @@ Bool RecorderClass::playbackFile(AsciiString filename)
 	}
 
 	ReplayHeader header;
-	header.forPlayback = TRUE;
-	header.filename = filename;
-	Bool success = readReplayHeader( header );
+	Bool success = readReplayHeader( header, filename, TRUE );
 	if (!success)
 	{
 		return FALSE;
@@ -1152,15 +1207,16 @@ Bool RecorderClass::playbackFile(AsciiString filename)
 	}
 #endif
 
-	Bool isMultiplayer = m_gameInfo.getSlot(header.localPlayerIndex)->getIP() != 0;
-	m_crcInfo = CRCInfo(header.localPlayerIndex, isMultiplayer);
 	REPLAY_CRC_INTERVAL = m_gameInfo.getCRCInterval();
-	DEBUG_LOG(("Player index is %d, replay CRC interval is %d", m_crcInfo.getLocalPlayer(), REPLAY_CRC_INTERVAL));
 
 	Int difficulty = 0;
 	m_file->read(&difficulty, sizeof(difficulty));
 
 	m_file->read(&m_originalGameMode, sizeof(m_originalGameMode));
+
+	const Bool isMultiplayer = rts::isMultiplayerGame(m_originalGameMode);
+	m_crcInfo = CRCInfo(header.localPlayerIndex, isMultiplayer);
+	DEBUG_LOG(("Player index is %d, replay CRC interval is %d", m_crcInfo.getLocalPlayer(), REPLAY_CRC_INTERVAL));
 
 	Int rankPoints = 0;
 	m_file->read(&rankPoints, sizeof(rankPoints));
@@ -1488,7 +1544,8 @@ void RecorderClass::readArgument(GameMessageArgumentDataType type, GameMessage *
 #endif
 			break;
 		}
-		case ARGUMENTDATATYPE_TIMESTAMP: {  // Not to be confused with Terrance Stamp... Kneel before Zod!!!
+		case ARGUMENTDATATYPE_TIMESTAMP: {
+			// Not to be confused with Terrance Stamp... Kneel before Zod!!!
 			UnsignedInt stamp;
 			m_file->read(&stamp, sizeof(stamp));
 			msg->appendTimestampArgument(stamp);
@@ -1555,6 +1612,21 @@ AsciiString RecorderClass::getReplayDir()
 {
 	AsciiString tmp = TheGlobalData->getPath_UserData();
 	tmp.concat("Replays\\");
+	return tmp;
+}
+
+/**
+ * returns the path to open for a replay filename in the replay directory or an absolute replay path.
+ */
+AsciiString RecorderClass::getReplayPathForRead(const AsciiString& filenameOrPath)
+{
+	if (isAbsolutePath(filenameOrPath.str()))
+	{
+		return filenameOrPath;
+	}
+
+	AsciiString tmp = getReplayDir();
+	tmp.concat(filenameOrPath);
 	return tmp;
 }
 

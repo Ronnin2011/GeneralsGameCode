@@ -1784,7 +1784,8 @@ Bool W3DView::setViewFilterMode(FilterModes filterMode)
 	if (m_viewFilterMode != FM_NULL_MODE &&
 		m_viewFilter != FT_NULL_FILTER) {
 		if (!W3DShaderManager::filterSetup(m_viewFilter, m_viewFilterMode))
-		{	//setup failed so restore previous mode.
+		{
+			//setup failed so restore previous mode.
 			m_viewFilterMode = oldMode;
 			return FALSE;
 		}
@@ -1802,7 +1803,8 @@ Bool W3DView::setViewFilter(FilterTypes filter)
 	if (m_viewFilterMode != FM_NULL_MODE &&
 		m_viewFilter != FT_NULL_FILTER) {
 		if (!W3DShaderManager::filterSetup(m_viewFilter, m_viewFilterMode))
-		{	//setup failed so restore previous mode.
+		{
+			//setup failed so restore previous mode.
 			m_viewFilter = oldFilter;
 			return FALSE;
 		};
@@ -2641,8 +2643,7 @@ void W3DView::lookAt( const Coord3D *o )
 		}
 	}
 
-	Coord2D pos2D = { pos.x, pos.y };
-	setPosition2D(pos2D);
+	setPosition2D(pos.asCoord2D());
 
 	resetPivotToGround();
 

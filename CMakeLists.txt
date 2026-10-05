@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.28)
 
 # Use packagename_ROOT for FindPackage.
 if(POLICY CMP0074)
@@ -54,8 +54,6 @@ endif()
 
 # Find/Add build dependencies and stubs shared by all projects
 if((WIN32 OR "${CMAKE_SYSTEM}" MATCHES "Windows") AND ${CMAKE_SIZEOF_VOID_P} EQUAL 4)
-    include(cmake/miles.cmake)
-    include(cmake/bink.cmake)
     include(cmake/dx9.cmake)  # Ronin 19/10/2025 Added DX9 SDK support for compatibility layer
     include(cmake/dx8.cmake)
 endif()
@@ -77,12 +75,17 @@ if (IS_VS6_BUILD)
     # If there is a desire to make this work, then a fixed max sdk needs to be created.
     add_subdirectory(Dependencies/MaxSDK)
 endif()
-add_subdirectory(Dependencies/Utility)
 
-# To be removed when abandoning VC6
-if (IS_VS6_BUILD)
-    include_directories(Dependencies/Utility)
-    add_compile_options(/FIUtility/CppMacros.h)
+add_subdirectory(Dependencies/Precompiled)
+add_subdirectory(Dependencies/Utility)
+add_subdirectory(Dependencies/Bink)
+add_subdirectory(Dependencies/Miles)
+if (WIN32)
+    add_subdirectory(Dependencies/DbgHelp)
+    add_subdirectory(Dependencies/Usp10)
+else()
+    add_library(deps_dbghelp INTERFACE)
+    add_library(deps_usp10 INTERFACE)
 endif()
 
 add_subdirectory(resources)

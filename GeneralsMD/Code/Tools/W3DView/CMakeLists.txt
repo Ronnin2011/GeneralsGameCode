@@ -6,7 +6,7 @@ target_link_libraries(z_w3dview PRIVATE
     d3d9
     d3dx9
     imm32
-    milesstub
+    deps_miles
     Version
     vfw32
     winmm

@@ -1121,6 +1121,8 @@ void PointGroupClass::Update_Arrays(
 
 		case TRIS_SIZE_NOORIENT:
 			{
+				WWASSERT(point_size);
+
 				// Scale vertex offsets and add them to point locations to get vertex locations
 				for (i = 0; i < active_points; i++) {
 					vertex_loc[vert + 0] = point_loc[i] +
@@ -1136,6 +1138,8 @@ void PointGroupClass::Update_Arrays(
 
 		case TRIS_NOSIZE_ORIENT:
 			{
+				WWASSERT(point_orientation);
+
 				// Scale vertex offsets and add them to point locations to get vertex locations
 				for (i = 0; i < active_points; i++) {
 					vertex_loc[vert + 0] = point_loc[i] +
@@ -1151,6 +1155,8 @@ void PointGroupClass::Update_Arrays(
 
 		case TRIS_SIZE_ORIENT:
 			{
+				WWASSERT(point_size && point_orientation);
+
 				// Scale vertex offsets and add them to point locations to get vertex locations
 				for (i = 0; i < active_points; i++) {
 					vertex_loc[vert + 0] = point_loc[i] +
@@ -1186,6 +1192,8 @@ void PointGroupClass::Update_Arrays(
 
 		case QUADS_SIZE_NOORIENT:
 			{
+				WWASSERT(point_size);
+
 				// Scale vertex offsets and add them to point locations to get vertex locations
 				for (i = 0; i < active_points; i++) {
 					vertex_loc[vert + 0] = point_loc[i] +
@@ -1203,6 +1211,8 @@ void PointGroupClass::Update_Arrays(
 
 		case QUADS_NOSIZE_ORIENT:
 			{
+				WWASSERT(point_orientation);
+
 				// Scale vertex offsets and add them to point locations to get vertex locations
 				for (i = 0; i < active_points; i++) {
 					vertex_loc[vert + 0] = point_loc[i] +
@@ -1220,6 +1230,8 @@ void PointGroupClass::Update_Arrays(
 
 		case QUADS_SIZE_ORIENT:
 			{
+				WWASSERT(point_size && point_orientation);
+
 				Matrix4x4 view;
 				Vector4 result;
 				if (!Billboard) {
@@ -1327,6 +1339,8 @@ void PointGroupClass::Update_Arrays(
 		case SCREEN_SIZE_NOORIENT:
 		case SCREEN_SIZE_ORIENT:
 			{
+				WWASSERT(point_size);
+
 				// Offsets need to be scaled to the current screen resolution
 
    			// First find x and y scale factors (sizes in pixels need to be
@@ -1805,7 +1819,8 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 			// 3 times per particle when we can do it once
 			float recipDepth = 0.1f / (float)depth;
 
-			float shiftInc = ( t *  *current_size * recipDepth );
+			const float pointSize = current_size ? *current_size : DefaultPointSize;
+			float shiftInc = t * pointSize * recipDepth;
 
 			Vector3 volumeLayerShift;
 			Vector3 cameraPosition = rinfo.Camera.Get_Position();
@@ -1852,12 +1867,9 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 		DX8Wrapper::Set_Transform(D3DTS_WORLD,identity);
 		DX8Wrapper::Set_Transform(D3DTS_VIEW,identity);
 
-
 		DX8Wrapper::Set_Material(PointMaterial);
 		DX8Wrapper::Set_Shader(Shader);
 		DX8Wrapper::Set_Texture(0,Texture);
-
-
 
 		// Enable sorting if the primitives are translucent and alpha testing is not enabled.
 		// TheSuperHackers @info Volumetric particles, both billboarded and ground-aligned, must have sorting enabled to
@@ -1877,7 +1889,6 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 			verticesperprimitive = 3;
 			indexbuffer = sort ? static_cast <IndexBufferClass*> (SortingTris) : static_cast <IndexBufferClass*> (Tris);
 		}
-
 
 		current = 0;
 		while (current<vnum)
@@ -1941,6 +1952,7 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 
 
 	}
+
 
 
 

@@ -909,12 +909,14 @@ void MeshClass::Render_Material_Pass(MaterialPassClass * pass,IndexBufferClass *
 		}
 
 		if (oldOpacity >= 0)
-		{	//opacity was modified for this mesh instance, so need to restore the material setting which may be shared
+		{
+			//opacity was modified for this mesh instance, so need to restore the material setting which may be shared
 			//among other instances.
 			pass->Peek_Material()->Set_Opacity(oldOpacity);
 		}
 		if (oldEmissive.X >= 0)
-		{	//emissive was modified for this mesh instance, so need to restore the material setting which may be shared
+		{
+			//emissive was modified for this mesh instance, so need to restore the material setting which may be shared
 			//among other instances.
 			pass->Peek_Material()->Set_Emissive(oldEmissive);
 		}
@@ -1076,12 +1078,14 @@ void MeshClass::Render_Material_Pass(MaterialPassClass * pass,IndexBufferClass *
 		}
 
 		if (oldOpacity >= 0)
-		{	//opacity was modified for this mesh instance, so need to restore the material setting which may be shared
+		{
+			//opacity was modified for this mesh instance, so need to restore the material setting which may be shared
 			//among other instances.
 			pass->Peek_Material()->Set_Opacity(oldOpacity);
 		}
 		if (oldEmissive.X >= 0)
-		{	//emissive was modified for this mesh instance, so need to restore the material setting which may be shared
+		{
+			//emissive was modified for this mesh instance, so need to restore the material setting which may be shared
 			//among other instances.
 			pass->Peek_Material()->Set_Emissive(oldEmissive);
 		}

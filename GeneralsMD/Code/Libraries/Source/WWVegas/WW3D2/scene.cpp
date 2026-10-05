@@ -559,7 +559,6 @@ void SimpleSceneClass::Customized_Render(RenderInfoClass & rinfo)
 	// apply only the first four lights in the scene
 	// @bugfix Ronin 26/03/2026 DX9: Clear all wrapper light slots, not just the legacy four. // Derived classes should use light environment.
 	WWASSERT(rinfo.light_environment==nullptr);
-	int count=0;
 	for (int lightIndex = 0; lightIndex < LightEnvironmentClass::MAX_LIGHTS; ++lightIndex)
 	{
 		DX8Wrapper::Set_Light(lightIndex,nullptr);
@@ -570,6 +569,7 @@ void SimpleSceneClass::Customized_Render(RenderInfoClass & rinfo)
 // support real point lights, etc.  It will likely just evolve into "the n most important" lights
 // rather than optimizing lights into directional lights...
 #if 0
+	int count=0;
 	for (it.First(&LightList); !it.Is_Done(); it.Next())
 	{
 		if (count<4)

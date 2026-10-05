@@ -5,7 +5,7 @@ target_link_libraries(z_wwcommon INTERFACE
     core_wwcommon
     corei_core_include
     d3d9
-    milesstub
+    deps_miles
     stlport
 )
 

@@ -164,6 +164,10 @@ public:
 	static bool removeExtension(AsciiString& path);
 	static bool removeExtension(UnicodeString& path);
 
+	/// Appends the native separator to nonempty paths unless either separator is already at the end.
+	/// Existing separators are not converted.
+	static void appendPathSeparator(AsciiString& path);
+
 protected:
 #if ENABLE_FILESYSTEM_EXISTENCE_CACHE
 	struct FileExistData
@@ -174,8 +178,8 @@ protected:
 	};
 	typedef std::hash_map<
 		rts::string_key<AsciiString>, FileExistData,
-		rts::string_key_hash<AsciiString>,
-		rts::string_key_equal<AsciiString>/**/> FileExistMap;
+		rts::string_key_hash,
+		rts::string_key_equal> FileExistMap;
 
 	mutable FileExistMap m_fileExist;
 	mutable FastCriticalSectionClass m_fileExistMutex;

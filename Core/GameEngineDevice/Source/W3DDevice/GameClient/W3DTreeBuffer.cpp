@@ -1267,7 +1267,8 @@ void W3DTreeBuffer::removeTreesForConstruction(const Coord3D* pos, const Geometr
 {
 	// Just iterate all trees, as even non-collidable ones get removed. jba. [7/11/2003]
 	Int i;
-	for (i=0; i<m_numTrees; i++) {				// small, height,							radius,									minor radius
+	for (i=0; i<m_numTrees; i++) {
+		// small, height,							radius,									minor radius
 		if (m_trees[i].treeType < 0) {
 			continue; // already deleted. jba [7/11/2003]
 		}
@@ -1581,7 +1582,8 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 		!depthPass && !TheTerrainShadowPass.active) {
 		for (curTree=0; curTree<m_numTrees; curTree++) {
 			Int type = m_trees[curTree].treeType;
-			if (type<0) { // deleted.
+			if (type<0) {
+				// deleted.
 				continue;
 			}
 			if (!m_trees[curTree].visible || !m_treeTypes[type].m_doShadow) {
@@ -1603,7 +1605,8 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 	if (!depthPass) {
 		for (curTree=0; curTree<m_numTrees; curTree++) {
 			Int type = m_trees[curTree].treeType;
-			if (type<0) { // deleted.
+			if (type<0) { 
+				// deleted.
 				continue;
 			}
 			const W3DTreeDrawModuleData *moduleData = m_treeTypes[type].m_data;

@@ -6,11 +6,11 @@ target_link_libraries(g_w3dview PRIVATE
     d3d9 
     d3dx9 
     dbghelplib
+    deps_miles
     g_wwaudio
     g_wwvegas
     gi_always
     imm32
-    milesstub
     Version
     vfw32
     winmm
