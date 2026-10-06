@@ -21,6 +21,7 @@
 #include "Common/ThingSort.h"
 #include "Common/ThingTemplate.h"
 #include "GameLogic/GameLogic.h"
+#include "GameLogic/Object.h"	// Ronin @feature 06/10/2026 DX9: `timesetting` walks the objects
 #include "GameLogic/TerrainLogic.h"
 #include "GameClient/Color.h"
 #include "GameClient/Display.h"
@@ -738,6 +739,56 @@ namespace
 		AsciiString state;
 		state.format("shadows: quality=%d (%s)  maps=%d", q, names[(q < 0) ? 0 : ((q > 3) ? 3 : q)],
 			TheUseShadowMaps ? 1 : 0);
+		printAscii(state, FALSE);
+	}
+
+	// Ronin @feature 06/10/2026 DX9: `timesetting` - the time-of-day lighting, what the debug build's Ctrl+Shift+D does
+	// (CommandXlat MSG_META_DEMO_TIME_OF_DAY). Not saved: a map load sets the map's own again.
+	void cmdTimeSetting(Int argc, const AsciiString *argv)
+	{
+		if (argc == 2 && TheWritableGlobalData != nullptr && TheGameClient != nullptr)
+		{
+			Int tod = isWholeNumber(argv[1].str()) ? atoi(argv[1].str()) : TIME_OF_DAY_INVALID;
+			for (Int i = TIME_OF_DAY_FIRST; i < TIME_OF_DAY_COUNT && tod == TIME_OF_DAY_INVALID; ++i)
+				if (stricmp(argv[1].str(), TimeOfDayNames[i]) == 0)
+					tod = i;
+			if (tod < TIME_OF_DAY_FIRST || tod >= TIME_OF_DAY_COUNT)
+			{
+				printAscii(AsciiString("usage: timesetting [1..4]  (1 morning, 2 afternoon, 3 evening, 4 night - or the name)"), TRUE);
+				return;
+			}
+			// Ronin @feature 06/10/2026 DX9: Object.cpp sets MODELCONDITION_NIGHT from it, so one player alone must not change it.
+			if (TheGameLogic != nullptr && TheGameLogic->isInMultiplayerGame())
+			{
+				printAscii(AsciiString("refused: not in LAN/online matches"), TRUE);
+				return;
+			}
+			if (TheWritableGlobalData->setTimeOfDay((TimeOfDay)tod))
+			{
+				TheGameClient->setTimeOfDay(TheGlobalData->m_timeOfDay);
+				if (TheGlobalData->m_forceModelsToFollowTimeOfDay && TheGameLogic != nullptr)
+				{
+					for (Object *obj = TheGameLogic->getFirstObject(); obj; obj = obj->getNextObject())
+					{
+						Drawable *d = obj->getDrawable();
+						if (d)
+						{
+							// Ronin @feature 06/10/2026 DX9: as the hotkey does - this only forces a refresh.
+							ModelConditionFlags empty;
+							d->clearAndSetModelConditionFlags(empty, empty);
+						}
+					}
+				}
+			}
+		}
+		else if (argc != 1)
+		{
+			printAscii(AsciiString("usage: timesetting [1..4]  (1 morning, 2 afternoon, 3 evening, 4 night - or the name)"), TRUE);
+			return;
+		}
+		const Int now = (TheGlobalData != nullptr) ? (Int)TheGlobalData->m_timeOfDay : TIME_OF_DAY_INVALID;
+		AsciiString state;
+		state.format("timesetting: %d (%s)", now, TimeOfDayNames[(now < 0 || now >= TIME_OF_DAY_COUNT) ? 0 : now]);
 		printAscii(state, FALSE);
 	}
 
@@ -2253,6 +2304,7 @@ void W3DDebugPanel::update(void)
 		registerCommand("taa", "taa [0|1] | taa <knob> <v> - temporal AA; the [TAA] row shows live state", cmdTaa);
 		registerCommand("ssao", "ssao [0..3] | ssao trees <auto|0|1> - ambient occlusion quality (not saved); trees: AO on trees", cmdSsao);
 		registerCommand("shadows", "shadows [0..3] - shadow-map quality, 0 off (stencil shadows) .. 3 ultra (not saved)", cmdShadows);
+		registerCommand("timesetting", "timesetting [1..4] - time of day: 1 morning, 2 afternoon, 3 evening, 4 night (not saved; not in LAN/online)", cmdTimeSetting);
 		registerCommand("grid", "grid [lift|width|alpha|radius <value>] - the placement grid Ctrl draws", cmdGrid);
 		registerCommand("spawn", "spawn [words] [count] - pick from a list, or spawn <ThingTemplate> [count]; single player only", cmdSpawn);
 		registerCommand("credits", "credits [amount] - add money to your player; single player only", cmdCredits);
