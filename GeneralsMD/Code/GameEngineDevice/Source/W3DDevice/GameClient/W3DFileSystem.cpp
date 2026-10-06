@@ -401,17 +401,18 @@ int  GameFileClass::Open(int rights)
 		return(false);
 	}
 
-MAYBE_UNUSED ArchiveFile* archive =
-	(TheArchiveFileSystem != nullptr) ? TheArchiveFileSystem->getArchiveFile(m_filePath) : nullptr;
+MAYBE_UNUSED Bool archiveExists =
+	(TheArchiveFileSystem != nullptr) ? TheArchiveFileSystem->doesFileExist(m_filePath) : FALSE;
 MAYBE_UNUSED Bool localExists =
 	(TheLocalFileSystem != nullptr) ? TheLocalFileSystem->doesFileExist(m_filePath) : FALSE;
-(void)archive;
+(void)archiveExists;
 (void)localExists;
 
-WWDEBUG_SAY(("GameFileClass::Open path=%s local=%d archive=%s",
-	m_filePath, localExists, archive ? archive->getName().str() : "<none>"));
+WWDEBUG_SAY(("GameFileClass::Open path=%s local=%d archive=%d",
+	m_filePath, localExists, archiveExists));
 
 	m_theFile = TheFileSystem->openFile(m_filePath, File::READ | File::BINARY);
+
 
 	return (m_theFile != nullptr);
 }

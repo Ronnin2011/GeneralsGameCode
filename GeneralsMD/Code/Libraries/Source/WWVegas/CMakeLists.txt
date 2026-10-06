@@ -3,7 +3,6 @@ add_library(z_wwcommon INTERFACE)
 
 target_link_libraries(z_wwcommon INTERFACE
     core_wwcommon
-    corei_core_include
     d3d9
     deps_miles
     stlport

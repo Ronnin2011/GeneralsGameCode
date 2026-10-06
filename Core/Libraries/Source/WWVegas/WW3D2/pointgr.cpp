@@ -986,7 +986,6 @@ void PointGroupClass::Render(RenderInfoClass &rinfo)
 
 		// Ronin @bugfix 20/11/2025: Ensure clean fixed-function pipeline for particle rendering
 		// Particles use FVF-based rendering and must clear any active shader state
-		DWORD fvf = DX8_FVF_XYZNDUV1; // Particles typically use position+normal+diffuse+1 texcoord
 		//const FVFInfoClass& fvfinfo = PointVerts.FVF_Info();
 		DX8Wrapper::BindLayoutFVF(PointVerts.FVF_Info().Get_FVF(), "PointGroupClass:Render");
 
@@ -1926,7 +1925,6 @@ void PointGroupClass::RenderVolumeParticle(RenderInfoClass &rinfo, unsigned int 
 
 			// Ronin @bugfix 20/11/2025: Ensure clean fixed-function pipeline for particle rendering
 			// Particles use FVF-based rendering and must clear any active shader state
-			DWORD fvf = DX8_FVF_XYZNDUV1; // Particles typically use position+normal+diffuse+1 texcoord
 			//const FVFInfoClass& fvfinfo = PointVerts.FVF_Info();
 			DX8Wrapper::BindLayoutFVF(PointVerts.FVF_Info().Get_FVF(), "PointGroupClass:RenderVolumeParticle");
 

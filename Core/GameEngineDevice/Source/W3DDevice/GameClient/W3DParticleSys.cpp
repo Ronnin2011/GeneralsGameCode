@@ -204,7 +204,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			continue;
 
 		// Ronin @feature 03/10/2026 DX9: phase 5 - the water draws this unit's wake itself (`water oldwakes 1` = both)
-		if (sys->m_isGroundAligned && W3DWater_OwnsWake((unsigned int)sys->getAttachedDrawable()))
+		if (sys->isFieldParticle() && W3DWater_OwnsWake((unsigned int)sys->getAttachedDrawable()))
 			continue;
 
 		//temporary hack that checks if texture name starts with "SMUD" - if so, we can assume it's a smudge type
@@ -271,7 +271,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			!canBatch ||
 			texture != batchTexture ||
 			sys->getShaderType() != batchShaderType ||
-			sys->shouldBillboard() != batchBillboard) {
+			(sys->getParticleAlignment() == ParticleSystemInfo::PARTICLE_ALIGNMENT_BILLBOARD) != batchBillboard) {
 			flushParticleBatch();
 		}
 
@@ -285,7 +285,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			batchTexture = texture;
 			batchTexture->Add_Ref();   // batchTexture owns its own ref; `texture` keeps the Get_Texture one
 			batchShaderType = sys->getShaderType();
-			batchBillboard  = sys->shouldBillboard();
+			batchBillboard  = (sys->getParticleAlignment() == ParticleSystemInfo::PARTICLE_ALIGNMENT_BILLBOARD);
 		}
 		Int startCount = count;
 
@@ -311,7 +311,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 			if (p->isCulled())
 				continue;
 
-			m_fieldParticleCount += ( sys->getPriority() == AREA_EFFECT && sys->m_isGroundAligned != FALSE );
+			m_fieldParticleCount += ( sys->getPriority() == AREA_EFFECT && sys->isFieldParticle() );
 
 			//@todo lorenzen sez: use pointer arithmetic for these arrays
 			personalities[count] = p->getPersonality();
@@ -341,7 +341,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 				batchTexture = texture;
 				batchTexture->Add_Ref();
 				batchShaderType = sys->getShaderType();
-				batchBillboard  = sys->shouldBillboard();
+				batchBillboard  = (sys->getParticleAlignment() == ParticleSystemInfo::PARTICLE_ALIGNMENT_BILLBOARD);
 				startCount = 0;
 			}
 		}
@@ -426,7 +426,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 					/// @todo Use both QUADS and TRIS for particles
 					m_pointGroup->Set_Point_Mode( PointGroupClass::QUADS );
 					m_pointGroup->Set_Arrays( m_posBuffer, m_RGBABuffer, nullptr, m_sizeBuffer, m_angleBuffer, nullptr, count );
-					m_pointGroup->Set_Billboard(sys->shouldBillboard());
+					m_pointGroup->Set_Billboard(sys->getParticleAlignment() == ParticleSystemInfo::PARTICLE_ALIGNMENT_BILLBOARD);
 					m_pointGroup->Set_Point_Frame( 0 );
 
 					m_pointGroup->RenderVolumeParticle( rinfo, sys->getVolumeParticleDepth() );
@@ -451,7 +451,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 						batchTexture    = texture;
 						batchTexture->Add_Ref();
 						batchShaderType = sys->getShaderType();
-						batchBillboard  = sys->shouldBillboard();
+						batchBillboard  = (sys->getParticleAlignment() == ParticleSystemInfo::PARTICLE_ALIGNMENT_BILLBOARD);
 					}
 					texture->Release_Ref();
 

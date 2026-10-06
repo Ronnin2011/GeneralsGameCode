@@ -469,7 +469,6 @@ void	LineGroupClass::Render(RenderInfoClass &rinfo)
 
 	// Ronin @bugfix 20/11/2025: Ensure clean fixed-function pipeline for line group rendering
 	// Line groups use FVF-based rendering and must clear any active shader state
-	DWORD fvf = DX8_FVF_XYZNDUV2; // Line groups use position+normal+diffuse+2 texcoords
 	DX8Wrapper::BindLayoutFVF(vba.FVF_Info().Get_FVF(), "LineGroupClass:Render");	
 
 #ifdef _DEBUG

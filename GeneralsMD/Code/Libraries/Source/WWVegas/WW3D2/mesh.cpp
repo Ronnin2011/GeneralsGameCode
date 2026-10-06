@@ -1049,23 +1049,6 @@ void MeshClass::Render_Material_Pass(MaterialPassClass * pass,IndexBufferClass *
 		pass->Install_Materials();
 		DX8Wrapper::Set_Index_Buffer(ib,0, "MeshClass::Render");
 
-		// Ronin @bugfix 29/12/2025 DX9: Set FVF for mesh material pass rendering
-		// Get FVF from the polygon renderer's container
-		if (!Model->PolygonRendererList.Is_Empty()) {
-			DX8FVFCategoryContainer* container = Model->PolygonRendererList.Peek_Head()->Get_Texture_Category()->Get_Container();
-			DWORD containerFVF = container->Get_FVF();
-
-/*#ifdef WWDEBUG
-			static int rigidMatPassCount = 0;
-			rigidMatPassCount++;
-			if (rigidMatPassCount <= 1000) {
-				WWDEBUG_SAY(("🏗️ MESH.CPP - Rigid Material Pass #%d: Setting FVF=0x%08X",
-					rigidMatPassCount, containerFVF));
-
-			}
-#endif*/
-		}
-
 		SNAPSHOT_SAY(("Set_World_Transform"));
 		DX8Wrapper::Set_Transform(D3DTS_WORLD,Transform);
 

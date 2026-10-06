@@ -3461,11 +3461,11 @@ void HeightMapRenderObjClass::renderExtraBlendTiles()
 				continue;
 			}
 
-			if (x >= drawStartX && x < drawEdgeX &&
-				y >= drawStartY && y < drawEdgeY &&
-				m_map->getExtraAlphaUVData(x,y,U,V,alpha,&flipState, &cliffState))
-			{
-				//this tile is inside visible region and has 3rd blend layer.
+			const Int drawLocalX = x - drawStartX;
+			const Int drawLocalY = y - drawStartY;
+			if (m_map->getExtraAlphaTexturePageForCell(drawLocalX, drawLocalY) != texturePage) {
+				continue;
+			}
 
 			pageTileIndices.push_back(j);
 		}
@@ -3638,20 +3638,15 @@ void HeightMapRenderObjClass::renderExtraBlendTiles()
 				W3DShaderManager::setTexture(2, m_stageThreeTexture);
 
 				W3DShaderManager::ShaderTypes st = W3DShaderManager::ST_ROAD_BASE;
-			if (TheGlobalData->m_useLightMap && doCloud)
- 			{
-				st = W3DShaderManager::ST_ROAD_BASE_NOISE12;
- 			}
- 			else if (TheGlobalData->m_useLightMap)
- 			{
- 				//lightmap only
- 				st = W3DShaderManager::ST_ROAD_BASE_NOISE2;
- 			}
- 			else if (doCloud)
- 			{
- 				//cloudmap only
- 				st = W3DShaderManager::ST_ROAD_BASE_NOISE1;
- 			}
+				if (TheGlobalData->m_useLightMap && doCloud) {
+					st = W3DShaderManager::ST_ROAD_BASE_NOISE12;
+				}
+				else if (TheGlobalData->m_useLightMap) {
+					st = W3DShaderManager::ST_ROAD_BASE_NOISE2;
+				}
+				else if (doCloud) {
+					st = W3DShaderManager::ST_ROAD_BASE_NOISE1;
+				}
 
 				const Int devicePasses = W3DShaderManager::getShaderPasses(st);
 				for (Int pass = 0; pass < devicePasses; ++pass)

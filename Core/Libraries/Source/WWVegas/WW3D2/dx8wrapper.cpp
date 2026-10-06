@@ -3049,7 +3049,7 @@ void DX8Wrapper::Draw_Sorting_IB_VB(
 	//Ensure_Device_IB_Matches_Wrapper_Expected("DX8Wrapper::Draw_Sorting_IB_VB");
 #endif
 
-	HRESULT hr = D3DDevice->DrawIndexedPrimitive(
+	MAYBE_UNUSED HRESULT hr = D3DDevice->DrawIndexedPrimitive(
 		D3DPT_TRIANGLELIST,
 		baseVertex,
 		0,           // MinVertexIndex
@@ -3188,7 +3188,7 @@ void DX8Wrapper::Draw(
 				//Ensure_Device_IB_Matches_Wrapper_Expected("DX8Wrapper::Draw");
 #endif
 
-				HRESULT hr = D3DDevice->DrawIndexedPrimitive(
+				D3DDevice->DrawIndexedPrimitive(
 					(D3DPRIMITIVETYPE)primitive_type,
 					baseVertex,
 					min_vertex_index,
@@ -3389,7 +3389,7 @@ void DX8Wrapper::Apply_Render_State_Changes()
 	if (render_state_changed & VERTEX_BUFFER_CHANGED) {
 		SNAPSHOT_SAY(("DX8 - apply vb change"));
 
-		IDirect3DDevice9* dev = _Get_D3D_Device8();
+		MAYBE_UNUSED IDirect3DDevice9* dev = _Get_D3D_Device8();
 		WWASSERT(dev);
 
 #ifdef _DEBUG
@@ -4460,7 +4460,6 @@ void DX8Wrapper::Create_Render_Target
 		*target=nullptr;
 		*depth_buffer=nullptr;
 		return;
-		D3DDISPLAYMODE mode;
 	}
 
 	// If render target format isn't supported return null
@@ -5999,7 +5998,7 @@ void DX8Wrapper::BindLayoutFVF(DWORD fvf, const char* owner)
 	DX8CALL(SetVertexShader(NULL));
 	DX8CALL(SetVertexDeclaration(NULL));
 
-	HRESULT hr = pDev->SetFVF(fvf);
+	MAYBE_UNUSED HRESULT hr = pDev->SetFVF(fvf);
 	DX8_RECORD_DX8_CALLS();
 
 #ifdef WWDEBUG
