@@ -22,6 +22,7 @@
 #include "Common/ThingTemplate.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/Object.h"	// Ronin @feature 06/10/2026 DX9: `timesetting` walks the objects
+#include "GameLogic/PartitionManager.h"	// Ronin @feature 06/10/2026 DX9: `mapvision` reads the shroud
 #include "GameLogic/TerrainLogic.h"
 #include "GameClient/Color.h"
 #include "GameClient/Display.h"
@@ -792,6 +793,39 @@ namespace
 		printAscii(state, FALSE);
 	}
 
+	// Ronin @feature 06/10/2026 DX9: `on` / `off` or a whole number, for the switch commands. FALSE = it is neither.
+	Bool parseOnOff(const char *s, Bool *value)
+	{
+		if (stricmp(s, "on") == 0)
+			*value = TRUE;
+		else if (stricmp(s, "off") == 0)
+			*value = FALSE;
+		else if (isWholeNumber(s))
+			*value = (atoi(s) != 0);
+		else
+			return FALSE;
+		return TRUE;
+	}
+
+	// Ronin @feature 06/10/2026 DX9: `clouds on|off` - the cloud shadows on terrain and models, the Options checkbox's own
+	// flag; every reader tests it per frame. Not saved. Night never draws them (BaseHeightMap useCloud).
+	void cmdClouds(Int argc, const AsciiString *argv)
+	{
+		Bool on = FALSE;
+		if (argc == 2 && TheWritableGlobalData != nullptr && parseOnOff(argv[1].str(), &on))
+			TheWritableGlobalData->m_useCloudMap = on;
+		else if (argc != 1)
+		{
+			printAscii(AsciiString("usage: clouds [on|off]"), TRUE);
+			return;
+		}
+		const Bool set = (TheGlobalData != nullptr) && TheGlobalData->m_useCloudMap;
+		const Bool night = (TheGlobalData != nullptr) && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT;
+		AsciiString state;
+		state.format("clouds: %s%s", set ? "on" : "off", (set && night) ? "  (not drawn: it is night)" : "");
+		printAscii(state, FALSE);
+	}
+
 	// Ronin @diagnostic 16/09/2026 DX9: tune the placement grid while it is on screen (hold Ctrl). `grid` prints the knobs,
 	// `grid <knob> <value>` sets one.
 	void cmdGrid(Int argc, const AsciiString *argv)
@@ -923,6 +957,52 @@ namespace
 		}
 		AsciiString line;
 		line.format("power: unlimited=%d  plants=%d  used=%d", unlimited ? 1 : 0, energy->getProduction(), energy->getConsumption());
+		printAscii(line, FALSE);
+	}
+
+	// Ronin @feature 06/10/2026 DX9: is every partition cell clear for this player - the engine's permanent reveal is on.
+	Bool mapFullyRevealed(Int playerIndex)
+	{
+		if (ThePartitionManager == nullptr || TheGameLogic == nullptr || !TheGameLogic->isInGame())
+			return FALSE;
+		const Int cellsX = ThePartitionManager->getCellCountX();
+		const Int cellsY = ThePartitionManager->getCellCountY();
+		for (Int y = 0; y < cellsY; ++y)
+			for (Int x = 0; x < cellsX; ++x)
+				if (ThePartitionManager->getShroudStatusForPlayer(playerIndex, x, y) != CELLSHROUD_CLEAR)
+					return FALSE;
+		return (cellsX > 0 && cellsY > 0);
+	}
+
+	// Ronin @feature 06/10/2026 DX9: `mapvision on|off` - the whole map revealed for your player. A logic message like
+	// credits, so a skirmish replay reproduces it. `off` leaves the map explored but fogged.
+	void cmdMapVision(Int argc, const AsciiString *argv)
+	{
+		Bool want = FALSE;
+		const Bool set = (argc == 2 && parseOnOff(argv[1].str(), &want));
+		if (!set && argc != 1)
+		{
+			printAscii(AsciiString("usage: mapvision [on|off]"), TRUE);
+			return;
+		}
+		Player *local = (ThePlayerList != nullptr) ? ThePlayerList->getLocalPlayer() : nullptr;
+		if (local == nullptr)
+		{
+			printAscii(AsciiString("mapvision: no local player"), TRUE);
+			return;
+		}
+		const Bool now = mapFullyRevealed(local->getPlayerIndex());
+		AsciiString line;
+		if (set)
+		{
+			if (!logicCommandAllowed())
+				return;
+			GameMessage *msg = TheMessageStream->appendMessage(GameMessage::MSG_DEV_SET_MAPVISION);
+			msg->appendIntegerArgument(want ? 1 : 0);
+			line.format("mapvision: %s%s", want ? "on" : "off", (want == now) ? " (it already was)" : "");
+		}
+		else
+			line.format("mapvision: %s", now ? "on" : "off");
 		printAscii(line, FALSE);
 	}
 
@@ -2305,10 +2385,12 @@ void W3DDebugPanel::update(void)
 		registerCommand("ssao", "ssao [0..3] | ssao trees <auto|0|1> - ambient occlusion quality (not saved); trees: AO on trees", cmdSsao);
 		registerCommand("shadows", "shadows [0..3] - shadow-map quality, 0 off (stencil shadows) .. 3 ultra (not saved)", cmdShadows);
 		registerCommand("timesetting", "timesetting [1..4] - time of day: 1 morning, 2 afternoon, 3 evening, 4 night (not saved; not in LAN/online)", cmdTimeSetting);
+		registerCommand("clouds", "clouds [on|off] - cloud shadows on terrain and models (not saved; none at night)", cmdClouds);
 		registerCommand("grid", "grid [lift|width|alpha|radius <value>] - the placement grid Ctrl draws", cmdGrid);
 		registerCommand("spawn", "spawn [words] [count] - pick from a list, or spawn <ThingTemplate> [count]; single player only", cmdSpawn);
 		registerCommand("credits", "credits [amount] - add money to your player; single player only", cmdCredits);
 		registerCommand("power", "power [0|1] - unlimited power for your player, 0 = your real output; single player only", cmdPower);
+		registerCommand("mapvision", "mapvision [on|off] - the whole map revealed for your player; single player only", cmdMapVision);
 	}
 
 	// Ronin @feature 16/09/2026 DX9: placement takes the mouse after the window translator (10) and before meta events (20),

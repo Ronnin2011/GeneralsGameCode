@@ -620,6 +620,8 @@ public:
 		// Ronin @feature 28/09/2026 DX9: debug panel `credits` and `power`, same rules as spawn.
 		MSG_DEV_ADD_CASH = 1991,										///< (Int amount)
 		MSG_DEV_SET_POWER = 1992,										///< (Int 1 = unlimited, 0 = real output)
+		// Ronin @feature 06/10/2026 DX9: debug panel `mapvision`, same rules as spawn.
+		MSG_DEV_SET_MAPVISION = 1993,								///< (Int 1 = the whole map revealed, 0 = undo it)
 
 //*********************************************************************************************************
 		MSG_END_NETWORK_MESSAGES = 1999,						///< MARKER TO DELINEATE MESSAGES THAT GO OVER THE NETWORK

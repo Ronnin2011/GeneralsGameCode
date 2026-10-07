@@ -56,7 +56,7 @@
 #include "GameLogic/Object.h"
 #include "GameLogic/ObjectCreationList.h"
 #include "GameLogic/ObjectIter.h"
-//#include "GameLogic/PartitionManager.h"
+#include "GameLogic/PartitionManager.h"
 #include "GameLogic/Module/AIUpdate.h"
 #include "GameLogic/Module/BodyModule.h"
 #include "GameLogic/Module/OpenContain.h"
@@ -600,6 +600,12 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 		case GameMessage::MSG_DEV_SET_POWER:
 		{
 			onDevSetPower(msg);
+			break;
+		}
+		// Ronin @feature 06/10/2026 DX9: debug panel `mapvision`.
+		case GameMessage::MSG_DEV_SET_MAPVISION:
+		{
+			onDevSetMapVision(msg);
 			break;
 		}
 
@@ -1515,7 +1521,7 @@ bool GameLogic::onDevSpawnObject(MAYBE_UNUSED GameMessage *msg)
 		Coord3D pos = centre;
 		pos.x += ((Real)(i % side) - (Real)(side - 1) * 0.5f) * spacing;
 		pos.y += ((Real)(i / side) - (Real)(side - 1) * 0.5f) * spacing;
-		if (!extent.isInRegionNoZ(pos))
+		if (!extent.isInRegion(pos.asCoord2D()))
 			continue;
 		pos.z = TheTerrainLogic->getGroundHeight(pos.x, pos.y);
 
@@ -1553,6 +1559,30 @@ bool GameLogic::onDevSetPower(MAYBE_UNUSED GameMessage *msg)
 		return false;
 
 	msgPlayer->getEnergy()->setUnlimited( msg->getArgument( 0 )->integer != 0 );
+	return true;
+}
+
+// Ronin @feature 06/10/2026 DX9: debug panel `mapvision 0|1` for the player who sent it - the engine's permanent reveal,
+// or its undo. Acts only on a real change: an undo with no reveal under it shrouds the player's own units.
+bool GameLogic::onDevSetMapVision(MAYBE_UNUSED GameMessage *msg)
+{
+	Player *msgPlayer = getMessagePlayer(msg);
+	if (isInMultiplayerGame() || msgPlayer == nullptr || msg->getArgumentCount() < 1 || ThePartitionManager == nullptr)
+		return false;
+
+	const Int playerIndex = msgPlayer->getPlayerIndex();
+	const Int cellsX = ThePartitionManager->getCellCountX();
+	const Int cellsY = ThePartitionManager->getCellCountY();
+	Bool revealed = (cellsX > 0 && cellsY > 0);
+	for (Int y = 0; revealed && y < cellsY; ++y)
+		for (Int x = 0; revealed && x < cellsX; ++x)
+			revealed = (ThePartitionManager->getShroudStatusForPlayer( playerIndex, x, y ) == CELLSHROUD_CLEAR);
+
+	const Bool want = (msg->getArgument( 0 )->integer != 0);
+	if (want && !revealed)
+		ThePartitionManager->revealMapForPlayerPermanently( playerIndex );
+	else if (!want && revealed)
+		ThePartitionManager->undoRevealMapForPlayerPermanently( playerIndex );
 	return true;
 }
 

@@ -315,6 +315,7 @@ private:
 	bool onDevSpawnObject(GameMessage *msg);	// Ronin @feature 15/09/2026 DX9: debug panel `spawn`
 	bool onDevAddCash(GameMessage *msg);		// Ronin @feature 28/09/2026 DX9: debug panel `credits`
 	bool onDevSetPower(GameMessage *msg);		// Ronin @feature 28/09/2026 DX9: debug panel `power`
+	bool onDevSetMapVision(GameMessage *msg);	// Ronin @feature 06/10/2026 DX9: debug panel `mapvision`
 	bool onEnter(GameMessage *msg, AIGroupPtr &currentlySelectedGroup);
 	bool onExit(GameMessage *msg, AIGroupPtr &currentlySelectedGroup);
 	bool onEvacuate(GameMessage *msg, AIGroupPtr &currentlySelectedGroup);
