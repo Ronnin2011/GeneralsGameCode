@@ -48,6 +48,7 @@ struct WaterSeaInputs
 	// Ronin @feature 29/09/2026 DX9: phase 3 - refraction.
 	IDirect3DBaseTexture9 *scene;		///< s6: the frame just before the water, null = the plain alpha blend
 	Real sceneInvW, sceneInvH;			///< 1 / its size, for the pixel's own texel (VPOS)
+	Real mirrorInvW, mirrorInvH;		///< Ronin @feature 08/10/2026 DX9: 1 / the mirror's size, for `mirrorsoft`
 	// Ronin @bugfix 30/09/2026 DX9: the TAA jitter this frame's projection carries (W3DTaa::getJitterNDC), 0 outside TAA.
 	Real jitterX, jitterY;
 	// Ronin @feature 02/10/2026 DX9: phase 4 - the WaterKind whose profile this draw takes (sea: a standing polygon reaching
@@ -288,6 +289,9 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 	// Ronin @feature 29/09/2026 DX9: phase 3 - refraction: the frame copy's texel size, the bend, on.
 	const float refraction[4] = { in.sceneInvW, in.sceneInvH, t.bend, (in.scene != nullptr) ? 1.0f : 0.0f };
 	dev->SetPixelShaderConstantF(35, refraction, 1);
+	// Ronin @feature 08/10/2026 DX9: `mirrorsoft` - c62: the extra taps' offset in mirror uv, z: on. Above the wake's c56-c61.
+	const float mirrorSoft[4] = { g.mirrorSoft * in.mirrorInvW, g.mirrorSoft * in.mirrorInvH, (g.mirrorSoft > 0.0f) ? 1.0f : 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(62, mirrorSoft, 1);
 
 	// Ronin @feature 29/09/2026 DX9: phase 3b - the terrain's shadow map, as W3DTreeBuffer binds it: off in the depth pass (the
 	// map is the render target there). s7 through the wrapper (it caches stages 0-7), s8 raw. LINEAR = hardware PCF.

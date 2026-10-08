@@ -24,9 +24,10 @@ struct WaterSeaGlobal
 	Bool refraction;	///< the frame under the water bent by the normals (off = the plain alpha blend)
 	Bool oldWaves;		///< the vanilla shore-wave sprites as well as the shore foam
 	Bool mirror;		///< reflections: render the mirror each frame; off = no mirror render and no reflection in the water
-	Int  mirrorRes;		///< 0 = the original 256 x 256; n = the screen's size / n, its shape, at most 1024 wide
+	Int  mirrorRes;		///< 1 = the screen's size, 2 = half of it (at most 1024 wide); the knob takes no other (Ronin, 08/10)
 	Bool mirrorClip;	///< off = the old mirror, where the seabed seen from below covers the reflection
 	Real mirrorFar;		///< the mirror camera's far plane, x the view's (1 = the view's own)
+	Real mirrorSoft;	///< Ronin @feature 08/10/2026 DX9: four more taps this many mirror texels out, to 1.5; 0 = the single tap
 	Real ride;			///< Ronin @feature 03/10/2026 DX9: phase 5 - how much floating units ride the swell: 0 = off, 1 = with the surface
 	// Ronin @feature 03/10/2026 DX9: phase 5 - wakes: moving units leave a trail on the water (W3DWater.cpp renderWakes).
 	Real wakes;			///< their strength - the shape's shading and the foam; 0 = off, nothing is drawn
@@ -103,9 +104,10 @@ inline const WaterSeaGlobal TheWaterSeaGlobalDefault =
 	TRUE,		// refraction
 	TRUE,		// oldWaves - kept by default (Ronin, 29/09)
 	TRUE,		// mirror
-	2,			// mirrorRes - half the screen, at most 1024 wide: sharper and calmer than 256 x 256 (Ronin, 30/09)
+	1,			// mirrorRes - the screen's full size, for `mirrorsoft` to average (Ronin, 08/10; half size since 30/09)
 	TRUE,		// mirrorClip
 	4.0f,		// mirrorFar
+	0.5f,		// mirrorSoft - calms the crawl of cut-out edges without the smear of higher values (Ronin, 08/10)
 	1.0f,		// ride
 	1.0f,		// wakes
 	1.0f,		// wakeFoam
@@ -151,11 +153,11 @@ inline WaterSeaTuning WaterSea_DefaultProfile(WaterKind kind)
 		12.0f,		// foamWidth
 		80.0f,		// foamTile
 		1.0f,		// texture - the map's own
-		0.9f,		// seaFoam
+		0.7f,		// seaFoam
 		4.0f,		// seaFoamDepth - halved: it whitened too much of a shallow sea (Ronin, 29/09)
 		40.0f,		// seaFoamTile
 		TRUE,		// swell
-		1.0f,		// swellHeight
+		0.7f,		// swellHeight
 		1.0f,		// swellSize
 		1.0f,		// swellSpeed
 		30.0f,		// swellDir
@@ -284,9 +286,10 @@ inline const WaterKnobInfo TheWaterGlobalKnobs[] =
 	{ "refraction",     WATER_KNOB_BOOL, offsetof(WaterSeaGlobal, refraction), 0.0f, 1.0f, TRUE },
 	{ "oldwaves",       WATER_KNOB_BOOL, offsetof(WaterSeaGlobal, oldWaves), 0.0f, 1.0f, TRUE },
 	{ "mirror",         WATER_KNOB_BOOL, offsetof(WaterSeaGlobal, mirror), 0.0f, 1.0f, FALSE },
-	{ "mirrorres",      WATER_KNOB_INT, offsetof(WaterSeaGlobal, mirrorRes), 0.0f, 8.0f, TRUE },
+	{ "mirrorres",      WATER_KNOB_INT, offsetof(WaterSeaGlobal, mirrorRes), 1.0f, 2.0f, TRUE },
 	{ "mirrorclip",     WATER_KNOB_BOOL, offsetof(WaterSeaGlobal, mirrorClip), 0.0f, 1.0f, TRUE },
 	{ "mirrorfar",      WATER_KNOB_REAL, offsetof(WaterSeaGlobal, mirrorFar), 1.0f, 20.0f, TRUE },
+	{ "mirrorsoft",     WATER_KNOB_REAL, offsetof(WaterSeaGlobal, mirrorSoft), 0.0f, 1.5f, TRUE },
 	{ "ride",           WATER_KNOB_REAL, offsetof(WaterSeaGlobal, ride), 0.0f, 2.0f, TRUE },
 	{ "wakes",          WATER_KNOB_REAL, offsetof(WaterSeaGlobal, wakes), 0.0f, 4.0f, TRUE },
 	{ "wakefoam",       WATER_KNOB_REAL, offsetof(WaterSeaGlobal, wakeFoam), 0.0f, 4.0f, TRUE },

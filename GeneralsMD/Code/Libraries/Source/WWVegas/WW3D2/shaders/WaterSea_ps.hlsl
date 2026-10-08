@@ -56,6 +56,8 @@ float4 g_ShroudMap          : register(c53);	// xy: world xy -> shroud uv scale 
 // Ronin @feature 03/10/2026 DX9: phase 5 - wakes (W3DWater.cpp renderWakes, WaterWake_ps.hlsl).
 float4 g_WakeMap            : register(c54);	// world xy -> wake uv: xy scale, zw offset
 float4 g_WakeCfg            : register(c55);	// x: foam (`wakefoam`), y: its slope -> the normal, z: its height -> crest units (all 0 = none)
+// Ronin @feature 08/10/2026 DX9: `mirrorsoft` (W3DWaterSea.h). c62: WaterWake_ps holds c56-c61.
+float4 g_MirrorSoft         : register(c62);	// xy: the extra taps' offset in mirror uv, z: 1 = on
 
 sampler2D s_ShadowNear : register(s7);	// Ronin @feature 29/09/2026 DX9: phase 3b - depth textures, hardware compare
 sampler2D s_ShadowFar  : register(s8);
@@ -156,7 +158,17 @@ PSOutput main(PSInput input)
 	// bends with the flattened ripples - a calm lake's mirror stays straight.
 	const float2 offset = (g_Surface.x > 0.0f) ? nFine.xy * g_Surface.z : caust;
 	const float2 uv     = (input.clipPos.xy / input.clipPos.w) * g_TexProj.xy + g_TexProj.zw + offset;
-	const float4 refl   = tex2D(s_Reflection, uv);
+	float4 refl         = tex2D(s_Reflection, uv);
+	// Ronin @feature 08/10/2026 DX9: `mirrorsoft` - four more taps on a rotated square: the half-size mirror has no AA and
+	// its cut-out edges crawl. tex2Dlod, so the branch is a real one (the mirror has one level).
+	[branch] if (g_MirrorSoft.z > 0.5f)
+	{
+		const float2 o = g_MirrorSoft.xy;
+		refl = 0.2f * (refl + tex2Dlod(s_Reflection, float4(uv + float2( o.x,  0.5f * o.y), 0.0f, 0.0f)) +
+							  tex2Dlod(s_Reflection, float4(uv + float2(-o.x, -0.5f * o.y), 0.0f, 0.0f)) +
+							  tex2Dlod(s_Reflection, float4(uv + float2(-0.5f * o.x,  o.y), 0.0f, 0.0f)) +
+							  tex2Dlod(s_Reflection, float4(uv + float2( 0.5f * o.x, -o.y), 0.0f, 0.0f)));
+	}
 
 	// Ronin @feature 29/09/2026 DX9: the body bends with the surface: the water texture is read where the normals push it.
 	// Light and shade from the normals, relative to flat water so the average brightness stays.

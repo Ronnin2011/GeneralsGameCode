@@ -1669,7 +1669,8 @@ void WaterRenderObjClass::ensureReflectionTarget()
 		w = (sw / div > 16) ? sw / div : 16;
 		h = (sh / div > 16) ? sh / div : 16;
 		// Ronin @tweak 30/09/2026 DX9: at most 1024 wide - its pixels are the cost, and a 4K screen at /2 would be 1920
-		if (w > 1024)
+		// Ronin @tweak 08/10/2026 DX9: not at `mirrorres 1` - the full size is asked for there, for `mirrorsoft` to average.
+		if (div > 1 && w > 1024)
 		{
 			h = (h * 1024) / w;
 			w = 1024;
@@ -3529,6 +3530,8 @@ void WaterRenderObjClass::bindWaterSea(IDirect3DBaseTexture9 *water, IDirect3DBa
 	WaterSeaInputs in;
 	in.bump             = m_pBumpTexture[(Int)m_fBumpFrame];
 	in.reflection       = m_pReflectionTexture->Peek_D3D_Texture();
+	in.mirrorInvW       = 1.0f / (Real)max(1, (Int)m_pReflectionTexture->Get_Width());	// Ronin @feature 08/10/2026 DX9: `mirrorsoft`
+	in.mirrorInvH       = 1.0f / (Real)max(1, (Int)m_pReflectionTexture->Get_Height());
 	in.water            = water;
 	in.edge             = edge;
 	in.normals          = (m_waterNormalTexture != nullptr) ? m_waterNormalTexture->Peek_D3D_Texture() : nullptr;
