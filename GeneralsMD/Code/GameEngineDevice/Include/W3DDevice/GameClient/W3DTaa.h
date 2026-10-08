@@ -54,6 +54,8 @@ public:
 
 	// Frees shaders and targets while the device still exists. Called from W3DDisplay's shutdown, beside W3DSsao's.
 	static void shutdown(void);
+	// Ronin @bugfix 07/10/2026 DX9: before a device reset. Drops the GPU timer queries - a reset fails while one is alive.
+	static void releaseResources(void);
 
 	// The current sample offset in NDC units, ready to add to the projection's off-centre terms. Zero when disabled.
 	// CameraClass::Apply is the only caller.

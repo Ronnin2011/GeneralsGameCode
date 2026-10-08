@@ -1339,6 +1339,11 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 		// Ronin @feature 13/09/2026 DX9: SSAO step 1. The INTZ scene depth is D3DPOOL_DEFAULT too; Begin rebuilds it.
 		Release_Scene_Depth();
 
+		// Ronin @bugfix 08/10/2026 DX9: the dynamic VB's D3D reference survives Set_Vertex_Buffer(nullptr); it failed the reset.
+		if (render_state.vba_d3d_vb) {
+			render_state.vba_d3d_vb->Release();
+			render_state.vba_d3d_vb = nullptr;
+		}
 		DynamicVBAccessClass::_Deinit();
 		DynamicIBAccessClass::_Deinit();
 		DX8TextureManagerClass::Release_Textures();
@@ -3823,7 +3828,8 @@ IDirect3DTexture8 * DX8Wrapper::_Create_DX8_ZTexture
 
 	DX8_ErrorCode(ret);
 
-	texture->AddRef(); // don't release this texture
+	// Ronin @bugfix 08/10/2026 DX9: no AddRef here. ZTextureClass owns the creation reference; a second one was never
+	// released, so every depth texture leaked and every device reset failed.
 
 	// Just return the texture, no reduction
 	// allowed for render targets.

@@ -372,6 +372,10 @@ namespace
 			}
 		}
 
+		// Ronin @bugfix 08/10/2026 DX9: the cached one is invalidated by a device reset like any other; Init() reloads it.
+		if (s_rigidCloudTexture != nullptr) {
+			s_rigidCloudTexture->Init();
+		}
 		return s_rigidCloudTexture;
 	}
 }
@@ -1379,6 +1383,11 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		// Per-diffuse: bind the diffuse on sampler 0 and resolve/bind its optional normal map (s2).
 		// normalMapActive also decides whether this run needs identical per-instance light payloads.
 		if (!haveDiffuse || rec.diffuse != lastDiffuse) {
+			// Ronin @bugfix 08/10/2026 DX9: Init() first, as TextureClass::Apply does. A device reset invalidates every model
+			// texture and a raw Peek never asks for the reload: every instanced mesh drew black after one.
+			if (rec.diffuse != nullptr) {
+				rec.diffuse->Init();
+			}
 			dev->SetTexture(0, (rec.diffuse != nullptr) ? rec.diffuse->Peek_D3D_Texture() : nullptr);
 
 			if (curNormalMap != nullptr) {

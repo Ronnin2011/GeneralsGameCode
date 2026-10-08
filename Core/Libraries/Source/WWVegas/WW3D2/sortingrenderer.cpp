@@ -456,6 +456,12 @@ void Release_Refs(SortingNodeStruct* state)
 	{
 		REF_PTR_RELEASE(state->sorting_state.Textures[i]);
 	}
+	// Ronin @bugfix 08/10/2026 DX9: the copied state also holds a D3D reference on the dynamic VB. Pooled nodes kept
+	// it for good, so the buffer outlived DynamicVBAccessClass::_Deinit and every device reset failed.
+	if (state->sorting_state.vba_d3d_vb) {
+		state->sorting_state.vba_d3d_vb->Release();
+		state->sorting_state.vba_d3d_vb = nullptr;
+	}
 }
 
 static unsigned overlapping_node_count;

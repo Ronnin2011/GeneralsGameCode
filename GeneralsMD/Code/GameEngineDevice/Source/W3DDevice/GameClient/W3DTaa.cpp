@@ -194,6 +194,7 @@ static Int   s_gpuSlot    = 0;
 static Bool  s_gpuOK      = FALSE;
 static float s_gpuTotalMs = -1.0f;
 static float s_gpuMaskMs  = -1.0f;
+static Bool  s_gpuRemake  = FALSE;	// Ronin @bugfix 07/10/2026 DX9: a device reset dropped them; postRender makes them again
 
 static void gpuRelease(void)
 {
@@ -1297,6 +1298,14 @@ static void renderMoverMask(IDirect3DDevice9 *dev, const D3DVIEWPORT9 &vp, Bool 
 	}
 }
 
+// Ronin @bugfix 07/10/2026 DX9: a device reset fails while any query is alive - `msaa 8` froze the game on it. The
+// targets are TextureClass, which the texture manager releases and remakes itself; the queries were the one thing left.
+void W3DTaa::releaseResources(void)
+{
+	s_gpuRemake = (s_gpuRemake || s_gpuOK) ? TRUE : FALSE;
+	gpuRelease();
+}
+
 void W3DTaa::shutdown(void)
 {
 	s_camera = NULL;
@@ -1467,6 +1476,11 @@ void W3DTaa::postRender(void)
 	WW3D::Get_Render_Target_Resolution(fbW, fbH, bits, windowed);
 	if (fbW <= 0 || fbH <= 0 || vp.Width == 0 || vp.Height == 0)
 		return;
+	if (s_gpuRemake)
+	{
+		s_gpuRemake = FALSE;
+		gpuCreate(dev);
+	}
 	gpuBegin();		// Ronin @diagnostic 27/09/2026 DX9: every return below this point is past gpuEnd
 
 	DWORD oldZ = 0, oldZW = 0, oldAB = 0, oldAT = 0, oldCull = 0, oldCW = 0;

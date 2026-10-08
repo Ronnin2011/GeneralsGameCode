@@ -446,6 +446,15 @@ void W3DShadowMap::shutdown(void)
 
 void W3DShadowMap::releaseResources(void)
 {
+	// Ronin @bugfix 08/10/2026 DX9: unpublish first, as applyQuality does. The receivers keep raw pointers; after a device
+	// reset the water mirror (drawn before the next update) bound a freed depth texture and crashed in SetTexture.
+	DX8InstanceManagerClass::Set_Shadow_Map(NULL, NULL, 0.0f, 0.0f, NULL, 0.0f);
+	TheTerrainShadowPass.enabled   = FALSE;
+	TheTerrainShadowPass.active    = FALSE;
+	TheTerrainShadowPass.shadowTex = NULL;
+	TheTerrainShadowPass.vs        = NULL;
+	TheTerrainShadowPass.ps        = NULL;
+	invalidateStaticCasters();
 	shutdown();
 }
 
