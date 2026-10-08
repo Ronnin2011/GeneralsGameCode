@@ -77,6 +77,9 @@ struct TerrainShadowPassState
 	// receiver skips its history there.
 	IDirect3DBaseTexture9 *movingMaskNear;
 	IDirect3DBaseTexture9 *movingMaskFar;
+	// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. TRUE with inDepthPass while the MAIN camera renders depth only: a
+	// second render like the light's, but none of the light's culls apply. APPENDED - rebuild GeneralsMD and Core.
+	Bool viewDepthPass;
 };
 
 

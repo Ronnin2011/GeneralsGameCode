@@ -969,8 +969,14 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 		Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 		W3DSsao::renderPass(rinfo.Camera, FALSE);
 
+	// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. The view prepass holds what the swapped depth holds at this point:
+	// freeze it here, and leave the trees out - under MSAA the AO pass runs before them.
+	if (TheTerrainShadowPass.viewDepthPass)
+		W3DSsao::prepassSolidDone();
+
 	// Draw the trees last so they alpha blend onto everything correctly.
-	DoTrees(rinfo);
+	if (!TheTerrainShadowPass.viewDepthPass)
+		DoTrees(rinfo);
 
 	// Ronin @feature 27/09/2026 DX9: SSAO after the trees while TAA runs (`ssao trees` auto, the default) or always with
 	// `ssao trees 1`: TAA's history smooths the foliage flicker that moved it before them on 14/09. One site runs.

@@ -2039,6 +2039,10 @@ AGAIN:
 			// so it belongs HERE with the others, never inside DoShadows.
 			if (TheUseShadowMaps)
 				W3DShadowMap::updateRenderTargetTexture(primaryW3DView->get3DCamera(), m_3DScene);
+
+			// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. The solid scene's depth into a readable texture - after the
+			// shadow map, whose receiver state it switches off and puts back. A no-op without MSAA or without SSAO.
+			W3DSsao::updateDepthPrepass(primaryW3DView ? primaryW3DView->get3DCamera() : NULL, m_3DScene);
 		}
 
 		viewsUpdated = FALSE;

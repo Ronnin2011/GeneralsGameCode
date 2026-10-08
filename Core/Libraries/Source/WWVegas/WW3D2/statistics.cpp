@@ -289,7 +289,7 @@ static unsigned draw_calls_by_subsystem[Debug_Statistics::DRAW_SUBSYS_COUNT] = {
 static const char* const draw_subsystem_names[Debug_Statistics::DRAW_SUBSYS_COUNT] =
 {
 	"other", "terrain", "shadow", "water", "shroud", "sorted", "sortAdd", "sortAlpha", "skin", "rigid",
-	"rigidFFP", "matpass", "fxLine", "fxPoint", "ui2D", "shadowMap"
+	"rigidFFP", "matpass", "fxLine", "fxPoint", "ui2D", "shadowMap", "shadowRecv", "prepass"
 };
 
 // Ronin @diagnostic 12/08/2026 §29 DX9: when locked, nested tags cannot override. The shadow-map

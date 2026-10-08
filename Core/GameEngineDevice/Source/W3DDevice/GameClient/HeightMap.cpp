@@ -1902,7 +1902,8 @@ static std::vector<unsigned char>	s_shadowTileKeep;
 
 static Bool shadowDepthSkipTile(Int ti, Int tj, Int numX)
 {
-	if (!TheTerrainShadowPass.inDepthPass || s_shadowTileKeep.empty())
+	// Ronin @feature 06/10/2026 DX9: the SSAO view prepass is a depth pass too, but the light's tile cull is not its.
+	if (!TheTerrainShadowPass.inDepthPass || TheTerrainShadowPass.viewDepthPass || s_shadowTileKeep.empty())
 		return FALSE;
 	const Int idx = tj * numX + ti;
 	if (idx < 0 || idx >= (Int)s_shadowTileKeep.size())
@@ -1917,7 +1918,7 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 
 	// Ronin @perf 30/08/2026 DX9: §29i.3. Rebuilt every depth pass, never cached — the fit is
 	// texel-snapped and tracks the camera.
-	if (TheTerrainShadowPass.inDepthPass && m_map != nullptr)
+	if (TheTerrainShadowPass.inDepthPass && !TheTerrainShadowPass.viewDepthPass && m_map != nullptr)	// Ronin @feature 06/10/2026 DX9: the light's pass only
 	{
 		const Int tileCount = m_numVBTilesX * m_numVBTilesY;
 		s_shadowTileKeep.assign((size_t)((tileCount > 0) ? tileCount : 0), 1);

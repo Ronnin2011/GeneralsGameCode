@@ -636,6 +636,12 @@ public:
 	static void Resume_Scene_Depth();
 	// NULL while bound or not written this frame — reading a bound depth-stencil is undefined.
 	static IDirect3DTexture9* Peek_Scene_Depth_Texture() { return (SceneDepthWritten && (SceneDepthSaved == nullptr || SceneDepthSuspended)) ? SceneDepthTexture : nullptr; }
+	// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. The same INTZ, filled by a depth prepass instead of swapped into the
+	// frame: Begin binds it with a dummy colour target, Freeze stops depth writes, End puts the frame's pair back.
+	static bool Begin_Scene_Depth_Prepass();
+	static void Freeze_Scene_Depth_Prepass();
+	static void End_Scene_Depth_Prepass();
+	static int  Get_Scene_Depth_Prepass_Target() { return ScenePrepassTarget; }
 
 	static void	Set_Viewport(CONST D3DVIEWPORT8* pViewport);
 
@@ -1045,6 +1051,17 @@ protected:
 	static int								SceneDepthSupport;		// -1 not probed, 0 no, 1 yes
 	static bool								SceneDepthWritten;
 	static bool								SceneDepthSuspended;	// ours is off the device mid-frame so a pass can read it
+	// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. The prepass's dummy colour target, the frame's pair it displaced,
+	// and the frame's depth while the AO pass has none bound. ScenePrepassTarget: 0 none, 1 NULL format, 2 A8R8G8B8.
+	static bool								Ensure_Scene_Depth(unsigned width, unsigned height);
+	static bool								Is_Null_Target_Supported();
+	static IDirect3DSurface9 *			ScenePrepassColor;
+	static IDirect3DSurface9 *			ScenePrepassSavedColor;
+	static IDirect3DSurface9 *			ScenePrepassSavedDepth;
+	static IDirect3DSurface9 *			SceneDepthHeld;
+	static int								ScenePrepassTarget;
+	static int								NullTargetSupport;		// -1 not probed, 0 no, 1 yes
+	static bool								SceneDepthFromPrepass;	// this frame's INTZ was filled by the prepass, not swapped in
 
 	static unsigned							DrawPolygonLowBoundLimit;
 

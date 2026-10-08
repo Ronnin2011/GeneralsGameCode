@@ -14,16 +14,24 @@
 #include "Lib/BaseType.h"
 
 class CameraClass;
+class SceneClass;
 
 class W3DSsao
 {
 public:
 	// Corner view: 0 = none, 1 = scene depth, 2 = raw AO recomputed at end of frame, 3 = the blurred AO renderPass made.
-	static const Int DEBUG_VIEW = 0;
+	// Ronin @diagnostic 07/10/2026 DX9: a runtime switch now - the panel's `ssao view`. Clamped to 0..3.
+	static void setDebugView(Int view);
+	static Int  getDebugView(void);
 	// Ronin @feature 13/09/2026 DX9: SSAO step 3b. 0 = compute AO but leave the frame untouched (A/B without a restart).
 	static const Int APPLY_TO_FRAME = 1;
 
 
+	// Ronin @feature 06/10/2026 DX9: SSAO under MSAA (SSAO_Work.md 6). Before Begin_Render, with the other render-to-texture
+	// passes: the solid scene's depth, main camera, into the texture the swap fills. getPrepassTarget: 0 none, 1 NULL, 2 ARGB.
+	static void updateDepthPrepass(CameraClass *camera, SceneClass *scene);
+	static void prepassSolidDone(void);						// RTS3DScene::Flush: nothing after this point writes depth
+	static Int  getPrepassTarget(void);
 	static void beginFrame(void);							// after WW3D::Begin_Render, before the views draw
 	// Ronin @feature 26/09/2026 DX9: called twice by RTS3DScene::Flush, before and after the trees; runs at the one matching
 	// the trees mode. Trees get AO only where something smooths their flicker (the 14/09 reason for running before them).

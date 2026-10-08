@@ -15,6 +15,9 @@
 #include "Common/GlobalData.h"
 #include "W3DDevice/GameClient/W3DSsao.h"
 #include "W3DDevice/GameClient/W3DTaa.h"	// Ronin @feature 27/09/2026 DX9: trees AO follows TAA
+#include "WW3D2/ww3d.h"						// Ronin @feature 06/10/2026 DX9: the depth prepass renders the scene
+#include "WW3D2/statistics.h"
+#include "W3DDevice/GameClient/W3DShadowMapState.h"
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 2. The two tuning knobs, in world units and as a multiplier.
 static const float AO_RADIUS    = 20.0f;
@@ -60,6 +63,8 @@ static IDirect3DPixelShader9	*s_showPS           = NULL;
 static Bool						s_shadersTried      = FALSE;
 static Bool						s_activeThisFrame   = FALSE;
 static Bool						s_aoReadyThisFrame  = FALSE;
+// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. This frame's depth came from updateDepthPrepass, not from the swap.
+static Bool						s_prepassThisFrame  = FALSE;
 // Ronin @feature 27/09/2026 DX9: `ssao trees` - AUTO (default) runs the pass after the trees only while TAA runs, so its
 // history smooths the foliage flicker; without TAA or under MSAA the pass stays before them, as on 14/09.
 static Int						s_aoTrees           = W3DSsao::TREES_AUTO;
@@ -291,7 +296,49 @@ Int W3DSsao::getQuality(void)
 void W3DSsao::beginFrame(void)
 {
 	s_aoReadyThisFrame = FALSE;
-	s_activeThisFrame  = (getQuality() > 0 && DX8Wrapper::Begin_Scene_Depth()) ? TRUE : FALSE;
+	// Ronin @feature 06/10/2026 DX9: a prepass frame already holds its depth; Begin_Scene_Depth would mark it unwritten.
+	s_activeThisFrame  = (getQuality() > 0 && (s_prepassThisFrame || DX8Wrapper::Begin_Scene_Depth())) ? TRUE : FALSE;
+}
+
+// Ronin @feature 06/10/2026 DX9: SSAO under MSAA (SSAO_Work.md 6). INTZ has no multisampled form, so the solid scene's
+// depth is rendered once more - main camera, colour off - into the texture the swap fills. A no-op without MSAA.
+void W3DSsao::updateDepthPrepass(CameraClass *camera, SceneClass *scene)
+{
+	s_prepassThisFrame = FALSE;
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev == NULL || camera == NULL || scene == NULL || getQuality() <= 0 || !DX8Wrapper::Begin_Scene_Depth_Prepass())
+		return;
+
+	DWORD oldColorWrite = 0xFFFFFFFF;
+	dev->GetRenderState(D3DRS_COLORWRITEENABLE, &oldColorWrite);
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE, 0);
+	{
+		Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_PREPASS, true);
+		// Ronin @feature 06/10/2026 DX9: a second scene render (inDepthPass), not the light's (viewDepthPass). The shadow receiver is off.
+		const Bool receiverWas = TheTerrainShadowPass.enabled;
+		TheTerrainShadowPass.enabled       = FALSE;
+		TheTerrainShadowPass.inDepthPass   = TRUE;
+		TheTerrainShadowPass.viewDepthPass = TRUE;
+		WW3D::Render(scene, camera);
+		TheTerrainShadowPass.viewDepthPass = FALSE;
+		TheTerrainShadowPass.inDepthPass   = FALSE;
+		TheTerrainShadowPass.enabled       = receiverWas;
+	}
+	DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE, oldColorWrite);
+
+	DX8Wrapper::End_Scene_Depth_Prepass();
+	s_prepassThisFrame = TRUE;
+}
+
+// Ronin @feature 06/10/2026 DX9: from RTS3DScene::Flush, where the AO pass sits in the main render: depth stops here.
+void W3DSsao::prepassSolidDone(void)
+{
+	DX8Wrapper::Freeze_Scene_Depth_Prepass();
+}
+
+Int W3DSsao::getPrepassTarget(void)
+{
+	return s_prepassThisFrame ? DX8Wrapper::Get_Scene_Depth_Prepass_Target() : 0;
 }
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 3a. Everything solid is in the depth buffer and nothing see-through has drawn.
@@ -301,6 +348,9 @@ Int  W3DSsao::getTrees(void)     { return s_aoTrees; }
 Bool W3DSsao::treesNow(void)
 {
 	// TAA decides isActive in its beginFrame, which runs before the scene draws this pass.
+	// Ronin @feature 06/10/2026 DX9: never on a prepass frame - its depth holds no trees, and MSAA has no TAA to smooth them.
+	if (s_prepassThisFrame)
+		return FALSE;
 	return (s_aoTrees == TREES_ON || (s_aoTrees == TREES_AUTO && W3DTaa::isActive())) ? TRUE : FALSE;
 }
 
@@ -437,11 +487,18 @@ Bool W3DSsao::isActive(void)
 	return s_activeThisFrame;
 }
 
+// Ronin @diagnostic 07/10/2026 DX9: `ssao view 0..3` - the corner view at runtime, so the MSAA prepass's depth and AO can
+// be compared with the swap path's without a rebuild.
+static Int s_debugView = 0;
+void W3DSsao::setDebugView(Int view) { s_debugView = (view < 0) ? 0 : ((view > 3) ? 3 : view); }
+Int  W3DSsao::getDebugView(void)     { return s_debugView; }
+
 // Ronin @feature 13/09/2026 DX9: SSAO. Top-right corner at the screen's aspect. 1 = depth (grey = distance), 2 = raw AO
 // recomputed here, 3 = the blurred AO renderPass produced. White = open, black = occluded; RED = outside the 3D viewport.
 void W3DSsao::drawDebugView(const CameraClass *camera)
 {
-	if (DEBUG_VIEW == 0 || !s_activeThisFrame || camera == NULL)
+	const Int view = s_debugView;
+	if (view == 0 || !s_activeThisFrame || camera == NULL)
 		return;
 
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
@@ -457,12 +514,12 @@ void W3DSsao::drawDebugView(const CameraClass *camera)
 	IDirect3DPixelShader9 *ps  = NULL;
 	IDirect3DTexture9     *tex = NULL;
 	Bool                   linear = FALSE;
-	if (DEBUG_VIEW == 1)
+	if (view == 1)
 	{
 		ps  = s_depthDebugPS;
 		tex = depthTex;
 	}
-	else if (DEBUG_VIEW == 2)
+	else if (view == 2)
 	{
 		ps  = s_aoRawPS;
 		tex = depthTex;
@@ -479,7 +536,7 @@ void W3DSsao::drawDebugView(const CameraClass *camera)
 	// First, so nothing the wrapper re-applies can land on top of the constants below.
 	DX8Wrapper::Invalidate_Cached_Render_States();
 
-	if (DEBUG_VIEW == 1)
+	if (view == 1)
 	{
 		float zNear = 1.0f;
 		float zFar  = 1000.0f;
@@ -487,7 +544,7 @@ void W3DSsao::drawDebugView(const CameraClass *camera)
 		const float c0[4] = { zNear, zFar, 1500.0f, 0.0f };
 		dev->SetPixelShaderConstantF(0, c0, 1);
 	}
-	else if (DEBUG_VIEW == 2)
+	else if (view == 2)
 	{
 		uploadAOConstants(dev, *camera, dd.Width, dd.Height);
 	}

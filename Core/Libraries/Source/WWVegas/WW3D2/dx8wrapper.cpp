@@ -192,6 +192,15 @@ IDirect3DSurface9 *			DX8Wrapper::SceneDepthSaved								= nullptr;
 int								DX8Wrapper::SceneDepthSupport							= -1;
 bool								DX8Wrapper::SceneDepthWritten							= false;
 bool								DX8Wrapper::SceneDepthSuspended							= false;
+// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. NULL - a colour target that takes no memory, for the depth prepass.
+#define D3DFMT_NULL_FOURCC ((D3DFORMAT)MAKEFOURCC('N','U','L','L'))
+IDirect3DSurface9 *			DX8Wrapper::ScenePrepassColor							= nullptr;
+IDirect3DSurface9 *			DX8Wrapper::ScenePrepassSavedColor					= nullptr;
+IDirect3DSurface9 *			DX8Wrapper::ScenePrepassSavedDepth					= nullptr;
+IDirect3DSurface9 *			DX8Wrapper::SceneDepthHeld								= nullptr;
+int								DX8Wrapper::ScenePrepassTarget							= 0;
+int								DX8Wrapper::NullTargetSupport							= -1;
+bool								DX8Wrapper::SceneDepthFromPrepass						= false;
 
 unsigned							DX8Wrapper::_MainThreadID								= 0;
 bool								DX8Wrapper::CurrentDX8LightEnables[MAX_LIGHTS];
@@ -1330,6 +1339,11 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 			Set_Vertex_Buffer (nullptr,i);
 		}
 		Set_Index_Buffer (nullptr, 0);
+		// Ronin @bugfix 08/10/2026 DX9: the dynamic VB's D3D reference survives Set_Vertex_Buffer(nullptr); it failed the reset.
+		if (render_state.vba_d3d_vb) {
+			render_state.vba_d3d_vb->Release();
+			render_state.vba_d3d_vb = nullptr;
+		}
 		if (m_pCleanupHook) {
 			m_pCleanupHook->ReleaseResources();
 		}
@@ -1339,11 +1353,6 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 		// Ronin @feature 13/09/2026 DX9: SSAO step 1. The INTZ scene depth is D3DPOOL_DEFAULT too; Begin rebuilds it.
 		Release_Scene_Depth();
 
-		// Ronin @bugfix 08/10/2026 DX9: the dynamic VB's D3D reference survives Set_Vertex_Buffer(nullptr); it failed the reset.
-		if (render_state.vba_d3d_vb) {
-			render_state.vba_d3d_vb->Release();
-			render_state.vba_d3d_vb = nullptr;
-		}
 		DynamicVBAccessClass::_Deinit();
 		DynamicIBAccessClass::_Deinit();
 		DX8TextureManagerClass::Release_Textures();
@@ -1395,6 +1404,7 @@ void DX8Wrapper::Release_Device()
 		// Ronin @feature 13/09/2026 DX9: SSAO step 1. Before the device goes; the next device is probed afresh.
 		Release_Scene_Depth();
 		SceneDepthSupport = -1;
+		NullTargetSupport = -1;
 
 		for (int a=0;a<MAX_TEXTURE_STAGES;++a)
 		{
@@ -2691,42 +2701,23 @@ bool DX8Wrapper::Is_Scene_Depth_Supported()
 	return SceneDepthSupport == 1;
 }
 
-// Ronin @feature 13/09/2026 DX9: SSAO step 1. Swap the device's depth-stencil for a same-size INTZ texture and clear it.
-// Returns false and changes nothing when unsupported, already bound, or the depth buffer is multisampled.
-bool DX8Wrapper::Begin_Scene_Depth()
+// Ronin @feature 06/10/2026 DX9: the INTZ texture at this size, made or remade. The swap and the prepass share it.
+bool DX8Wrapper::Ensure_Scene_Depth(unsigned width, unsigned height)
 {
-	SceneDepthWritten = false;
-	if (D3DDevice == nullptr || SceneDepthSaved != nullptr || !Is_Scene_Depth_Supported())
-		return false;
-
-	IDirect3DSurface9 *current = nullptr;
-	if (FAILED(D3DDevice->GetDepthStencilSurface(&current)) || current == nullptr)
-		return false;
-
-	// INTZ has no multisampled form — with AA on the frame keeps its own depth buffer.
-	D3DSURFACE_DESC cd;
-	if (FAILED(current->GetDesc(&cd)) || cd.MultiSampleType != D3DMULTISAMPLE_NONE)
-	{
-		current->Release();
-		return false;
-	}
-
-	// The device's own depth buffer is the size reference, so a resolution change rebuilds ours.
 	if (SceneDepthSurface != nullptr)
 	{
 		D3DSURFACE_DESC sd;
-		if (FAILED(SceneDepthSurface->GetDesc(&sd)) || sd.Width != cd.Width || sd.Height != cd.Height)
+		if (FAILED(SceneDepthSurface->GetDesc(&sd)) || sd.Width != width || sd.Height != height)
 			Release_Scene_Depth();
 	}
 
 	if (SceneDepthTexture == nullptr)
 	{
 		IDirect3DTexture9 *tex = nullptr;
-		if (FAILED(D3DDevice->CreateTexture(cd.Width, cd.Height, 1, D3DUSAGE_DEPTHSTENCIL, D3DFMT_INTZ_FOURCC,
+		if (FAILED(D3DDevice->CreateTexture(width, height, 1, D3DUSAGE_DEPTHSTENCIL, D3DFMT_INTZ_FOURCC,
 				D3DPOOL_DEFAULT, &tex, nullptr)) || tex == nullptr)
 		{
-			SceneDepthSupport = 0;		// the probe said yes and creation said no — stop retrying every frame
-			current->Release();
+			SceneDepthSupport = 0;		// the probe said yes and creation said no - stop retrying every frame
 			return false;
 		}
 		SceneDepthTexture = tex;
@@ -2736,12 +2727,35 @@ bool DX8Wrapper::Begin_Scene_Depth()
 			SceneDepthSurface = nullptr;
 			Release_Scene_Depth();
 			SceneDepthSupport = 0;
-			current->Release();
 			return false;
 		}
 	}
+	return true;
+}
 
-	if (FAILED(D3DDevice->SetDepthStencilSurface(SceneDepthSurface)))
+// Ronin @feature 13/09/2026 DX9: SSAO step 1. Swap the device's depth-stencil for a same-size INTZ texture and clear it.
+// Returns false and changes nothing when unsupported, already bound, or the depth buffer is multisampled.
+bool DX8Wrapper::Begin_Scene_Depth()
+{
+	SceneDepthWritten = false;
+	SceneDepthFromPrepass = false;
+	if (D3DDevice == nullptr || SceneDepthSaved != nullptr || !Is_Scene_Depth_Supported())
+		return false;
+
+	IDirect3DSurface9 *current = nullptr;
+	if (FAILED(D3DDevice->GetDepthStencilSurface(&current)) || current == nullptr)
+		return false;
+
+	// Ronin @feature 06/10/2026 DX9: INTZ has no multisampled form - under AA the frame keeps its own depth and the prepass fills ours.
+	D3DSURFACE_DESC cd;
+	if (FAILED(current->GetDesc(&cd)) || cd.MultiSampleType != D3DMULTISAMPLE_NONE)
+	{
+		current->Release();
+		return false;
+	}
+
+	// Ronin @feature 06/10/2026 DX9: the device's own depth buffer is the size reference, so a resolution change rebuilds ours.
+	if (!Ensure_Scene_Depth(cd.Width, cd.Height) || FAILED(D3DDevice->SetDepthStencilSurface(SceneDepthSurface)))
 	{
 		current->Release();
 		return false;
@@ -2766,32 +2780,177 @@ void DX8Wrapper::End_Scene_Depth()
 	SceneDepthSaved = nullptr;
 }
 
-// Ronin @feature 13/09/2026 DX9: SSAO step 3a. Take our depth-stencil off the device mid-frame. Only while it is bound and
-// written; the caller must switch to a target that needs no depth before drawing.
+// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. NULL is a colour target that takes no memory - for depth-only passes.
+bool DX8Wrapper::Is_Null_Target_Supported()
+{
+	if (NullTargetSupport < 0)
+	{
+		NullTargetSupport = 0;
+		if (D3DInterface != nullptr && CurrentCaps != nullptr)
+		{
+			const D3DCAPS9 &caps = CurrentCaps->Get_DX8_Caps();
+			D3DDISPLAYMODE mode;
+			if (SUCCEEDED(D3DInterface->GetAdapterDisplayMode(caps.AdapterOrdinal, &mode)) &&
+				SUCCEEDED(D3DInterface->CheckDeviceFormat(caps.AdapterOrdinal, caps.DeviceType, mode.Format,
+					D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE, D3DFMT_NULL_FOURCC)))
+			{
+				NullTargetSupport = 1;
+			}
+		}
+	}
+	return NullTargetSupport == 1;
+}
+
+// Ronin @feature 06/10/2026 DX9: SSAO under MSAA (SSAO_Work.md 6). A multisampled frame cannot swap its depth, so a prepass
+// fills the same INTZ: bound here with a dummy colour target and cleared. False = not multisampled, or not makeable.
+bool DX8Wrapper::Begin_Scene_Depth_Prepass()
+{
+	if (D3DDevice == nullptr || SceneDepthSaved != nullptr || ScenePrepassSavedColor != nullptr ||
+		!Is_Scene_Depth_Supported())
+		return false;
+
+	IDirect3DSurface9 *frameDepth = nullptr;
+	if (FAILED(D3DDevice->GetDepthStencilSurface(&frameDepth)) || frameDepth == nullptr)
+		return false;
+
+	D3DSURFACE_DESC fd;
+	if (FAILED(frameDepth->GetDesc(&fd)) || fd.MultiSampleType == D3DMULTISAMPLE_NONE ||
+		!Ensure_Scene_Depth(fd.Width, fd.Height))
+	{
+		frameDepth->Release();
+		return false;
+	}
+
+	// Ronin @feature 06/10/2026 DX9: Release_Scene_Depth drops this with the texture, so the two are always the same size.
+	if (ScenePrepassColor == nullptr)
+	{
+		ScenePrepassTarget = 0;
+		if (Is_Null_Target_Supported() && SUCCEEDED(D3DDevice->CreateRenderTarget(fd.Width, fd.Height,
+				D3DFMT_NULL_FOURCC, D3DMULTISAMPLE_NONE, 0, FALSE, &ScenePrepassColor, nullptr)))
+			ScenePrepassTarget = 1;
+		else if (SUCCEEDED(D3DDevice->CreateRenderTarget(fd.Width, fd.Height,
+				D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE, 0, FALSE, &ScenePrepassColor, nullptr)))
+			ScenePrepassTarget = 2;
+		else
+			ScenePrepassColor = nullptr;
+	}
+
+	IDirect3DSurface9 *frameColor = nullptr;
+	if (ScenePrepassColor == nullptr || FAILED(D3DDevice->GetRenderTarget(0, &frameColor)) || frameColor == nullptr)
+	{
+		frameDepth->Release();
+		return false;
+	}
+
+	// Ronin @feature 06/10/2026 DX9: depth off first, then the target, then the depth that matches it.
+	D3DDevice->SetDepthStencilSurface(nullptr);
+	if (FAILED(D3DDevice->SetRenderTarget(0, ScenePrepassColor)) ||
+		FAILED(D3DDevice->SetDepthStencilSurface(SceneDepthSurface)))
+	{
+		D3DDevice->SetDepthStencilSurface(nullptr);
+		D3DDevice->SetRenderTarget(0, frameColor);
+		D3DDevice->SetDepthStencilSurface(frameDepth);
+		frameColor->Release();
+		frameDepth->Release();
+		return false;
+	}
+	ScenePrepassSavedColor = frameColor;	// both keep the references the Get calls took
+	ScenePrepassSavedDepth = frameDepth;
+
+	SceneDepthWritten = false;
+	SceneDepthFromPrepass = false;
+	D3DDevice->Clear(0, nullptr, D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, 0, 1.0f, 0);
+	return true;
+}
+
+// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. The solid scene is in; whatever the render still drains writes no depth.
+void DX8Wrapper::Freeze_Scene_Depth_Prepass()
+{
+	if (D3DDevice != nullptr && ScenePrepassSavedColor != nullptr)
+		D3DDevice->SetDepthStencilSurface(nullptr);
+}
+
+// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. The frame's own pair back, in Begin's order; the INTZ is now readable.
+void DX8Wrapper::End_Scene_Depth_Prepass()
+{
+	if (ScenePrepassSavedColor == nullptr)
+		return;
+	if (D3DDevice != nullptr)
+	{
+		D3DDevice->SetDepthStencilSurface(nullptr);
+		D3DDevice->SetRenderTarget(0, ScenePrepassSavedColor);
+		D3DDevice->SetDepthStencilSurface(ScenePrepassSavedDepth);
+		SceneDepthWritten = true;
+		SceneDepthFromPrepass = true;
+	}
+	ScenePrepassSavedColor->Release();
+	ScenePrepassSavedColor = nullptr;
+	if (ScenePrepassSavedDepth != nullptr)
+	{
+		ScenePrepassSavedDepth->Release();
+		ScenePrepassSavedDepth = nullptr;
+	}
+}
+
+// Ronin @feature 13/09/2026 DX9: SSAO step 3a. Take the depth-stencil off the device mid-frame so a pass can read ours.
+// Ronin @feature 06/10/2026 DX9: on a prepass frame ours is not bound: hold the frame's multisampled one instead.
 bool DX8Wrapper::Suspend_Scene_Depth()
 {
-	if (D3DDevice == nullptr || SceneDepthSaved == nullptr || !SceneDepthWritten || SceneDepthSuspended)
+	if (D3DDevice == nullptr || !SceneDepthWritten || SceneDepthSuspended)
 		return false;
+	if (SceneDepthSaved == nullptr && !SceneDepthFromPrepass)
+		return false;
+	if (SceneDepthFromPrepass && FAILED(D3DDevice->GetDepthStencilSurface(&SceneDepthHeld)))
+		SceneDepthHeld = nullptr;
 	if (FAILED(D3DDevice->SetDepthStencilSurface(nullptr)))
+	{
+		if (SceneDepthHeld != nullptr)
+		{
+			SceneDepthHeld->Release();
+			SceneDepthHeld = nullptr;
+		}
 		return false;
+	}
 	SceneDepthSuspended = true;
 	return true;
 }
 
-// Ronin @feature 13/09/2026 DX9: SSAO step 3a. Put it back — the rest of the frame keeps testing against it.
+// Ronin @feature 13/09/2026 DX9: SSAO step 3a. Put it back - the rest of the frame keeps testing against it.
 void DX8Wrapper::Resume_Scene_Depth()
 {
 	if (!SceneDepthSuspended)
 		return;
 	SceneDepthSuspended = false;
-	if (D3DDevice != nullptr && SceneDepthSurface != nullptr)
+	if (SceneDepthFromPrepass)
+	{
+		if (D3DDevice != nullptr)
+			D3DDevice->SetDepthStencilSurface(SceneDepthHeld);
+		if (SceneDepthHeld != nullptr)
+		{
+			SceneDepthHeld->Release();
+			SceneDepthHeld = nullptr;
+		}
+	}
+	else if (D3DDevice != nullptr && SceneDepthSurface != nullptr)
 		D3DDevice->SetDepthStencilSurface(SceneDepthSurface);
 }
 
-// Ronin @feature 13/09/2026 DX9: SSAO step 1. D3DPOOL_DEFAULT — released before every Reset and before the device goes.
+// Ronin @feature 13/09/2026 DX9: SSAO step 1. D3DPOOL_DEFAULT - released before every Reset and before the device goes.
 void DX8Wrapper::Release_Scene_Depth()
 {
 	End_Scene_Depth();
+	End_Scene_Depth_Prepass();
+	if (SceneDepthHeld != nullptr)
+	{
+		SceneDepthHeld->Release();
+		SceneDepthHeld = nullptr;
+	}
+	if (ScenePrepassColor != nullptr)
+	{
+		ScenePrepassColor->Release();
+		ScenePrepassColor = nullptr;
+	}
+	ScenePrepassTarget = 0;
 	if (SceneDepthSurface != nullptr)
 	{
 		SceneDepthSurface->Release();
@@ -2803,6 +2962,7 @@ void DX8Wrapper::Release_Scene_Depth()
 		SceneDepthTexture = nullptr;
 	}
 	SceneDepthWritten = false;
+	SceneDepthFromPrepass = false;
 }
 
 void DX8Wrapper::Set_Viewport(CONST D3DVIEWPORT8* pViewport)

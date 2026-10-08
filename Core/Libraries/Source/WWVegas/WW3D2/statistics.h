@@ -91,6 +91,8 @@ namespace Debug_Statistics
 		// so shadowMap= was casters PLUS one draw per terrain VB tile — it moved 250->350 on zoom with no
 		// change in casters at all. Separate them, or the caster count cannot be read.
 		DRAW_SUBSYS_SHADOWRECV,   // terrain shadow receiver pass — one draw per VB tile
+		// Ronin @diagnostic 06/10/2026 DX9: SSAO under MSAA renders the solid scene's depth once more, main camera.
+		DRAW_SUBSYS_PREPASS,      // view depth prepass - what MSAA + SSAO costs in draws
 		DRAW_SUBSYS_COUNT
 
 	};
