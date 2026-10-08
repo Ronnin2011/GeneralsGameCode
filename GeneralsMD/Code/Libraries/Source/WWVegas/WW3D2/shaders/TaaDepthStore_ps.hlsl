@@ -16,7 +16,7 @@ sampler2D g_Scene    : register(s0);     // this frame, final
 sampler2D g_Depth    : register(s2);     // INTZ scene depth, this frame
 sampler2D g_Opaque   : register(s7);     // this frame before particles (W3DTaa::noteOpaqueDone)
 float4    g_DepthCfg : register(c0);     // y = zNear, z = zFar (c0 yz, matching the resolve's g_TaaDebug layout),
-                                         // w = `taa autoreact` threshold, 0 = off
+                                         // w = `taa autoreact` threshold, 0 = off; x = 1 / (`autofull` - `autoreact`)
 
 float4 main(float2 uv : TEXCOORD0) : COLOR0
 {
@@ -38,7 +38,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
     if (g_DepthCfg.w > 0.0f)
     {
         float3 dd = abs(tex2Dlod(g_Scene, float4(uv, 0.0f, 0.0f)).rgb - tex2Dlod(g_Opaque, float4(uv, 0.0f, 0.0f)).rgb);
-        flag = (max(dd.r, max(dd.g, dd.b)) > g_DepthCfg.w) ? 1.0f : 0.0f;
+        // Ronin @bugfix 08/10/2026 DX9: proportional, as the resolve computes it this frame (c0.x).
+        flag = saturate((max(dd.r, max(dd.g, dd.b)) - g_DepthCfg.w) * g_DepthCfg.x);
     }
     return float4(enc, flag);
 }

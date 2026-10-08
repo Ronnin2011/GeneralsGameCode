@@ -657,13 +657,14 @@ namespace
 			else if (stricmp(argv[1].str(), "disoccv")  == 0) { W3DTaa::setDisoccV((float)atof(argv[2].str())); ok = TRUE; }
 			else if (stricmp(argv[1].str(), "reactive") == 0) { W3DTaa::setReactive((float)atof(argv[2].str())); ok = TRUE; }
 			else if (stricmp(argv[1].str(), "autoreact")== 0) { W3DTaa::setAutoReact((float)atof(argv[2].str())); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "autofull") == 0) { W3DTaa::setAutoFull((float)atof(argv[2].str())); ok = TRUE; }
 			// Ronin @bugfix 29/09/2026 DX9: the water's reactive mask - its polygons in the velocity pass.
 			else if (stricmp(argv[1].str(), "water")    == 0) { W3DTaa::setWaterMask(atoi(argv[2].str()) != 0); ok = TRUE; }
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: taa [0|1] | weight <0..0.99> | debug <0..15> | sharpen <0..1> | mipbias <-2..0> | clamp <0..1> | shadowmask <0|1> | maskcap <0|1> | vel <0|1> | disocc <0..2> | disoccv <px> | reactive <0..1> | autoreact <0..1> | water <0|1>"), TRUE);
-			printAscii(AsciiString("  debug 1=reproj 2=depth 3=samples 4=history 13=velocity/reactive mask (orange = auto-reactive) 14=moving shadows (blue = in one now, red = clamped, yellow = also capped) 15=mesh motion px/frame (navy<.05 blue<.1 cyan<.2 green<.35 yellow<.5 orange<1 red)"), FALSE);
+			printAscii(AsciiString("usage: taa [0|1] | weight <0..0.99> | debug <0..15> | sharpen <0..1> | mipbias <-2..0> | clamp <0..1> | shadowmask <0|1> | maskcap <0|1> | vel <0|1> | disocc <0..2> | disoccv <px> | reactive <0..1> | autoreact <0..1> | autofull <0..1> | water <0|1>"), TRUE);
+			printAscii(AsciiString("  debug 1=reproj 2=depth 3=samples 4=history 13=velocity/reactive mask (orange = auto-reactive, by how much) 14=moving shadows (blue = in one now, red = clamped, yellow = also capped) 15=mesh motion px/frame (navy<.05 blue<.1 cyan<.2 green<.35 yellow<.5 orange<1 red)"), FALSE);
 			return;
 		}
 		// Ronin @diagnostic 26/09/2026 DX9: labels are the knob names, so what is read here is what gets typed.
@@ -672,9 +673,9 @@ namespace
 		state.format("taa: enabled=%d  running=%d  weight=%.2f  sharpen=%.2f  mipbias=%.2f  debug=%d",
 			W3DTaa::isEnabled() ? 1 : 0, W3DTaa::isActive() ? 1 : 0, W3DTaa::getWeight(), W3DTaa::getSharpen(), W3DTaa::getMipBias(), W3DTaa::getDebug());
 		printAscii(state, FALSE);
-		state.format("  clamp=%.2f  shadowmask=%d  maskcap=%d  reactive=%.2f  autoreact=%.2f",
+		state.format("  clamp=%.2f  shadowmask=%d  maskcap=%d  reactive=%.2f  autoreact=%.2f  autofull=%.2f",
 			W3DTaa::getClamp(), W3DTaa::getShadowMask() ? 1 : 0, W3DTaa::getMaskCap() ? 1 : 0,
-			W3DTaa::getReactive(), W3DTaa::getAutoReact());
+			W3DTaa::getReactive(), W3DTaa::getAutoReact(), W3DTaa::getAutoFull());
 		printAscii(state, FALSE);
 		// Ronin @bugfix 03/10/2026 DX9: the water mask's source - "own" = the water marked its pixels as it drew; else the
 		// flat polygons' triangle count (the fallback).

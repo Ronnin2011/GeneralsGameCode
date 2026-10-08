@@ -114,6 +114,10 @@ static float s_reactiveW  = 0.5f;	// `taa reactive` - 0 off, else the history we
 // sorted translucency draw; where the final frame differs from the copy an effect drew, and the history is clamped
 // there. Particles have no velocity, so nothing else clamps them. `taa autoreact` = the threshold, 0 = off.
 static float         s_autoReact   = 0.03f;
+// Ronin @bugfix 08/10/2026 DX9: `taa autofull` - the difference at which an effect is FULLY reactive; proportional in between.
+// On/off left a hard-edged field with no AA round thin smoke. At or below `autoreact` it is the old on/off again.
+static float         s_autoFull    = 0.20f;
+static float autoReactSlope(void) { const float span = s_autoFull - s_autoReact; return (span > 0.001f) ? 1.0f / span : 1000.0f; }
 static TextureClass *s_opaqueTex   = NULL;
 static UnsignedInt   s_opaqueW = 0, s_opaqueH = 0;
 static Bool          s_opaqueOK    = FALSE;
@@ -464,6 +468,8 @@ void  W3DTaa::setDisoccV(float px) { s_disoccV = taaKnob(px, 0.0f, 8.0f, 0.5f); 
 float W3DTaa::getDisoccV(void)     { return s_disoccV; }
 void  W3DTaa::setAutoReact(float t) { s_autoReact = taaKnob(t, 0.0f, 1.0f, 0.03f); }
 float W3DTaa::getAutoReact(void)    { return s_autoReact; }
+void  W3DTaa::setAutoFull(float t)  { s_autoFull = taaKnob(t, 0.0f, 1.0f, 0.20f); }
+float W3DTaa::getAutoFull(void)     { return s_autoFull; }
 Bool  W3DTaa::getOpaqueOK(void)     { return s_opaqueOK; }
 void  W3DTaa::noteCursorBib(const Vector3 *corners)
 {
@@ -1839,7 +1845,7 @@ void W3DTaa::postRender(void)
 					dev->SetTexture(7, s_opaqueTex->Peek_D3D_Texture());
 					setResolveSampler(dev, 7);		// POINT - compared 1:1 with the scene
 				}
-				const float c11[4] = { 0.0f, 0.0f, s_disoccV, useAuto ? s_autoReact : 0.0f };
+				const float c11[4] = { 0.0f, autoReactSlope(), s_disoccV, useAuto ? s_autoReact : 0.0f };	// Ronin @bugfix 08/10/2026 DX9: y = the mask's slope
 				dev->SetPixelShaderConstantF(11, c11, 1);	// likewise after the velocity pass
 				// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask at s3, screen clip -> sun clip at c12..c15, its params at
 				// c16 (x = 0: not drawn this frame, the resolve skips it). After the velocity pass, which used c12.
@@ -1888,7 +1894,7 @@ void W3DTaa::postRender(void)
 				dev->SetPixelShader(s_depthStorePS);
 				// Ronin @feature 26/09/2026 DX9: c0.w = the auto-reactive threshold; the flag goes in alpha.
 				const Bool useAutoD = autoReactUsable(fbW, fbH);
-				const float dcfg[4] = { 0.0f, s_zNear, s_zFar, useAutoD ? s_autoReact : 0.0f };
+				const float dcfg[4] = { autoReactSlope(), s_zNear, s_zFar, useAutoD ? s_autoReact : 0.0f };
 				dev->SetPixelShaderConstantF(0, dcfg, 1);
 				dev->SetTexture(2, depthTex);
 				setResolveSampler(dev, 2);

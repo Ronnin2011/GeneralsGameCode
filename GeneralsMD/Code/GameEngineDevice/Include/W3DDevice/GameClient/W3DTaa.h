@@ -124,6 +124,8 @@ public:
 	static void  noteOpaqueDone(void);
 	static void  setAutoReact(float t);
 	static float getAutoReact(void);
+	static void  setAutoFull(float t);	// Ronin @bugfix 08/10/2026 DX9: fully reactive from this difference on (`taa autofull`)
+	static float getAutoFull(void);
 	static Bool  getOpaqueOK(void);
 	// Ronin @bugfix 26/09/2026 DX9: W3DTerrainVisual::addFactionBibDrawable hands over the build-placement bib's 4 world
 	// corners; TAA flags that quad reactive for a few frames so the bib leaves no trail.

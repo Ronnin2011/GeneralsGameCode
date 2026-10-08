@@ -24,7 +24,7 @@ float4   g_Viewport  : register(c5);     // xy = 3D viewport min, zw = its size,
 float4   g_TaaDebug  : register(c6);     // x = debug view, yz = clip planes (the depth views must linearise)
 float4   g_TaaSharpen: register(c7);     // x = CAS strength (screen copy only), y = this frame's velocity is bound, w = clamp strength
 float4   g_TaaExtra  : register(c10);    // x = last frame's velocity is bound, y = `taa disocc` mode, z = `taa reactive`
-float4   g_TaaVel    : register(c11);    // z = `taa disoccv` px, w = `taa autoreact` threshold (0 = off or no snapshot)
+float4   g_TaaVel    : register(c11);    // y = 1 / (`autofull` - `autoreact`), z = `taa disoccv` px, w = `taa autoreact` (0 = off or no snapshot)
 // Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask (W3DTaa renderMoverMask) - sun depth of every mesh that moved this
 // frame, 16-bit packed: RG where it is now, BA where it was. c12..c15 take a screen clip position to the sun's.
 sampler2D g_MoverMap : register(s3);
@@ -311,7 +311,9 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
         {
             float3 dd = abs(scene - tex2Dlod(g_Opaque, float4(uv, 0.0f, 0.0f)).rgb);
             float  pa = tex2Dlod(g_PrevDepth, float4(camHistUV, 0.0f, 0.0f)).a;
-            autoR     = (max(dd.r, max(dd.g, dd.b)) > g_TaaVel.w || pa > 0.5f) ? 1.0f : 0.0f;
+            // Ronin @bugfix 08/10/2026 DX9: PROPORTIONAL (c11.y). On/off left a hard-edged field with no AA round thin smoke; the
+            // history now gives way only as far as the effect covers the pixel. Last frame's value rides in the alpha.
+            autoR     = max(saturate((max(dd.r, max(dd.g, dd.b)) - g_TaaVel.w) * g_TaaVel.y), pa);
             reactive  = max(reactive, autoR);
         }
     }
@@ -323,7 +325,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
     {
         float da = (g_TaaSharpen.y > 0.5f) ? tex2Dlod(g_Velocity, float4(uv, 0.0f, 0.0f)).a : 0.0f;
         if (da < 0.1f)
-            return (autoR > 0.5f) ? float4(1.0f, 0.5f, 0.0f, 0.0f) : float4(scene * 0.25f, 0.0f);
+            return float4(lerp(scene * 0.25f, float3(1.0f, 0.5f, 0.0f), autoR), 0.0f);
         if (da < 0.25f)
             return float4(0.0f, 1.0f, 1.0f, 0.0f);
         if (da < 0.35f)
@@ -565,8 +567,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
     n              = lerp(min(n + 1.0f, TAA_MAX_N), 1.0f, invalid);
     // The caller's weight caps how much history a converged pixel may keep, so `taa weight` still means something.
     float effWeight = min(1.0f - 1.0f / n, g_TaaParams.x);
-    if (reactive > 0.5f)
-        effWeight = min(effWeight, g_TaaExtra.z);
+    // Ronin @bugfix 08/10/2026 DX9: the cap scales with how reactive the pixel is (1 = the whole `taa reactive` cap).
+    effWeight = min(effWeight, lerp(1.0f, g_TaaExtra.z, reactive));
     // Ronin @bugfix 27/09/2026 DX9: where a moving shadow arrived or left this frame (`taa maskcap`), keep at most half the
     // history - the rotor's treatment. The clamp alone left a faint trail on grass: its box holds dark blades, so a faint old
     // shadow looked plausible there (none on the road, whose box is tight). Not a reset: that showed the raw frame.
