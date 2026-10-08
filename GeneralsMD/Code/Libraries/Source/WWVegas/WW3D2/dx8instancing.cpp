@@ -868,7 +868,9 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	{
 		float reflShroudOfsX = 0.0f, reflShroudOfsY = 0.0f, reflShroudSclX = 0.0f, reflShroudSclY = 0.0f;
 		TextureClass* reflShroudTex = W3DShaderManager::getShroudTexture();
-		const bool reflShroudActive = (reflShroudTex != nullptr) &&
+		// Ronin @bugfix 08/10/2026 DX9: not for a ghost object - its fogged light environment is the fog already (Is_Fog_Dimmed).
+		const bool reflFogDimmed = (lightEnv != nullptr) && lightEnv->Is_Fog_Dimmed();
+		const bool reflShroudActive = !reflFogDimmed && (reflShroudTex != nullptr) &&
 			(W3DShaderManager::getShroudMapState(&reflShroudOfsX, &reflShroudOfsY,
 												 &reflShroudSclX, &reflShroudSclY) != 0);
 
@@ -987,6 +989,7 @@ bool DX8InstanceManagerClass::Collect_Single_Rigid(
 	rec.diffuse  = diffuseTexture; // per-record: a container flush spans many texture-categories
 	rec.material = material;
 	rec.shader   = shader;         // per-record render state (blend/z/alpha-test/cull)
+	rec.shroud   = (lightEnv == nullptr) || !lightEnv->Is_Fog_Dimmed();	// Ronin @bugfix 08/10/2026 DX9: see the flush
 	m_pendingSingleRigidCount++;
 
 	// Container-constant: every mesh in a DX8RigidFVFCategoryContainer shares one FVF (one decl/VB).
@@ -1058,6 +1061,9 @@ bool DX8InstanceManagerClass::Single_Rigid_Order_Less(const PendingSingleRigid& 
 	if (cmp != 0) return cmp < 0;
 	cmp = memcmp(a.texGen.row1, b.texGen.row1, sizeof(a.texGen.row1));
 	if (cmp != 0) return cmp < 0;
+
+	// Ronin @bugfix 08/10/2026 DX9: the shroud switch (c23). Last in the key: a ghost object's records never share a draw with lit ones.
+	if (a.shroud != b.shroud) return (int)a.shroud < (int)b.shroud;
 
 	return false; // equal on the whole merge key -> these two can share one instanced draw
 }
@@ -1342,6 +1348,8 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	unsigned             lastShaderBits = 0;
 	bool                 haveShader = false;
 	unsigned             lastFreq0 = D3DSTREAMSOURCE_INDEXEDDATA | 1; // matches the setup above
+	bool                 lastShroud = true;
+	bool                 haveShroud = false;
 
 	unsigned i = 0;
 	while (i < count) {
@@ -1422,6 +1430,15 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 			dev->SetVertexShaderConstantF(21, rec.texGen.row1, 1);
 			lastTexGen = rec.texGen;
 			haveLastTexGen = true;
+		}
+
+		// Ronin @bugfix 08/10/2026 DX9: per-shroud. A ghost object is lit by the fogged environment, which is the fog already; the
+		// shroud on top darkened fogged buildings twice. c23.zw == 0 switches it off in the pixel shader.
+		if (!haveShroud || rec.shroud != lastShroud) {
+			static const float psC23Off[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+			dev->SetPixelShaderConstantF(23, rec.shroud ? psC23 : psC23Off, 1);
+			lastShroud = rec.shroud;
+			haveShroud = true;
 		}
 
 		// How many of the FOLLOWING records can ride this same draw? State + geometry adjacency comes

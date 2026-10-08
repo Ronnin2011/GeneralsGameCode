@@ -1031,6 +1031,8 @@ void RTS3DScene::updateFixedLightEnvironments(RenderInfoClass & rinfo)
 	//Generate the default light environment
 	m_defaultLightEnv.Reset(Vector3(0,0,0), Get_Ambient_Light());
 	m_foggedLightEnv.Reset(Vector3(0,0,0), Get_Ambient_Light()*foggedLightFrac);
+	// Ronin @bugfix 08/10/2026 DX9: it IS the fog for a ghost object - the shader paths must not multiply the shroud in as well.
+	m_foggedLightEnv.Set_Fog_Dimmed(true);
 
 	Vector3 oldDiffuse, oldAmbient;
 	for (Int globalLightIndex = 0; globalLightIndex < m_numGlobalLights; globalLightIndex++)

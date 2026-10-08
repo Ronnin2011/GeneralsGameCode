@@ -226,7 +226,8 @@ LightEnvironmentClass::LightEnvironmentClass() :
 	ObjectCenter(0,0,0),
 	OutputAmbient(0,0,0),
 	FillLight(),
-	FillIntensity(0.0f)
+	FillIntensity(0.0f),
+	FogDimmed(false)
 {
 }
 

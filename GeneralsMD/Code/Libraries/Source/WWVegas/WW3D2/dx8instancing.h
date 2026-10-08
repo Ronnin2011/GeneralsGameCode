@@ -243,6 +243,7 @@ private:
 		TextureClass*            diffuse;   // per-record: a container flush spans many texture-categories
 		VertexMaterialClass*     material;  // per-record: VS material constants swapped per distinct material
 		ShaderClass              shader;    // per-record: blend/z/alpha-test/cull render state, re-applied per group
+		bool                     shroud;    // per-record: false = its light env already carries the fog (a ghost object)
 	};
 
 	enum { MAX_PENDING_SINGLE_RIGID = 4096 };

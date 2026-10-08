@@ -89,6 +89,10 @@ public:
 	void					Add_Fill_Light();
 	void					Calculate_Fill_Light();
 	void					Set_Fill_Intensity(float intensity)			{ FillIntensity = intensity; }
+	// Ronin @bugfix 08/10/2026 DX9: TRUE = these lights already carry the fog of war's dimming (the scene's fogged environment,
+	// for ghost objects), so a pixel shader that samples the shroud must not darken the mesh a second time.
+	void					Set_Fog_Dimmed(bool dimmed)					{ FogDimmed = dimmed; }
+	bool					Is_Fog_Dimmed() const						{ return FogDimmed; }
 
 	/*
 	** Accessors
@@ -172,4 +176,5 @@ protected:
 
 	InputLightStruct 	FillLight;						// Used to store the calculated fill light
 	float					FillIntensity;					// Used to determine how strong the fill light should be
+	bool					FogDimmed;						// Ronin @bugfix 08/10/2026 DX9: see Set_Fog_Dimmed. Reset() leaves it alone.
 };
