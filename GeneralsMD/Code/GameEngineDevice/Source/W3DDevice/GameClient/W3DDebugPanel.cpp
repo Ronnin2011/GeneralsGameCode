@@ -9,6 +9,9 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <tlhelp32.h>
 
 #include "Common/GameEngine.h"
 #include "Common/GameMemory.h"
@@ -480,7 +483,7 @@ namespace
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: water profile sea|lake|river | water [normals|fresnel|swell|ownopacity|breakers 0|1] (the profile's) | water [flat|mesh|waves|sea|depth|oldwaves|oldwakes|refraction|mirrorclip|mirror 0|1] | water view <0..14> | water mirrorres <0..8> | water <knob> <value> | water save|load|defaults"), TRUE);
+			printAscii(AsciiString("usage: water profile sea|lake|river | water [normals|fresnel|swell|ownopacity|breakers 0|1] (the profile's) | water [flat|mesh|waves|sea|depth|oldwaves|oldwakes|refraction|mirrorclip|mirror 0|1] | water view <0..14> | water mirrorres <1|2> | water <knob> <value> | water save|load|defaults"), TRUE);
 			return;
 		}
 		// Ronin @feature 03/10/2026 DX9: the global switches, then the selected profile as a table, one column per group - one
@@ -490,8 +493,8 @@ namespace
 			TheWaterDebug.skipFlat ? 0 : 1, TheWaterDebug.skipMesh ? 0 : 1, TheWaterDebug.skipWaves ? 0 : 1,
 			TheWaterDebug.seaPlane ? 1 : 0, g.depth ? 1 : 0, g.oldWaves ? 1 : 0, g.refraction ? 1 : 0, g.view);
 		printAscii(state, FALSE);
-		state.format("            mirror=%d  mirrorres=%d  mirrorclip=%d  mirrorfar=%.3g  ride=%.3g", g.mirror ? 1 : 0, g.mirrorRes,
-			g.mirrorClip ? 1 : 0, g.mirrorFar, g.ride);
+		state.format("            mirror=%d  mirrorres=%d  mirrorclip=%d  mirrorfar=%.3g  mirrorsoft=%.3g  ride=%.3g", g.mirror ? 1 : 0,
+			g.mirrorRes, g.mirrorClip ? 1 : 0, g.mirrorFar, g.mirrorSoft, g.ride);
 		printAscii(state, FALSE);
 		// Ronin @feature 03/10/2026 DX9: phase 5 - wakes
 		state.format("            wakes=%.3g  wakefoam=%.3g  wakeheight=%.3g  wakeshade=%.3g  wakerings=%.3g  wakesurge=%.3g  oldwakes=%d",
@@ -700,9 +703,12 @@ namespace
 		// Ronin @feature 26/09/2026 DX9: `ssao trees auto|0|1` - AO on trees while TAA runs (auto), never, or always.
 		else if (argc == 3 && stricmp(argv[1].str(), "trees") == 0)
 			W3DSsao::setTrees(stricmp(argv[2].str(), "auto") == 0 ? W3DSsao::TREES_AUTO : ((atoi(argv[2].str()) != 0) ? W3DSsao::TREES_ON : W3DSsao::TREES_OFF));
+		// Ronin @diagnostic 07/10/2026 DX9: `ssao view 0..3` - corner view: 1 scene depth, 2 raw AO, 3 the blurred AO.
+		else if (argc == 3 && stricmp(argv[1].str(), "view") == 0 && isWholeNumber(argv[2].str()))
+			W3DSsao::setDebugView(atoi(argv[2].str()));
 		else if (argc != 1)
 		{
-			printAscii(AsciiString("usage: ssao [0..3]  (0 off, 1 normal, 2 high, 3 ultra) | ssao trees <auto|0|1>"), TRUE);
+			printAscii(AsciiString("usage: ssao [0..3]  (0 off, 1 normal, 2 high, 3 ultra) | ssao trees <auto|0|1> | ssao view [0..3]"), TRUE);
 			return;
 		}
 		static const char *names[] = { "off", "normal", "high", "ultra" };
@@ -711,9 +717,10 @@ namespace
 		// Ronin @bugfix 27/09/2026 DX9: no `active` here - it is decided at the next frame start, so it read stale right after
 		// a change. The [DEPTH] row shows whether it actually ran.
 		const Int tm = W3DSsao::getTrees();
-		state.format("ssao: quality=%d (%s)  trees=%s%s", q, names[(q < 0) ? 0 : ((q > 3) ? 3 : q)],
+		state.format("ssao: quality=%d (%s)  trees=%s%s  view=%d", q, names[(q < 0) ? 0 : ((q > 3) ? 3 : q)],
 			(tm == W3DSsao::TREES_AUTO) ? "auto" : ((tm == W3DSsao::TREES_ON) ? "1" : "0"),
-			(tm == W3DSsao::TREES_AUTO) ? (W3DSsao::treesNow() ? " (on: TAA running)" : " (off: TAA not running)") : "");
+			(tm == W3DSsao::TREES_AUTO) ? (W3DSsao::treesNow() ? " (on: TAA running)" : " (off: TAA not running)") : "",
+			W3DSsao::getDebugView());
 		printAscii(state, FALSE);
 	}
 
@@ -823,6 +830,617 @@ namespace
 		const Bool night = (TheGlobalData != nullptr) && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT;
 		AsciiString state;
 		state.format("clouds: %s%s", set ? "on" : "off", (set && night) ? "  (not drawn: it is night)" : "");
+		printAscii(state, FALSE);
+	}
+
+	// Ronin @diagnostic 08/10/2026 DX9: device-object tracking, on only with DX9Track.txt beside the exe at start-up. Every
+	// default-pool object is remembered with its call stack and held by one more reference; resetReport lists survivors.
+	enum { TRACK_MAX = 16384, TRACK_FRAMES = 12 };
+	struct TrackedObject
+	{
+		IUnknown   *obj;
+		const char *kind;
+		UINT        a, b;
+		DWORD       usage;
+		Int         format;
+		USHORT      frames;
+		void       *stack[TRACK_FRAMES];
+	};
+	TrackedObject *s_tracked      = nullptr;
+	Int            s_trackedCount = 0;
+	Int            s_trackedLost  = 0;		// made while the table was full
+	Int            s_trackedTotal = 0;
+	Int            s_trackSeen    = 0;		// every creation the hooks saw, whatever its pool
+	Int            s_trackHist[12][4] = {};	// the same, per hook and memory pool (0 default, 1 managed, 2 system, 3 scratch)
+	DWORD          s_trackBirthThread = 0;	// the thread the device was made on (a reset from another one fails)
+	Bool           s_trackOn      = FALSE;
+	Bool           s_trackHooked  = FALSE;
+
+	void trackAdd(IUnknown *obj, const char *kind, UINT a, UINT b, DWORD usage, Int format)
+	{
+		if (!s_trackOn || obj == nullptr || s_tracked == nullptr)
+			return;
+		++s_trackedTotal;
+		if (s_trackedCount >= TRACK_MAX)
+		{
+			++s_trackedLost;
+			return;
+		}
+		TrackedObject &t = s_tracked[s_trackedCount++];
+		obj->AddRef();
+		t.obj    = obj;
+		t.kind   = kind;
+		t.a      = a;
+		t.b      = b;
+		t.usage  = usage;
+		t.format = format;
+		t.frames = CaptureStackBackTrace(2, TRACK_FRAMES, t.stack, nullptr);	// 2: this function and the hook
+	}
+
+	// Ronin @diagnostic 08/10/2026 DX9: forgets every object whose only remaining reference is the tracker's own.
+	Int trackSweep(void)
+	{
+		Int kept = 0;
+		for (Int i = 0; i < s_trackedCount; ++i)
+		{
+			IUnknown *obj = s_tracked[i].obj;
+			obj->AddRef();
+			if (obj->Release() <= 1)
+			{
+				obj->Release();
+				continue;
+			}
+			if (kept != i)
+				s_tracked[kept] = s_tracked[i];
+			++kept;
+		}
+		s_trackedCount = kept;
+		return kept;
+	}
+
+	typedef HRESULT (__stdcall *TrackSwapChainFn)(IDirect3DDevice9 *, D3DPRESENT_PARAMETERS *, IDirect3DSwapChain9 **);
+	typedef HRESULT (__stdcall *TrackTextureFn)(IDirect3DDevice9 *, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DTexture9 **, HANDLE *);
+	typedef HRESULT (__stdcall *TrackVolumeFn)(IDirect3DDevice9 *, UINT, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DVolumeTexture9 **, HANDLE *);
+	typedef HRESULT (__stdcall *TrackCubeFn)(IDirect3DDevice9 *, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DCubeTexture9 **, HANDLE *);
+	typedef HRESULT (__stdcall *TrackVBFn)(IDirect3DDevice9 *, UINT, DWORD, DWORD, D3DPOOL, IDirect3DVertexBuffer9 **, HANDLE *);
+	typedef HRESULT (__stdcall *TrackIBFn)(IDirect3DDevice9 *, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DIndexBuffer9 **, HANDLE *);
+	typedef HRESULT (__stdcall *TrackSurfaceFn)(IDirect3DDevice9 *, UINT, UINT, D3DFORMAT, D3DMULTISAMPLE_TYPE, DWORD, BOOL, IDirect3DSurface9 **, HANDLE *);
+	typedef HRESULT (__stdcall *TrackPlainFn)(IDirect3DDevice9 *, UINT, UINT, D3DFORMAT, D3DPOOL, IDirect3DSurface9 **, HANDLE *);
+	typedef HRESULT (__stdcall *TrackStateFn)(IDirect3DDevice9 *, D3DSTATEBLOCKTYPE, IDirect3DStateBlock9 **);
+	typedef HRESULT (__stdcall *TrackEndStateFn)(IDirect3DDevice9 *, IDirect3DStateBlock9 **);
+	typedef HRESULT (__stdcall *TrackQueryFn)(IDirect3DDevice9 *, D3DQUERYTYPE, IDirect3DQuery9 **);
+
+	TrackSwapChainFn s_origSwapChain = nullptr;
+	TrackTextureFn   s_origTexture   = nullptr;
+	TrackVolumeFn    s_origVolume    = nullptr;
+	TrackCubeFn      s_origCube      = nullptr;
+	TrackVBFn        s_origVB        = nullptr;
+	TrackIBFn        s_origIB        = nullptr;
+	TrackSurfaceFn   s_origTarget    = nullptr;
+	TrackSurfaceFn   s_origDepth     = nullptr;
+	TrackPlainFn     s_origPlain     = nullptr;
+	TrackStateFn     s_origState     = nullptr;
+	TrackEndStateFn  s_origEndState  = nullptr;
+	TrackQueryFn     s_origQuery     = nullptr;
+
+	HRESULT __stdcall trackSwapChain(IDirect3DDevice9 *dev, D3DPRESENT_PARAMETERS *pp, IDirect3DSwapChain9 **out)
+	{
+		++s_trackSeen;
+		++s_trackHist[0][((Int)0) & 3];
+		const HRESULT hr = s_origSwapChain(dev, pp, out);
+		if (SUCCEEDED(hr) && out != nullptr)
+			trackAdd(*out, "swap chain", 0, 0, 0, 0);
+		return hr;
+	}
+	HRESULT __stdcall trackTexture(IDirect3DDevice9 *dev, UINT w, UINT h, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool, IDirect3DTexture9 **out, HANDLE *shared)
+	{
+		++s_trackSeen;
+		++s_trackHist[1][((Int)pool) & 3];
+		const HRESULT hr = s_origTexture(dev, w, h, levels, usage, fmt, pool, out, shared);
+		if (SUCCEEDED(hr) && out != nullptr && pool == D3DPOOL_DEFAULT)
+			trackAdd(*out, "texture", w, h, usage, (Int)fmt);
+		return hr;
+	}
+	HRESULT __stdcall trackVolume(IDirect3DDevice9 *dev, UINT w, UINT h, UINT d, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool, IDirect3DVolumeTexture9 **out, HANDLE *shared)
+	{
+		++s_trackSeen;
+		++s_trackHist[2][((Int)pool) & 3];
+		const HRESULT hr = s_origVolume(dev, w, h, d, levels, usage, fmt, pool, out, shared);
+		if (SUCCEEDED(hr) && out != nullptr && pool == D3DPOOL_DEFAULT)
+			trackAdd(*out, "volume texture", w, h, usage, (Int)fmt);
+		return hr;
+	}
+	HRESULT __stdcall trackCube(IDirect3DDevice9 *dev, UINT edge, UINT levels, DWORD usage, D3DFORMAT fmt, D3DPOOL pool, IDirect3DCubeTexture9 **out, HANDLE *shared)
+	{
+		++s_trackSeen;
+		++s_trackHist[3][((Int)pool) & 3];
+		const HRESULT hr = s_origCube(dev, edge, levels, usage, fmt, pool, out, shared);
+		if (SUCCEEDED(hr) && out != nullptr && pool == D3DPOOL_DEFAULT)
+			trackAdd(*out, "cube texture", edge, edge, usage, (Int)fmt);
+		return hr;
+	}
+	HRESULT __stdcall trackVB(IDirect3DDevice9 *dev, UINT bytes, DWORD usage, DWORD fvf, D3DPOOL pool, IDirect3DVertexBuffer9 **out, HANDLE *shared)
+	{
+		++s_trackSeen;
+		++s_trackHist[4][((Int)pool) & 3];
+		const HRESULT hr = s_origVB(dev, bytes, usage, fvf, pool, out, shared);
+		if (SUCCEEDED(hr) && out != nullptr && pool == D3DPOOL_DEFAULT)
+			trackAdd(*out, "vertex buffer", bytes, fvf, usage, 0);
+		return hr;
+	}
+	HRESULT __stdcall trackIB(IDirect3DDevice9 *dev, UINT bytes, DWORD usage, D3DFORMAT fmt, D3DPOOL pool, IDirect3DIndexBuffer9 **out, HANDLE *shared)
+	{
+		++s_trackSeen;
+		++s_trackHist[5][((Int)pool) & 3];
+		const HRESULT hr = s_origIB(dev, bytes, usage, fmt, pool, out, shared);
+		if (SUCCEEDED(hr) && out != nullptr && pool == D3DPOOL_DEFAULT)
+			trackAdd(*out, "index buffer", bytes, 0, usage, (Int)fmt);
+		return hr;
+	}
+	HRESULT __stdcall trackTarget(IDirect3DDevice9 *dev, UINT w, UINT h, D3DFORMAT fmt, D3DMULTISAMPLE_TYPE ms, DWORD q, BOOL lockable, IDirect3DSurface9 **out, HANDLE *shared)
+	{
+		++s_trackSeen;
+		++s_trackHist[6][((Int)0) & 3];
+		const HRESULT hr = s_origTarget(dev, w, h, fmt, ms, q, lockable, out, shared);
+		if (SUCCEEDED(hr) && out != nullptr)
+			trackAdd(*out, "render target surface", w, h, (DWORD)ms, (Int)fmt);
+		return hr;
+	}
+	HRESULT __stdcall trackDepth(IDirect3DDevice9 *dev, UINT w, UINT h, D3DFORMAT fmt, D3DMULTISAMPLE_TYPE ms, DWORD q, BOOL discard, IDirect3DSurface9 **out, HANDLE *shared)
+	{
+		++s_trackSeen;
+		++s_trackHist[7][((Int)0) & 3];
+		const HRESULT hr = s_origDepth(dev, w, h, fmt, ms, q, discard, out, shared);
+		if (SUCCEEDED(hr) && out != nullptr)
+			trackAdd(*out, "depth surface", w, h, (DWORD)ms, (Int)fmt);
+		return hr;
+	}
+	HRESULT __stdcall trackPlain(IDirect3DDevice9 *dev, UINT w, UINT h, D3DFORMAT fmt, D3DPOOL pool, IDirect3DSurface9 **out, HANDLE *shared)
+	{
+		++s_trackSeen;
+		++s_trackHist[8][((Int)pool) & 3];
+		const HRESULT hr = s_origPlain(dev, w, h, fmt, pool, out, shared);
+		if (SUCCEEDED(hr) && out != nullptr && pool == D3DPOOL_DEFAULT)
+			trackAdd(*out, "plain surface", w, h, 0, (Int)fmt);
+		return hr;
+	}
+	HRESULT __stdcall trackState(IDirect3DDevice9 *dev, D3DSTATEBLOCKTYPE type, IDirect3DStateBlock9 **out)
+	{
+		++s_trackSeen;
+		++s_trackHist[9][((Int)0) & 3];
+		const HRESULT hr = s_origState(dev, type, out);
+		if (SUCCEEDED(hr) && out != nullptr)
+			trackAdd(*out, "state block", (UINT)type, 0, 0, 0);
+		return hr;
+	}
+	HRESULT __stdcall trackEndState(IDirect3DDevice9 *dev, IDirect3DStateBlock9 **out)
+	{
+		++s_trackSeen;
+		++s_trackHist[10][((Int)0) & 3];
+		const HRESULT hr = s_origEndState(dev, out);
+		if (SUCCEEDED(hr) && out != nullptr)
+			trackAdd(*out, "state block (recorded)", 0, 0, 0, 0);
+		return hr;
+	}
+	HRESULT __stdcall trackQuery(IDirect3DDevice9 *dev, D3DQUERYTYPE type, IDirect3DQuery9 **out)
+	{
+		++s_trackSeen;
+		++s_trackHist[11][((Int)0) & 3];
+		const HRESULT hr = s_origQuery(dev, type, out);
+		if (SUCCEEDED(hr) && out != nullptr)	// out is null when the caller only asks whether the type exists
+			trackAdd(*out, "query", (UINT)type, 0, 0, 0);
+		return hr;
+	}
+
+	// Ronin @diagnostic 08/10/2026 DX9: who takes references on the frame's own surfaces - the device's Get* calls, by call
+	// site. A site seen once or twice that is not matched by a release is what a failing reset points at.
+	enum { LEDGER_MAX = 512, LEDGER_FRAMES = 6 };
+	struct LedgerEntry
+	{
+		char      kind;		// B back buffer, R render target 0, D depth, S swap chain
+		void     *object;
+		UnsignedInt count;
+		USHORT    frames;
+		void     *stack[LEDGER_FRAMES];
+	};
+	LedgerEntry s_ledger[LEDGER_MAX];
+	Int         s_ledgerCount = 0;
+	Int         s_ledgerLost  = 0;
+
+	void ledgerAdd(char kind, void *object)
+	{
+		if (!s_trackOn || object == nullptr)
+			return;
+		void *stack[LEDGER_FRAMES] = {};
+		const USHORT frames = CaptureStackBackTrace(2, LEDGER_FRAMES, stack, nullptr);
+		for (Int i = 0; i < s_ledgerCount; ++i)
+		{
+			LedgerEntry &e = s_ledger[i];
+			if (e.kind == kind && e.object == object && e.stack[0] == stack[0] && e.stack[1] == stack[1] && e.stack[2] == stack[2])
+			{
+				++e.count;
+				return;
+			}
+		}
+		if (s_ledgerCount >= LEDGER_MAX)
+		{
+			++s_ledgerLost;
+			return;
+		}
+		LedgerEntry &e = s_ledger[s_ledgerCount++];
+		e.kind   = kind;
+		e.object = object;
+		e.count  = 1;
+		e.frames = frames;
+		memcpy(e.stack, stack, sizeof(stack));
+	}
+
+	typedef HRESULT (__stdcall *LedgerSwapFn)(IDirect3DDevice9 *, UINT, IDirect3DSwapChain9 **);
+	typedef HRESULT (__stdcall *LedgerBackFn)(IDirect3DDevice9 *, UINT, UINT, D3DBACKBUFFER_TYPE, IDirect3DSurface9 **);
+	typedef HRESULT (__stdcall *LedgerTargetFn)(IDirect3DDevice9 *, DWORD, IDirect3DSurface9 **);
+	typedef HRESULT (__stdcall *LedgerDepthFn)(IDirect3DDevice9 *, IDirect3DSurface9 **);
+	LedgerSwapFn   s_origGetSwap   = nullptr;
+	LedgerBackFn   s_origGetBack   = nullptr;
+	LedgerTargetFn s_origGetTarget = nullptr;
+	LedgerDepthFn  s_origGetDepth  = nullptr;
+
+	HRESULT __stdcall ledgerGetSwap(IDirect3DDevice9 *dev, UINT index, IDirect3DSwapChain9 **out)
+	{
+		const HRESULT hr = s_origGetSwap(dev, index, out);
+		if (SUCCEEDED(hr) && out != nullptr)
+			ledgerAdd('S', *out);
+		return hr;
+	}
+	HRESULT __stdcall ledgerGetBack(IDirect3DDevice9 *dev, UINT chain, UINT index, D3DBACKBUFFER_TYPE type, IDirect3DSurface9 **out)
+	{
+		const HRESULT hr = s_origGetBack(dev, chain, index, type, out);
+		if (SUCCEEDED(hr) && out != nullptr)
+			ledgerAdd('B', *out);
+		return hr;
+	}
+	HRESULT __stdcall ledgerGetTarget(IDirect3DDevice9 *dev, DWORD index, IDirect3DSurface9 **out)
+	{
+		const HRESULT hr = s_origGetTarget(dev, index, out);
+		if (SUCCEEDED(hr) && out != nullptr && index == 0)
+			ledgerAdd('R', *out);
+		return hr;
+	}
+	HRESULT __stdcall ledgerGetDepth(IDirect3DDevice9 *dev, IDirect3DSurface9 **out)
+	{
+		const HRESULT hr = s_origGetDepth(dev, out);
+		if (SUCCEEDED(hr) && out != nullptr)
+			ledgerAdd('D', *out);
+		return hr;
+	}
+
+	// Ronin @diagnostic 08/10/2026 DX9: the ledger's entries for one object, fewest calls first - a leak is a rare caller.
+	void ledgerReport(FILE *f, const char *label, void *object, char onlyKind)
+	{
+		Int shown = 0;
+		for (UnsignedInt want = 1; want != 0 && shown < 24; want = (want < 0x40000000u) ? want * 4 : 0)
+		{
+			for (Int i = 0; i < s_ledgerCount && shown < 24; ++i)
+			{
+				const LedgerEntry &e = s_ledger[i];
+				if ((object != nullptr && e.object != object) || (onlyKind != 0 && e.kind != onlyKind) || e.count >= want * 4 || e.count < want)
+					continue;
+				fprintf(f, "  %s: taken %u times via %c from:", label, e.count, e.kind);
+				for (USHORT s = 0; s < e.frames; ++s)
+					fprintf(f, " %08X", (unsigned)(UINT_PTR)e.stack[s]);
+				fputc('\n', f);
+				++shown;
+			}
+		}
+		fflush(f);
+	}
+
+	// Ronin @diagnostic 08/10/2026 DX9: one line into the report, flushed at once - a failed reset can take the game down.
+	void traceWrite(FILE *f, const char *format, ...)
+	{
+		va_list args;
+		va_start(args, format);
+		vfprintf(f, format, args);
+		va_end(args);
+		fputc('\n', f);
+		fflush(f);
+	}
+
+	// Ronin @diagnostic 08/10/2026 DX9: every module in the process with its address range - shows an injected overlay,
+	// and maps a logged stack address that lies outside the exe.
+	void traceModules(FILE *f)
+	{
+		const HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, GetCurrentProcessId());
+		if (snap == INVALID_HANDLE_VALUE)
+		{
+			traceWrite(f, "modules: no snapshot (%u)", (unsigned)GetLastError());
+			return;
+		}
+		MODULEENTRY32 entry;
+		entry.dwSize = sizeof(entry);
+		Int count = 0;
+		fprintf(f, "modules:\n ");
+		for (BOOL more = Module32First(snap, &entry); more; more = Module32Next(snap, &entry))
+		{
+			fprintf(f, " %s@%08X+%X", entry.szModule, (unsigned)(UINT_PTR)entry.modBaseAddr, (unsigned)entry.modBaseSize);
+			if (++count % 4 == 0)
+				fprintf(f, "\n ");
+		}
+		fputc('\n', f);
+		fflush(f);
+		CloseHandle(snap);
+	}
+
+	// Ronin @diagnostic 08/10/2026 DX9: what the last device reset found; `resetcheck` prints it in the panel.
+	struct ResetSeen
+	{
+		Bool    seen;
+		HRESULT hr;
+		Int     alive;			// tracked default-pool objects still alive as Reset was called
+		Int     backHeld;		// references others hold on the back buffer, and on the bound depth
+		Int     depthHeld;
+		void   *back;
+		void   *depth;
+	};
+	ResetSeen s_lastReset;
+	Int       s_resetCount  = 0;
+	Bool      s_checkArmed  = FALSE;	// `resetcheck` wants the report even when the reset works
+	Bool      s_reportBegun = FALSE;	// the file starts afresh once per run, then grows
+	typedef HRESULT (__stdcall *TrackResetFn)(IDirect3DDevice9 *, D3DPRESENT_PARAMETERS *);
+	TrackResetFn s_origReset = nullptr;
+
+	// Ronin @diagnostic 08/10/2026 DX9: one block of DX9ResetCheck.txt (beside Options.ini). A survivor is listed with the
+	// call stack of whoever made it; `others` counts the references that are not the tracker's own.
+	void resetReport(IDirect3DDevice9 *dev, HRESULT hr)
+	{
+		if (TheGlobalData == nullptr)
+			return;
+		AsciiString path = TheGlobalData->getPath_UserData();
+		path.concat("DX9ResetCheck.txt");
+		FILE *f = fopen(path.str(), s_reportBegun ? "at" : "wt");
+		if (f == nullptr)
+			return;
+		s_reportBegun = TRUE;
+		const UINT_PTR base = (UINT_PTR)GetModuleHandleA(nullptr);
+		const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
+		const IMAGE_NT_HEADERS *nt  = (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+		dev->AddRef();
+		const Int deviceRefs = (Int)dev->Release();
+		traceWrite(f, "---- reset %d at panel frame %u: %s (%08X)  aa=%d", s_resetCount, s_frame, SUCCEEDED(hr) ? "OK" : "FAILED",
+			(unsigned)hr, DX8Wrapper::Get_Anti_Aliasing_Level());
+		traceWrite(f, "exe base=%08X size=%08X  thread=%u (device made on %u)  deviceRefs=%d", (unsigned)base,
+			(unsigned)nt->OptionalHeader.SizeOfImage, (unsigned)GetCurrentThreadId(), (unsigned)s_trackBirthThread, deviceRefs);
+		traceWrite(f, "as Reset was called: %d tracked objects alive, back buffer held by %d, depth held by %d", s_lastReset.alive,
+			s_lastReset.backHeld, s_lastReset.depthHeld);
+		traceWrite(f, "since start: %d creations seen, %d default-pool, %d missed (table full)", s_trackSeen, s_trackedTotal,
+			s_trackedLost);
+		static const char *hookNames[12] = { "swap chain", "texture", "volume texture", "cube texture", "vertex buffer", "index buffer",
+			"render target surface", "depth surface", "plain surface", "state block", "state block (recorded)", "query" };
+		for (Int k = 0; k < 12; ++k)
+			if (s_trackHist[k][0] + s_trackHist[k][1] + s_trackHist[k][2] + s_trackHist[k][3] > 0)
+				traceWrite(f, "  seen: %-22s default=%d managed=%d system=%d scratch=%d", hookNames[k], s_trackHist[k][0], s_trackHist[k][1],
+					s_trackHist[k][2], s_trackHist[k][3]);
+		for (Int i = 0; i < s_trackedCount; ++i)
+		{
+			const TrackedObject &t = s_tracked[i];
+			t.obj->AddRef();
+			const ULONG refs = t.obj->Release();
+			fprintf(f, "  alive: %s  a=%u b=%u usage=%08X format=%d others=%u  stack:", t.kind, t.a, t.b, (unsigned)t.usage, t.format,
+				(unsigned)(refs - 1));
+			for (USHORT s = 0; s < t.frames; ++s)
+				fprintf(f, " %08X", (unsigned)(UINT_PTR)t.stack[s]);
+			fputc('\n', f);
+			fflush(f);
+		}
+		if (s_lastReset.backHeld > 0)
+			ledgerReport(f, "back buffer", s_lastReset.back, 0);
+		if (s_lastReset.depthHeld > 0)
+			ledgerReport(f, "depth", s_lastReset.depth, 0);
+		if (FAILED(hr))
+			traceModules(f);
+		fclose(f);
+	}
+
+	// Ronin @diagnostic 08/10/2026 DX9: IDirect3DDevice9::Reset. The sweep first, so a reference of the tracker's own never
+	// fails one; what is left is exactly what the game's release list missed. A failed reset is always reported.
+	HRESULT __stdcall trackReset(IDirect3DDevice9 *dev, D3DPRESENT_PARAMETERS *pp)
+	{
+		++s_resetCount;
+		s_lastReset.alive    = s_trackOn ? trackSweep() : 0;
+		s_lastReset.backHeld = s_lastReset.depthHeld = -1;
+		s_lastReset.back     = s_lastReset.depth = nullptr;
+		IDirect3DSurface9 *surf = nullptr;
+		if (SUCCEEDED(s_origGetBack(dev, 0, 0, D3DBACKBUFFER_TYPE_MONO, &surf)) && surf != nullptr)
+		{
+			s_lastReset.back     = surf;
+			s_lastReset.backHeld = (Int)surf->Release();	// what is left once ours is gone: anyone else's
+		}
+		surf = nullptr;
+		if (SUCCEEDED(s_origGetDepth(dev, &surf)) && surf != nullptr)
+		{
+			s_lastReset.depth     = surf;
+			s_lastReset.depthHeld = (Int)surf->Release();
+		}
+		const HRESULT hr = s_origReset(dev, pp);
+		s_lastReset.seen = TRUE;
+		s_lastReset.hr   = hr;
+		if (FAILED(hr) || s_checkArmed)
+			resetReport(dev, hr);
+		return hr;
+	}
+
+	// Ronin @diagnostic 08/10/2026 DX9: patches the device's method table in place - IDirect3DDevice9's slots by number.
+	// The originals are kept and every hook calls through, so with tracking off they cost one branch.
+	Bool trackInstall(IDirect3DDevice9 *dev)
+	{
+		if (s_trackHooked)
+			return TRUE;
+		void **table = *(void ***)dev;
+		DWORD oldProtect = 0;
+		if (!VirtualProtect(table, 119 * sizeof(void *), PAGE_READWRITE, &oldProtect))
+			return FALSE;
+		s_origSwapChain = (TrackSwapChainFn)table[13];	table[13]  = (void *)trackSwapChain;
+		s_origTexture   = (TrackTextureFn)table[23];	table[23]  = (void *)trackTexture;
+		s_origVolume    = (TrackVolumeFn)table[24];		table[24]  = (void *)trackVolume;
+		s_origCube      = (TrackCubeFn)table[25];		table[25]  = (void *)trackCube;
+		s_origVB        = (TrackVBFn)table[26];			table[26]  = (void *)trackVB;
+		s_origIB        = (TrackIBFn)table[27];			table[27]  = (void *)trackIB;
+		s_origTarget    = (TrackSurfaceFn)table[28];	table[28]  = (void *)trackTarget;
+		s_origDepth     = (TrackSurfaceFn)table[29];	table[29]  = (void *)trackDepth;
+		s_origPlain     = (TrackPlainFn)table[36];		table[36]  = (void *)trackPlain;
+		s_origState     = (TrackStateFn)table[59];		table[59]  = (void *)trackState;
+		s_origEndState  = (TrackEndStateFn)table[61];	table[61]  = (void *)trackEndState;
+		s_origQuery     = (TrackQueryFn)table[118];		table[118] = (void *)trackQuery;
+		s_origGetSwap   = (LedgerSwapFn)table[14];		table[14]  = (void *)ledgerGetSwap;
+		s_origGetBack   = (LedgerBackFn)table[18];		table[18]  = (void *)ledgerGetBack;
+		s_origGetTarget = (LedgerTargetFn)table[38];	table[38]  = (void *)ledgerGetTarget;
+		s_origGetDepth  = (LedgerDepthFn)table[40];		table[40]  = (void *)ledgerGetDepth;
+		s_origReset     = (TrackResetFn)table[16];		table[16]  = (void *)trackReset;
+		VirtualProtect(table, 119 * sizeof(void *), oldProtect, &oldProtect);
+		s_trackHooked = TRUE;
+		return TRUE;
+	}
+
+	// Ronin @diagnostic 08/10/2026 DX9: tracking from the device's birth. IDirect3D9::CreateDevice is slot 16; the device
+	// hooks go in before the game makes its first object, so what start-up creates is seen too.
+	typedef HRESULT (__stdcall *TrackBirthFn)(IDirect3D9 *, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS *, IDirect3DDevice9 **);
+	typedef IDirect3D9 *(__stdcall *TrackCreate9Fn)(UINT);
+	TrackBirthFn   s_origBirth   = nullptr;
+	TrackCreate9Fn s_origCreate9 = nullptr;
+
+	HRESULT __stdcall trackBirth(IDirect3D9 *d3d, UINT adapter, D3DDEVTYPE type, HWND window, DWORD flags, D3DPRESENT_PARAMETERS *pp,
+		IDirect3DDevice9 **out)
+	{
+		const HRESULT hr = s_origBirth(d3d, adapter, type, window, flags, pp, out);
+		if (SUCCEEDED(hr))
+			s_trackBirthThread = GetCurrentThreadId();
+		if (SUCCEEDED(hr) && out != nullptr && *out != nullptr && !s_trackHooked)
+		{
+			if (s_tracked == nullptr)
+				s_tracked = new TrackedObject[TRACK_MAX];
+			if (trackInstall(*out))
+				s_trackOn = TRUE;
+		}
+		return hr;
+	}
+
+	IDirect3D9 * __stdcall trackCreate9(UINT sdkVersion)
+	{
+		IDirect3D9 *d3d = s_origCreate9(sdkVersion);
+		if (d3d != nullptr && s_origBirth == nullptr)
+		{
+			void **table = *(void ***)d3d;
+			DWORD oldProtect = 0;
+			if (VirtualProtect(&table[16], sizeof(void *), PAGE_READWRITE, &oldProtect))
+			{
+				s_origBirth = (TrackBirthFn)table[16];
+				table[16]   = (void *)trackBirth;
+				VirtualProtect(&table[16], sizeof(void *), oldProtect, &oldProtect);
+			}
+		}
+		return d3d;
+	}
+
+	// Ronin @diagnostic 08/10/2026 DX9: runs before main(). Only with DX9Track.txt beside the exe: points d3d9's
+	// Direct3DCreate9 export at the hook above, which the wrapper then finds through GetProcAddress. 32-bit only.
+	struct TrackBirthHook
+	{
+		TrackBirthHook()
+		{
+			char path[MAX_PATH];
+			const DWORD length = GetModuleFileNameA(nullptr, path, MAX_PATH);
+			if (length == 0 || length >= MAX_PATH - 16)
+				return;
+			char *slash = strrchr(path, '\\');
+			if (slash == nullptr)
+				return;
+			strcpy(slash + 1, "DX9Track.txt");
+			if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES)
+				return;
+			const HMODULE lib = LoadLibraryA("D3D9.DLL");
+			if (lib == nullptr)
+				return;
+			BYTE *base = (BYTE *)lib;
+			const IMAGE_DOS_HEADER *dos = (const IMAGE_DOS_HEADER *)base;
+			const IMAGE_NT_HEADERS *nt  = (const IMAGE_NT_HEADERS *)(base + dos->e_lfanew);
+			const IMAGE_DATA_DIRECTORY &dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+			if (dir.VirtualAddress == 0)
+				return;
+			const IMAGE_EXPORT_DIRECTORY *exports = (const IMAGE_EXPORT_DIRECTORY *)(base + dir.VirtualAddress);
+			const DWORD *names    = (const DWORD *)(base + exports->AddressOfNames);
+			const WORD  *ordinals = (const WORD *)(base + exports->AddressOfNameOrdinals);
+			DWORD       *entries  = (DWORD *)(base + exports->AddressOfFunctions);
+			for (DWORD i = 0; i < exports->NumberOfNames; ++i)
+			{
+				if (strcmp((const char *)(base + names[i]), "Direct3DCreate9") != 0)
+					continue;
+				DWORD *entry = &entries[ordinals[i]];
+				DWORD oldProtect = 0;
+				if (VirtualProtect(entry, sizeof(DWORD), PAGE_READWRITE, &oldProtect))
+				{
+					s_origCreate9 = (TrackCreate9Fn)(base + *entry);
+					*entry = (DWORD)((UINT_PTR)trackCreate9 - (UINT_PTR)base);
+					VirtualProtect(entry, sizeof(DWORD), oldProtect, &oldProtect);
+				}
+				break;
+			}
+		}
+	};
+	TrackBirthHook s_trackBirthHook;
+
+	// Ronin @diagnostic 08/10/2026 DX9: `resetcheck` - one device reset at the same settings, by the game's own path. With
+	// DX9Track.txt beside the exe at start-up, DX9ResetCheck.txt lists what was still alive when Reset was called.
+	void cmdResetCheck(Int argc, const AsciiString *argv)
+	{
+		if (argc != 1 || TheDisplay == nullptr || DX8Wrapper::_Get_D3D_Device8() == nullptr)
+		{
+			printAscii(AsciiString("usage: resetcheck"), TRUE);
+			return;
+		}
+		s_lastReset.seen = FALSE;
+		s_checkArmed = TRUE;
+		const Bool ok = TheDisplay->setDisplayMode(TheDisplay->getWidth(), TheDisplay->getHeight(), TheDisplay->getBitDepth(),
+			TheDisplay->getWindowed());
+		s_checkArmed = FALSE;
+		AsciiString line;
+		if (!s_trackHooked)
+			line.format("resetcheck: reset %s  (tracking off: start the game with DX9Track.txt beside the exe for the list)",
+				ok ? "OK" : "FAILED");
+		else if (s_lastReset.seen)
+			line.format("resetcheck: reset %s (%08X)  alive=%d backHeld=%d depthHeld=%d  - DX9ResetCheck.txt in the user data folder",
+				ok ? "OK" : "FAILED", (unsigned)s_lastReset.hr, s_lastReset.alive, s_lastReset.backHeld, s_lastReset.depthHeld);
+		else
+			line.format("resetcheck: %s, but the device was never asked to reset", ok ? "OK" : "FAILED");
+		printAscii(line, ok ? FALSE : TRUE);
+	}
+
+	// Ronin @feature 07/10/2026 DX9: `msaa 0|2|4|8` - the Options menu's anti-aliasing at runtime, by the device reset that
+	// menu does for it (OptionsMenu.cpp saveOptions). Not saved.
+	void cmdMsaa(Int argc, const AsciiString *argv)
+	{
+		if (argc == 2 && isWholeNumber(argv[1].str()) && TheWritableGlobalData != nullptr && TheDisplay != nullptr)
+		{
+			Int level = atoi(argv[1].str());
+			level = (level <= 0) ? 0 : ((level <= 2) ? 2 : ((level <= 4) ? 4 : 8));
+			if (DX8Wrapper::Get_Anti_Aliasing_Level() != level)
+			{
+				TheWritableGlobalData->m_antiAliasLevel = level;
+				if (!TheDisplay->setDisplayMode(TheDisplay->getWidth(), TheDisplay->getHeight(), TheDisplay->getBitDepth(),
+						TheDisplay->getWindowed()))
+				{
+					TheWritableGlobalData->m_antiAliasLevel = DX8Wrapper::Get_Anti_Aliasing_Level();
+					printAscii(AsciiString("msaa: the device reset FAILED - `resetcheck` says what blocks it"), TRUE);
+					return;
+				}
+			}
+		}
+		else if (argc != 1)
+		{
+			printAscii(AsciiString("usage: msaa [0|2|4|8]"), TRUE);
+			return;
+		}
+		AsciiString state;
+		state.format("msaa: %d%s", DX8Wrapper::Get_Anti_Aliasing_Level(),
+			(DX8Wrapper::Get_Anti_Aliasing_Level() == 0) ? "" : "  (TAA does not run with it)");
 		printAscii(state, FALSE);
 	}
 
@@ -2050,7 +2668,7 @@ namespace
 		}
 		if (s_rowOn[W3DDebugPanel::ROW_DRAW2])
 		{
-			text.format(L"[DRAW2] rigidFFP=%u  matpass=%u  fxLine=%u  fxPoint=%u  ui2D=%u  other=%u  shadowMap=%u  shadowRecv=%u",
+			text.format(L"[DRAW2] rigidFFP=%u  matpass=%u  fxLine=%u  fxPoint=%u  ui2D=%u  other=%u  shadowMap=%u  shadowRecv=%u  prepass=%u",
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_RIGID_FFP],
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_MATPASS],
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_FX_LINE],
@@ -2058,7 +2676,8 @@ namespace
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_UI2D],
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_OTHER],
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_SHADOWMAP],
-				s_drawNow[Debug_Statistics::DRAW_SUBSYS_SHADOWRECV]);
+				s_drawNow[Debug_Statistics::DRAW_SUBSYS_SHADOWRECV],
+				s_drawNow[Debug_Statistics::DRAW_SUBSYS_PREPASS]);
 			putRow(W3DDebugPanel::ROW_DRAW2, text, GameMakeColor(255, 160, 0, 255));
 		}
 
@@ -2122,11 +2741,36 @@ namespace
 		{
 			Int aoW = 0, aoH = 0;
 			W3DSsao::getTargetSize(&aoW, &aoH);
-			text.format(L"[DEPTH] ssao=%d  intz=%d  active=%d  aa=%d  aoRes=%dx%d  samples=%d",
+			// Ronin @diagnostic 07/10/2026 DX9: bound = samples of the colour target / the depth the 3D views left on the device,
+			// -1 = none. Under MSAA 4x both must read 4: a single-sampled or missing depth lets the trees' second target bind.
+			Int rtSamples = -1, dsSamples = -1;
+			IDirect3DDevice9 *boundDev = DX8Wrapper::_Get_D3D_Device8();
+			if (boundDev != nullptr)
+			{
+				IDirect3DSurface9 *surf = nullptr;
+				D3DSURFACE_DESC sd;
+				if (SUCCEEDED(boundDev->GetRenderTarget(0, &surf)) && surf != nullptr)
+				{
+					if (SUCCEEDED(surf->GetDesc(&sd)))
+						rtSamples = (Int)sd.MultiSampleType;
+					surf->Release();
+				}
+				surf = nullptr;
+				if (SUCCEEDED(boundDev->GetDepthStencilSurface(&surf)) && surf != nullptr)
+				{
+					if (SUCCEEDED(surf->GetDesc(&sd)))
+						dsSamples = (Int)sd.MultiSampleType;
+					surf->Release();
+				}
+			}
+			// Ronin @diagnostic 06/10/2026 DX9: prepass = this frame's depth came from the MSAA prepass: 1 NULL target, 2 ARGB.
+			text.format(L"[DEPTH] ssao=%d  intz=%d  active=%d  aa=%d  prepass=%d  bound=%d/%d  aoRes=%dx%d  samples=%d",
 				W3DSsao::getQuality(),
 				W3DSsao::isSupported() ? 1 : 0,
 				W3DSsao::isActive() ? 1 : 0,
 				DX8Wrapper::Get_Anti_Aliasing_Level(),
+				W3DSsao::getPrepassTarget(),
+				rtSamples, dsSamples,
 				aoW, aoH,
 				W3DSsao::getSampleCount());
 			putRow(W3DDebugPanel::ROW_DEPTH, text, GameMakeColor(140, 255, 140, 255));
@@ -2366,6 +3010,10 @@ void W3DDebugPanel::update(void)
 {
 	++s_frame;
 	s_available = FALSE;
+	// Ronin @diagnostic 08/10/2026 DX9: device-object tracking - let go of what everyone else already has, so the table
+	// only holds what is alive.
+	if (s_trackOn)
+		trackSweep();
 	sampleReadouts();
 
 	if (TheWindowManager == nullptr || TheGlobalData == nullptr || TheGlobalData->m_headless)
@@ -2382,10 +3030,12 @@ void W3DDebugPanel::update(void)
 		registerCommand("perf", "perf [reset] - the [PERF] run mean; reset starts it over (measure each switch state apart)", cmdPerf);
 		registerCommand("rows", "rows [<name>|all 0|1] - list the readout rows, or switch one or all", cmdRows);
 		registerCommand("taa", "taa [0|1] | taa <knob> <v> - temporal AA; the [TAA] row shows live state", cmdTaa);
-		registerCommand("ssao", "ssao [0..3] | ssao trees <auto|0|1> - ambient occlusion quality (not saved); trees: AO on trees", cmdSsao);
+		registerCommand("ssao", "ssao [0..3] | ssao trees <auto|0|1> | ssao view [0..3] - ambient occlusion quality (not saved); trees: AO on trees; view: 1 depth, 2 raw AO, 3 blurred AO in the corner", cmdSsao);
 		registerCommand("shadows", "shadows [0..3] - shadow-map quality, 0 off (stencil shadows) .. 3 ultra (not saved)", cmdShadows);
 		registerCommand("timesetting", "timesetting [1..4] - time of day: 1 morning, 2 afternoon, 3 evening, 4 night (not saved; not in LAN/online)", cmdTimeSetting);
 		registerCommand("clouds", "clouds [on|off] - cloud shadows on terrain and models (not saved; none at night)", cmdClouds);
+		registerCommand("msaa", "msaa [0|2|4|8] - anti-aliasing level, by a device reset (not saved); TAA does not run with it", cmdMsaa);
+		registerCommand("resetcheck", "resetcheck - resets the device at the same settings and says whether it worked; started with DX9Track.txt beside the exe, DX9ResetCheck.txt lists what was still alive", cmdResetCheck);
 		registerCommand("grid", "grid [lift|width|alpha|radius <value>] - the placement grid Ctrl draws", cmdGrid);
 		registerCommand("spawn", "spawn [words] [count] - pick from a list, or spawn <ThingTemplate> [count]; single player only", cmdSpawn);
 		registerCommand("credits", "credits [amount] - add money to your player; single player only", cmdCredits);
