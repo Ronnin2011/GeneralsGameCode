@@ -406,6 +406,7 @@ WaterRenderObjClass::WaterRenderObjClass()
 	m_waterType = WATER_TYPE_0_TRANSLUCENT;
 	m_tod=TIME_OF_DAY_AFTERNOON;
 	m_pReflectionTexture=nullptr;
+	m_pReflectionDepth=nullptr;
 	m_skyBox=nullptr;
 	m_vertexBufferD3D=nullptr;
 	m_indexBufferD3D=nullptr;
@@ -906,6 +907,7 @@ void WaterRenderObjClass::ReleaseResources()
 	REF_PTR_RELEASE(m_indexBuffer);
 
 	REF_PTR_RELEASE(m_pReflectionTexture);
+	REF_PTR_RELEASE(m_pReflectionDepth);	// Ronin @bugfix 07/10/2026 DX9: rebuilt by the next mirror
 	REF_PTR_RELEASE(m_refractionTexture);	// Ronin @feature 29/09/2026 DX9: phase 3 - rebuilt on the next copy
 	m_refractionW = m_refractionH = 0;
 	m_refractionOK = FALSE;
@@ -1647,12 +1649,13 @@ void WaterRenderObjClass::updateRenderTargetTextures(CameraClass *cam)
 		TheWaterMirror.active = TRUE;
 		TheWaterMirror.level  = m_level;
 		ensureReflectionTarget();
+		ensureReflectionDepth();
 		renderMirror(cam);	//generate texture containing reflected scene
 	}
 }
 
 // Ronin @diagnostic 29/09/2026 DX9: the mirror's size - 256 x 256 (the original, whatever the screen's shape), or the screen's
-// size / `mirrorres`. It shares the screen's depth buffer, so it can never be larger. Recreated only when the size changes.
+// size / `mirrorres`. Never larger: without its own depth (07/10) it borrows the screen's. Recreated only on a size change.
 void WaterRenderObjClass::ensureReflectionTarget()
 {
 	Int w = SEA_REFLECTION_SIZE;
@@ -1696,6 +1699,29 @@ void WaterRenderObjClass::ensureReflectionTarget()
 	TheWaterStats.mirrorH = h;
 }
 
+// Ronin @bugfix 07/10/2026 DX9: the mirror's own depth-stencil, the size of its colour target; remade when that changes.
+// Without one (no depth textures on the card) the mirror borrows the screen's depth as before, which MSAA breaks.
+void WaterRenderObjClass::ensureReflectionDepth()
+{
+	D3DSURFACE_DESC cd;
+	IDirect3DTexture9 *colour = (m_pReflectionTexture != nullptr) ? m_pReflectionTexture->Peek_D3D_Texture() : nullptr;
+	if (colour == nullptr || FAILED(colour->GetLevelDesc(0, &cd)))
+	{
+		REF_PTR_RELEASE(m_pReflectionDepth);
+		return;
+	}
+	if (m_pReflectionDepth != nullptr && m_pReflectionDepth->Peek_D3D_Base_Texture() != nullptr &&
+		(UINT)m_pReflectionDepth->Get_Width() == cd.Width && (UINT)m_pReflectionDepth->Get_Height() == cd.Height)
+		return;
+
+	REF_PTR_RELEASE(m_pReflectionDepth);
+	m_pReflectionDepth = NEW_REF(ZTextureClass, (cd.Width, cd.Height, WW3D_ZFORMAT_D24S8, MIP_LEVELS_1, TextureClass::POOL_DEFAULT));
+	if (m_pReflectionDepth->Peek_D3D_Base_Texture() == nullptr)
+	{
+		REF_PTR_RELEASE(m_pReflectionDepth);	// a macro with its own if - keep the braces
+	}
+}
+
 //-------------------------------------------------------------------------------------------------
 /** Renders the reflected scene into an offscreen texture. */
 //-------------------------------------------------------------------------------------------------
@@ -1735,7 +1761,8 @@ void WaterRenderObjClass::renderMirror(CameraClass *cam)
 	Matrix3D reflectedTransform(rRight,rUp,rN,rPos);
 
 
-	DX8Wrapper::Set_Render_Target_With_Z((TextureClass*)m_pReflectionTexture);
+	// Ronin @bugfix 07/10/2026 DX9: with its own depth - the screen's is multisampled under MSAA and cannot pair with this.
+	DX8Wrapper::Set_Render_Target_With_Z((TextureClass*)m_pReflectionTexture, m_pReflectionDepth);
 
 	// Clear the backbuffer
 	WW3D::Begin_Render(false,true,Vector3(0.0f,0.0f,0.0f));	//clearing only z-buffer since background always filled with clouds

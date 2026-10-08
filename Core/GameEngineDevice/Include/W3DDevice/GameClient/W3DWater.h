@@ -79,6 +79,7 @@ typedef IDirect3DTexture9* LPDIRECT3DTEXTURE8;
 
 class PolygonTrigger;
 class WaterTracksRenderSystem;
+class ZTextureClass;
 class Xfer;
 /// Custom render object that draws mirrors, water, and skies.
 /**
@@ -222,6 +223,9 @@ protected:
 	Real				m_fBumpFrame;	///<current animation frame
 	Real				m_fBumpScale;	///<scales bump map uv perturbation
 	TextureClass * m_pReflectionTexture;	///<render target for reflection
+	// Ronin @bugfix 07/10/2026 DX9: the mirror's own depth. It borrowed the screen's, which under MSAA is multisampled and
+	// cannot pair with a texture target - reflections drew with no depth at all. NULL = not makeable, the old path runs.
+	ZTextureClass * m_pReflectionDepth;
 	RenderObjClass	*m_skyBox;		///<box around level
 	WaterTracksRenderSystem *m_waterTrackSystem;	///<object responsible for rendering water wakes
 	// Ronin @build DX9: Changed from DWORD handles to native DX9 shader pointers
@@ -284,6 +288,7 @@ protected:
 	Bool m_refractionOK;		///< this frame's copy succeeded
 	void copyRefraction();		///< copy render target 0 into it, when the WaterSea shader will read it
 	void ensureReflectionTarget();	///< Ronin @diagnostic 29/09/2026 DX9: the mirror at `mirrorres` size
+	void ensureReflectionDepth();	///< Ronin @bugfix 07/10/2026 DX9: its depth, at the colour target's size
 	// Ronin @bugfix 01/10/2026 DX9: sea (a standing polygon reaching the map's edge) or lake, for the WaterSea opacity.
 	Bool m_standingIsSea;			///< the standing polygon renderWater is drawing
 	Bool isSeaPolygon(PolygonTrigger *pTrig) const;
