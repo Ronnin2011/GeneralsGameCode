@@ -1854,10 +1854,20 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 				psDev->SetTexture(5, NULL);
 			}
 
+			// Ronin @bugfix 07/10/2026 DX9: no accumulation on a multisampled frame. A single-sampled second target beside it
+			// makes every tree draw invalid: the trees vanished under MSAA. The terrain detects the same (HeightMap, 20/09).
+			Bool msaaFrame = FALSE;
+			IDirect3DSurface9 *frameRT = NULL;
+			D3DSURFACE_DESC frameDesc;
+			if (shadowOn && SUCCEEDED(psDev->GetRenderTarget(0, &frameRT)) && frameRT != NULL) {
+				msaaFrame = (SUCCEEDED(frameRT->GetDesc(&frameDesc)) && frameDesc.MultiSampleType != D3DMULTISAMPLE_NONE);
+				frameRT->Release();
+			}
+
 			// Ronin @feature 07/09/2026 DX9: §29j.13n. Tree receiver accumulation, MRT. Main pass only:
 			// the depth pass has no colour writes, and the reflection pass is a mirrored camera whose
 			// history belongs to the main view (§29j.13l).
-			const Bool treeAccumOn = shadowOn && TheTerrainShadowPass.treeAccumSurf != NULL &&
+			const Bool treeAccumOn = shadowOn && !msaaFrame && TheTerrainShadowPass.treeAccumSurf != NULL &&
 									 !ShaderClass::Is_Backface_Culling_Inverted();
 			if (treeAccumOn) {
 				IDirect3DSurface9 *oldRT = NULL;
