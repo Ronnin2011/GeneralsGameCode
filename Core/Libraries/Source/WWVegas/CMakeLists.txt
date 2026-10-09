@@ -1,13 +1,12 @@
 # Interface libraries to set common defines and includes, avoid duplication later
 add_library(core_wwcommon INTERFACE)
 
-target_compile_definitions(core_wwcommon INTERFACE
-    #NOMINMAX
-    WIN32_LEAN_AND_MEAN
-)
-
 target_link_libraries(core_wwcommon INTERFACE
+    # Ronin @build 09/10/2026 DX9: the whole DirectX set here, as upstream's d3d8lib carries it; targets inherit it (#3432).
     d3d9
+    d3dx9
+    dinput8
+    dxguid
     deps_dbghelp
     deps_miles
     deps_usp10

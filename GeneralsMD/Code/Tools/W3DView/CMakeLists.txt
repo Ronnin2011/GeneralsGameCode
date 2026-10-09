@@ -4,7 +4,6 @@ target_link_libraries(z_w3dview PRIVATE
     core_wwstub # avoid linking GameEngine
     corei_w3dview # this interface gets the source files for the tool
     d3d9
-    d3dx9
     imm32
     deps_miles
     Version
