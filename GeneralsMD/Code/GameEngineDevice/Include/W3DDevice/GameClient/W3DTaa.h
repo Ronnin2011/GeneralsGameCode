@@ -51,6 +51,8 @@ public:
 	// Ronin @feature 20/09/2026 DX9: reprojection needs the INTZ scene depth. SSAO owns that buffer when it is on; when
 	// it is off TAA begins it, and then TAA must end it. Called beside W3DSsao's pair in W3DDisplay::draw.
 	static void endFrame(void);
+	// Ronin @feature 09/10/2026 DX9: TRUE while TAA holds the scene depth this frame - W3DLocalLights begins it only if nobody did.
+	static Bool ownsDepth(void);
 
 	// Frees shaders and targets while the device still exists. Called from W3DDisplay's shutdown, beside W3DSsao's.
 	static void shutdown(void);
@@ -140,6 +142,16 @@ public:
 	static Bool  beginWaterMask(void);
 	static void  endWaterMask(void);
 	static Bool  getWaterMaskDrawn(void);	// last frame: the water marked itself (else the flat polygons)
+	// Ronin @bugfix 09/10/2026 DX9: the local lights mark where a light CHANGED a pixel since last frame (LocalLight_ps COLOR1); the
+	// resolve clamps there. Around W3DLocalLights' draws, as the water's pair.
+	static Bool  beginLightMask(void);
+	static void  endLightMask(void);
+	// Ronin @bugfix 09/10/2026 DX9: the selection flash is drawn after the resolve, not through the history. The scene asks
+	// ownsSelectionFlash before adding a drawable's flash to its lights; TRUE = leave it out.
+	static Bool  ownsSelectionFlash(void);
+	// Ronin @bugfix 09/10/2026 DX9: 1 / the map's own light on open ground, per channel: frame x this ~ the surface's colour, which the
+	// flash is added to.
+	static void  getMapLightFactor(float out[3]);
 
 	// Samples in the sequence before it repeats. 8 is the usual choice: long enough to look supersampled, short enough
 	// that a stopped camera settles quickly.

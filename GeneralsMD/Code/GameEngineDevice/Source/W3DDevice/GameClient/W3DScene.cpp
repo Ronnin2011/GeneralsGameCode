@@ -760,7 +760,9 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 		const Vector3 *selectionColor = nullptr;
 
 		tintColor			 = draw->getTintColor();
-		selectionColor = draw->getSelectionColor();
+		// Ronin @bugfix 09/10/2026 DX9: not while TAA draws the selection flash itself, after its resolve - in the history a
+		// few-frame flash lagged, and hurrying the history cost the object its anti-aliasing (AntiAliasing_Work.md 22b).
+		selectionColor = W3DTaa::ownsSelectionFlash() ? nullptr : draw->getSelectionColor();
 
 		if ( tintColor || selectionColor )
 		{

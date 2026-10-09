@@ -86,14 +86,16 @@ static Bool s_lastVelOK = FALSE;
 // MeshClass::s_TaaMeshNote; TAA keeps its previous WORLD TRANSFORM, and a mesh whose transform changed is re-drawn into
 // the velocity target from its own vertex array. No classification: turrets, dishes and animated rigid parts qualify
 // just by moving. Keyed by pointer, identity only; a pointer reused after a delete costs at most one wrong frame.
-enum { TAA_MESH_BITS = 12, TAA_MESH_SLOTS = 1 << TAA_MESH_BITS, TAA_MAX_MESH_DRAWS = 1024 };
+enum { TAA_MESH_BITS = 12, TAA_MESH_SLOTS = 1 << TAA_MESH_BITS, TAA_MAX_MESH_DRAWS = 2048 };	// Ronin @bugfix 09/10/2026 DX9: 1024 -> 2048: a selected army flashes
 // Ronin @feature 26/09/2026 DX9: §14 stage 2 - a SKIN keeps its deformed WORLD positions for two frames in skin[]
 // (skinCur = this frame's). W3D deforms skins on the CPU, so there is no transform to diff.
 struct TaaMeshSlot { const void *key; Matrix3D prev; UnsignedInt stamp; UnsignedInt movedStamp;
                      Vector3 *skin[2]; Int skinCap; Int skinCount; Int skinCur;
-                     Matrix3D prevRoot; UnsignedInt rootStamp; };	// Ronin @bugfix 27/09/2026 DX9: its object's transform
+                     Matrix3D prevRoot; UnsignedInt rootStamp;	// Ronin @bugfix 27/09/2026 DX9: its object's transform
+                     float boxC[3]; float boxE[3]; Bool boxOK; };	// Ronin @bugfix 09/10/2026 DX9: its world box when last drawn, reset if it vanishes
 struct TaaMeshDraw { MeshClass *mesh; Matrix3D cur; Matrix3D prev; Int kind;
-                     const Vector3 *skinCur; const Vector3 *skinPrev; };	// skinCur NULL = rigid
+                     const Vector3 *skinCur; const Vector3 *skinPrev;	// skinCur NULL = rigid
+                     float flash[4]; };	// Ronin @bugfix 09/10/2026 DX9: its drawable's selection flash, w = 1 while it flashes
 // Ronin @feature 24/09/2026 DX9: REACTIVE MASK. What a motion vector cannot describe: a texture scrolling on a still
 // surface (treads, conveyors - the engine's own time-variant mappers) and a MOVING translucent layer (a rotor), which
 // writes no depth. Flagged in the velocity alpha: 0 none, 0.4 reactive, 0.7 velocity + reactive, 1.0 velocity.
@@ -146,6 +148,25 @@ static Bool                   s_waterMaskReady = FALSE;	// this frame's target i
 static Bool                   s_waterMaskDrawn = FALSE;	// a water draw bound it this frame
 static Bool                   s_waterMaskLast  = FALSE;	// the frame before's, for the panel
 static Int                    s_waterMaskCaps  = -1;		// -1 not asked yet; 1 = two render targets, blended
+// Ronin @bugfix 09/10/2026 DX9: the local lights' change mask (beginLightMask). A still pixel under a light that changed had no
+// evidence of change, so its history lagged while every mover's shadow footprint, clamped, showed the light as it is.
+static TextureClass          *s_lightMaskTex   = NULL;
+static UnsignedInt            s_lightMaskW = 0, s_lightMaskH = 0;
+static UnsignedInt            s_lightMaskStamp = 0;		// s_moverFrame it was drawn in
+static Int                    s_lightMaskCaps  = -1;		// -1 not asked yet; 1 = two render targets, blended
+// Ronin @bugfix 09/10/2026 DX9: the selection flash is drawn AFTER the resolve. In the history a few-frame tint lagged,
+// and every way of hurrying the history cost its anti-aliasing (AntiAliasing_Work.md 22b). See ownsSelectionFlash.
+static UnsignedInt            s_flashAsked     = 0;		// s_moverFrame the scene last asked - proof it skips the flash itself
+static TextureClass          *s_flashTex       = NULL;	// rgb = the flash colour of the mesh at this pixel, a = 1 where one flashes
+static UnsignedInt            s_flashW = 0, s_flashH = 0;
+static UnsignedInt            s_flashStamp     = 0;		// s_moverFrame the mask was drawn in
+static const float            TAA_FLASH_GAIN   = 2.0f;	// the scene added the tint to the ambient AND to every light
+// Ronin @bugfix 09/10/2026 DX9: a mesh drawn last frame and not this one leaves its last box, drawn as a GHOST: reset.
+// More than TAA_MAX_VANISH in one frame is a cut or a fast scroll, where the whole picture is clamped anyway.
+enum { TAA_MAX_VANISH = 64 };
+static float                  s_vanishBox[TAA_MAX_VANISH][6];	// centre xyz, extent xyz
+static Int                    s_vanishCount    = 0;
+static const float            TAA_JUMP_DIST2   = 16.0f;	// Ronin @bugfix 09/10/2026 DX9: a still mesh that moved further than 4 units in one frame jumped
 static float s_disoccV    = 0.5f;	// Ronin @bugfix 26/09/2026 DX9: `taa disoccv` - px a mover must have moved to vacate a pixel
 static Int   s_reactCount = 0;
 // Ronin @diagnostic 25/09/2026 DX9: meshes that found no slot this frame, so no velocity at all. Should read 0.
@@ -401,6 +422,7 @@ void W3DTaa::endFrame(void)
 }
 
 Bool W3DTaa::isActive(void) { return s_active; }
+Bool W3DTaa::ownsDepth(void) { return s_ownsDepth; }
 
 void W3DTaa::setEnabled(Bool on)
 {
@@ -456,6 +478,11 @@ static Bool                    s_shadersTried = FALSE;
 // DX8TextureManagerClass recreates them across a device Reset — the same rule SSAO's targets follow.
 // s_historyValid is FALSE until a frame has actually been written: the resolve must never blend into an unwritten buffer.
 static TextureClass *s_history[2]   = { NULL, NULL };
+// Ronin @bugfix 09/10/2026 DX9: the history's low bits, a second 8-bit pair written as render target 1. On a still
+// pixel 0.9 x history + 0.1 x frame rounds back to the history once they are under 5/255 apart: ghosts never left.
+static TextureClass *s_historyLo[2] = { NULL, NULL };
+static UnsignedInt   s_historyLoW = 0, s_historyLoH = 0;
+static UnsignedInt   s_lowStamp   = 0;		// s_moverFrame the low bits were last written in
 static UnsignedInt   s_historyW     = 0;
 static UnsignedInt   s_historyH     = 0;
 static Int           s_historyIndex  = 0;
@@ -487,6 +514,45 @@ void  W3DTaa::noteCursorBib(const Vector3 *corners)
 }
 
 void W3DTaa::setWaterMask(Bool on)   { s_waterMask = on; }
+
+// Ronin @bugfix 09/10/2026 DX9: 1 / the map's own light on open ground, per channel, so frame x this ~ the surface's colour - what the
+// selection flash is added to. Terrain values at the map's time of day: ambient plus each light by how steeply it comes down.
+void W3DTaa::getMapLightFactor(float out[3])
+{
+	static const float LIGHT_MIN = 0.25f, LIGHT_MAX = 1.0f;	// bounds on very dark or very bright maps
+	float sum[3] = { 0.0f, 0.0f, 0.0f };
+	if (TheGlobalData != NULL)
+	{
+		for (Int i = 0; i < MAX_GLOBAL_LIGHTS; ++i)
+		{
+			const GlobalData::TerrainLighting &tl = TheGlobalData->m_terrainLighting[TheGlobalData->m_timeOfDay][i];
+			const float len = sqrtf(tl.lightPos.x * tl.lightPos.x + tl.lightPos.y * tl.lightPos.y + tl.lightPos.z * tl.lightPos.z);
+			float down = (len > 0.0001f) ? (-tl.lightPos.z / len) : 0.0f;
+			if (down < 0.0f)
+				down = 0.0f;
+			sum[0] += tl.ambient.red   + tl.diffuse.red   * down;
+			sum[1] += tl.ambient.green + tl.diffuse.green * down;
+			sum[2] += tl.ambient.blue  + tl.diffuse.blue  * down;
+		}
+	}
+	for (Int c = 0; c < 3; ++c)
+	{
+		float v = sum[c];
+		if (v < LIGHT_MIN) v = LIGHT_MIN;
+		if (v > LIGHT_MAX) v = LIGHT_MAX;
+		out[c] = 1.0f / v;
+	}
+}
+
+// Ronin @bugfix 09/10/2026 DX9: RTS3DScene::renderOneObject asks before it adds a drawable's selection flash to its lights. TRUE = leave
+// it out: TAA draws it after the resolve. Only inside the redirected 3D render; the mirror and the shadow passes keep it.
+Bool W3DTaa::ownsSelectionFlash(void)
+{
+	if (!s_redirected || !s_velocityOn || s_velMeshVS == NULL || s_velMeshPS == NULL || s_resolvePS == NULL)
+		return FALSE;
+	s_flashAsked = s_moverFrame;
+	return TRUE;
+}
 Bool W3DTaa::getWaterMask(void)      { return s_waterMask; }
 Int  W3DTaa::getWaterMaskTris(void)  { return s_waterVertCount / 3; }
 
@@ -654,6 +720,7 @@ static TaaMeshSlot *findMeshSlot(const void *key)
 	freeSlot->movedStamp = 0;
 	freeSlot->skinCount  = 0;		// buffers kept for reuse, contents invalid
 	freeSlot->rootStamp  = 0;
+	freeSlot->boxOK      = FALSE;
 	return freeSlot;
 }
 
@@ -746,6 +813,32 @@ void W3DTaa::noteMesh(MeshClass *mesh)
 	const Bool movedLast = (sl->movedStamp != 0) && (s_moverFrame - sl->movedStamp == 1);
 	sl->prev  = cur;
 	sl->stamp = s_moverFrame;
+	// Ronin @bugfix 09/10/2026 DX9: where it is now - its world box - for the frame it is no longer drawn (postRender).
+	{
+		const AABoxClass &wb = mesh->Get_Bounding_Box();
+		sl->boxC[0] = wb.Center.X; sl->boxC[1] = wb.Center.Y; sl->boxC[2] = wb.Center.Z;
+		sl->boxE[0] = wb.Extent.X; sl->boxE[1] = wb.Extent.Y; sl->boxE[2] = wb.Extent.Z;
+		sl->boxOK   = TRUE;
+	}
+
+	// Ronin @bugfix 09/10/2026 DX9: SELECTION FLASH. Its drawable's flash colour, when the scene left it out this frame (it asked:
+	// s_flashAsked). The velocity pass marks this mesh's pixels with it and the screen copy adds it after the resolve.
+	RenderObjClass *top = mesh;
+	while (top->Get_Container() != NULL)
+		top = top->Get_Container();
+	const DrawableInfo *topInfo = (const DrawableInfo *)top->Get_User_Data();
+	float flash[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	if (s_flashAsked == s_moverFrame && topInfo != NULL && topInfo->m_drawable != NULL)
+	{
+		const Vector3 *sel = topInfo->m_drawable->getSelectionColor();
+		if (sel != NULL && (sel->X > 0.004f || sel->Y > 0.004f || sel->Z > 0.004f))
+		{
+			flash[0] = sel->X;
+			flash[1] = sel->Y;
+			flash[2] = sel->Z;
+			flash[3] = 1.0f;
+		}
+	}
 
 	Bool moved = FALSE;
 	const Vector3 *skinCur = NULL, *skinPrev = NULL;
@@ -792,6 +885,8 @@ void W3DTaa::noteMesh(MeshClass *mesh)
 	// Ronin @feature 24/09/2026 DX9: reactive meshes are drawn whether they moved or not - a conveyor never moves.
 	// A STATIC translucent mesh is left alone: over still ground its history is valid.
 	UnsignedByte f = (s_reactiveW > 0.0f) ? classifyModel(mesh, mdl) : 0;
+	if (f & TAA_MF_TRANSL)
+		sl->boxOK = FALSE;		// Ronin @bugfix 09/10/2026 DX9: a translucent mesh that goes (a muzzle flash) is the reactive mask's, not a box reset
 	// Ronin @bugfix 26/09/2026 DX9: translucent at RUNTIME - an opacity override draws an opaque model through the alpha shader
 	// (the build-placement preview, fading units); the model's shaders cannot say so. Moving, it is a GHOST (27/09).
 	// Get_Alpha_Override is last frame's: Render sets it from rinfo after this note - one frame late at a change, no more.
@@ -819,9 +914,6 @@ void W3DTaa::noteMesh(MeshClass *mesh)
 	// scene holds, carrying the DrawableInfo) kept last frame's transform. Last frame's must be known, else it counts as moving.
 	if (kind == TAA_KIND_VEL)
 	{
-		RenderObjClass *top = mesh;
-		while (top->Get_Container() != NULL)
-			top = top->Get_Container();
 		const Matrix3D root = top->Get_Transform();
 		Bool rootStill = (sl->rootStamp != 0 && s_moverFrame - sl->rootStamp == 1) ? TRUE : FALSE;
 		for (Int r = 0; r < 3 && rootStill; ++r)
@@ -829,12 +921,30 @@ void W3DTaa::noteMesh(MeshClass *mesh)
 				if (fabsf(root[r][c] - sl->prevRoot[r][c]) > 1.0e-4f) { rootStill = FALSE; break; }
 		sl->prevRoot  = root;
 		sl->rootStamp = s_moverFrame;
-		const DrawableInfo *di = (const DrawableInfo *)top->Get_User_Data();
-		if (rootStill && di != NULL && di->m_drawable != NULL && di->m_drawable->isKindOf(KINDOF_INFANTRY))
+		if (rootStill && topInfo != NULL && topInfo->m_drawable != NULL && topInfo->m_drawable->isKindOf(KINDOF_INFANTRY))
 			kind = TAA_KIND_VEL_IDLE;
 	}
 	if (isSkin && kind == TAA_KIND_TRANSLUCENT)
 		kind = -1;		// skins draw after the translucent pass; none are translucent in practice
+	// Ronin @bugfix 09/10/2026 DX9: a flashing mesh with nothing else to say is drawn as STILL (present, no mover) - only so the
+	// velocity pass reaches it and can mark its pixels for the flash.
+	if (flash[3] > 0.5f && kind < 0)
+		kind = TAA_KIND_STILL;
+	// Ronin @bugfix 09/10/2026 DX9: a still mesh that JUMPS (the rally flag re-placed) was in no velocity target last frame, so nothing
+	// marked the place it left and it faded there for a second. Its old footprint, drawn as a GHOST, is reset.
+	if (vel && !movedLast && !isSkin && s_meshDrawCount < TAA_MAX_MESH_DRAWS &&
+		(cur.Get_Translation() - prev.Get_Translation()).Length2() > TAA_JUMP_DIST2)
+	{
+		TaaMeshDraw &g = s_meshDraws[s_meshDrawCount++];
+		g.mesh = mesh;
+		g.cur  = prev;
+		g.prev = prev;
+		g.kind = TAA_KIND_GHOST;
+		g.skinCur  = NULL;
+		g.skinPrev = NULL;
+		g.flash[0] = g.flash[1] = g.flash[2] = g.flash[3] = 0.0f;
+		++s_reactCount;
+	}
 	if (kind < 0 || s_meshDrawCount >= TAA_MAX_MESH_DRAWS)
 		return;
 
@@ -845,6 +955,10 @@ void W3DTaa::noteMesh(MeshClass *mesh)
 	d.kind = kind;
 	d.skinCur  = skinCur;
 	d.skinPrev = skinPrev;
+	d.flash[0] = flash[0];
+	d.flash[1] = flash[1];
+	d.flash[2] = flash[2];
+	d.flash[3] = flash[3];
 	if (isSkin)
 		++s_skinDrawCount;
 	if (kind != TAA_KIND_VEL && kind != TAA_KIND_STILL && kind != TAA_KIND_VEL_IDLE)
@@ -994,6 +1108,126 @@ void W3DTaa::endWaterMask(void)
 }
 
 Bool W3DTaa::getWaterMaskDrawn(void) { return s_waterMaskLast; }
+
+// Ronin @bugfix 09/10/2026 DX9: around W3DLocalLights' draws. TRUE = render target 1 is this frame's light-change mask, cleared;
+// call endLightMask after the draws. Only inside the TAA redirect - there is no MSAA then, so two targets can pair.
+Bool W3DTaa::beginLightMask(void)
+{
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (!s_redirected || dev == NULL)
+		return FALSE;
+	if (s_lightMaskCaps < 0)
+	{
+		D3DCAPS9 caps;
+		s_lightMaskCaps = (SUCCEEDED(dev->GetDeviceCaps(&caps)) && caps.NumSimultaneousRTs >= 2 &&
+						   (caps.PrimitiveMiscCaps & D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING) != 0) ? 1 : 0;
+	}
+	if (s_lightMaskCaps != 1)
+		return FALSE;
+	IDirect3DSurface9 *rt0 = NULL;
+	if (FAILED(dev->GetRenderTarget(0, &rt0)) || rt0 == NULL)
+		return FALSE;
+	D3DSURFACE_DESC desc;
+	const Bool plain = (SUCCEEDED(rt0->GetDesc(&desc)) && desc.MultiSampleType == D3DMULTISAMPLE_NONE) ? TRUE : FALSE;
+	rt0->Release();
+	if (!plain)
+		return FALSE;
+	if (s_lightMaskTex == NULL || s_lightMaskW != desc.Width || s_lightMaskH != desc.Height)
+	{
+		REF_PTR_RELEASE(s_lightMaskTex);
+		s_lightMaskW = 0;
+		s_lightMaskH = 0;
+		s_lightMaskTex = NEW_REF(TextureClass, (desc.Width, desc.Height, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1,
+												 TextureClass::POOL_DEFAULT, true));
+		if (s_lightMaskTex->Peek_D3D_Base_Texture() == NULL)
+		{
+			REF_PTR_RELEASE(s_lightMaskTex);	// a macro with its own if - keep the braces
+			return FALSE;
+		}
+		s_lightMaskW = desc.Width;
+		s_lightMaskH = desc.Height;
+	}
+	IDirect3DSurface9 *surf = s_lightMaskTex->Get_D3D_Surface_Level();
+	if (surf == NULL)
+		return FALSE;
+	const Bool ok = (SUCCEEDED(dev->ColorFill(surf, NULL, D3DCOLOR_ARGB(0, 0, 0, 0))) &&	// not Clear: that wipes every bound target
+					 SUCCEEDED(dev->SetRenderTarget(1, surf))) ? TRUE : FALSE;
+	surf->Release();
+	if (ok)
+	{
+		dev->SetRenderState(D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
+													 D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
+		s_lightMaskStamp = s_moverFrame;
+	}
+	return ok;
+}
+
+void W3DTaa::endLightMask(void)
+{
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev != NULL)
+		dev->SetRenderTarget(1, NULL);
+}
+
+// Ronin @bugfix 09/10/2026 DX9: the selection-flash mask, made the frame's size, cleared and bound as render target 1. ColorFill,
+// not Clear - that wipes every bound target. A TextureClass target, so a device reset is the texture manager's.
+static Bool bindFlashMask(IDirect3DDevice9 *dev, UnsignedInt width, UnsignedInt height)
+{
+	if (s_flashTex == NULL || s_flashW != width || s_flashH != height)
+	{
+		REF_PTR_RELEASE(s_flashTex);
+		s_flashW = 0;
+		s_flashH = 0;
+		s_flashTex = NEW_REF(TextureClass, (width, height, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1, TextureClass::POOL_DEFAULT, true));
+		if (s_flashTex->Peek_D3D_Base_Texture() == NULL)
+		{
+			REF_PTR_RELEASE(s_flashTex);	// a macro with its own if - keep the braces
+			return FALSE;
+		}
+		s_flashW = width;
+		s_flashH = height;
+	}
+	IDirect3DSurface9 *surf = s_flashTex->Get_D3D_Surface_Level();
+	if (surf == NULL)
+		return FALSE;
+	const Bool ok = (SUCCEEDED(dev->ColorFill(surf, NULL, D3DCOLOR_ARGB(0, 0, 0, 0))) &&
+					 SUCCEEDED(dev->SetRenderTarget(1, surf))) ? TRUE : FALSE;
+	surf->Release();
+	if (ok)
+	{
+		dev->SetRenderState(D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
+													 D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
+		s_flashStamp = s_moverFrame;
+	}
+	return ok;
+}
+
+// Ronin @bugfix 09/10/2026 DX9: the low-bits pair, the size of the history. TextureClass targets, so a device reset is the texture
+// manager's. FALSE = not makeable: the history stays 8-bit.
+static Bool ensureHistoryLow(UnsignedInt width, UnsignedInt height)
+{
+	if (s_historyLo[0] != NULL && s_historyLo[1] != NULL && s_historyLoW == width && s_historyLoH == height)
+		return TRUE;
+	REF_PTR_RELEASE(s_historyLo[0]);
+	REF_PTR_RELEASE(s_historyLo[1]);
+	s_historyLoW = 0;
+	s_historyLoH = 0;
+	s_lowStamp   = 0;
+	for (Int i = 0; i < 2; ++i)
+	{
+		s_historyLo[i] = NEW_REF(TextureClass, (width, height, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1,
+												 TextureClass::POOL_DEFAULT, true));
+		if (s_historyLo[i]->Peek_D3D_Base_Texture() == NULL)
+		{
+			REF_PTR_RELEASE(s_historyLo[0]);
+			REF_PTR_RELEASE(s_historyLo[1]);
+			return FALSE;
+		}
+	}
+	s_historyLoW = width;
+	s_historyLoH = height;
+	return TRUE;
+}
 
 static Bool ensureHistory(UnsignedInt width, UnsignedInt height)
 {
@@ -1352,6 +1586,15 @@ void W3DTaa::shutdown(void)
 	s_historyW     = 0;
 	s_historyH     = 0;
 	s_historyValid = FALSE;
+	REF_PTR_RELEASE(s_flashTex);		// Ronin @bugfix 09/10/2026 DX9: the selection-flash mask
+	s_flashW     = 0;
+	s_flashH     = 0;
+	s_flashStamp = 0;
+	REF_PTR_RELEASE(s_historyLo[0]);	// Ronin @bugfix 09/10/2026 DX9: the history's low bits
+	REF_PTR_RELEASE(s_historyLo[1]);
+	s_historyLoW = 0;
+	s_historyLoH = 0;
+	s_lowStamp   = 0;
 	REF_PTR_RELEASE(s_depthHist[0]);
 	REF_PTR_RELEASE(s_depthHist[1]);
 	REF_PTR_RELEASE(s_velTex);
@@ -1362,6 +1605,10 @@ void W3DTaa::shutdown(void)
 	// Ronin @bugfix 03/10/2026 DX9: the water's own mask.
 	if (s_waterMaskPS != NULL) { s_waterMaskPS->Release(); s_waterMaskPS = NULL; }
 	REF_PTR_RELEASE(s_waterMaskTex);
+	REF_PTR_RELEASE(s_lightMaskTex);	// Ronin @bugfix 09/10/2026 DX9: the local lights' change mask
+	s_lightMaskW     = 0;
+	s_lightMaskH     = 0;
+	s_lightMaskStamp = 0;
 	s_waterMaskW     = 0;
 	s_waterMaskH     = 0;
 	s_waterMaskReady = FALSE;
@@ -1594,7 +1841,30 @@ void W3DTaa::postRender(void)
 		s_waterVertCount = 0;
 	else
 		buildWaterMask();	// Ronin @bugfix 29/09/2026 DX9: the water, flagged reactive below
-	if (s_velocityOn && (s_meshDrawCount > 0 || cursorBibLive() || s_waterVertCount > 0 || s_waterMaskDrawn) && s_velMeshVS != NULL && s_velMeshPS != NULL &&
+	// Ronin @bugfix 09/10/2026 DX9: VANISHED. A mesh that reported last frame and not this one: a deselected rally flag, a unit that
+	// died. It was in no velocity target, so nothing reset where it stood and it faded for a second. Its box, below.
+	s_vanishCount = 0;
+	if (s_velocityOn)
+	{
+		Int found = 0;
+		for (Int vi = 0; vi < TAA_MESH_SLOTS; ++vi)
+		{
+			const TaaMeshSlot &vs = s_meshSlots[vi];
+			if (vs.key == NULL || !vs.boxOK || vs.stamp == 0 || s_moverFrame - vs.stamp != 1)
+				continue;
+			if (found < TAA_MAX_VANISH)
+			{
+				for (Int c = 0; c < 3; ++c)
+				{
+					s_vanishBox[found][c]     = vs.boxC[c];
+					s_vanishBox[found][c + 3] = vs.boxE[c];
+				}
+			}
+			++found;
+		}
+		s_vanishCount = (found <= TAA_MAX_VANISH) ? found : 0;
+	}
+	if (s_velocityOn && (s_meshDrawCount > 0 || cursorBibLive() || s_waterVertCount > 0 || s_waterMaskDrawn || s_vanishCount > 0) && s_velMeshVS != NULL && s_velMeshPS != NULL &&
 		depthTex != NULL && s_curViewProjValid && s_prevViewProjValid && ensureVelocity((UnsignedInt)fbW, (UnsignedInt)fbH))
 	{
 		IDirect3DSurface9 *vSurf  = s_velTex->Get_D3D_Surface_Level();
@@ -1677,6 +1947,40 @@ void W3DTaa::postRender(void)
 					dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, (UINT)(s_waterVertCount / 3), s_waterVerts, sizeof(Vector3));
 				}
 
+				// Ronin @bugfix 09/10/2026 DX9: the vanished meshes' boxes, as GHOSTS (alpha 0.3, one-sided, zero velocity): the resolve keeps no
+				// history there this frame and the next. Before the meshes, so anything still standing there overwrites it.
+				if (s_vanishCount > 0)
+				{
+					static const float ghostC12[4] = { 0.3f, 1.0f, 1.0f, 0.0f };
+					static const unsigned short boxIdx[36] = { 0,1,2, 2,1,3,  4,6,5, 5,6,7,  0,4,1, 1,4,5,
+															  2,3,6, 6,3,7,  0,2,4, 4,2,6,  1,5,3, 3,5,7 };
+					D3DXMATRIX vpT;
+					D3DXMatrixTranspose(&vpT, &s_curViewProjClean);
+					dev->SetPixelShaderConstantF(12, ghostC12, 1);
+					dev->SetVertexShaderConstantF(0, (const float *)&vpT, 4);
+					dev->SetVertexShaderConstantF(4, (const float *)&vpT, 4);
+					for (Int vb = 0; vb < s_vanishCount; ++vb)
+					{
+						const float *b = s_vanishBox[vb];
+						Vector3 corner[8];
+						for (Int ci = 0; ci < 8; ++ci)
+							corner[ci].Set(b[0] + ((ci & 1) ? b[3] : -b[3]), b[1] + ((ci & 2) ? b[4] : -b[4]), b[2] + ((ci & 4) ? b[5] : -b[5]));
+						dev->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, 8, 12, boxIdx, D3DFMT_INDEX16, corner, sizeof(Vector3));
+					}
+				}
+
+				// Ronin @bugfix 09/10/2026 DX9: the selection-flash mask as render target 1 while the meshes draw (TaaVelMesh_ps COLOR1 = c13).
+				// Only when one flashes. A mesh in front that does not flash writes zero there - the visible surface owns the pixel.
+				Bool flashBound = FALSE;
+				for (Int fk = 0; fk < s_meshDrawCount; ++fk)
+				{
+					if (s_meshDraws[fk].flash[3] > 0.5f)
+					{
+						flashBound = bindFlashMask(dev, (UnsignedInt)fbW, (UnsignedInt)fbH);
+						break;
+					}
+				}
+
 				Int boundKind = -1;
 				for (Int k = 0; k < 2 * s_meshDrawCount; ++k)
 				{
@@ -1721,6 +2025,8 @@ void W3DTaa::postRender(void)
 					D3DXMatrixTranspose(&pT, &pWVP);
 					dev->SetVertexShaderConstantF(0, (const float *)&cT, 4);
 					dev->SetVertexShaderConstantF(4, (const float *)&pT, 4);
+					if (flashBound)
+						dev->SetPixelShaderConstantF(13, md.flash, 1);
 					dev->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, (UINT)vcount, (UINT)pcount,
 												polys, D3DFMT_INDEX16, verts, sizeof(Vector3));
 				}
@@ -1771,10 +2077,14 @@ void W3DTaa::postRender(void)
 							o[0] = md.skinCur[v].X;  o[1] = md.skinCur[v].Y;  o[2] = md.skinCur[v].Z;
 							o[3] = md.skinPrev[v].X; o[4] = md.skinPrev[v].Y; o[5] = md.skinPrev[v].Z;
 						}
+						if (flashBound)
+							dev->SetPixelShaderConstantF(13, md.flash, 1);
 						dev->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, (UINT)vcount, (UINT)pcount,
 													polys, D3DFMT_INDEX16, s_skinScratch, sizeof(float) * 6);
 					}
 				}
+				if (flashBound)
+					dev->SetRenderTarget(1, NULL);	// Ronin @bugfix 09/10/2026 DX9: before target 0 goes back
 			}
 			dev->SetRenderTarget(0, prevRT);
 			prevRT->Release();
@@ -1815,6 +2125,23 @@ void W3DTaa::postRender(void)
 				// SetRenderTarget resets the viewport to the whole target; the 3D view is a sub-rect of it.
 				dev->SetViewport(&vp);
 
+				// Ronin @bugfix 09/10/2026 DX9: the history's low bits: written as render target 1, last frame's read at s9 (c6.w) when it
+				// was written in the frame just before this one. Blending is off here, so two targets need no blend cap.
+				IDirect3DSurface9 *lowSurf = ensureHistoryLow(s_historyW, s_historyH)
+											 ? s_historyLo[s_historyIndex]->Get_D3D_Surface_Level() : NULL;
+				const Bool writeLow = (lowSurf != NULL && SUCCEEDED(dev->SetRenderTarget(1, lowSurf))) ? TRUE : FALSE;
+				if (lowSurf != NULL)
+					lowSurf->Release();
+				const Bool readLow = (writeLow && s_historyValid && s_lowStamp != 0 && s_moverFrame - s_lowStamp == 1) ? TRUE : FALSE;
+				if (writeLow)
+					dev->SetRenderState(D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
+																 D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
+				if (readLow)
+				{
+					dev->SetTexture(9, s_historyLo[s_historyIndex ^ 1]->Peek_D3D_Texture());
+					setResolveSampler(dev, 9, TRUE);	// LINEAR, as the history itself
+				}
+
 				// Only trust the history once a frame has actually been written into it. c0.w turns reprojection on:
 				// without depth or a previous matrix the shader keeps the history where it is, which is 2b-i's
 				// behaviour — softer while panning, but never wrong.
@@ -1826,7 +2153,9 @@ void W3DTaa::postRender(void)
 				// Debug views draw in this pass so they show what the RESOLVE sees, not a re-derived picture.
 				// yz carry the clip planes: raw D3D depth sits above 0.99 for almost the whole scene, so the depth
 				// debug view has to LINEARISE or it is a white screen that tells you nothing. (It told me nothing.)
-				const float c6[4] = { (float)s_debugMode, s_zNear, s_zFar, 0.0f };
+				const float c6[4] = { (float)s_debugMode, s_zNear, s_zFar, readLow ? 1.0f : 0.0f };
+				static const float flashOff[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				dev->SetPixelShaderConstantF(8, flashOff, 1);	// Ronin @bugfix 09/10/2026 DX9: c8.w = 0: the flash never enters the history
 				const float c7[4] = { 0.0f, (s_lastVelOK && s_velTex != NULL) ? 1.0f : 0.0f, 0.0f, s_clamp };	// x = 0: no CAS into the history
 				dev->SetPixelShaderConstantF(6, c6, 1);
 				dev->SetPixelShaderConstantF(7, c7, 1);
@@ -1837,7 +2166,15 @@ void W3DTaa::postRender(void)
 					dev->SetTexture(6, s_velPrevTex->Peek_D3D_Texture());
 					setResolveSampler(dev, 6);		// POINT - the alpha is a flag, not a value to blend
 				}
-				const float c10[4] = { usePrevVel ? 1.0f : 0.0f, (float)s_disocc, s_reactiveW, 0.0f };
+				// Ronin @bugfix 09/10/2026 DX9: the local lights' change mask at s8 (c10.w), only when W3DLocalLights drew it this frame.
+				const Bool useLightMask = (s_lightMaskTex != NULL && s_lightMaskStamp == s_moverFrame &&
+										   s_lightMaskW == (UnsignedInt)fbW && s_lightMaskH == (UnsignedInt)fbH) ? TRUE : FALSE;
+				if (useLightMask)
+				{
+					dev->SetTexture(8, s_lightMaskTex->Peek_D3D_Texture());
+					setResolveSampler(dev, 8);		// POINT - 1:1 with the scene
+				}
+				const float c10[4] = { usePrevVel ? 1.0f : 0.0f, (float)s_disocc, s_reactiveW, useLightMask ? 1.0f : 0.0f };
 				dev->SetPixelShaderConstantF(10, c10, 1);	// uploaded HERE, after the velocity pass used c10/c11
 				const Bool useAuto = autoReactUsable(fbW, fbH);
 				if (useAuto)
@@ -1845,7 +2182,7 @@ void W3DTaa::postRender(void)
 					dev->SetTexture(7, s_opaqueTex->Peek_D3D_Texture());
 					setResolveSampler(dev, 7);		// POINT - compared 1:1 with the scene
 				}
-				const float c11[4] = { 0.0f, autoReactSlope(), s_disoccV, useAuto ? s_autoReact : 0.0f };	// Ronin @bugfix 08/10/2026 DX9: y = the mask's slope
+				const float c11[4] = { 1.0f, autoReactSlope(), s_disoccV, useAuto ? s_autoReact : 0.0f };	// Ronin @bugfix 08/10/2026 DX9: x = an effect that left resets, y = the mask's slope
 				dev->SetPixelShaderConstantF(11, c11, 1);	// likewise after the velocity pass
 				// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask at s3, screen clip -> sun clip at c12..c15, its params at
 				// c16 (x = 0: not drawn this frame, the resolve skips it). After the velocity pass, which used c12.
@@ -1873,12 +2210,19 @@ void W3DTaa::postRender(void)
 					setResolveSampler(dev, 4);
 				}
 				dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
+				if (writeLow)
+				{
+					dev->SetRenderTarget(1, NULL);	// Ronin @bugfix 09/10/2026 DX9: before the depth store takes target 0
+					s_lowStamp = s_moverFrame;
+				}
+				dev->SetTexture(9, NULL);
 				dev->SetTexture(1, NULL);
 				dev->SetTexture(4, NULL);
 				dev->SetTexture(5, NULL);
 				dev->SetTexture(6, NULL);
 				dev->SetTexture(7, NULL);
 				dev->SetTexture(3, NULL);
+				dev->SetTexture(8, NULL);
 				wroteHistory = TRUE;
 			}
 			curSurf->Release();
@@ -1935,10 +2279,24 @@ void W3DTaa::postRender(void)
 		dev->SetPixelShaderConstantF(6, c6off, 1);
 		const float c7cas[4] = { s_sharpen, 0.0f, 0.0f, 0.0f };	// Ronin @feature 26/09/2026 DX9: CAS here, never in pass 1
 		dev->SetPixelShaderConstantF(7, c7cas, 1);
+		// Ronin @bugfix 09/10/2026 DX9: the selection flash, added here - after the resolve, never in the history. c8 = 1 / the map's light
+		// (frame -> surface colour, as the local lights use) and the strength; s10 = the mask the velocity pass drew.
+		const Bool useFlash = (s_flashTex != NULL && s_flashStamp == s_moverFrame && s_flashW == (UnsignedInt)fbW &&
+							   s_flashH == (UnsignedInt)fbH) ? TRUE : FALSE;
+		float c8[4] = { 1.0f, 1.0f, 1.0f, 0.0f };
+		if (useFlash)
+		{
+			getMapLightFactor(c8);
+			c8[3] = TAA_FLASH_GAIN;
+			dev->SetTexture(10, s_flashTex->Peek_D3D_Texture());
+			setResolveSampler(dev, 10);		// POINT - 1:1 with the frame
+		}
+		dev->SetPixelShaderConstantF(8, c8, 1);
 		dev->SetTexture(0, wroteHistory ? s_history[s_historyIndex]->Peek_D3D_Texture()
 										: (IDirect3DBaseTexture9 *)sceneTex);
 		setResolveSampler(dev, 0);
 		dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
+		dev->SetTexture(10, NULL);
 	}
 
 	if (wroteHistory)

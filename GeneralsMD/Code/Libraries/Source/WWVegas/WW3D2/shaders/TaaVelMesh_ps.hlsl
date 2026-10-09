@@ -23,6 +23,15 @@ float4 g_VpUv  : register(c11);     // xy = viewport origin in frame-buffer UV, 
 // y = depth test: 0 two-sided, 1 one-sided (translucent: writes no depth), 2 none (the placement bib quad);
 // z = write zero velocity.
 float4 g_Kind  : register(c12);
+// Ronin @bugfix 09/10/2026 DX9: this mesh's selection flash (rgb, a = 1 while it flashes), written to a second target when one is
+// bound: the screen copy adds the flash there, after the resolve.
+float4 g_Flash : register(c13);
+
+struct PS_OUTPUT
+{
+    float4 velocity : COLOR0;
+    float4 flash    : COLOR1;
+};
 
 static const float VEL_RANGE = 64.0f;
 
@@ -31,7 +40,7 @@ float linearise(float raw)
     return (g_VpPx.z * g_VpPx.w) / max(g_VpPx.w - raw * (g_VpPx.w - g_VpPx.z), 0.0001f);
 }
 
-float4 main(float4 cur : TEXCOORD0, float4 prev : TEXCOORD1) : COLOR0
+PS_OUTPUT main(float4 cur : TEXCOORD0, float4 prev : TEXCOORD1)
 {
     float2 nc = cur.xy  / cur.w;
     float2 np = prev.xy / prev.w;
@@ -64,5 +73,8 @@ float4 main(float4 cur : TEXCOORD0, float4 prev : TEXCOORD1) : COLOR0
     float2 e  = floor(saturate(v / (2.0f * VEL_RANGE) + 0.5f) * 4095.0f + 0.5f);
     float2 hi = floor(e / 16.0f);
     float2 lo = e - hi * 16.0f;
-    return float4(hi.x / 255.0f, hi.y / 255.0f, (lo.x * 16.0f + lo.y) / 255.0f, g_Kind.x);
+    PS_OUTPUT o;
+    o.velocity = float4(hi.x / 255.0f, hi.y / 255.0f, (lo.x * 16.0f + lo.y) / 255.0f, g_Kind.x);
+    o.flash    = g_Flash;
+    return o;
 }
