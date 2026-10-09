@@ -1726,7 +1726,13 @@ void TerrainShader2Stage::reset()
 
 void TerrainShader2Stage::updateCloud()
 {
-	const float frame_time = WW3D::Get_Logic_Frame_Time_Seconds();
+	// Ronin @bugfix 09/10/2026 DX9: move by the logic time since the LAST CALL. The terrain renders several times a
+	// frame here (shadow maps, mirror, prepass) and every render used to add a whole frame's step.
+	static unsigned int lastLogicMs = WW3D::Get_Logic_Time_Milliseconds();
+	const unsigned int nowLogicMs = WW3D::Get_Logic_Time_Milliseconds();
+	const float frame_time = (float)(nowLogicMs - lastLogicMs) * 0.001f;
+	lastLogicMs = nowLogicMs;
+
 	m_xOffset += m_xSlidePerSecond * frame_time;
 	m_yOffset += m_ySlidePerSecond * frame_time;
 
