@@ -131,6 +131,8 @@ bool MeshClass::s_SkipBakedShadowCasters = false;
 MeshClass::ShadowMoverNoteFunc MeshClass::s_ShadowMoverNote = NULL;
 // Ronin @feature 24/09/2026 DX9: set by W3DTaa so every main-pass mesh can report itself for motion vectors (§14).
 MeshClass::TaaMeshNoteFunc MeshClass::s_TaaMeshNote = NULL;
+// Ronin @feature 09/10/2026 DX9: set by W3DLocalLights so a mesh that only looks like a light can report itself (lighting part 2).
+MeshClass::LightFixtureNoteFunc MeshClass::s_LightFixtureNote = NULL;
 // Ronin @perf 26/08/2026 DX9: §29i.5 — FALSE except inside the shadow depth-pass scene render.
 bool MeshClass::s_InShadowDepthPass = false;
 static SimpleDynVecClass<uint32> temp_apt;
@@ -676,6 +678,16 @@ void MeshClass::Render(RenderInfoClass & rinfo)
 	WWPROFILE("Mesh::Render");
 	if (Is_Not_Hidden_At_All() == false) {
 		return;
+	}
+
+	// Ronin @feature 09/10/2026 DX9: lighting part 2 - a beam mesh reports itself, in every pass; 2 = a spot light stands in for it
+	// and it is not drawn. Before the TAA note: a mesh that is not drawn is not noted either.
+	if (LightFixture != 1 && s_LightFixtureNote != NULL) {
+		const int fixture = s_LightFixtureNote(this);
+		LightFixture = (fixture == 0) ? 1 : 2;
+		if (fixture == 2) {
+			return;
+		}
 	}
 
 	// Ronin @feature 24/09/2026 DX9: TAA motion vectors, §14. Main pass only - the shadow depth pass renders the

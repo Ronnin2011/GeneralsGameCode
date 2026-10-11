@@ -198,6 +198,10 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/WaterWake.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/WaterWake.pso"
+        # Ronin @build 09/10/2026 Local lights - the screen-space light pass (W3DLocalLights).
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/LocalLight.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/LocalLight.pso"
         # Ronin @build 28/09/2026 Water — the WaterSea normal map (scripts/water/GenWaterNormal.ps1). Textures load from
         # Art/Textures, which the install does not have yet.
         COMMAND ${CMAKE_COMMAND} -E make_directory

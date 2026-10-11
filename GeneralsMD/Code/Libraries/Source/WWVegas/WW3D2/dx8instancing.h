@@ -90,6 +90,12 @@ public:
 	// of Set_Shadow_Map is untouched. tex == NULL means one cascade and the receiver ignores the rest.
 	static void Set_Shadow_Map_Far(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
 	                               float depthBias, float texelWorldSize);
+	// Ronin @feature 10/10/2026 DX9: lighting part 3. Round Flush_Single_Rigid's draws W3DLocalLights binds a second target and
+	// RigidInstance_ps writes the sun's shade there (COLOR1): a lamp can then light what the sun's shadow hides.
+	typedef void (*SunShadeHookFunc)(void);
+	static void Set_Sun_Shade_Hooks(SunShadeHookFunc begin, SunShadeHookFunc end) { s_SunShadeBegin = begin; s_SunShadeEnd = end; }
+	static SunShadeHookFunc s_SunShadeBegin;
+	static SunShadeHookFunc s_SunShadeEnd;
 
 
 	/**

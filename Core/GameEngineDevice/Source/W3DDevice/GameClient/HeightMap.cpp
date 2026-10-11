@@ -97,6 +97,7 @@
 // Ronin @feature 14/08/2026 DX9: §29h terrain shadow receiver. Core-owned state struct, NOT
 // W3DShadowMap.h — this file compiles for the Generals target too, which has no such header.
 #include "W3DDevice/GameClient/W3DShadowMapState.h"
+#include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: local lights drawn in screen space
 #include "d3dx9math.h"
 
 TerrainShadowPassState TheTerrainShadowPass = { FALSE };
@@ -207,7 +208,8 @@ UnsignedInt HeightMapRenderObjClass::doTheDynamicLight(VERTEX_FORMAT *vb, VERTEX
 	Int k;
 	for (k=0; k<numLights; k++) {
 		W3DDynamicLight *pLight = pLights[k];
-		if (!pLight->isEnabled()) {
+		// Ronin @feature 09/10/2026 DX9: nor while W3DLocalLights draws the lights per pixel - this pass then only restores.
+		if (!pLight->isEnabled() || W3DLocalLights::ownsDynamicLights()) {
 			continue; // he is turned off.
 		}
 		Vector3 lightDirection(vbMirror->x, vbMirror->y, vbMirror->z);
@@ -1407,7 +1409,10 @@ void HeightMapRenderObjClass::On_Frame_Update()
 	{
 		W3DDynamicLight *pLight = (W3DDynamicLight*)pDynamicLightsIterator.Peek_Obj();
 		pLight->m_processMe = false;
-		if (pLight->m_enabled || pLight->m_priorEnable) {
+		// Ronin @feature 09/10/2026 DX9: while W3DLocalLights draws the lights per pixel, the vertex re-light sees each one as off:
+		// one last update restores what it had lit, then it costs nothing.
+		const Bool lightOn = pLight->m_enabled && !W3DLocalLights::ownsDynamicLights();
+		if (lightOn || pLight->m_priorEnable) {
 			Real range = pLight->Get_Attenuation_Range();
 			if (pLight->m_priorEnable) {
 				pLight->m_prevMinX = pLight->m_minX;
@@ -1448,7 +1453,7 @@ void HeightMapRenderObjClass::On_Frame_Update()
 				}
 			}
 		}
-		pLight->m_priorEnable = pLight->m_enabled;
+		pLight->m_priorEnable = lightOn;
 	}
 	if (numDynaLights > 0) {
 		//step through each vertex buffer that needs updating

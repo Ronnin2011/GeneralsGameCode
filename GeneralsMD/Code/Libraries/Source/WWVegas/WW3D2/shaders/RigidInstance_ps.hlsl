@@ -55,8 +55,11 @@ struct PS_INPUT
     float3 worldPos : TEXCOORD3;
 };
 
-float4 main(PS_INPUT input) : COLOR0
+// Ronin @feature 10/10/2026 DX9: lighting part 3. sunShade = what the sun's shadow left of this pixel (1 = it took nothing); main
+// writes it to COLOR1 for W3DLocalLights, which binds a target there in the main pass.
+float4 meshColour(PS_INPUT input, out float sunShade)
 {
+    sunShade = 1.0f;
     const int debugMode = (int) (g_DebugParams.x + 0.5f);
 
     float4 texel = tex2D(g_DiffuseSampler, input.uv0);
@@ -210,7 +213,8 @@ float4 main(PS_INPUT input) : COLOR0
             }
             // A surface turning away from the sun can only get DARKER — min(), not lerp().
             float lit = min((inNear ? sumN : sumF) * (1.0f / 9.0f), geo);
-            color.rgb *= lerp(0.45f, 1.0f, lit);
+            sunShade = lerp(0.45f, 1.0f, lit);
+            color.rgb *= sunShade;
         }
     }
 
@@ -223,4 +227,19 @@ float4 main(PS_INPUT input) : COLOR0
     }
 
     return color;
+}
+
+struct PS_OUTPUT
+{
+    float4 color    : COLOR0;
+    float4 sunShade : COLOR1;       // r = the sun's shade; ignored unless a second target is bound
+};
+
+PS_OUTPUT main(PS_INPUT input)
+{
+    PS_OUTPUT o;
+    float sunShade;
+    o.color    = meshColour(input, sunShade);
+    o.sunShade = float4(sunShade, 0.0f, 0.0f, 1.0f);
+    return o;
 }

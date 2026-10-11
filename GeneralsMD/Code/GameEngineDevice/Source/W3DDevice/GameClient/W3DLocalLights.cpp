@@ -1,0 +1,1808 @@
+/*
+**	Command & Conquer Generals Zero Hour(tm)
+**	DX9 local lights, drawn in screen space.
+*/
+
+// Ronin @feature 09/10/2026 DX9: local lights. Each enabled W3DDynamicLight is one quad over the screen rectangle its
+// sphere covers; LocalLight.pso rebuilds position and facing from the scene depth and adds the light to the frame.
+
+#include "WW3D2/dx8todx9.h"
+#include "WWLib/always.h"
+#include "Lib/BaseType.h"
+#include "WW3D2/dx8wrapper.h"
+#include "WW3D2/camera.h"
+#include "WW3D2/texture.h"
+#include "WW3D2/formconv.h"
+#include "WW3D2/robjlist.h"
+#include "WW3D2/mesh.h"			// Ronin @feature 09/10/2026 DX9: the beams: which meshes only look like lights
+#include "WW3D2/meshmdl.h"
+#include "WW3D2/shader.h"
+#include "WW3D2/dx8instancing.h"	// Ronin @feature 10/10/2026 DX9: part 3: the hooks round the mesh shader's draws
+#include "W3DDevice/GameClient/W3DShadowMapState.h"
+#include "Common/GlobalData.h"
+#include "W3DDevice/GameClient/W3DLocalLights.h"
+#include "W3DDevice/GameClient/W3DDynamicLight.h"
+#include "W3DDevice/GameClient/W3DScene.h"
+#include "W3DDevice/GameClient/W3DSsao.h"
+#include "W3DDevice/GameClient/W3DTaa.h"
+
+// Ronin @feature 09/10/2026 DX9: more lights than this in one frame are counted (live) and left undrawn.
+static const Int MAX_LIGHTS_DRAWN = 256;
+
+static IDirect3DVertexShader9	*s_quadVS        = NULL;
+static IDirect3DPixelShader9	*s_lightPS       = NULL;
+static Bool						s_shadersTried  = FALSE;
+
+static Bool						s_enabled       = TRUE;
+static float					s_intensity     = 1.0f;
+static float					s_over          = 1.5f;
+static float					s_boost         = 0.0f;
+static Int						s_view          = 0;
+static float					s_range         = 1.0f;
+static Bool						s_small         = TRUE;
+
+static Bool						s_active        = FALSE;	// decided in beginFrame, read until the next one
+static Bool						s_ownsDepth     = FALSE;
+static Bool						s_passDone      = FALSE;	// the first main-pass flush of the frame is the one
+
+// Ronin @feature 09/10/2026 DX9: the frame before any light. A TextureClass render target, so the texture manager
+// releases and recreates it across a device reset - as the SSAO pair.
+static TextureClass				*s_copy         = NULL;
+static UnsignedInt				s_copyW         = 0;
+static UnsignedInt				s_copyH         = 0;
+static D3DFORMAT				s_copyFormat    = D3DFMT_UNKNOWN;
+
+static W3DLocalLights::Stats	s_stats;	// this frame, being counted
+static W3DLocalLights::Stats	s_shown;	// last frame, complete
+
+struct LightDraw
+{
+	float c[40];			// c5..c10: the light now (position, diffuse, ambient) and as it was last frame; c11, c12: the two axes; c13: shafts
+	float x0, y0, x1, y1;	// target pixels
+};
+
+// Ronin @bugfix 09/10/2026 DX9: each drawn light as it was, for TAA's change mask (LocalLight_ps COLOR1): the resolve clamps where a
+// light changed a pixel since last frame. Without it lit ground lagged and every mover's shadow footprint showed.
+struct LightMemo
+{
+	const void *key;		// the W3DDynamicLight, or a beam's mesh
+	Int         sub;		// -1 = a W3DDynamicLight, else the beam's index in its mesh
+	Vector3     world;
+	float       inner, outer;
+	float       diffuse[3], ambient[3];	// times intensity
+	Vector3     axis;		// a spot: away from the lamp
+	float       cosOuter, edge;	// a point light: -2 and 1, so the cone term is 1
+	float       shaft;		// the beam in the air, its strength; 0 for a point light
+	float       coronaRadius = 0.0f, coronaStrength = 0.0f;	// a lamp's own glow, drawn by the shader (c14); 0 = none
+	Vector3     boundCentre;	// the sphere that holds everything it reaches
+	float       boundRadius;
+	Bool        seen;		// a light of this frame matched it
+};
+static LightMemo				s_memo[MAX_LIGHTS_DRAWN];
+static Int						s_memoCount     = 0;
+
+struct ViewMap
+{
+	float zNear, zFar;
+	float planeMinX, planeMaxY, planeW, planeH;	// the view plane at depth 1
+	float vx0, vy0, vx1, vy1;					// the 3D viewport in target pixels
+};
+
+// Ronin @feature 09/10/2026 DX9: same reader as W3DSsao.cpp's, which is file-static there. Caller frees with HeapFree.
+static DWORD *readShaderBlob(const char *path)
+{
+	HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hFile == INVALID_HANDLE_VALUE)
+		return NULL;
+
+	const DWORD fileSize = GetFileSize(hFile, NULL);
+	if (fileSize == 0 || fileSize == INVALID_FILE_SIZE || fileSize < sizeof(DWORD))
+	{
+		CloseHandle(hFile);
+		return NULL;
+	}
+
+	DWORD *blob = (DWORD *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, fileSize);
+	if (blob == NULL)
+	{
+		CloseHandle(hFile);
+		return NULL;
+	}
+
+	DWORD bytesRead = 0;
+	const BOOL ok = ReadFile(hFile, blob, fileSize, &bytesRead, NULL);
+	CloseHandle(hFile);
+	if (!ok || bytesRead != fileSize)
+	{
+		HeapFree(GetProcessHeap(), 0, blob);
+		return NULL;
+	}
+	return blob;
+}
+
+static void ensureShaders(IDirect3DDevice9 *dev)
+{
+	if (s_shadersTried)
+		return;
+	s_shadersTried = TRUE;
+
+	DWORD *blob = readShaderBlob("shaders\\ScreenQuad.vso");
+	if (blob != NULL)
+	{
+		if (FAILED(dev->CreateVertexShader(blob, &s_quadVS)))
+			s_quadVS = NULL;
+		HeapFree(GetProcessHeap(), 0, blob);
+	}
+	blob = readShaderBlob("shaders\\LocalLight.pso");
+	if (blob != NULL)
+	{
+		if (FAILED(dev->CreatePixelShader(blob, &s_lightPS)))
+			s_lightPS = NULL;
+		HeapFree(GetProcessHeap(), 0, blob);
+	}
+}
+
+// Ronin @feature 09/10/2026 DX9: at the target's own size and format, so StretchRect neither scales nor converts (it resolves MSAA).
+static Bool ensureCopy(UnsignedInt width, UnsignedInt height, D3DFORMAT format)
+{
+	if (s_copy != NULL && s_copyW == width && s_copyH == height && s_copyFormat == format)
+		return TRUE;
+
+	REF_PTR_RELEASE(s_copy);
+	s_copyW = 0;
+	s_copyH = 0;
+	s_copyFormat = D3DFMT_UNKNOWN;
+
+	WW3DFormat wwFormat = D3DFormat_To_WW3DFormat(format);
+	if (wwFormat == WW3D_FORMAT_UNKNOWN)
+		wwFormat = WW3D_FORMAT_A8R8G8B8;
+	s_copy = NEW_REF(TextureClass, (width, height, wwFormat, MIP_LEVELS_1, TextureClass::POOL_DEFAULT, true));
+	if (s_copy->Peek_D3D_Base_Texture() == NULL)
+	{
+		REF_PTR_RELEASE(s_copy);	// a macro with its own if - keep the braces
+		return FALSE;
+	}
+	s_copyW = width;
+	s_copyH = height;
+	s_copyFormat = format;
+	return TRUE;
+}
+
+// Ronin @feature 09/10/2026 DX9: 1 / the map's own light on open ground, per channel, so frame x this ~ the surface's colour.
+// W3DTaa works it out (its selection flash is added to the same surface); `lights boost` overrides it here.
+static void sceneLightFactor(float out[3])
+{
+	if (s_boost > 0.0f)
+	{
+		out[0] = out[1] = out[2] = s_boost;
+		return;
+	}
+	W3DTaa::getMapLightFactor(out);
+}
+
+// Ronin @feature 09/10/2026 DX9: LIGHTING PART 2, THE BEAMS (docs/Lighting_Work.md 4.2). A cone of light in the art is loose
+// quads on the `lightbeam` texture. Each beam becomes a spot light; its quads are no longer drawn.
+static const Int   MAX_FIXTURE_MODELS = 1024;		// a power of two; the whole game ships 733 beam meshes
+static const Int   MAX_FIXTURE_BEAMS  = 2048;		// ... holding 1210 beams
+static const Int   MAX_BEAMS_A_MESH   = 16;
+static const Int   MAX_FIXTURE_VERTS  = 1024;
+static const Int   MAX_FIXTURE_QUADS  = 256;
+static const Int   MAX_FRAME_BEAMS    = 192;
+static const Int   MAX_FIXTURE_GLOWS  = 4096;
+static const Int   MAX_GLOWS_A_MESH   = 24;
+static const Int   MAX_FRAME_GLOWS    = 192;
+static const Int   MAX_FIXTURE_POOLS  = 2048;
+static const Int   MAX_POOLS_A_MESH   = 40;
+static const Int   MAX_FRAME_POOLS    = 128;
+static const float BEAM_REACH         = 1.3f;		// the beam in the air ends this far along, in the art cone's length
+static const float BEAM_INNER         = 0.1f;		// the light on surfaces is at full strength to this share of its reach
+// Ronin @feature 09/10/2026 DX9: a beam the art draws level (a headlight, 1 degree UP on the Humvee) never reaches the ground: its pool
+// was 7% of a lamp's (run 1; scratchpad beam_ground_sim.py). It is aimed at the ground this share of its length ahead.
+static const float BEAM_AIM_AHEAD     = 0.8f;
+static const float BEAM_AIM_MAX_UP    = 0.0872f;	// sin 5 deg: a beam that points up more than this is meant to
+static const float BEAM_AIM_MAX_DOWN  = 0.8660f;	// sin 60 deg: one this steep already lights what is under it
+static const float BEAM_AIM_MAX_TILT  = 0.4363f;	// 25 deg, in radians: never tipped further than this
+static const float BEAM_COLOUR[3]     = { 1.0f, 1.0f, 0.9f };	// the texture's own tint (255,255,230)
+
+struct FixtureBeam
+{
+	Vector3 lamp, end;		// in the mesh's own space
+	float   endRadius;
+};
+struct FixtureModel
+{
+	const MeshModelClass *key;
+	Int     verts, polys;
+	Vector3 first;			// its first vertex: a freed model's address can come back as another beam of the same size
+	Int     firstBeam, beamCount;
+	Int     firstGlow, glowCount;
+	Int     firstPool, poolCount;	// the painted pools: pieces on a glow texture too large to be a lamp
+	Bool    glowOnly;		// every polygon is a lamp's glow: with coronas on the mesh need not be drawn
+	Bool    pure;			// every polygon is beam: the mesh need not be drawn at all
+};
+static FixtureModel	s_fixModels[MAX_FIXTURE_MODELS];
+static FixtureBeam	s_fixBeams[MAX_FIXTURE_BEAMS];
+static Int			s_fixBeamCount  = 0;
+static Int			s_fixModelCount = 0;
+struct FixtureGlow
+{
+	Vector3 centre;			// in the mesh's own space
+	float   radius;			// of the art's glow
+	Int     kind;			// GLOW_TABLE
+};
+static FixtureGlow	s_fixGlows[MAX_FIXTURE_GLOWS];
+static Int			s_fixGlowCount  = 0;
+static FixtureGlow	s_fixPools[MAX_FIXTURE_POOLS];	// radius = half the piece's diagonal
+static Int			s_fixPoolCount  = 0;
+struct FramePool
+{
+	const void *mesh;
+	Int         index;
+	Vector3     pos;		// world
+	float       radius;
+	Int         kind;
+};
+static FramePool	s_framePools[MAX_FRAME_POOLS];
+static Int			s_framePoolCount = 0;
+struct FrameGlow
+{
+	const void *mesh;
+	Int         index;
+	Vector3     pos;		// world
+	float       scale;		// its object's
+	float       radius;		// of the art's glow, world
+	Int         kind;
+};
+static FrameGlow	s_frameGlows[MAX_FRAME_GLOWS];
+static Int			s_frameGlowCount = 0;
+
+struct FrameBeam
+{
+	const void *mesh;
+	Int         index;
+	Vector3     lamp, end;	// world
+	float       endRadius;
+	Vector3     up;			// its object's up, and the lamp's height over the object's own origin: the ground under it
+	float       height;
+};
+static FrameBeam	s_frameBeams[MAX_FRAME_BEAMS];
+static Int			s_frameBeamCount = 0;
+struct SeenMesh { const MeshClass *mesh; UnsignedInt frame; };
+static SeenMesh		s_seenMesh[512];
+static UnsignedInt	s_fixFrame  = 1;
+static Bool			s_collect   = FALSE;	// between beginFrame and the pass: a rendered beam mesh adds its beams
+static float		s_beams     = 1.5f;		// `lights beams`
+static float		s_spill     = 0.5f;		// `lights spill`: the dim light around a beam's cone, beside the cone's own
+static float		s_spillWide = 2.2f;		// `lights spillwide`: how wide it reaches, in cone widths
+static float		s_shafts    = 0.4f;		// `lights shafts`: the beam in the air, beside the light's own strength
+static Bool			s_beamsOn   = FALSE;	// this frame the beams are lights (decided in beginFrame)
+static float		s_glows     = 0.5f;		// `lights glows`: the lamp glows as point lights, their strength; 0 = none
+static float		s_glowReach = 0.8f;		// `lights glowreach`: multiplies GLOW_TABLE's reach
+static Bool			s_glowsOn   = FALSE;
+static float		s_coronas   = 1.5f;		// `lights coronas`: the lamp's own glow drawn by the shader; 0 = the art's glow textures
+static float		s_coronaSize = 1.0f;	// `lights coronasize`: its radius, in the art glow's own
+static Bool			s_coronasOn = FALSE;
+static float		s_beamReach = 1.8f;		// `lights beamreach`: a beam's light on surfaces ends this far along, in the art cone's length
+static float		s_hotspot   = 0.5f;		// `lights hotspot`: the share of a beam's cone at full strength; the rest fades to its edge
+// Ronin @bugfix 10/10/2026 DX9: OFF by default - an experiment. Second form (dithered rays that TAA averages); in the simulation it
+// still lets a third of the light through true shadow and thin things cast almost none (Lighting_Work.md 6).
+static float		s_shadows   = 0.0f;		// `lights shadows`: local lights cast shadows from the frame's own depth (LocalLight_ps lampSeen)
+// Ronin @bugfix 10/10/2026 DX9: 0.6, not 0.92. A lamp under a canopy or an eave is hidden from the camera, and the last stretch of
+// every ray to it lies behind what the camera sees: simulated, 92% of the lit ground was falsely shadowed; at 0.6, 5%.
+static float		s_shadowEnd  = 0.6f;		// `lights shadowend`: how far towards the lamp a shadow ray is walked
+static float		s_shadowThin = 2.0f;	// `lights shadowthin`: taps in a row a thing must cover to cast; 2 = fences, poles, flags cast nothing
+static float		s_poolFill  = 0.6f;		// `lights poolfill`: the light that stands in for a painted pool no lamp covers; 0 = none
+static Bool			s_poolsOn   = FALSE;
+static Bool			s_keepPools = FALSE;	// `lights pools 1`: the glow textures stay drawn (lamp glows welded into meshes, painted pools)
+static Bool			s_glowRejected = FALSE;	// readGlows: a piece of the last model read was no lamp
+
+// Ronin @feature 09/10/2026 DX9: the beam textures met so far. While the beams are lights each one's surface is swapped for a
+// clear texel, which hides the beam polygons welded into other meshes (35 night models, the War Factory among them).
+struct BeamTexture
+{
+	TextureClass          *tex;		// a reference is held
+	IDirect3DBaseTexture9 *own;		// its real surface while the clear one stands in; a reference is held
+	Bool                   glow;		// a glow texture (lamp glows and the painted pools), not a beam's
+};
+static BeamTexture			s_beamTex[16];
+static Int					s_beamTexCount = 0;
+static IDirect3DTexture9	*s_clearTex    = NULL;
+
+static Bool isBeamTexture(TextureClass *tex)
+{
+	if (tex == NULL)
+		return FALSE;
+	const char *name = tex->Get_Texture_Name();
+	return (name != NULL && _strnicmp(name, "lightbeam", 9) == 0) ? TRUE : FALSE;	// lightbeam, lightbeamdiffuse
+}
+
+static void rememberBeamTexture(TextureClass *tex, Bool glow = FALSE)
+{
+	for (Int i = 0; i < s_beamTexCount; ++i)
+		if (s_beamTex[i].tex == tex)
+			return;
+	if (s_beamTexCount >= (Int)(sizeof(s_beamTex) / sizeof(s_beamTex[0])))
+		return;
+	tex->Add_Ref();
+	s_beamTex[s_beamTexCount].tex = tex;
+	s_beamTex[s_beamTexCount].own = NULL;
+	s_beamTex[s_beamTexCount].glow = glow;
+	++s_beamTexCount;
+}
+
+static void restoreBeamTexture(BeamTexture &bt)
+{
+	if (s_clearTex != NULL && bt.tex->Peek_D3D_Base_Texture() == s_clearTex)
+	{
+		if (bt.own != NULL)
+			bt.tex->Set_D3D_Base_Texture(bt.own);
+		else
+			bt.tex->Invalidate();		// it never had its own surface here: let it load as usual
+	}
+	if (bt.own != NULL)
+	{
+		bt.own->Release();
+		bt.own = NULL;
+	}
+}
+
+// Ronin @feature 09/10/2026 DX9: every frame, since the texture manager may reload a texture and put its real surface back.
+static void swapBeamTextures(IDirect3DDevice9 *dev, Bool hideBeams, Bool hideGlows)
+{
+	for (Int i = 0; i < s_beamTexCount; )
+	{
+		BeamTexture &bt = s_beamTex[i];
+		const Bool hide = bt.glow ? hideGlows : hideBeams;
+		if (bt.tex->Num_Refs() == 1)		// only this list still holds it: its map was unloaded
+		{
+			restoreBeamTexture(bt);
+			bt.tex->Release_Ref();
+			s_beamTex[i] = s_beamTex[--s_beamTexCount];
+			continue;
+		}
+		if (!hide)
+			restoreBeamTexture(bt);
+		else
+		{
+			if (s_clearTex == NULL && dev != NULL &&
+				SUCCEEDED(dev->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &s_clearTex, NULL)) && s_clearTex != NULL)
+			{
+				D3DLOCKED_RECT lr;
+				if (SUCCEEDED(s_clearTex->LockRect(0, &lr, NULL, 0)))
+				{
+					*(DWORD *)lr.pBits = 0x00000000;		// black and clear: nothing under either blend
+					s_clearTex->UnlockRect(0);
+				}
+			}
+			IDirect3DBaseTexture9 *cur = bt.tex->Peek_D3D_Base_Texture();
+			if (s_clearTex != NULL && cur != s_clearTex)
+			{
+				if (bt.own != NULL)
+					bt.own->Release();
+				bt.own = cur;
+				if (bt.own != NULL)
+					bt.own->AddRef();
+				bt.tex->Set_D3D_Base_Texture(s_clearTex);
+			}
+		}
+		++i;
+	}
+}
+
+static inline UnsignedInt fixtureHash(const void *p, UnsignedInt mask)
+{
+	UnsignedInt v = (UnsignedInt)(size_t)p;
+	v = (v >> 4) * 2654435761u;
+	return (v >> 12) & mask;
+}
+
+// Ronin @feature 09/10/2026 DX9: is polygon i on a beam texture. Polygons come in runs of one texture, so the name is compared
+// once a run.
+struct BeamPolys
+{
+	MeshModelClass *mdl;
+	Bool            perPoly, single;
+	TextureClass   *last;
+	Bool            lastIs;
+	Bool is(Int i)
+	{
+		if (!perPoly)
+			return single;
+		TextureClass *t = mdl->Peek_Texture(i, 0, 0);
+		if (t != last)
+		{
+			last   = t;
+			lastIs = isBeamTexture(t);
+			if (lastIs)
+				rememberBeamTexture(t);
+		}
+		return lastIs;
+	}
+};
+
+// Ronin @feature 09/10/2026 DX9: LIGHTING PART 2, STEP 2 - THE LAMP GLOWS. Colours measured from the textures (weighted by
+// brightness, Lighting_Work.md 3.5); reach is a first guess by kind, scaled by `lights glowreach`.
+struct GlowKind
+{
+	const char *name;		// the texture, without its extension
+	float       colour[3];
+	float       reach;
+	Bool        hide;		// its art may go clear. Not `coplight`: 9 meshes draw it OPAQUE (hovercraft, battleship lamps)
+};
+static const GlowKind GLOW_TABLE[] =
+{
+	{ "coplight4",      { 1.00f, 0.99f, 0.54f }, 40.0f, TRUE },		// street and building lamps
+	{ "coplight3",      { 1.00f, 0.82f, 0.46f }, 30.0f, TRUE },
+	{ "coplight",       { 1.00f, 0.23f, 0.15f }, 20.0f, FALSE },
+	{ "spotlight",      { 1.00f, 0.99f, 0.46f }, 40.0f, TRUE },
+	{ "pmredlight",     { 1.00f, 0.29f, 0.28f }, 18.0f, TRUE },		// red warning lamps
+	{ "pmrunwaylightr", { 1.00f, 0.42f, 0.42f }, 20.0f, TRUE },
+	{ "pmrunwaylight",  { 0.40f, 0.85f, 1.00f }, 20.0f, TRUE },
+	{ "pmgreenlight",   { 0.21f, 1.00f, 0.21f }, 15.0f, TRUE },
+	{ "atyellowlite2",  { 1.00f, 0.97f, 0.31f }, 25.0f, TRUE },
+};
+static const Int   GLOW_KINDS      = (Int)(sizeof(GLOW_TABLE) / sizeof(GLOW_TABLE[0]));
+static const float GLOW_MAX_RADIUS = 6.0f;		// a larger piece on these textures is a painted pool, not a lamp
+
+static Int glowTextureKind(TextureClass *tex)
+{
+	if (tex == NULL)
+		return -1;
+	const char *name = tex->Get_Texture_Name();
+	if (name == NULL)
+		return -1;
+	for (Int k = 0; k < GLOW_KINDS; ++k)
+	{
+		const size_t len = strlen(GLOW_TABLE[k].name);
+		if (_strnicmp(name, GLOW_TABLE[k].name, len) == 0 && (name[len] == '.' || name[len] == 0))
+			return k;
+	}
+	return -1;
+}
+
+// Ronin @feature 09/10/2026 DX9: polygon i's glow kind, -1 = none. As BeamPolys: the name is compared once a run of polygons.
+struct GlowPolys
+{
+	MeshModelClass *mdl;
+	Bool            perPoly;
+	Int             single;
+	TextureClass   *last;
+	Int             lastKind;
+	Int kind(Int i)
+	{
+		if (!perPoly)
+			return single;
+		TextureClass *t = mdl->Peek_Texture(i, 0, 0);
+		if (t != last)
+		{
+			last     = t;
+			lastKind = glowTextureKind(t);
+			if (lastKind >= 0 && GLOW_TABLE[lastKind].hide)
+				rememberBeamTexture(t, TRUE);
+		}
+		return lastKind;
+	}
+};
+
+static inline Int fixRoot(const UnsignedShort *p, Int x)
+{
+	while (p[x] != x)
+		x = p[x];
+	return x;
+}
+
+// Ronin @feature 09/10/2026 DX9: a model's lamp glows, once. Its glow polygons, welded and joined into pieces; a small piece is
+// a lamp, pieces that share a centre (two crossed quads) are one lamp.
+static void readGlows(MeshModelClass *mdl, FixtureModel *slot, GlowPolys &gp)
+{
+	const Int nv = mdl->Get_Vertex_Count();
+	const Int np = mdl->Get_Polygon_Count();
+	const Vector3  *verts = mdl->Get_Vertex_Array();
+	const TriIndex *polys = mdl->Get_Polygon_Array();
+	s_glowRejected = (nv > MAX_FIXTURE_VERTS) ? TRUE : FALSE;
+	if (nv > MAX_FIXTURE_VERTS)
+		return;
+	static UnsignedShort parent[MAX_FIXTURE_VERTS];
+	static signed char   kind[MAX_FIXTURE_VERTS];		// -1 = on no glow polygon
+	memset(kind, -1, (size_t)nv);
+	for (Int i = 0; i < np; ++i)
+	{
+		const Int k = gp.kind(i);
+		if (k < 0)
+			continue;
+		kind[polys[i].I] = (signed char)k;
+		kind[polys[i].J] = (signed char)k;
+		kind[polys[i].K] = (signed char)k;
+	}
+	for (Int v = 0; v < nv; ++v)
+	{
+		parent[v] = (UnsignedShort)v;
+		if (kind[v] < 0)
+			continue;
+		for (Int w = 0; w < v; ++w)
+		{
+			if (kind[w] >= 0 && fabsf(verts[v].X - verts[w].X) < 0.02f && fabsf(verts[v].Y - verts[w].Y) < 0.02f &&
+				fabsf(verts[v].Z - verts[w].Z) < 0.02f)
+			{
+				parent[v] = parent[w];
+				break;
+			}
+		}
+	}
+	for (Int i = 0; i < np; ++i)
+	{
+		if (gp.kind(i) < 0)
+			continue;
+		const Int a = fixRoot(parent, polys[i].I);
+		const Int b = fixRoot(parent, polys[i].J);
+		parent[b] = (UnsignedShort)a;
+		parent[fixRoot(parent, polys[i].K)] = (UnsignedShort)a;
+	}
+	for (Int r = 0; r < nv; ++r)
+	{
+		if (kind[r] < 0 || fixRoot(parent, r) != r)
+			continue;
+		Vector3 lo(1.0e9f, 1.0e9f, 1.0e9f), hi(-1.0e9f, -1.0e9f, -1.0e9f);
+		for (Int v = 0; v < nv; ++v)
+		{
+			if (kind[v] < 0 || fixRoot(parent, v) != r)
+				continue;
+			if (verts[v].X < lo.X) lo.X = verts[v].X;
+			if (verts[v].Y < lo.Y) lo.Y = verts[v].Y;
+			if (verts[v].Z < lo.Z) lo.Z = verts[v].Z;
+			if (verts[v].X > hi.X) hi.X = verts[v].X;
+			if (verts[v].Y > hi.Y) hi.Y = verts[v].Y;
+			if (verts[v].Z > hi.Z) hi.Z = verts[v].Z;
+		}
+		const Vector3 centre = (lo + hi) * 0.5f;
+		const float   radius = (hi - lo).Length() * 0.5f;
+		if (radius > GLOW_MAX_RADIUS || radius < 0.05f)
+		{
+			s_glowRejected = TRUE;
+			// Ronin @feature 09/10/2026 DX9: step 3: a painted pool. Kept by its size; one that no lamp covers gets a light (renderPass).
+			if (radius > GLOW_MAX_RADIUS && GLOW_TABLE[kind[r]].hide && slot->poolCount < MAX_POOLS_A_MESH)
+			{
+				FixtureGlow &fp = s_fixPools[s_fixPoolCount++];
+				fp.centre = centre;
+				fp.radius = radius;
+				fp.kind   = kind[r];
+				++slot->poolCount;
+			}
+			continue;
+		}
+		Bool merged = FALSE;
+		for (Int g = 0; g < slot->glowCount && !merged; ++g)
+		{
+			FixtureGlow &fg = s_fixGlows[slot->firstGlow + g];
+			const float reach = (radius > fg.radius) ? radius : fg.radius;
+			if ((centre - fg.centre).Length() <= 0.75f * reach)
+			{
+				fg.radius = reach;
+				merged = TRUE;
+			}
+		}
+		if (!merged && slot->glowCount < MAX_GLOWS_A_MESH)
+		{
+			FixtureGlow &fg = s_fixGlows[s_fixGlowCount++];
+			fg.centre = centre;
+			fg.radius = radius;
+			fg.kind   = kind[r];
+			++slot->glowCount;
+		}
+		else if (!merged)
+			s_glowRejected = TRUE;
+	}
+}
+
+// Ronin @feature 09/10/2026 DX9: reads a model's beams, once. Rule (tried on all 1210 shipped beams, scratchpad beam_survey3.py):
+// a beam is 3..8 loose quads; each quad's two ends are its lowest and highest V, the narrow one is the lamp. NULL = no beam here.
+static const FixtureModel *fixtureModel(MeshModelClass *mdl)
+{
+	const Int nv = mdl->Get_Vertex_Count();
+	const Int np = mdl->Get_Polygon_Count();
+	const Vector3  *verts = mdl->Get_Vertex_Array();
+	const TriIndex *polys = mdl->Get_Polygon_Array();
+	if (nv <= 0 || np <= 0 || verts == NULL || polys == NULL || mdl->Get_Pass_Count() <= 0 || mdl->Get_Flag(MeshGeometryClass::SKIN))
+		return NULL;
+
+	const UnsignedInt h = fixtureHash(mdl, MAX_FIXTURE_MODELS - 1);
+	FixtureModel *slot = NULL;
+	for (Int probe = 0; probe < 16; ++probe)
+	{
+		FixtureModel &m = s_fixModels[(h + probe) & (MAX_FIXTURE_MODELS - 1)];
+		if (m.key == mdl && m.verts == nv && m.polys == np && m.first == verts[0])
+			return &m;
+		if (m.key == NULL || m.key == mdl)
+		{
+			slot = &m;
+			break;
+		}
+	}
+
+	BeamPolys bp;
+	bp.mdl     = mdl;
+	bp.perPoly = mdl->Has_Texture_Array(0, 0) ? TRUE : FALSE;
+	bp.single  = FALSE;
+	bp.last    = NULL;
+	bp.lastIs  = FALSE;
+	GlowPolys gp;
+	gp.mdl      = mdl;
+	gp.perPoly  = bp.perPoly;
+	gp.single   = -1;
+	gp.last     = NULL;
+	gp.lastKind = -1;
+	if (!bp.perPoly)
+	{
+		TextureClass *t = mdl->Peek_Single_Texture(0, 0);
+		bp.single = isBeamTexture(t);
+		gp.single = bp.single ? -1 : glowTextureKind(t);
+		if (gp.single >= 0 && GLOW_TABLE[gp.single].hide)
+			rememberBeamTexture(t, TRUE);
+		if (!bp.single && gp.single < 0)
+			return NULL;
+		if (bp.single)
+			rememberBeamTexture(t);
+	}
+	Int beamPolys = 0, glowPolys = 0;
+	Bool keepArt = FALSE;		// Ronin @bugfix 09/10/2026 DX9: a glow whose art must stay drawn: the mesh is never skipped
+	for (Int i = 0; i < np; ++i)
+	{
+		if (bp.is(i))
+			++beamPolys;
+		else if (gp.kind(i) >= 0)
+		{
+			++glowPolys;
+			if (!GLOW_TABLE[gp.kind(i)].hide)
+				keepArt = TRUE;
+		}
+	}
+	if (beamPolys == 0 && glowPolys == 0)
+		return NULL;
+
+	// Ronin @feature 09/10/2026 DX9: a full table or a full pool starts over - every model is read again when it is next drawn.
+	if (slot == NULL || s_fixBeamCount + MAX_BEAMS_A_MESH > MAX_FIXTURE_BEAMS || s_fixGlowCount + MAX_GLOWS_A_MESH > MAX_FIXTURE_GLOWS ||
+		s_fixPoolCount + MAX_POOLS_A_MESH > MAX_FIXTURE_POOLS)
+	{
+		memset(s_fixModels, 0, sizeof(s_fixModels));
+		s_fixBeamCount  = 0;
+		s_fixGlowCount  = 0;
+		s_fixPoolCount  = 0;
+		s_fixModelCount = 0;
+		slot = &s_fixModels[h];
+	}
+	slot->key       = mdl;
+	slot->verts     = nv;
+	slot->polys     = np;
+	slot->first     = verts[0];
+	slot->firstBeam = s_fixBeamCount;
+	slot->beamCount = 0;
+	slot->pure      = (beamPolys == np) ? TRUE : FALSE;
+	slot->firstGlow = s_fixGlowCount;
+	slot->glowCount = 0;
+	slot->firstPool = s_fixPoolCount;
+	slot->poolCount = 0;
+	++s_fixModelCount;
+	slot->glowOnly  = FALSE;
+	if (glowPolys > 0)
+	{
+		readGlows(mdl, slot, gp);
+		slot->glowOnly = (glowPolys == np && slot->glowCount > 0 && !s_glowRejected && !keepArt) ? TRUE : FALSE;
+	}
+	if (beamPolys == 0)
+		return slot;
+
+	const Vector2 *uv = mdl->Get_UV_Array(0, 0);
+	if (uv == NULL || nv > MAX_FIXTURE_VERTS)
+		return slot;		// hidden with the others, but no light can be read off it
+
+	// Ronin @feature 09/10/2026 DX9: the beam's vertices, welded by position, joined through its polygons: each piece is one quad.
+	static UnsignedShort parent[MAX_FIXTURE_VERTS];
+	static UnsignedByte  used[MAX_FIXTURE_VERTS];
+	memset(used, 0, (size_t)nv);
+	for (Int i = 0; i < np; ++i)
+	{
+		if (!bp.is(i))
+			continue;
+		used[polys[i].I] = 1;
+		used[polys[i].J] = 1;
+		used[polys[i].K] = 1;
+	}
+	for (Int v = 0; v < nv; ++v)
+	{
+		parent[v] = (UnsignedShort)v;
+		if (!used[v])
+			continue;
+		for (Int w = 0; w < v; ++w)
+		{
+			if (used[w] && fabsf(verts[v].X - verts[w].X) < 0.02f && fabsf(verts[v].Y - verts[w].Y) < 0.02f &&
+				fabsf(verts[v].Z - verts[w].Z) < 0.02f)
+			{
+				parent[v] = parent[w];
+				break;
+			}
+		}
+	}
+	struct Find
+	{
+		static Int root(const UnsignedShort *p, Int x)
+		{
+			while (p[x] != x)
+				x = p[x];
+			return x;
+		}
+	};
+	for (Int i = 0; i < np; ++i)
+	{
+		if (!bp.is(i))
+			continue;
+		const Int a = Find::root(parent, polys[i].I);
+		const Int b = Find::root(parent, polys[i].J);
+		const Int c = Find::root(parent, polys[i].K);
+		parent[b] = (UnsignedShort)a;
+		parent[Find::root(parent, c)] = (UnsignedShort)a;
+	}
+
+	struct Quad
+	{
+		Vector3 lamp, end;
+		float   lampR, endR;
+		Int     beam;
+	};
+	static Quad quads[MAX_FIXTURE_QUADS];
+	Int quadCount = 0;
+	for (Int r = 0; r < nv && quadCount < MAX_FIXTURE_QUADS; ++r)
+	{
+		if (!used[r] || Find::root(parent, r) != r)
+			continue;
+		float vMin = 1.0e9f, vMax = -1.0e9f;
+		for (Int v = 0; v < nv; ++v)
+		{
+			if (!used[v] || Find::root(parent, v) != r)
+				continue;
+			if (uv[v].Y < vMin) vMin = uv[v].Y;
+			if (uv[v].Y > vMax) vMax = uv[v].Y;
+		}
+		const float span = vMax - vMin;
+		if (span < 0.2f)
+			continue;
+		Vector3 c[2] = { Vector3(0.0f, 0.0f, 0.0f), Vector3(0.0f, 0.0f, 0.0f) };
+		Int     n[2] = { 0, 0 };
+		for (Int v = 0; v < nv; ++v)
+		{
+			if (!used[v] || Find::root(parent, v) != r)
+				continue;
+			const Int e = (uv[v].Y <= vMin + 0.1f * span) ? 0 : ((uv[v].Y >= vMax - 0.1f * span) ? 1 : -1);
+			if (e >= 0)
+			{
+				c[e] += verts[v];
+				++n[e];
+			}
+		}
+		if (n[0] == 0 || n[1] == 0)
+			continue;
+		c[0] /= (float)n[0];
+		c[1] /= (float)n[1];
+		float rad[2] = { 0.0f, 0.0f };
+		for (Int v = 0; v < nv; ++v)
+		{
+			if (!used[v] || Find::root(parent, v) != r)
+				continue;
+			const Int e = (uv[v].Y <= vMin + 0.1f * span) ? 0 : ((uv[v].Y >= vMax - 0.1f * span) ? 1 : -1);
+			if (e >= 0)
+			{
+				const float d = (verts[v] - c[e]).Length();
+				if (d > rad[e])
+					rad[e] = d;
+			}
+		}
+		const Int lampEnd = (rad[0] <= rad[1]) ? 0 : 1;		// the narrow end is the lamp
+		Quad &q = quads[quadCount];
+		q.lamp  = c[lampEnd];
+		q.end   = c[lampEnd ^ 1];
+		q.lampR = rad[lampEnd];
+		q.endR  = rad[lampEnd ^ 1];
+		q.beam  = -1;
+		if ((q.end - q.lamp).Length() < 0.5f)
+			continue;
+		++quadCount;
+	}
+
+	// Ronin @feature 09/10/2026 DX9: quads that start at one lamp and end together are one beam.
+	struct Group
+	{
+		Vector3 lamp, end;		// the first quad's
+		float   lampR, endR;
+	};
+	Group groups[MAX_BEAMS_A_MESH];
+	Int groupCount = 0;
+	for (Int qi = 0; qi < quadCount; ++qi)
+	{
+		Quad &q = quads[qi];
+		for (Int g = 0; g < groupCount; ++g)
+		{
+			const float lampR = (q.lampR > groups[g].lampR) ? q.lampR : groups[g].lampR;
+			const float endR  = (q.endR  > groups[g].endR)  ? q.endR  : groups[g].endR;
+			if ((q.lamp - groups[g].lamp).Length() <= 2.5f * lampR + 0.3f && (q.end - groups[g].end).Length() <= 2.5f * endR)
+			{
+				q.beam = g;
+				groups[g].lampR = lampR;
+				groups[g].endR  = endR;
+				break;
+			}
+		}
+		if (q.beam < 0 && groupCount < MAX_BEAMS_A_MESH)
+		{
+			q.beam = groupCount;
+			groups[groupCount].lamp  = q.lamp;
+			groups[groupCount].end   = q.end;
+			groups[groupCount].lampR = q.lampR;
+			groups[groupCount].endR  = q.endR;
+			++groupCount;
+		}
+	}
+	for (Int g = 0; g < groupCount; ++g)
+	{
+		Vector3 lamp(0.0f, 0.0f, 0.0f), end(0.0f, 0.0f, 0.0f);
+		Int n = 0;
+		for (Int qi = 0; qi < quadCount; ++qi)
+		{
+			if (quads[qi].beam != g)
+				continue;
+			lamp += quads[qi].lamp;
+			end  += quads[qi].end;
+			++n;
+		}
+		if (n == 0)
+			continue;
+		lamp /= (float)n;
+		end  /= (float)n;
+		float endRadius = 0.0f;
+		for (Int qi = 0; qi < quadCount; ++qi)
+		{
+			if (quads[qi].beam != g)
+				continue;
+			const float d = (quads[qi].end - end).Length() + quads[qi].endR;
+			if (d > endRadius)
+				endRadius = d;
+		}
+		if ((end - lamp).Length() < 0.5f || endRadius < 0.05f)
+			continue;
+		FixtureBeam &fb = s_fixBeams[s_fixBeamCount++];
+		fb.lamp      = lamp;
+		fb.end       = end;
+		fb.endRadius = endRadius;
+		++slot->beamCount;
+	}
+	return slot;
+}
+
+// Ronin @feature 09/10/2026 DX9: called by MeshClass::Render for every mesh it has not ruled out, in every pass. Only a mesh that
+// is being drawn reaches this, so a unit hidden by the fog of war gives no light away.
+int W3DLocalLights::noteFixtureMesh(MeshClass *mesh)
+{
+	MeshModelClass *mdl = (mesh != NULL) ? mesh->Peek_Model() : NULL;
+	if (mdl == NULL)
+		return 1;		// no model yet: ask again
+	const FixtureModel *fm = fixtureModel(mdl);
+	if (fm == NULL)
+		return 0;
+	if (s_collect && ((s_beamsOn && fm->beamCount > 0) || (s_glowsOn && fm->glowCount > 0) || (s_poolsOn && fm->poolCount > 0)))
+	{
+		// Ronin @feature 09/10/2026 DX9: once a frame - the water's mirror renders the scene again inside the same window.
+		const UnsignedInt h = fixtureHash(mesh, 511);
+		Bool taken = FALSE;
+		SeenMesh *spot = NULL;
+		for (Int probe = 0; probe < 8 && spot == NULL; ++probe)
+		{
+			SeenMesh &s = s_seenMesh[(h + probe) & 511];
+			if (s.frame == s_fixFrame && s.mesh == mesh)
+			{
+				taken = TRUE;
+				break;
+			}
+			if (s.frame != s_fixFrame)
+				spot = &s;
+		}
+		if (!taken && spot != NULL)
+		{
+			spot->mesh  = mesh;
+			spot->frame = s_fixFrame;
+			const Matrix3D &tm = mesh->Get_Transform();
+			RenderObjClass *top = mesh;
+			while (top->Get_Container() != NULL)
+				top = top->Get_Container();
+			const Matrix3D &root = top->Get_Transform();
+			Vector3 rootUp = root.Get_Z_Vector();
+			const float upLen = rootUp.Length();
+			if (upLen > 0.0001f)
+				rootUp /= upLen;		// Ronin @feature 09/10/2026 DX9: a scaled object's axes are not unit length
+			const Vector3 rootPos = root.Get_Translation();
+			for (Int b = 0; s_beamsOn && b < fm->beamCount && s_frameBeamCount < MAX_FRAME_BEAMS; ++b)
+			{
+				const FixtureBeam &fb = s_fixBeams[fm->firstBeam + b];
+				FrameBeam &o = s_frameBeams[s_frameBeamCount];
+				Matrix3D::Transform_Vector(tm, fb.lamp, &o.lamp);
+				Matrix3D::Transform_Vector(tm, fb.end, &o.end);
+				const float own   = (fb.end - fb.lamp).Length();
+				const float world = (o.end - o.lamp).Length();
+				if (own < 0.01f || world < 0.01f)
+					continue;
+				o.endRadius = fb.endRadius * (world / own);		// a scaled object scales its beam
+				o.up        = rootUp;
+				o.height    = Vector3::Dot_Product(o.lamp - rootPos, rootUp);
+				o.mesh      = mesh;
+				o.index     = b;
+				++s_frameBeamCount;
+			}
+			for (Int g = 0; s_glowsOn && g < fm->glowCount && s_frameGlowCount < MAX_FRAME_GLOWS; ++g)
+			{
+				const FixtureGlow &fg = s_fixGlows[fm->firstGlow + g];
+				FrameGlow &o = s_frameGlows[s_frameGlowCount];
+				Vector3 beside;
+				Matrix3D::Transform_Vector(tm, fg.centre, &o.pos);
+				Matrix3D::Transform_Vector(tm, fg.centre + Vector3(1.0f, 0.0f, 0.0f), &beside);
+				o.scale = (beside - o.pos).Length();
+				o.radius = fg.radius * o.scale;
+				o.mesh  = mesh;
+				o.index = g;
+				o.kind  = fg.kind;
+				++s_frameGlowCount;
+			}
+			for (Int p = 0; s_poolsOn && p < fm->poolCount && s_framePoolCount < MAX_FRAME_POOLS; ++p)
+			{
+				const FixtureGlow &fp = s_fixPools[fm->firstPool + p];
+				FramePool &o = s_framePools[s_framePoolCount];
+				Vector3 beside;
+				Matrix3D::Transform_Vector(tm, fp.centre, &o.pos);
+				Matrix3D::Transform_Vector(tm, fp.centre + Vector3(1.0f, 0.0f, 0.0f), &beside);
+				o.radius = fp.radius * (beside - o.pos).Length();
+				o.mesh   = mesh;
+				o.index  = p;
+				o.kind   = fp.kind;
+				++s_framePoolCount;
+			}
+		}
+	}
+	if (s_beamsOn && fm->pure)
+	{
+		++s_stats.beamMeshes;
+		return 2;
+	}
+	if (s_coronasOn && fm->glowOnly)
+		return 2;		// Ronin @feature 09/10/2026 DX9: its glow is drawn by the light pass
+	return 1;
+}
+
+Bool W3DLocalLights::beamsHiddenIn(const MeshClass *mesh)
+{
+	return (s_beamsOn && mesh != NULL && mesh->Get_Light_Fixture() == 2) ? TRUE : FALSE;
+}
+
+void  W3DLocalLights::setBeams(float v)	{ s_beams = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getBeams(void)	{ return s_beams; }
+void  W3DLocalLights::setShafts(float v)	{ s_shafts = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float W3DLocalLights::getShafts(void)	{ return s_shafts; }
+void  W3DLocalLights::setSpill(float v)	{ s_spill = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float W3DLocalLights::getSpill(void)	{ return s_spill; }
+void  W3DLocalLights::setSpillWide(float v)	{ s_spillWide = (v < 1.2f) ? 1.2f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getSpillWide(void)	{ return s_spillWide; }
+void  W3DLocalLights::setGlows(float v)	{ s_glows = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getGlows(void)	{ return s_glows; }
+void  W3DLocalLights::setGlowReach(float v)	{ s_glowReach = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getGlowReach(void)	{ return s_glowReach; }
+void  W3DLocalLights::setCoronas(float v)	{ s_coronas = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getCoronas(void)	{ return s_coronas; }
+void  W3DLocalLights::setCoronaSize(float v)	{ s_coronaSize = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getCoronaSize(void)	{ return s_coronaSize; }
+void  W3DLocalLights::setPools(Bool keep)	{ s_keepPools = keep; }
+Bool  W3DLocalLights::getPools(void)	{ return s_keepPools; }
+void  W3DLocalLights::setBeamReach(float v)	{ s_beamReach = (v < 1.0f) ? 1.0f : ((v > 3.0f) ? 3.0f : v); }
+float W3DLocalLights::getBeamReach(void)	{ return s_beamReach; }
+void  W3DLocalLights::setPoolFill(float v)	{ s_poolFill = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getPoolFill(void)	{ return s_poolFill; }
+void  W3DLocalLights::setHotspot(float v)	{ s_hotspot = (v < 0.0f) ? 0.0f : ((v > 0.9f) ? 0.9f : v); }
+float W3DLocalLights::getHotspot(void)	{ return s_hotspot; }
+void  W3DLocalLights::setShadows(float v)	{ s_shadows = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float W3DLocalLights::getShadows(void)	{ return s_shadows; }
+void  W3DLocalLights::setShadowThin(float v)	{ s_shadowThin = (v < 1.0f) ? 1.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getShadowThin(void)	{ return s_shadowThin; }
+void  W3DLocalLights::setShadowEnd(float v)	{ s_shadowEnd = (v < 0.3f) ? 0.3f : ((v > 1.0f) ? 1.0f : v); }
+float W3DLocalLights::getShadowEnd(void)	{ return s_shadowEnd; }
+
+void W3DLocalLights::setEnabled(Bool on)	{ s_enabled = on; }
+Bool W3DLocalLights::isEnabled(void)		{ return s_enabled; }
+void W3DLocalLights::setIntensity(float v)	{ s_intensity = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
+float W3DLocalLights::getIntensity(void)	{ return s_intensity; }
+void W3DLocalLights::setOver(float v)		{ s_over = (v < 1.0f) ? 1.0f : ((v > 8.0f) ? 8.0f : v); }
+float W3DLocalLights::getOver(void)			{ return s_over; }
+void W3DLocalLights::setBoost(float v)		{ s_boost = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
+float W3DLocalLights::getBoost(void)		{ return s_boost; }
+void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v > 4) ? 4 : v); }
+Int  W3DLocalLights::getView(void)			{ return s_view; }
+Bool W3DLocalLights::ownsDynamicLights(void)	{ return s_active; }
+void W3DLocalLights::setRange(float v)		{ s_range = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getRange(void)		{ return s_range; }
+void W3DLocalLights::setSmall(Bool on)		{ s_small = on; }
+Bool W3DLocalLights::getSmall(void)			{ return s_small; }
+Bool W3DLocalLights::wantsSmallLights(void)	{ return (s_active && s_small) ? TRUE : FALSE; }
+
+
+void W3DLocalLights::getStats(Stats *out)
+{
+	if (out != NULL)
+		*out = s_shown;
+}
+
+// Ronin @feature 10/10/2026 DX9: LIGHTING PART 3, STEP 1 - the sun's shade as the mesh shader applied it, kept per pixel (RigidInstance_ps
+// COLOR1), so a lamp lights the surface the sun's shadow hides. Bound round Flush_Single_Rigid's draws, main pass only.
+static TextureClass			*s_shadeTex     = NULL;
+static UnsignedInt			s_shadeW        = 0;
+static UnsignedInt			s_shadeH        = 0;
+static Bool					s_shadeOpen     = FALSE;	// between beginFrame and the light pass
+static Bool					s_shadeBound    = FALSE;
+static Bool					s_shadeWritten  = FALSE;	// bound at least once this frame
+static const void			*s_shadeBeside  = NULL;	// the target it was first bound beside this frame: compared, never used
+static float				s_sunFill       = 1.0f;	// `lights sunfill`
+static float				s_sunErase      = 3.0f;	// `lights sunerase`: a lamp restores what the sun's shadow took; gone at strength 1/3
+
+void W3DLocalLights::beginSunShade(void)
+{
+	if (!s_shadeOpen || s_shadeBound || s_sunFill <= 0.0f || ShaderClass::Is_Backface_Culling_Inverted() ||
+		TheTerrainShadowPass.inDepthPass || TheTerrainShadowPass.viewDepthPass)
+		return;		// not the main pass (the mirror draws with culling inverted), or not wanted
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	IDirect3DSurface9 *rt = NULL;
+	if (dev == NULL || FAILED(dev->GetRenderTarget(0, &rt)) || rt == NULL)
+		return;
+	D3DSURFACE_DESC rd;
+	// Ronin @feature 10/10/2026 DX9: a second target must match the first: never under MSAA, and only beside the frame's own target.
+	const Bool usable = (SUCCEEDED(rt->GetDesc(&rd)) && rd.MultiSampleType == D3DMULTISAMPLE_NONE &&
+						 (s_shadeBeside == NULL || s_shadeBeside == rt)) ? TRUE : FALSE;
+	const void *beside = rt;
+	rt->Release();
+	if (!usable)
+		return;
+	if (s_shadeTex == NULL || s_shadeW != rd.Width || s_shadeH != rd.Height)
+	{
+		REF_PTR_RELEASE(s_shadeTex);
+		s_shadeW = 0;
+		s_shadeH = 0;
+		s_shadeTex = NEW_REF(TextureClass, (rd.Width, rd.Height, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1, TextureClass::POOL_DEFAULT, true));
+		if (s_shadeTex->Peek_D3D_Base_Texture() == NULL)
+		{
+			REF_PTR_RELEASE(s_shadeTex);	// a macro with its own if - keep the braces
+			return;
+		}
+		s_shadeW = rd.Width;
+		s_shadeH = rd.Height;
+	}
+	IDirect3DSurface9 *surf = s_shadeTex->Get_D3D_Surface_Level();
+	if (surf == NULL)
+		return;
+	if (s_shadeBeside == NULL)
+	{
+		dev->ColorFill(surf, NULL, 0);		// 0 = no mesh wrote here: the light pass leaves such a pixel as it was
+		s_shadeBeside  = beside;
+		s_shadeWritten = TRUE;
+	}
+	if (SUCCEEDED(dev->SetRenderTarget(1, surf)))
+		s_shadeBound = TRUE;
+	surf->Release();
+}
+
+void W3DLocalLights::endSunShade(void)
+{
+	if (!s_shadeBound)
+		return;
+	s_shadeBound = FALSE;
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev != NULL)
+		dev->SetRenderTarget(1, NULL);
+}
+
+void  W3DLocalLights::setSunFill(float v)	{ s_sunFill = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float W3DLocalLights::getSunFill(void)		{ return s_sunFill; }
+void  W3DLocalLights::setSunErase(float v)	{ s_sunErase = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
+float W3DLocalLights::getSunErase(void)		{ return s_sunErase; }
+
+void W3DLocalLights::beginFrame(void)
+{
+	s_shown = s_stats;
+	s_stats.live     = 0;
+	s_stats.drawn    = 0;
+	s_stats.coverage = 0.0f;
+	s_stats.masked   = FALSE;
+	s_stats.beams      = 0;
+	s_stats.glows      = 0;
+	s_stats.pools      = 0;
+	s_stats.beamMeshes = 0;
+	s_stats.beamModels = s_fixModelCount;
+	if (!s_passDone)
+		s_memoCount = 0;		// Ronin @bugfix 09/10/2026 DX9: no pass last frame: nothing to compare with
+	s_passDone  = FALSE;
+	s_ownsDepth = FALSE;
+
+	Bool active = FALSE;
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (s_enabled && dev != NULL)
+	{
+		ensureShaders(dev);
+		if (s_quadVS != NULL && s_lightPS != NULL)
+		{
+			// Ronin @feature 09/10/2026 DX9: SSAO and TAA begin before this and each may hold the scene depth; begin it here only
+			// when neither did - Begin_Scene_Depth refuses a second start. Under MSAA without SSAO there is none: old paths stay.
+			if (W3DSsao::isActive() || W3DTaa::ownsDepth())
+				active = TRUE;
+			else
+			{
+				s_ownsDepth = DX8Wrapper::Begin_Scene_Depth() ? TRUE : FALSE;
+				active = s_ownsDepth;
+			}
+		}
+	}
+	s_active = active;
+	s_stats.active    = active;
+	s_stats.ownsDepth = s_ownsDepth;
+
+	// Ronin @feature 09/10/2026 DX9: the beams. Meshes rendered from here to the pass add theirs; the shadow passes of the NEXT frame run
+	// before its beginFrame and only skip. The hook is set every frame, as TAA's.
+	++s_fixFrame;
+	s_frameBeamCount = 0;
+	s_frameGlowCount = 0;
+	s_framePoolCount = 0;
+	s_beamsOn = (active && s_beams > 0.0f) ? TRUE : FALSE;
+	s_glowsOn = (active && s_glows > 0.0f) ? TRUE : FALSE;
+	s_coronasOn = (s_glowsOn && s_coronas > 0.0f) ? TRUE : FALSE;
+	s_poolsOn = (s_coronasOn && !s_keepPools && s_poolFill > 0.0f) ? TRUE : FALSE;	// the painted pools are hidden and want filling
+	s_collect = (s_beamsOn || s_glowsOn || s_poolsOn) ? TRUE : FALSE;
+	// Ronin @feature 09/10/2026 DX9: step 3: with the lamps' glows drawn by the shader, their textures go clear - and with them the pools
+	// of light painted on ground and walls, which the real lights now make.
+	swapBeamTextures(dev, s_beamsOn, (s_coronasOn && !s_keepPools) ? TRUE : FALSE);
+	MeshClass::Set_Light_Fixture_Note_Func(&W3DLocalLights::noteFixtureMesh);
+	// Ronin @feature 10/10/2026 DX9: part 3: the sun's shade is recorded from here to the light pass. The hooks are set every frame.
+	endSunShade();
+	s_shadeOpen    = active;
+	s_shadeWritten = FALSE;
+	s_shadeBeside  = NULL;
+	DX8InstanceManagerClass::Set_Sun_Shade_Hooks(&W3DLocalLights::beginSunShade, &W3DLocalLights::endSunShade);
+}
+
+void W3DLocalLights::endFrame(void)
+{
+	s_shadeOpen = FALSE;
+	endSunShade();
+	if (!s_ownsDepth)
+		return;
+	s_ownsDepth = FALSE;
+	DX8Wrapper::End_Scene_Depth();
+}
+
+// Ronin @feature 09/10/2026 DX9: the screen rectangle of a view-space sphere, in view-plane units at depth 1. Conservative:
+// each side is taken at the sphere's nearest and farthest depth. FALSE = wholly behind the camera or past the far plane.
+static Bool sphereViewRect(const Vector3 &c, float r, float zNear, float zFar, float *xMin, float *xMax, float *yMin, float *yMax,
+						   Bool *wholeView)
+{
+	const float e = -c.Z;			// distance along the view axis
+	if (e + r <= zNear || e - r >= zFar)
+		return FALSE;
+	*wholeView = (e - r < zNear) ? TRUE : FALSE;	// the camera is inside it, or it cuts the near plane
+	if (*wholeView)
+		return TRUE;
+	const float eNear = e - r;
+	const float eFar  = e + r;
+	const float xa = (c.X - r) / eNear, xb = (c.X - r) / eFar;
+	const float xc = (c.X + r) / eNear, xd = (c.X + r) / eFar;
+	const float ya = (c.Y - r) / eNear, yb = (c.Y - r) / eFar;
+	const float yc = (c.Y + r) / eNear, yd = (c.Y + r) / eFar;
+	*xMin = (xa < xb) ? xa : xb;
+	*xMax = (xc > xd) ? xc : xd;
+	*yMin = (ya < yb) ? ya : yb;
+	*yMax = (yc > yd) ? yc : yd;
+	return TRUE;
+}
+
+// Ronin @feature 09/10/2026 DX9: a view-space sphere's rectangle in target pixels, clipped to the 3D viewport. FALSE = not on screen.
+static Bool spherePixelRect(const Vector3 &c, float r, const ViewMap &vm, float rect[4])
+{
+	float xMin = 0.0f, xMax = 0.0f, yMin = 0.0f, yMax = 0.0f;
+	Bool wholeView = FALSE;
+	if (!sphereViewRect(c, r, vm.zNear, vm.zFar, &xMin, &xMax, &yMin, &yMax, &wholeView))
+		return FALSE;
+	rect[0] = vm.vx0; rect[1] = vm.vy0; rect[2] = vm.vx1; rect[3] = vm.vy1;
+	if (wholeView)
+		return TRUE;
+	// Ronin @feature 09/10/2026 DX9: view-plane units to target pixels; the screen's Y grows downward, the plane's upward.
+	const float px0 = vm.vx0 + ((xMin - vm.planeMinX) / vm.planeW) * (vm.vx1 - vm.vx0);
+	const float px1 = vm.vx0 + ((xMax - vm.planeMinX) / vm.planeW) * (vm.vx1 - vm.vx0);
+	const float py0 = vm.vy0 + ((vm.planeMaxY - yMax) / vm.planeH) * (vm.vy1 - vm.vy0);
+	const float py1 = vm.vy0 + ((vm.planeMaxY - yMin) / vm.planeH) * (vm.vy1 - vm.vy0);
+	if (px0 > vm.vx0) rect[0] = floorf(px0);
+	if (py0 > vm.vy0) rect[1] = floorf(py0);
+	if (px1 < vm.vx1) rect[2] = ceilf(px1);
+	if (py1 < vm.vy1) rect[3] = ceilf(py1);
+	return (rect[2] > rect[0] && rect[3] > rect[1]) ? TRUE : FALSE;
+}
+
+// Ronin @bugfix 09/10/2026 DX9: one draw: the light now and as it was last frame, over the rectangle that holds both spheres.
+// FALSE = neither is on screen.
+static Bool makeDraw(LightDraw &d, const LightMemo &now, const LightMemo &was, const Matrix3D &cameraTM, const ViewMap &vm)
+{
+	Vector3 viewNow, viewWas;
+	Matrix3D::Inverse_Transform_Vector(cameraTM, now.world, &viewNow);
+	Matrix3D::Inverse_Transform_Vector(cameraTM, was.world, &viewWas);
+	Vector3 boundNow, boundWas, axisNow, axisWas;
+	Matrix3D::Inverse_Transform_Vector(cameraTM, now.boundCentre, &boundNow);
+	Matrix3D::Inverse_Transform_Vector(cameraTM, was.boundCentre, &boundWas);
+	Matrix3D::Inverse_Rotate_Vector(cameraTM, now.axis, &axisNow);
+	Matrix3D::Inverse_Rotate_Vector(cameraTM, was.axis, &axisWas);
+	float a[4], b[4];
+	const Bool onNow = spherePixelRect(boundNow, now.boundRadius, vm, a);
+	const Bool onWas = spherePixelRect(boundWas, was.boundRadius, vm, b);
+	if (!onNow && !onWas)
+		return FALSE;
+	const float *r0 = onNow ? a : b;
+	const float *r1 = onWas ? b : a;
+	d.x0 = (r0[0] < r1[0]) ? r0[0] : r1[0];
+	d.y0 = (r0[1] < r1[1]) ? r0[1] : r1[1];
+	d.x1 = (r0[2] > r1[2]) ? r0[2] : r1[2];
+	d.y1 = (r0[3] > r1[3]) ? r0[3] : r1[3];
+
+	const LightMemo *src[2]  = { &now, &was };
+	const Vector3   *view[2] = { &viewNow, &viewWas };
+	const Vector3   *axis[2] = { &axisNow, &axisWas };
+	d.c[34] = s_spill;
+	d.c[35] = 1.0f / s_spillWide;
+	for (Int s = 0; s < 2; ++s)
+	{
+		float *x = d.c + 24 + s * 4;
+		x[0] = axis[s]->X; x[1] = axis[s]->Y; x[2] = axis[s]->Z; x[3] = src[s]->cosOuter;
+		d.c[32 + s] = src[s]->shaft;
+		d.c[36 + s * 2] = src[s]->coronaRadius;
+		d.c[37 + s * 2] = src[s]->coronaStrength;
+		float *c = d.c + s * 12;
+		const float span = src[s]->outer - src[s]->inner;
+		c[0] = view[s]->X; c[1] = view[s]->Y; c[2] = view[s]->Z; c[3] = 1.0f / ((span > 0.5f) ? span : 0.5f);
+		c[4] = src[s]->diffuse[0]; c[5] = src[s]->diffuse[1]; c[6]  = src[s]->diffuse[2]; c[7]  = src[s]->inner;
+		c[8] = src[s]->ambient[0]; c[9] = src[s]->ambient[1]; c[10] = src[s]->ambient[2]; c[11] = src[s]->edge;
+	}
+	return TRUE;
+}
+
+void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
+{
+	if (!s_active || s_passDone || scene == NULL)
+		return;
+	s_passDone = TRUE;
+	s_shadeOpen = FALSE;		// Ronin @feature 10/10/2026 DX9: part 3: what is drawn from here on is not under the lights
+	endSunShade();
+	s_collect  = FALSE;		// Ronin @feature 09/10/2026 DX9: the beams are in; later renders this frame only skip
+
+	// Ronin @bugfix 09/10/2026 DX9: last frame's lights, taken out of the memo - any early return below leaves it empty.
+	static LightMemo last[MAX_LIGHTS_DRAWN];
+	const Int lastCount = s_memoCount;
+	for (Int m = 0; m < lastCount; ++m)
+		last[m] = s_memo[m];
+	s_memoCount = 0;
+
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev == NULL)
+		return;
+
+	IDirect3DSurface9 *rt = NULL;
+	D3DSURFACE_DESC rd;
+	if (FAILED(dev->GetRenderTarget(0, &rt)) || rt == NULL)
+		return;
+	if (FAILED(rt->GetDesc(&rd)) || rd.Width == 0 || rd.Height == 0)
+	{
+		rt->Release();
+		return;
+	}
+
+	float zNear = 1.0f;
+	float zFar  = 1000.0f;
+	camera.Get_Clip_Planes(zNear, zFar);
+	Vector2 planeMin, planeMax, vpMin, vpMax;
+	camera.Get_View_Plane(planeMin, planeMax);
+	camera.Get_Viewport(vpMin, vpMax);
+	const float planeW = planeMax.X - planeMin.X;
+	const float planeH = planeMax.Y - planeMin.Y;
+	const float targetW = (float)rd.Width;
+	const float targetH = (float)rd.Height;
+	// Ronin @feature 09/10/2026 DX9: the 3D viewport in target pixels - lights never draw outside it.
+	const float vx0 = vpMin.X * targetW, vy0 = vpMin.Y * targetH;
+	const float vx1 = vpMax.X * targetW, vy1 = vpMax.Y * targetH;
+
+	// Ronin @feature 09/10/2026 DX9: gather first. With nothing to draw the device is not touched at all.
+	static LightDraw draws[MAX_LIGHTS_DRAWN];
+	Int count = 0;
+	Int lightCount = 0;
+	if (planeW > 0.0f && planeH > 0.0f && vx1 > vx0 && vy1 > vy0)
+	{
+		const Matrix3D &cameraTM = camera.Get_Transform();
+		const ViewMap vm = { zNear, zFar, planeMin.X, planeMax.Y, planeW, planeH, vx0, vy0, vx1, vy1 };
+		RefRenderObjListIterator it(scene->getDynamicLights());
+		for (it.First(); !it.Is_Done(); it.Next())
+		{
+			W3DDynamicLight *light = (W3DDynamicLight *)it.Peek_Obj();
+			if (light == NULL || !light->isEnabled())
+				continue;
+			++s_stats.live;
+			if (count >= MAX_LIGHTS_DRAWN || light->Get_Type() != LightClass::POINT)
+				continue;
+
+			LightMemo now;
+			now.key   = light;
+			now.sub   = -1;
+			now.seen  = FALSE;
+			now.world = light->Get_Position();
+			now.axis.Set(0.0f, 0.0f, 1.0f);
+			now.cosOuter = -2.0f;
+			now.edge     = 1.0f;
+			now.shaft    = 0.0f;
+			light->Get_Far_Attenuation_Range(now.inner, now.outer);
+			now.inner *= s_range;
+			now.outer *= s_range;
+			now.boundCentre = now.world;
+			now.boundRadius = now.outer;
+			if (now.outer - now.inner < 0.5f)
+				continue;
+			Vector3 diffuse, ambient;
+			light->Get_Diffuse(&diffuse);
+			light->Get_Ambient(&ambient);
+			const float k = light->Get_Intensity() * s_intensity;
+			if ((diffuse.X + diffuse.Y + diffuse.Z + ambient.X + ambient.Y + ambient.Z) * k <= 0.002f)
+				continue;
+			now.diffuse[0] = diffuse.X * k; now.diffuse[1] = diffuse.Y * k; now.diffuse[2] = diffuse.Z * k;
+			now.ambient[0] = ambient.X * k; now.ambient[1] = ambient.Y * k; now.ambient[2] = ambient.Z * k;
+
+			// Ronin @bugfix 09/10/2026 DX9: as it was last frame; a light that was not there is the same sphere, dark.
+			LightMemo was = now;
+			was.diffuse[0] = was.diffuse[1] = was.diffuse[2] = 0.0f;
+			was.ambient[0] = was.ambient[1] = was.ambient[2] = 0.0f;
+			for (Int m = 0; m < lastCount; ++m)
+			{
+				if (last[m].key == now.key && last[m].sub == now.sub)
+				{
+					was = last[m];
+					last[m].seen = TRUE;
+					break;
+				}
+			}
+			if (!makeDraw(draws[count], now, was, cameraTM, vm))
+				continue;		// off screen
+			s_stats.coverage += ((draws[count].x1 - draws[count].x0) * (draws[count].y1 - draws[count].y0)) / (targetW * targetH);
+			s_memo[s_memoCount++] = now;
+			++count;
+			++lightCount;
+		}
+
+		// Ronin @feature 09/10/2026 DX9: the beams: a spot at the lamp, as wide as the art's cone, reaching a little past its end; a level
+		// one is aimed at the ground (BEAM_AIM_AHEAD). Mostly flat: a headlight meets the road at a shallow angle.
+		for (Int fb = 0; fb < s_frameBeamCount; ++fb)
+		{
+			const FrameBeam &beam = s_frameBeams[fb];
+			++s_stats.live;
+			if (count >= MAX_LIGHTS_DRAWN)
+				continue;
+			Vector3 along = beam.end - beam.lamp;
+			const float len = along.Length();
+			const float k   = s_beams * s_intensity;
+			if (len < 0.5f || k <= 0.002f)
+				continue;
+			along /= len;
+			const float rise = Vector3::Dot_Product(along, beam.up);		// the sine of its angle above level
+			Vector3 flat = along - beam.up * rise;
+			const float flatLen = flat.Length();
+			if (beam.height > 0.5f && flatLen > 0.001f && rise <= BEAM_AIM_MAX_UP && -rise <= BEAM_AIM_MAX_DOWN)
+			{
+				const float wantDown = atan2f(beam.height, BEAM_AIM_AHEAD * len);
+				const float haveDown = atan2f(-rise, flatLen);
+				if (haveDown < wantDown)
+				{
+					const float down = (wantDown < haveDown + BEAM_AIM_MAX_TILT) ? wantDown : (haveDown + BEAM_AIM_MAX_TILT);
+					along = flat * (cosf(down) / flatLen) - beam.up * sinf(down);
+				}
+			}
+			LightMemo now;
+			now.key   = beam.mesh;
+			now.sub   = beam.index;
+			now.seen  = FALSE;
+			now.world = beam.lamp;
+			now.axis  = along;
+			// Ronin @bugfix 09/10/2026 DX9: the light runs well past the art's cone and fades all the way (it stopped at 1.3 lengths, on a straight
+			// ramp: an edge round every pool). The beam in the air keeps its own end - c14.x, the corona's slot, unused by a spot.
+			now.outer = len * s_beamReach * s_range;
+			now.inner = now.outer * BEAM_INNER;
+			now.shaft = s_shafts;
+			now.coronaRadius = len * BEAM_REACH * s_range;
+			float tanOuter = beam.endRadius / len;
+			if (tanOuter < 0.05f) tanOuter = 0.05f;
+			if (tanOuter > 3.0f)  tanOuter = 3.0f;
+			const float tanInner = tanOuter * s_hotspot;
+			const float cosInner = 1.0f / sqrtf(1.0f + tanInner * tanInner);
+			now.cosOuter = 1.0f / sqrtf(1.0f + tanOuter * tanOuter);
+			now.edge     = 1.0f / (((cosInner - now.cosOuter) > 0.001f) ? (cosInner - now.cosOuter) : 0.001f);
+			// Ronin @feature 09/10/2026 DX9: the cone inside the reach fits a sphere half way along it; a very wide one is the whole reach.
+			// Ronin @feature 09/10/2026 DX9: measured on the spill, wider than the cone (LocalLight_ps coneTerm) - or its rectangle cuts it.
+			const float tanSpill = tanOuter * s_spillWide;
+			const float cosSpill = 1.0f / sqrtf(1.0f + tanSpill * tanSpill);
+			if (cosSpill >= 0.5f)
+			{
+				now.boundCentre = beam.lamp + along * (now.outer * 0.5f);
+				now.boundRadius = now.outer * sqrtf(1.25f - cosSpill);
+			}
+			else
+			{
+				now.boundCentre = beam.lamp;
+				now.boundRadius = now.outer;
+			}
+			for (Int ch = 0; ch < 3; ++ch)
+			{
+				now.diffuse[ch] = BEAM_COLOUR[ch] * k * 0.35f;
+				now.ambient[ch] = BEAM_COLOUR[ch] * k * 0.65f;
+			}
+			LightMemo was = now;
+			was.diffuse[0] = was.diffuse[1] = was.diffuse[2] = 0.0f;
+			was.ambient[0] = was.ambient[1] = was.ambient[2] = 0.0f;
+			for (Int m = 0; m < lastCount; ++m)
+			{
+				if (last[m].key == now.key && last[m].sub == now.sub)
+				{
+					was = last[m];
+					last[m].seen = TRUE;
+					break;
+				}
+			}
+			if (!makeDraw(draws[count], now, was, cameraTM, vm))
+				continue;		// off screen
+			s_stats.coverage += ((draws[count].x1 - draws[count].x0) * (draws[count].y1 - draws[count].y0)) / (targetW * targetH);
+			s_memo[s_memoCount++] = now;
+			++count;
+			++lightCount;
+			++s_stats.beams;
+		}
+
+		// Ronin @feature 09/10/2026 DX9: the lamp glows: a point light at each, its colour and reach by its texture (GLOW_TABLE). The glow
+		// itself is still drawn - the lamp has to look lit.
+		for (Int fg = 0; fg < s_frameGlowCount; ++fg)
+		{
+			const FrameGlow &glow = s_frameGlows[fg];
+			++s_stats.live;
+			const float k = s_glows * s_intensity;
+			if (count >= MAX_LIGHTS_DRAWN || k <= 0.002f)
+				continue;
+			const GlowKind &gk = GLOW_TABLE[glow.kind];
+			LightMemo now;
+			now.key   = glow.mesh;
+			now.sub   = 1000 + glow.index;		// apart from the same mesh's beams
+			now.coronaRadius   = glow.radius * s_coronaSize;
+			now.coronaStrength = s_coronasOn ? (s_coronas / k) : 0.0f;		// the shader multiplies by the light's colour x k
+			now.seen  = FALSE;
+			now.world = glow.pos;
+			now.outer = gk.reach * glow.scale * s_glowReach * s_range;
+			now.inner = now.outer * 0.25f;
+			if (now.outer - now.inner < 0.5f)
+				continue;
+			now.axis.Set(0.0f, 0.0f, 1.0f);
+			now.cosOuter = -2.0f;
+			now.edge     = 1.0f;
+			now.shaft    = -1.0f;		// Ronin @feature 10/10/2026 DX9: no shadow: dozens of small lamps, and the cost is per light
+			now.boundCentre = now.world;
+			now.boundRadius = now.outer;
+			for (Int ch = 0; ch < 3; ++ch)
+			{
+				now.diffuse[ch] = gk.colour[ch] * k * 0.5f;
+				now.ambient[ch] = gk.colour[ch] * k * 0.5f;
+			}
+			LightMemo was = now;
+			was.diffuse[0] = was.diffuse[1] = was.diffuse[2] = 0.0f;
+			was.ambient[0] = was.ambient[1] = was.ambient[2] = 0.0f;
+			for (Int m = 0; m < lastCount; ++m)
+			{
+				if (last[m].key == now.key && last[m].sub == now.sub)
+				{
+					was = last[m];
+					last[m].seen = TRUE;
+					break;
+				}
+			}
+			if (!makeDraw(draws[count], now, was, cameraTM, vm))
+				continue;		// off screen
+			s_stats.coverage += ((draws[count].x1 - draws[count].x0) * (draws[count].y1 - draws[count].y0)) / (targetW * targetH);
+			s_memo[s_memoCount++] = now;
+			++count;
+			++lightCount;
+			++s_stats.glows;
+		}
+
+		// Ronin @feature 09/10/2026 DX9: step 3 - a painted pool that no beam lands on and no lamp stands by (351 of the art's 1155) would go
+		// dark with its texture: a flat light of its own size and colour stands in. `lights poolfill`.
+		for (Int fp = 0; fp < s_framePoolCount; ++fp)
+		{
+			const FramePool &pool = s_framePools[fp];
+			Bool covered = FALSE;
+			for (Int fb = 0; fb < s_frameBeamCount && !covered; ++fb)
+				covered = ((s_frameBeams[fb].end - pool.pos).Length() <= pool.radius + s_frameBeams[fb].endRadius ||
+						   (s_frameBeams[fb].lamp - pool.pos).Length() <= pool.radius) ? TRUE : FALSE;
+			for (Int fg = 0; fg < s_frameGlowCount && !covered; ++fg)
+				covered = ((s_frameGlows[fg].pos - pool.pos).Length() <=
+						   pool.radius + 0.5f * GLOW_TABLE[s_frameGlows[fg].kind].reach * s_frameGlows[fg].scale) ? TRUE : FALSE;
+			if (covered)
+				continue;
+			++s_stats.live;
+			const float k = s_poolFill * s_intensity;
+			if (count >= MAX_LIGHTS_DRAWN || k <= 0.002f)
+				continue;
+			const GlowKind &gk = GLOW_TABLE[pool.kind];
+			LightMemo now;
+			now.key   = pool.mesh;
+			now.sub   = 2000 + pool.index;		// apart from the same mesh's beams and glows
+			now.seen  = FALSE;
+			now.world = pool.pos;
+			now.outer = pool.radius * s_range;
+			now.inner = now.outer * 0.1f;
+			if (now.outer - now.inner < 0.5f)
+				continue;
+			now.axis.Set(0.0f, 0.0f, 1.0f);
+			now.cosOuter = -2.0f;
+			now.edge     = 1.0f;
+			now.shaft    = -1.0f;		// Ronin @feature 10/10/2026 DX9: no shadow: it sits in the surface it lights
+			now.boundCentre = now.world;
+			now.boundRadius = now.outer;
+			for (Int ch = 0; ch < 3; ++ch)
+			{
+				now.diffuse[ch] = 0.0f;		// flat: the light sits IN the painted surface
+				now.ambient[ch] = gk.colour[ch] * k;
+			}
+			LightMemo was = now;
+			was.ambient[0] = was.ambient[1] = was.ambient[2] = 0.0f;
+			for (Int m = 0; m < lastCount; ++m)
+			{
+				if (last[m].key == now.key && last[m].sub == now.sub)
+				{
+					was = last[m];
+					last[m].seen = TRUE;
+					break;
+				}
+			}
+			if (!makeDraw(draws[count], now, was, cameraTM, vm))
+				continue;		// off screen
+			s_stats.coverage += ((draws[count].x1 - draws[count].x0) * (draws[count].y1 - draws[count].y0)) / (targetW * targetH);
+			s_memo[s_memoCount++] = now;
+			++count;
+			++lightCount;
+			++s_stats.pools;
+		}
+
+		// Ronin @bugfix 09/10/2026 DX9: a light drawn last frame and gone now gets one dark draw, so the mask marks where it went out.
+		for (Int m = 0; m < lastCount && count < MAX_LIGHTS_DRAWN; ++m)
+		{
+			if (last[m].seen)
+				continue;
+			LightMemo gone = last[m];
+			gone.diffuse[0] = gone.diffuse[1] = gone.diffuse[2] = 0.0f;
+			gone.ambient[0] = gone.ambient[1] = gone.ambient[2] = 0.0f;
+			if (!makeDraw(draws[count], gone, last[m], cameraTM, vm))
+				continue;
+			s_stats.coverage += ((draws[count].x1 - draws[count].x0) * (draws[count].y1 - draws[count].y0)) / (targetW * targetH);
+			++count;
+		}
+	}
+	if (count == 0)
+	{
+		rt->Release();
+		return;
+	}
+
+	// Ronin @feature 09/10/2026 DX9: a second render target still bound would force every target to one size - as the SSAO pass.
+	IDirect3DSurface9 *rt1 = NULL;
+	if (SUCCEEDED(dev->GetRenderTarget(1, &rt1)) && rt1 != NULL)
+	{
+		rt1->Release();
+		rt->Release();
+		return;
+	}
+
+	if (!DX8Wrapper::Suspend_Scene_Depth())
+	{
+		rt->Release();
+		return;
+	}
+
+	// Ronin @feature 09/10/2026 DX9: the depth must be the frame's size (it is, in both the swap and the prepass), and the
+	// frame is copied once - every light reads the frame as it stood before any of them.
+	IDirect3DTexture9 *depthTex = DX8Wrapper::Peek_Scene_Depth_Texture();
+	D3DSURFACE_DESC dd;
+	IDirect3DSurface9 *copySurf = NULL;
+	Bool ready = (depthTex != NULL && SUCCEEDED(depthTex->GetLevelDesc(0, &dd)) && dd.Width == rd.Width &&
+				  dd.Height == rd.Height && ensureCopy(rd.Width, rd.Height, rd.Format)) ? TRUE : FALSE;
+	if (ready)
+	{
+		copySurf = s_copy->Get_D3D_Surface_Level();
+		ready = (copySurf != NULL && SUCCEEDED(dev->StretchRect(rt, NULL, copySurf, NULL, D3DTEXF_NONE))) ? TRUE : FALSE;
+	}
+	if (copySurf != NULL)
+		copySurf->Release();
+	rt->Release();
+	if (!ready)
+	{
+		DX8Wrapper::Resume_Scene_Depth();
+		return;
+	}
+
+	// Ronin @feature 09/10/2026 DX9: everything the pass touches is read raw and written back raw - states, viewport and the
+	// pixel constants a later draw may still count on - and the wrapper cache is invalidated at the end, as the SSAO pass.
+	DWORD zEnable, zWrite, alphaBlend, alphaTest, stencil, cull, colorWrite, srcBlend, destBlend;
+	dev->GetRenderState(D3DRS_ZENABLE,          &zEnable);
+	dev->GetRenderState(D3DRS_ZWRITEENABLE,     &zWrite);
+	dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
+	dev->GetRenderState(D3DRS_ALPHATESTENABLE,  &alphaTest);
+	dev->GetRenderState(D3DRS_STENCILENABLE,    &stencil);
+	dev->GetRenderState(D3DRS_CULLMODE,         &cull);
+	dev->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
+	dev->GetRenderState(D3DRS_SRCBLEND,         &srcBlend);
+	dev->GetRenderState(D3DRS_DESTBLEND,        &destBlend);
+	D3DVIEWPORT9 oldVP;
+	const Bool haveVP = SUCCEEDED(dev->GetViewport(&oldVP));
+	float savedConstants[16 * 4];
+	const Bool haveConstants = SUCCEEDED(dev->GetPixelShaderConstantF(0, savedConstants, 16));
+
+	dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+	dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+	dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+	// Ronin @feature 09/10/2026 DX9: added to the frame (views 1 and 2 replace it). RGB only - destination alpha is the frame's.
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, (s_view == 1 || s_view == 2 || s_view == 4) ? FALSE : TRUE);
+	dev->SetRenderState(D3DRS_SRCBLEND,  D3DBLEND_ONE);
+	dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+
+	// Ronin @bugfix 09/10/2026 DX9: TAA's change mask as render target 1 while the lights draw (it blends as target 0 does: summed).
+	const Bool masked = W3DTaa::beginLightMask();
+	s_stats.masked = masked;
+
+	// Ronin @feature 09/10/2026 DX9: the quads are in whole-target pixels, so the viewport is the whole target for the pass.
+	D3DVIEWPORT9 fullVP;
+	fullVP.X = 0; fullVP.Y = 0; fullVP.Width = rd.Width; fullVP.Height = rd.Height; fullVP.MinZ = 0.0f; fullVP.MaxZ = 1.0f;
+	dev->SetViewport(&fullVP);
+
+	float factor[3];
+	sceneLightFactor(factor);
+	s_stats.sceneLight[0] = factor[0];
+	s_stats.sceneLight[1] = factor[1];
+	s_stats.sceneLight[2] = factor[2];
+	// Ronin @feature 10/10/2026 DX9: part 3: the sun's shade, if the mesh shader recorded it this frame at this size.
+	const Bool meshShade = (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height) ? TRUE : FALSE;
+	// Ronin @feature 10/10/2026 DX9: step 1b: the terrain's shade. Its shadow pass renders this frame's term into a screen texture and
+	// multiplies that into the frame (HeightMap.cpp renderTerrainShadowPass), so it is exact. Never under MSAA: not written then.
+	IDirect3DBaseTexture9 *groundShade = NULL;
+	if (s_sunFill > 0.0f && rd.MultiSampleType == D3DMULTISAMPLE_NONE && TheTerrainShadowPass.enabled &&
+		TheTerrainShadowPass.accumSurf != NULL && TheTerrainShadowPass.accumCur != NULL)
+	{
+		D3DSURFACE_DESC gd;
+		if (SUCCEEDED(((IDirect3DTexture9 *)TheTerrainShadowPass.accumCur)->GetLevelDesc(0, &gd)) && gd.Width == rd.Width &&
+			gd.Height == rd.Height)
+			groundShade = TheTerrainShadowPass.accumCur;
+	}
+	const float shadeUse = (meshShade || groundShade != NULL) ? s_sunFill : 0.0f;
+	s_stats.sunShade = (shadeUse > 0.0f) ? ((meshShade ? 1 : 0) + ((groundShade != NULL) ? 2 : 0)) : 0;
+	const float shared[5 * 4] =
+	{
+		zNear, zFar, (float)s_view, s_over,
+		planeMin.X, planeMax.Y, planeW, planeH,
+		vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y,
+		1.0f / targetW, 1.0f / targetH, shadeUse, s_sunErase,
+		factor[0], factor[1], factor[2], s_shadows
+	};
+	dev->SetPixelShaderConstantF(0, shared, 5);
+	// Ronin @feature 10/10/2026 DX9: the shadow rays' dither moves every frame while TAA runs and averages it; without TAA it would only be grain.
+	const float noise[4] = { W3DTaa::ownsDepth() ? (float)(s_fixFrame & 63) * 5.588238f : -1.0f, s_shadowThin, s_shadowEnd, 0.0f };
+	dev->SetPixelShaderConstantF(15, noise, 1);
+
+	for (DWORD stage = 0; stage < 4; ++stage)
+	{
+		dev->SetSamplerState(stage, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+		dev->SetSamplerState(stage, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+		dev->SetSamplerState(stage, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(stage, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(stage, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	}
+	dev->SetTexture(0, depthTex);
+	dev->SetTexture(1, s_copy->Peek_D3D_Texture());
+	dev->SetTexture(2, (shadeUse > 0.0f && meshShade) ? s_shadeTex->Peek_D3D_Texture() : NULL);
+	dev->SetTexture(3, (shadeUse > 0.0f) ? groundShade : NULL);
+
+	// Ronin @feature 09/10/2026 DX9: the layout goes through the wrapper - a raw SetFVF leaves its cached layout stale.
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::renderPass");
+	dev->SetVertexShader(s_quadVS);		// AFTER the layout bind - BindLayoutFVF clears the VS
+	dev->SetPixelShader(s_lightPS);
+
+	for (Int i = 0; i < count; ++i)
+	{
+		const LightDraw &d = draws[i];
+		dev->SetPixelShaderConstantF(5, d.c, 10);
+
+		// Ronin @feature 09/10/2026 DX9: D3D9 texel centres sit half a pixel off pixel centres: the geometry moves, the UVs stay exact.
+		const float l = ((d.x0 - 0.5f) / targetW) * 2.0f - 1.0f;
+		const float r = ((d.x1 - 0.5f) / targetW) * 2.0f - 1.0f;
+		const float t = 1.0f - ((d.y0 - 0.5f) / targetH) * 2.0f;
+		const float b = 1.0f - ((d.y1 - 0.5f) / targetH) * 2.0f;
+		const float u0 = d.x0 / targetW, u1 = d.x1 / targetW;
+		const float v0 = d.y0 / targetH, v1 = d.y1 / targetH;
+		struct QuadVertex { float x, y, z; float u, v; } q[4];
+		q[0].x = l; q[0].y = t; q[0].z = 0.0f; q[0].u = u0; q[0].v = v0;
+		q[1].x = r; q[1].y = t; q[1].z = 0.0f; q[1].u = u1; q[1].v = v0;
+		q[2].x = l; q[2].y = b; q[2].z = 0.0f; q[2].u = u0; q[2].v = v1;
+		q[3].x = r; q[3].y = b; q[3].z = 0.0f; q[3].u = u1; q[3].v = v1;
+		dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
+	}
+	s_stats.drawn = lightCount;
+	if (masked)
+		W3DTaa::endLightMask();
+
+	// Ronin @feature 09/10/2026 DX9: unbind, then the 3D viewport, the frame's depth, states and constants; the wrapper re-asserts itself.
+	dev->SetTexture(0, NULL);
+	dev->SetTexture(1, NULL);
+	dev->SetTexture(2, NULL);
+	dev->SetTexture(3, NULL);
+	if (haveVP)
+		dev->SetViewport(&oldVP);
+	DX8Wrapper::Resume_Scene_Depth();
+	dev->SetRenderState(D3DRS_ZENABLE,          zEnable);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE,     zWrite);
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, alphaBlend);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE,  alphaTest);
+	dev->SetRenderState(D3DRS_STENCILENABLE,    stencil);
+	dev->SetRenderState(D3DRS_CULLMODE,         cull);
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, colorWrite);
+	dev->SetRenderState(D3DRS_SRCBLEND,         srcBlend);
+	dev->SetRenderState(D3DRS_DESTBLEND,        destBlend);
+	if (haveConstants)
+		dev->SetPixelShaderConstantF(0, savedConstants, 16);
+
+	dev->SetVertexShader(NULL);
+	dev->SetPixelShader(NULL);
+	DX8Wrapper::Invalidate_Cached_Render_States();
+}
+
+void W3DLocalLights::shutdown(void)
+{
+	// Ronin @feature 09/10/2026 DX9: the beams: every swapped texture gets its own surface back, and meshes stop asking.
+	MeshClass::Set_Light_Fixture_Note_Func(NULL);
+	DX8InstanceManagerClass::Set_Sun_Shade_Hooks(NULL, NULL);
+	endSunShade();
+	s_shadeOpen = FALSE;
+	REF_PTR_RELEASE(s_shadeTex);
+	s_shadeW = 0;
+	s_shadeH = 0;
+	s_beamsOn = FALSE;
+	s_collect = FALSE;
+	for (Int i = 0; i < s_beamTexCount; ++i)
+	{
+		restoreBeamTexture(s_beamTex[i]);
+		s_beamTex[i].tex->Release_Ref();
+	}
+	s_beamTexCount = 0;
+	if (s_clearTex != NULL)
+	{
+		s_clearTex->Release();
+		s_clearTex = NULL;
+	}
+	REF_PTR_RELEASE(s_copy);
+	s_copyW = 0;
+	s_copyH = 0;
+	s_copyFormat = D3DFMT_UNKNOWN;
+	if (s_lightPS != NULL)
+	{
+		s_lightPS->Release();
+		s_lightPS = NULL;
+	}
+	if (s_quadVS != NULL)
+	{
+		s_quadVS->Release();
+		s_quadVS = NULL;
+	}
+	s_shadersTried = FALSE;
+	s_active = FALSE;
+}

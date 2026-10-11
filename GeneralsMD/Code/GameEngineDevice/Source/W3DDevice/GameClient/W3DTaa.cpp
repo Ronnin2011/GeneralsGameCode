@@ -37,6 +37,7 @@
 #include "W3DDevice/GameClient/W3DShadowMap.h"	// Ronin @bugfix 27/09/2026 DX9: the sun matrix, for the moving-shadow mask
 #include "GameClient/Drawable.h"				// Ronin @bugfix 27/09/2026 DX9: idle infantry - which object a mesh belongs to
 #include "GameClient/DrawableInfo.h"
+#include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: which meshes have their beam polygons hidden
 #include "Common/KindOf.h"
 #include "GameLogic/PolygonTrigger.h"			// Ronin @bugfix 29/09/2026 DX9: the water's polygons, for its reactive mask
 #include "W3DDevice/GameClient/W3DWater.h"
@@ -885,6 +886,10 @@ void W3DTaa::noteMesh(MeshClass *mesh)
 	// Ronin @feature 24/09/2026 DX9: reactive meshes are drawn whether they moved or not - a conveyor never moves.
 	// A STATIC translucent mesh is left alone: over still ground its history is valid.
 	UnsignedByte f = (s_reactiveW > 0.0f) ? classifyModel(mesh, mdl) : 0;
+	// Ronin @feature 09/10/2026 DX9: its scrolling, see-through polygons are a beam that is not drawn (a spot light stands in): what is
+	// left of the mesh is the lamp's housing, and marking the beam's footprint reactive would cost that area its AA.
+	if (W3DLocalLights::beamsHiddenIn(mesh))
+		f &= (UnsignedByte)~(TAA_MF_TIMEVAR | TAA_MF_TRANSL);
 	if (f & TAA_MF_TRANSL)
 		sl->boxOK = FALSE;		// Ronin @bugfix 09/10/2026 DX9: a translucent mesh that goes (a muzzle flash) is the reactive mask's, not a box reset
 	// Ronin @bugfix 26/09/2026 DX9: translucent at RUNTIME - an opacity override draws an opaque model through the alpha shader

@@ -55,6 +55,7 @@
 #include "W3DDevice/GameClient/W3DShadowMap.h"
 #include "W3DDevice/GameClient/W3DTaa.h"
 #include "W3DDevice/GameClient/W3DSsao.h"
+#include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: local lights drawn in screen space
 #include "W3DDevice/GameClient/W3DShadowMapState.h"
 #include "W3DDevice/GameClient/W3DStatusCircle.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
@@ -868,7 +869,8 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 			}
 		}
 
-    if( draw && draw->getReceivesDynamicLights() )
+    // Ronin @feature 09/10/2026 DX9: not while W3DLocalLights draws these per pixel - they would be added twice.
+    if( draw && draw->getReceivesDynamicLights() && !W3DLocalLights::ownsDynamicLights() )
     {
 		  // dynamic lights
 		  RefRenderObjListIterator dynaLightIt(&m_dynamicLightList);
@@ -985,6 +987,12 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	if (!depthPass && !ShaderClass::Is_Backface_Culling_Inverted() && m_customPassMode == SCENE_PASS_DEFAULT &&
 		Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
 		W3DSsao::renderPass(rinfo.Camera, TRUE);
+
+	// Ronin @feature 09/10/2026 DX9: local lights, per pixel from the scene depth - over everything solid, trees included, and
+	// before anything see-through. Main pass only, same gate as the SSAO pass above.
+	if (!depthPass && !ShaderClass::Is_Backface_Culling_Inverted() && m_customPassMode == SCENE_PASS_DEFAULT &&
+		Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
+		W3DLocalLights::renderPass(rinfo.Camera, this);
 
 	//don't draw shadows in this mode because they interfere with destination alpha
 	if (!depthPass && m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)

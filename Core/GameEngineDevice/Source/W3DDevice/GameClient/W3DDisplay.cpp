@@ -78,6 +78,7 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DShadowMap.h"
 #include "W3DDevice/GameClient/W3DSsao.h"
 #include "W3DDevice/GameClient/W3DTaa.h"
+#include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: local lights drawn in screen space
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DScene.h"
@@ -479,6 +480,7 @@ W3DDisplay::~W3DDisplay()
 		W3DShaderManager::shutdown();
 		W3DSsao::shutdown();	// Ronin @feature 13/09/2026 DX9: SSAO step 1 — its shader, while the device exists
 		W3DTaa::shutdown();		// Ronin @feature 20/09/2026 DX9: TAA — resolve shader and history targets, likewise
+		W3DLocalLights::shutdown();	// Ronin @feature 09/10/2026 DX9: its shaders and frame copy, likewise
 	}
 	m_assetManager->Free_Assets();
 	delete m_assetManager;
@@ -2086,6 +2088,9 @@ AGAIN:
 				// every camera's Apply() in this frame must see the SAME offset or the passes disagree by a subpixel.
 				W3DTaa::beginFrame();
 
+				// Ronin @feature 09/10/2026 DX9: local lights. After both: it uses the scene depth SSAO or TAA began, or begins its own.
+				W3DLocalLights::beginFrame();
+
 				// draw all views of the world
 				drawViews();
 
@@ -2187,6 +2192,8 @@ AGAIN:
 				// Ronin @feature 20/09/2026 DX9: TAA. Ends the INTZ buffer only if TAA was the one that started it —
 				// when SSAO is on it owns that lifetime and this is a no-op.
 				W3DTaa::endFrame();
+				// Ronin @feature 09/10/2026 DX9: likewise for the local lights - a no-op unless they began the scene depth.
+				W3DLocalLights::endFrame();
 
 				// render is all done!
 				WW3D::End_Render();
@@ -2297,7 +2304,8 @@ void W3DDisplay::createLightPulse( const Coord3D *pos, const RGBColor *color,
 {
 	if (m_3DScene == nullptr)
 		return;
-	if (innerRadius+attenuationWidth<2.0*PATHFIND_CELL_SIZE_F + 1.0f) {
+	// Ronin @feature 09/10/2026 DX9: the vertex paths could not show a pulse under two cells of reach; per pixel it shows.
+	if (innerRadius+attenuationWidth<2.0*PATHFIND_CELL_SIZE_F + 1.0f && !W3DLocalLights::wantsSmallLights()) {
 		return; // it basically won't make any visual difference.  jba.
 	}
 	W3DDynamicLight * theDynamicLight = m_3DScene->getADynamicLight();

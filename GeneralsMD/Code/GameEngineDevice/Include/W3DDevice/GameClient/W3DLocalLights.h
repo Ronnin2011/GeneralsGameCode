@@ -1,0 +1,115 @@
+/*
+**	Command & Conquer Generals Zero Hour(tm)
+**	DX9 local lights, drawn in screen space.
+*/
+
+// Ronin @feature 09/10/2026 DX9: local lights (explosions, weapon flashes) per pixel from the scene depth, over terrain and
+// meshes alike. While it runs, the per-vertex terrain re-light and the per-object light stand down (ownsDynamicLights).
+
+#pragma once
+
+#ifndef __W3DLOCALLIGHTS_H_
+#define __W3DLOCALLIGHTS_H_
+
+#include "Lib/BaseType.h"
+
+class CameraClass;
+class RTS3DScene;
+class MeshClass;
+
+class W3DLocalLights
+{
+public:
+	static void beginFrame(void);			// W3DDisplay::draw, after W3DTaa::beginFrame: can this frame run
+	static void renderPass(const CameraClass &camera, RTS3DScene *scene);	// RTS3DScene::Flush, after the trees
+	static void endFrame(void);				// after W3DTaa::endFrame: ends the scene depth if this pass began it
+	static void shutdown(void);				// frees the shaders and the frame copy while the device exists
+
+	// Ronin @feature 09/10/2026 DX9: TRUE while this pass draws the scene's dynamic lights - the old paths must not add them again.
+	static Bool ownsDynamicLights(void);
+	// Ronin @feature 09/10/2026 DX9: TRUE = W3DDisplay::createLightPulse keeps the pulses it drops as too small for the 10-unit
+	// vertex grid (26 of the game's 65). Per pixel they show.
+	static Bool wantsSmallLights(void);
+
+	// Ronin @feature 09/10/2026 DX9: lighting part 2, the beams. MeshClass::Render asks this about every mesh once: 0 = no light fixture,
+	// 1 = one, draw it, 2 = one whose beam a spot light replaces this frame: do not draw it. Lighting_Work.md 4.2.
+	static int  noteFixtureMesh(MeshClass *mesh);
+	// Ronin @feature 09/10/2026 DX9: TRUE = this mesh's beam polygons are clear this frame (their texture is swapped); TAA must not
+	// treat the mesh as a moving-texture translucent one on their account.
+	static Bool beamsHiddenIn(const MeshClass *mesh);
+
+	// Ronin @diagnostic 09/10/2026 DX9: the panel's `lights` knobs. Session only, not saved.
+	static void  setEnabled(Bool on);
+	static Bool  isEnabled(void);
+	static void  setIntensity(float v);		// multiplies every light's colour
+	static float getIntensity(void);
+	static void  setOver(float v);			// how far above the surface's own colour a light may push a pixel; 1 = the old limit
+	static float getOver(void);
+	static void  setBoost(float v);			// frame-to-surface factor; 0 = worked out from the map's light values
+	static float getBoost(void);
+	static void  setRange(float v);			// multiplies every light's reach
+	static float getRange(void);
+	static void  setSmall(Bool on);			// see wantsSmallLights
+	static Bool  getSmall(void);
+	static void  setView(Int v);			// 0 off, 1 the light alone, 2 the facing used, 3 the rectangles drawn, 4 where each light's shadow was caught
+	static Int   getView(void);
+	static void  setBeams(float v);			// the beams' strength as lights; 0 = the art's own beams, no lights
+	static float getBeams(void);
+	static void  setShafts(float v);		// the beam in the air, drawn by the shader: its strength beside the light's; 0 = none
+	static float getShafts(void);
+	static void  setSpill(float v);			// the dim light around a beam's cone: its strength beside the cone's; 0 = none
+	static float getSpill(void);
+	static void  setSpillWide(float v);		// ... and how wide it reaches, in cone widths
+	static float getSpillWide(void);
+	static void  setGlows(float v);			// the lamp glows as point lights: their strength; 0 = none
+	static float getGlows(void);
+	static void  setGlowReach(float v);		// multiplies every glow light's reach
+	static float getGlowReach(void);
+	static void  setCoronas(float v);		// the lamp's own glow drawn by the shader, its strength; 0 = the art's glow textures
+	static float getCoronas(void);
+	static void  setCoronaSize(float v);	// its radius, in the art glow's own
+	static float getCoronaSize(void);
+	static void  setPools(Bool keep);		// TRUE = the art's painted pools of light (and welded glows) stay drawn
+	static Bool  getPools(void);
+	static void  setBeamReach(float v);		// a beam's light on surfaces ends this far along, in the art cone's own length
+	static float getBeamReach(void);
+	static void  setPoolFill(float v);		// strength of the light that stands in for a painted pool no lamp covers; 0 = none
+	static float getPoolFill(void);
+	static void  setHotspot(float v);		// the share of a beam's cone at full strength; 0 = it fades from the axis out
+	static float getHotspot(void);
+	static void  setShadows(float v);		// how much a local light's shadow takes (walked through the frame's depth); 0 = no shadows
+	static float getShadows(void);
+	static void  setShadowThin(float v);	// taps in a row (of 32 a ray) a thing must cover to cast a light's shadow; 1 = anything casts
+	static float getShadowThin(void);
+	static void  setShadowEnd(float v);		// how far towards the lamp a shadow ray is walked, 0.3..1 of the way
+	static float getShadowEnd(void);
+	// Ronin @feature 10/10/2026 DX9: lighting part 3, step 1. Called round the mesh shader's draws (DX8InstanceManagerClass hooks): binds a
+	// second target that takes the sun's shade (RigidInstance_ps COLOR1), in the main pass only.
+	static void  beginSunShade(void);
+	static void  endSunShade(void);
+	static void  setSunFill(float v);		// how much of the sun's shade a lamp undoes on a mesh; 0 = none (as before)
+	static float getSunFill(void);
+	static void  setSunErase(float v);		// how fast a lamp restores what the sun's shadow took: gone at lamp strength 1 / this; 0 = never
+	static float getSunErase(void);
+
+	// Ronin @diagnostic 09/10/2026 DX9: last frame's numbers, for the panel's [LIGHT] row.
+	struct Stats
+	{
+		Bool  active;			// the pass could run: shaders loaded and a readable scene depth
+		Bool  ownsDepth;		// it began the scene depth itself - neither SSAO nor TAA had
+		Int   live;				// enabled lights in the scene
+		Int   drawn;			// of those, drawn
+		float coverage;			// summed rectangle area, in screens
+		Bool  masked;			// TAA took the change mask this frame
+		float sceneLight[3];	// the frame-to-surface factor in use
+		Int   beams;			// beams that became spot lights
+		Int   glows;			// lamp glows that became point lights
+		Int   pools;			// painted pools no lamp covers that got a light of their own
+		Int   sunShade;			// the sun's shade the lights read this frame: 1 = the meshes', 2 = the terrain's, 3 = both
+		Int   beamMeshes;		// beam-only meshes left undrawn (every pass counts)
+		Int   beamModels;		// beam models read so far
+	};
+	static void getStats(Stats *out);
+};
+
+#endif

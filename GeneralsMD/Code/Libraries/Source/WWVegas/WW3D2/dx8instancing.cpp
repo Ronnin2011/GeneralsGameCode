@@ -619,6 +619,10 @@ void DX8InstanceManagerClass::Set_Shadow_Map_Far(IDirect3DBaseTexture9* tex, con
 		memcpy(s_shadowLightVPFar, lightViewProjT, sizeof(float) * 16);
 }
 
+// Ronin @feature 10/10/2026 DX9: lighting part 3 - set by W3DLocalLights, called round Flush_Single_Rigid's draws.
+DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_SunShadeBegin = nullptr;
+DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_SunShadeEnd = nullptr;
+
 
 // Ronin @diagnostic 26/06/2026 DX9 P2: how many category flushes per frame (=> avg batch size).
 // Many tiny flushes => per-category pipeline re-setup is the cost; few big ones => it's per-mesh.
@@ -1212,6 +1216,11 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	dev->SetVertexShader(selectedVS);
 	dev->SetPixelShader(selectedPS);
 	dev->SetSoftwareVertexProcessing(FALSE);
+	// Ronin @feature 10/10/2026 DX9: lighting part 3 - the sun's shade goes to a second target while these draw (RigidInstance_ps COLOR1).
+	// The hook binds it in the main pass only; it comes off before the teardown below.
+	if (s_SunShadeBegin != nullptr) {
+		s_SunShadeBegin();
+	}
 
 	dev->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | 1);
 	dev->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1);
@@ -1522,6 +1531,11 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	m_singleRigidCursor = baseSlot + count;
 	if (m_singleRigidCursor >= SINGLE_RIGID_RING_INSTANCES) {
 		m_singleRigidCursor = 0;
+	}
+
+	// Ronin @feature 10/10/2026 DX9: lighting part 3 - the second target comes off before anything else draws.
+	if (s_SunShadeEnd != nullptr) {
+		s_SunShadeEnd();
 	}
 
 	// --- Teardown ONCE -------------------------------------------------------------------------

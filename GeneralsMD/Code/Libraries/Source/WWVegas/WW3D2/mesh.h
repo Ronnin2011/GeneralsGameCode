@@ -190,6 +190,13 @@ public:
 	static void						Set_Taa_Mesh_Note_Func(TaaMeshNoteFunc fn) { s_TaaMeshNote = fn; }
 	static TaaMeshNoteFunc			s_TaaMeshNote;
 
+	// Ronin @feature 09/10/2026 DX9: lighting part 2 - a mesh that only looks like a light (a beam) reports itself. The callback
+	// returns 0 = not one (kept in LightFixture, never asked again), 1 = one, draw it, 2 = one a real light replaces: skip.
+	typedef int						(*LightFixtureNoteFunc)(MeshClass *mesh);
+	static void						Set_Light_Fixture_Note_Func(LightFixtureNoteFunc fn) { s_LightFixtureNote = fn; }
+	static LightFixtureNoteFunc	s_LightFixtureNote;
+	unsigned char					Get_Light_Fixture() const { return LightFixture; }
+
 protected:
 
 	virtual void					Add_Dependencies_To_List (DynamicVectorClass<StringClass> &file_list, bool textures_only = false) override;
@@ -205,6 +212,7 @@ protected:
 	bool								BakedShadowCaster;		// §29j.8 — in the static shadow bake
 	bool								ShadowCasterMover;		// §29j.8 — proven to move, never bake
 	bool								ShroudAppliedInShader;	// last base draw sampled the shroud in its own PS
+	unsigned char					LightFixture = 0;		// Ronin @feature 09/10/2026 DX9: 0 not asked yet, 1 no light fixture, 2 one
 	DecalMeshClass *				DecalMesh;
 
 	LightEnvironmentClass *		LightEnvironment;		// cached pointer to the light environment for this mesh
