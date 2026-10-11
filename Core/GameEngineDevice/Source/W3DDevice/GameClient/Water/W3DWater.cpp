@@ -227,7 +227,9 @@ static Int getRiverVertexDiffuse(W3DShroud *shroud, Real x, Real y, Real shadeR,
 		(Int)(shadeR * shroudScale),
 		(Int)(shadeG * shroudScale),
 		(Int)(shadeB * shroudScale),
-		((diffuse >> 24) & 0xff) * shroudScale);
+		// Ronin @bugfix 11/10/2026 DX9: the alpha is not the shroud's. Scaled by it (how the PS was handed the shroud, 05/10) a
+		// river under the fog of war went see-through: the riverbed showed, not the water.
+		(diffuse >> 24) & 0xff);
 }
 
 void doSkyBoxSet(Bool startDraw)
@@ -3250,6 +3252,8 @@ void WaterRenderObjClass::drawRiverWater(PolygonTrigger *pTrig)
 		}
 	}
 	const Bool haveFlow = (flowX.size() == (size_t)sections) ? TRUE : FALSE;
+	// Ronin @feature 28/09/2026 DX9: WaterType 2 draws rivers with the reflective WaterSea shaders.
+	const Bool reflect = useReflection();
 	//allocate 2 vertices per side
 	DynamicVBAccessClass vb_access(BUFFER_TYPE_DYNAMIC_DX8,dynamic_fvf_type,(rectangleCount+1)*2);
 	{
@@ -3260,7 +3264,7 @@ void WaterRenderObjClass::drawRiverWater(PolygonTrigger *pTrig)
 
 		// TheSuperHackers @bugfix afc-afc0 14/04/2026 Apply shroud per-vertex to avoid double-darkening
 		// at river borders.
-		W3DShroud *shroud = TheTerrainRenderObject ? TheTerrainRenderObject->getShroud() : nullptr;
+		W3DShroud *shroud = (!reflect && TheTerrainRenderObject) ? TheTerrainRenderObject->getShroud() : nullptr;	// Ronin @bugfix 11/10/2026 DX9: not the reflective draw - the WaterSea PS samples it
 
 		for (i=0; i<(pTrig->getNumPoints()/2); i++)
 		{
@@ -3329,8 +3333,6 @@ void WaterRenderObjClass::drawRiverWater(PolygonTrigger *pTrig)
 	DX8Wrapper::Set_Index_Buffer(ib_access, 0, "1st bind of WaterRenderObjClass::drawRiverWater");
 	DX8Wrapper::Set_Vertex_Buffer(vb_access);
 
-	// Ronin @feature 28/09/2026 DX9: WaterType 2 draws rivers with the reflective WaterSea shaders.
-	const Bool reflect = useReflection();
 	if (reflect)
 		setupReflectiveWater(TRUE);
 	else
@@ -3525,7 +3527,6 @@ void WaterRenderObjClass::bindWaterSea(IDirect3DBaseTexture9 *water, IDirect3DBa
 {
 	if (m_waterNormalTexture != nullptr && !m_waterNormalTexture->Is_Initialized())
 		m_waterNormalTexture->Init();
-	const Int setAlpha = (m_settings[m_tod].waterDiffuse >> 24) & 0xff;	// a river's vertex alpha = this x its shroud
 
 	WaterSeaInputs in;
 	in.bump             = m_pBumpTexture[(Int)m_fBumpFrame];
@@ -3539,7 +3540,6 @@ void WaterRenderObjClass::bindWaterSea(IDirect3DBaseTexture9 *water, IDirect3DBa
 	in.bumpTilesPerUnit = PATCH_UV_SCALE / PATCH_SCALE;
 	in.edgeScaleU       = edgeScaleU;
 	in.clockSeconds     = m_riverVOrigin / 0.06f;	// m_riverVOrigin gains 0.06 a logic second (update)
-	in.shroudPerAlpha   = (riverShroud && setAlpha > 0) ? 255.0f / (Real)setAlpha : 0.0f;
 	// Ronin @feature 29/09/2026 DX9: phase 1 - terrain vertex k sits at world (k - border) x MAP_XY_FACTOR, its texel centre
 	// at uv (k + 0.5) / extent; a height byte is MAP_HEIGHT_SCALE world units (HeightMap.cpp's vertex build).
 	in.heights          = m_heightTexture;
@@ -3552,11 +3552,11 @@ void WaterRenderObjClass::bindWaterSea(IDirect3DBaseTexture9 *water, IDirect3DBa
 	in.swell            = standing;
 	in.swellCell        = standing ? m_swellCellNow : 0.0f;	// Ronin @bugfix 03/10/2026 DX9: this polygon's real grid cell
 	// Ronin @bugfix 03/10/2026 DX9: the standing polygons take the shroud in the PS (drawTrapezoidWater skips their second
-	// pass). Rivers carry it per vertex and the sea plane keeps its own pass: none for them.
+	// pass), and since 11/10 the rivers. The sea plane keeps its own pass: none for it.
 	in.shroud           = nullptr;
 	in.shroudOffsetX    = 0.0f;	in.shroudOffsetY = 0.0f;
 	in.shroudScaleX     = 0.0f;	in.shroudScaleY  = 0.0f;
-	if (standing)
+	if (standing || riverShroud)
 	{
 		TextureClass *shroudTex = W3DShaderManager::getShroudTexture();
 		if (shroudTex != nullptr && W3DShaderManager::getShroudMapState(&in.shroudOffsetX, &in.shroudOffsetY, &in.shroudScaleX, &in.shroudScaleY))

@@ -22,7 +22,6 @@ float4 g_Eye        : register(c13);	// xyz: camera position, world
 float4 g_SunDir     : register(c14);	// xyz: toward the sun (terrain light 0), w: glitter power (`water gloss`)
 float4 g_SunColor   : register(c15);	// rgb: sun colour x glitter strength (`water spec`)
 float4 g_Surface    : register(c16);	// x: ripple strength (0 = normal maps off, 1 = as authored), y: Fresnel on, z: reflection distortion, w: F0
-float4 g_Shroud     : register(c17);	// x: 1 when the vertex colour carries shroud (rivers), y: 1 / the WaterSet alpha
 // Ronin @feature 29/09/2026 DX9: what makes it read as water from an RTS camera, where Fresnel leaves little reflection.
 float4 g_Look       : register(c18);	// x: body refraction, y: body shade, z: Fresnel power, w: debug view (`water view`)
 float4 g_Sheen      : register(c19);	// rgb: sun colour x sheen strength, w: sheen power
@@ -212,12 +211,11 @@ PSOutput main(PSInput input)
 	const float  fresnel = g_Surface.w + (1.0f - g_Surface.w) * pow(1.0f - NdotV, g_Look.z);
 	const float  share   = g_Reflect.x * lerp(1.0f, fresnel, g_Surface.y);
 
-	// Sun: sharp glitter plus a broad sheen, Blinn-Phong. A river carries its shroud in the vertex alpha; the flat water's
-	// shroud pass darkens the rest.
+	// Ronin @bugfix 11/10/2026 DX9: sun - sharp glitter plus a broad sheen, Blinn-Phong. The shroud darkens it with the rest, at
+	// the end: a river no longer carries it in its vertex alpha.
 	const float3 H      = normalize(g_SunDir.xyz + V);
 	const float  NdotH  = saturate(dot(n, H));
-	const float  shroud = lerp(1.0f, saturate(input.color.a * g_Shroud.y), g_Shroud.x);
-	const float3 sun    = (pow(NdotH, g_SunDir.w) * g_SunColor.rgb + pow(NdotH, g_Sheen.w) * g_Sheen.rgb) * shroud;
+	const float3 sun    = pow(NdotH, g_SunDir.w) * g_SunColor.rgb + pow(NdotH, g_Sheen.w) * g_Sheen.rgb;
 
 	// Ronin @feature 29/09/2026 DX9: phase 3b - shadows on the surface: in shadow the sun's glitter and sheen go and the body
 	// darkens by `shadow`. Both cascades are sampled (fxc cannot branch around tex2Dproj); outside the map = lit.
@@ -409,12 +407,10 @@ PSOutput main(PSInput input)
 	}
 #endif
 
-#ifndef WATER_RIVER		// a river carries its shroud in the vertex alpha
 	// Ronin @bugfix 03/10/2026 DX9: the fog of war, here and not in a second pass: that pass drew the grid flat, so it lay
 	// above the troughs like a sheet and missed the crests. As that pass did, it darkens the whole result.
-	if (g_ShroudMap.x > 0.0f)
+	if (g_ShroudMap.x > 0.0f)	// Ronin @bugfix 11/10/2026 DX9: rivers too - in their vertex alpha it also blended them: see-through under fog
 		c.rgb *= tex2D(s_Shroud, (input.worldPos.xy + g_ShroudMap.zw) * g_ShroudMap.xy).rgb;
-#endif
 
 #ifdef WATER_VIEWS	// Ronin @feature 02/10/2026 DX9: phase 4 - only the *Views.pso variants carry them (`water view`)
 	// Ronin @bugfix 03/10/2026 DX9: debug views - one-sided tests, the last unconditional: this build only runs with `water

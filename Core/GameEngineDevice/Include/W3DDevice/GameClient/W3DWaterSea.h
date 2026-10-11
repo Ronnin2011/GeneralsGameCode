@@ -30,7 +30,6 @@ struct WaterSeaInputs
 	Real bumpTilesPerUnit;				///< caust tiling, the sea's 3 per 40 world units
 	Real edgeScaleU;					///< rivers 1/HEIGHT_TO_USE (their uv2 is uv1 with u doubled), else 0
 	Real clockSeconds;					///< the water clock, logic seconds
-	Real shroudPerAlpha;				///< rivers: 1 / the WaterSet alpha (their vertex alpha is it x the shroud); else 0
 	// Ronin @feature 29/09/2026 DX9: phase 1 - the terrain heights, one L8 texel per terrain vertex.
 	IDirect3DBaseTexture9 *heights;		///< s5, null = no depth
 	Real heightScaleU, heightScaleV;	///< world xy -> uv: 1 / (MAP_XY_FACTOR x extent)
@@ -251,7 +250,6 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 	const float sunDir[4]     = { sx, sy, sz, t.gloss };
 	const float sunSharp[4]   = { sun.red * t.spec, sun.green * t.spec, sun.blue * t.spec, 0.0f };
 	const float surface[4]    = { t.normals ? t.ripple : 0.0f, t.fresnel ? 1.0f : 0.0f, t.distort, t.f0 };	// Ronin @feature 02/10/2026 DX9: x = `ripple`
-	const float shroud[4]     = { (in.shroudPerAlpha > 0.0f) ? 1.0f : 0.0f, in.shroudPerAlpha, 0.0f, 0.0f };
 	const float look[4]       = { t.refract, t.shade, t.fresnelPow, (float)g.view };
 	const float sheen[4]      = { sun.red * t.sheen, sun.green * t.sheen, sun.blue * t.sheen, t.sheenPow };
 	dev->SetPixelShaderConstantF(10, bumpEnvMat, 1);
@@ -261,7 +259,6 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 	dev->SetPixelShaderConstantF(14, sunDir, 1);
 	dev->SetPixelShaderConstantF(15, sunSharp, 1);
 	dev->SetPixelShaderConstantF(16, surface, 1);
-	dev->SetPixelShaderConstantF(17, shroud, 1);
 	dev->SetPixelShaderConstantF(18, look, 1);
 	dev->SetPixelShaderConstantF(19, sheen, 1);
 
