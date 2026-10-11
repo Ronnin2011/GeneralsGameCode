@@ -1727,6 +1727,12 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		factor[0], factor[1], factor[2], 0.0f
 	};
 	dev->SetPixelShaderConstantF(0, shared, 5);
+	// Ronin @bugfix 11/10/2026 DX9: TAA shifts the frame by part of a pixel, another each frame (camera.cpp). Rebuilt from the depth as
+	// if it had not, a point is up to 0.15 units off its surface: the pools of lamps close to what they light flickered in shadow.
+	float jitterX = 0.0f, jitterY = 0.0f;
+	W3DTaa::getJitterNDC(&jitterX, &jitterY);
+	const float jitter[4] = { -0.5f * jitterX, 0.5f * jitterY, 0.0f, 0.0f };		// the shift, in viewport widths and heights
+	dev->SetPixelShaderConstantF(15, jitter, 1);
 
 	for (DWORD stage = 0; stage < 4; ++stage)
 	{

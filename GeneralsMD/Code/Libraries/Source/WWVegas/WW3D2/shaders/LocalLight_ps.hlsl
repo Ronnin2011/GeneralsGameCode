@@ -25,6 +25,7 @@ float4 g_PrevAmb    : register(c10);        // rgb = ambient * intensity, w = th
 float4 g_LightAxis  : register(c11);        // xyz = the axis, away from the lamp; w = cos outer
 float4 g_PrevAxis   : register(c12);        // the same, last frame, in THIS frame's view space
 float4 g_Shaft      : register(c13);        // the beam in the air: x = its strength now, y = last frame's (0 = none); z = the spill's strength, w = 1 / its width
+float4 g_Jitter     : register(c15);        // xy = how far TAA shifted this frame on screen, in viewport widths and heights (0 without TAA)
 float4 g_Corona     : register(c14);        // a lamp's own glow: x = radius, y = strength; z, w = last frame's (0 = none). A beam: x, z = where its shaft ends
 
 struct PS_OUTPUT
@@ -40,7 +41,8 @@ float3 viewPosition(float2 uv)
     float  n = g_Camera.x;
     float  f = g_Camera.y;
     float  e = (n * f) / max(f - d * (f - n), 0.0001f);
-    float2 s = (uv - g_Viewport.xy) / g_Viewport.zw;
+    // Ronin @bugfix 11/10/2026 DX9: the depth here belongs to the point TAA's jitter moved to this pixel: its ray is the unshifted one.
+    float2 s = (uv - g_Viewport.xy) / g_Viewport.zw - g_Jitter.xy;
     float  px = g_ViewPlane.x + s.x * g_ViewPlane.z;
     float  py = g_ViewPlane.y - s.y * g_ViewPlane.w;
     return float3(px * e, py * e, -e);
