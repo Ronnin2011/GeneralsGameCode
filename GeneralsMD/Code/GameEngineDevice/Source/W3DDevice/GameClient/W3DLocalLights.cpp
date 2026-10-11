@@ -16,6 +16,8 @@
 #include "WW3D2/robjlist.h"
 #include "WW3D2/mesh.h"			// Ronin @feature 09/10/2026 DX9: the beams: which meshes only look like lights
 #include "WW3D2/meshmdl.h"
+#include "WW3D2/hlod.h"				// Ronin @bugfix 11/10/2026 DX9: a lamp the animation has sunk out of sight (lampSunk)
+#include "WW3D2/hanim.h"
 #include "WW3D2/shader.h"
 #include "WW3D2/dx8instancing.h"	// Ronin @feature 10/10/2026 DX9: part 3: the hooks round the mesh shader's draws
 #include "W3DDevice/GameClient/W3DShadowMapState.h"
@@ -242,6 +244,7 @@ struct FixtureModel
 	Int     firstGlow, glowCount;
 	Int     firstPool, poolCount;	// the painted pools: pieces on a glow texture too large to be a lamp
 	Bool    glowOnly;		// every polygon is a lamp's glow: with coronas on the mesh need not be drawn
+	Bool    glowUp;			// its glow polygons face up its own Z: the art can blink it by sinking it (lampSunk)
 	Bool    pure;			// every polygon is beam: the mesh need not be drawn at all
 };
 static FixtureModel	s_fixModels[MAX_FIXTURE_MODELS];
@@ -662,6 +665,8 @@ static const FixtureModel *fixtureModel(MeshModelClass *mdl)
 	}
 	Int beamPolys = 0, glowPolys = 0;
 	Bool keepArt = FALSE;		// Ronin @bugfix 09/10/2026 DX9: a glow whose art must stay drawn: the mesh is never skipped
+	Vector3 glowFacing(0.0f, 0.0f, 0.0f);	// Ronin @bugfix 11/10/2026 DX9: the glow polygons' normals summed, and their lengths
+	float glowArea = 0.0f;
 	for (Int i = 0; i < np; ++i)
 	{
 		if (bp.is(i))
@@ -671,6 +676,10 @@ static const FixtureModel *fixtureModel(MeshModelClass *mdl)
 			++glowPolys;
 			if (!GLOW_TABLE[gp.kind(i)].hide)
 				keepArt = TRUE;
+			Vector3 n;
+			Vector3::Cross_Product(verts[polys[i].J] - verts[polys[i].I], verts[polys[i].K] - verts[polys[i].I], &n);
+			glowFacing += n;
+			glowArea += n.Length();
 		}
 	}
 	if (beamPolys == 0 && glowPolys == 0)
@@ -700,6 +709,7 @@ static const FixtureModel *fixtureModel(MeshModelClass *mdl)
 	slot->poolCount = 0;
 	++s_fixModelCount;
 	slot->glowOnly  = FALSE;
+	slot->glowUp    = (glowArea > 0.0f && glowFacing.Z > 0.7f * glowArea) ? TRUE : FALSE;
 	if (glowPolys > 0)
 	{
 		readGlows(mdl, slot, gp);
@@ -893,6 +903,81 @@ static const FixtureModel *fixtureModel(MeshModelClass *mdl)
 	return slot;
 }
 
+// Ronin @bugfix 11/10/2026 DX9: THE BLINKED LAMPS. The art blinks a lamp by JUMPING its bone down its own Z, behind what it is
+// mounted on (197 of the 199 shipped cases face up that Z: Lighting_Work.md 6c). One record an animation's bone, made once.
+struct BlinkBone
+{
+	const HAnimClass *anim;
+	Int         pivot, frames, pivots;
+	UnsignedInt name;		// the animation's name, hashed: a freed animation's address can come back as another
+	float       top;		// the highest Z the animation gives the bone
+	float       jump;		// the largest change of Z in one frame; 0 = the bone is not blinked
+};
+static BlinkBone	s_blinkBones[256];
+
+static const BlinkBone *blinkBone(HAnimClass *anim, Int pivot, Int frames)
+{
+	UnsignedInt name = 2166136261u;
+	for (const char *c = anim->Get_Name(); c != NULL && *c != 0; ++c)
+		name = (name ^ (UnsignedInt)(unsigned char)*c) * 16777619u;
+	const Int pivots = anim->Get_Num_Pivots();
+	const UnsignedInt h = fixtureHash(anim, 255) + (UnsignedInt)pivot * 7u;
+	BlinkBone *slot = &s_blinkBones[h & 255];
+	for (Int probe = 0; probe < 8; ++probe)
+	{
+		BlinkBone &b = s_blinkBones[(h + probe) & 255];
+		if (b.anim == anim && b.pivot == pivot && b.frames == frames && b.pivots == pivots && b.name == name)
+			return &b;
+		if (b.anim == NULL)
+		{
+			slot = &b;
+			break;
+		}
+	}
+	Vector3 t;
+	anim->Get_Translation(t, pivot, (float)(frames - 1));
+	float was = t.Z, low = t.Z, top = t.Z, jump = 0.0f;		// from the last frame: a looped animation jumps there too
+	for (Int f = 0; f < frames; ++f)
+	{
+		anim->Get_Translation(t, pivot, (float)f);
+		low  = (t.Z < low) ? t.Z : low;
+		top  = (t.Z > top) ? t.Z : top;
+		jump = (fabsf(t.Z - was) > jump) ? fabsf(t.Z - was) : jump;
+		was  = t.Z;
+	}
+	slot->anim   = anim;
+	slot->pivot  = pivot;
+	slot->frames = frames;
+	slot->pivots = pivots;
+	slot->name   = name;
+	slot->top    = top;
+	// Ronin @bugfix 11/10/2026 DX9: a jump is most of the way in one frame. A bone that glides (a lamp on a rising wall) is left lit.
+	slot->jump   = (top - low >= 0.05f && jump >= 0.4f * (top - low)) ? jump : 0.0f;
+	return slot;
+}
+
+// Ronin @bugfix 11/10/2026 DX9: is this lamp's mesh in the place its animation hides it? Lit only at the top of the jump.
+static Bool lampSunk(MeshClass *mesh)
+{
+	RenderObjClass *box = mesh->Get_Container();
+	if (box == NULL || box->Class_ID() != RenderObjClass::CLASSID_HLOD)
+		return FALSE;
+	float frame = 0.0f, mult = 1.0f;
+	int frames = 0, mode = 0;
+	HAnimClass *anim = static_cast<HLodClass *>(box)->Peek_Animation_And_Info(frame, frames, mode, mult);
+	if (anim == NULL || frames < 2)
+		return FALSE;
+	const Int pivot = box->Get_Sub_Object_Bone_Index(mesh);
+	if (pivot <= 0 || pivot >= anim->Get_Num_Pivots())
+		return FALSE;
+	const BlinkBone *bb = blinkBone(anim, pivot, frames);
+	if (bb->jump <= 0.0f)
+		return FALSE;
+	Vector3 t;
+	anim->Get_Translation(t, pivot, frame);
+	return (bb->top - t.Z > 0.5f * bb->jump) ? TRUE : FALSE;
+}
+
 // Ronin @feature 09/10/2026 DX9: called by MeshClass::Render for every mesh it has not ruled out, in every pass. Only a mesh that
 // is being drawn reaches this, so a unit hidden by the fog of war gives no light away.
 int W3DLocalLights::noteFixtureMesh(MeshClass *mesh)
@@ -951,7 +1036,10 @@ int W3DLocalLights::noteFixtureMesh(MeshClass *mesh)
 				o.index     = b;
 				++s_frameBeamCount;
 			}
-			for (Int g = 0; s_glowsOn && g < fm->glowCount && s_frameGlowCount < MAX_FRAME_GLOWS; ++g)
+			// Ronin @bugfix 11/10/2026 DX9: a lamp its animation has sunk out of sight gives no light: the battleship's two red lamps
+			// shone on from inside the hull while their art blinked.
+			const Bool sunk = (fm->glowUp && (fm->glowCount > 0 || fm->poolCount > 0)) ? lampSunk(mesh) : FALSE;
+			for (Int g = 0; s_glowsOn && !sunk && g < fm->glowCount && s_frameGlowCount < MAX_FRAME_GLOWS; ++g)
 			{
 				const FixtureGlow &fg = s_fixGlows[fm->firstGlow + g];
 				FrameGlow &o = s_frameGlows[s_frameGlowCount];
@@ -965,7 +1053,7 @@ int W3DLocalLights::noteFixtureMesh(MeshClass *mesh)
 				o.kind  = fg.kind;
 				++s_frameGlowCount;
 			}
-			for (Int p = 0; s_poolsOn && p < fm->poolCount && s_framePoolCount < MAX_FRAME_POOLS; ++p)
+			for (Int p = 0; s_poolsOn && !sunk && p < fm->poolCount && s_framePoolCount < MAX_FRAME_POOLS; ++p)
 			{
 				const FixtureGlow &fp = s_fixPools[fm->firstPool + p];
 				FramePool &o = s_framePools[s_framePoolCount];
