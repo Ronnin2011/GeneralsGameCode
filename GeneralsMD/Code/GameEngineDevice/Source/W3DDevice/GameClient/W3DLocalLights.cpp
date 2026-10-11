@@ -20,11 +20,13 @@
 #include "WW3D2/dx8instancing.h"	// Ronin @feature 10/10/2026 DX9: part 3: the hooks round the mesh shader's draws
 #include "W3DDevice/GameClient/W3DShadowMapState.h"
 #include "Common/GlobalData.h"
+#include "GameLogic/TerrainLogic.h"	// Ronin @feature 11/10/2026 DX9: how high a point light is over the ground
 #include "W3DDevice/GameClient/W3DLocalLights.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DSsao.h"
 #include "W3DDevice/GameClient/W3DTaa.h"
+#include <d3dx9math.h>				// Ronin @feature 11/10/2026 DX9: the lamp shadow maps' matrices, as W3DTaa.cpp
 
 // Ronin @feature 09/10/2026 DX9: more lights than this in one frame are counted (live) and left undrawn.
 static const Int MAX_LIGHTS_DRAWN = 256;
@@ -32,6 +34,10 @@ static const Int MAX_LIGHTS_DRAWN = 256;
 static IDirect3DVertexShader9	*s_quadVS        = NULL;
 static IDirect3DPixelShader9	*s_lightPS       = NULL;
 static Bool						s_shadersTried  = FALSE;
+// Ronin @feature 11/10/2026 DX9: the lamp shadow maps' depth draw - the pair TAA's shadow mask ships: a mesh in, its depth out as
+// two bytes of colour.
+static IDirect3DVertexShader9	*s_lampVS        = NULL;
+static IDirect3DPixelShader9	*s_lampPS        = NULL;
 
 static Bool						s_enabled       = TRUE;
 static float					s_intensity     = 1.0f;
@@ -59,6 +65,9 @@ struct LightDraw
 {
 	float c[40];			// c5..c10: the light now (position, diffuse, ambient) and as it was last frame; c11, c12: the two axes; c13: shafts
 	float x0, y0, x1, y1;	// target pixels
+	Int   map;				// its shadow map's tile (s_lampMaps), or -1
+	Int   mapWas;			// ... and last frame's (s_lampMapsPrev), or -1
+	Int   sides;			// a blast's four level maps: the first one's tile, or -1
 };
 
 // Ronin @bugfix 09/10/2026 DX9: each drawn light as it was, for TAA's change mask (LocalLight_ps COLOR1): the resolve clamps where a
@@ -77,6 +86,7 @@ struct LightMemo
 	Vector3     boundCentre;	// the sphere that holds everything it reaches
 	float       boundRadius;
 	Bool        seen;		// a light of this frame matched it
+	Int         map = -1;	// its shadow map's tile that frame, or -1
 };
 static LightMemo				s_memo[MAX_LIGHTS_DRAWN];
 static Int						s_memoCount     = 0;
@@ -138,6 +148,20 @@ static void ensureShaders(IDirect3DDevice9 *dev)
 	{
 		if (FAILED(dev->CreatePixelShader(blob, &s_lightPS)))
 			s_lightPS = NULL;
+		HeapFree(GetProcessHeap(), 0, blob);
+	}
+	blob = readShaderBlob("shaders\\TaaVelMesh.vso");
+	if (blob != NULL)
+	{
+		if (FAILED(dev->CreateVertexShader(blob, &s_lampVS)))
+			s_lampVS = NULL;
+		HeapFree(GetProcessHeap(), 0, blob);
+	}
+	blob = readShaderBlob("shaders\\TaaMoverLight.pso");
+	if (blob != NULL)
+	{
+		if (FAILED(dev->CreatePixelShader(blob, &s_lampPS)))
+			s_lampPS = NULL;
 		HeapFree(GetProcessHeap(), 0, blob);
 	}
 }
@@ -966,6 +990,372 @@ int W3DLocalLights::noteFixtureMesh(MeshClass *mesh)
 	return 1;
 }
 
+// Ronin @feature 11/10/2026 DX9: LAMP SHADOW MAPS (docs/Lighting_Work.md 6b) - the solid meshes drawn this frame, kept so each lamp's
+// map can be drawn from what stands in its light.
+struct LampCaster
+{
+	MeshClass            *mesh;		// valid for this frame only
+	const RenderObjClass *root;		// the object it is part of: a lamp's own object casts nothing in its light
+	float                 boxC[3];	// its world box: centre
+	float                 boxE[3];	// ... and extent
+	Bool                  skin;		// drawn through its bones: deformed on the CPU when a map first wants it
+	Int                   skinAt;	// ... where in s_skinVerts; -1 = not yet this frame, -2 = no room
+	Bool                  perPoly;	// a shader per polygon: only its solid ones cast
+};
+static const Int	MAX_LAMP_CASTERS = 4096;
+static LampCaster	s_casters[MAX_LAMP_CASTERS];
+static Int			s_casterCount = 0;
+static Bool			s_casterOpen  = FALSE;	// between beginFrame and the light pass
+
+// Ronin @feature 11/10/2026 DX9: what casts a lamp's shadow is drawn solid. Blended or alpha-tested (glass, fences, a beam welded into
+// a hull) casts nothing.
+static inline Bool castsLampShadow(ShaderClass shader)
+{
+	return (shader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO &&
+			shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE) ? TRUE : FALSE;
+}
+
+void W3DLocalLights::noteCaster(MeshClass *mesh)
+{
+	if (!s_casterOpen || mesh == NULL || s_casterCount >= MAX_LAMP_CASTERS || ShaderClass::Is_Backface_Culling_Inverted() ||
+		TheTerrainShadowPass.inDepthPass || TheTerrainShadowPass.viewDepthPass)
+		return;		// the main pass only: not the mirror, not a depth pass
+	MeshModelClass *mdl = mesh->Peek_Model();
+	if (mdl == NULL || mdl->Get_Polygon_Count() <= 0 || mdl->Get_Pass_Count() <= 0)
+		return;
+	const Bool perPoly = mdl->Has_Shader_Array(0) ? TRUE : FALSE;
+	if (!perPoly && !castsLampShadow(mdl->Get_Single_Shader(0)))
+		return;
+	// Ronin @feature 11/10/2026 DX9: a skin is deformed through its container's bones (as W3DTaa::noteMesh): without them, no caster.
+	const Bool isSkin = mdl->Get_Flag(MeshGeometryClass::SKIN) ? TRUE : FALSE;
+	if (isSkin && (mesh->Get_Container() == NULL || mesh->Get_Container()->Get_HTree() == NULL))
+		return;
+	const RenderObjClass *top = mesh;
+	while (top->Get_Container() != NULL)
+		top = top->Get_Container();
+	const AABoxClass &box = mesh->Get_Bounding_Box();
+	LampCaster &c = s_casters[s_casterCount++];
+	c.mesh    = mesh;
+	c.root    = top;
+	c.boxC[0] = box.Center.X; c.boxC[1] = box.Center.Y; c.boxC[2] = box.Center.Z;
+	c.boxE[0] = box.Extent.X; c.boxE[1] = box.Extent.Y; c.boxE[2] = box.Extent.Z;
+	c.skin    = isSkin;
+	c.skinAt  = -1;
+	c.perPoly = perPoly;
+}
+
+// Ronin @feature 11/10/2026 DX9: STAGE B1 - each beam on screen gets a tile of one atlas, and the casters in its light are drawn into it
+// from the lamp, and its light reads it (LocalLight_ps lampShadow). `lights view 4` shows the tiles.
+static const Int	LAMP_ATLAS     = 2048;
+static const Int	LAMP_TILE      = 256;
+static const Int	LAMP_TILES_ROW = LAMP_ATLAS / LAMP_TILE;
+static const Int	MAX_LAMP_MAPS  = LAMP_TILES_ROW * LAMP_TILES_ROW;
+static const float	LAMP_NEAR      = 0.5f;
+// Ronin @feature 11/10/2026 DX9: a point light's one map looks straight down, 70 degrees to each side. Its near plane is 1.5: 108 of
+// 434 muzzle bones sit inside their barrel or turret, none of those faces is deeper (scratchpad muzzle_down_survey2.py).
+static const float	LAMP_POINT_NEAR = 1.5f;
+static const float	LAMP_POINT_TAN  = 2.75f;
+static const Int	MAX_POINT_MAPS  = 24;
+// Ronin @feature 11/10/2026 DX9: the downward map sees the ground out to 2.75 x the light's height: lower than a third of its reach, the
+// light goes on past that. The game's blast lights last 2 seconds (median) and reach 30 to 100 units: those get four level maps too.
+static const Int	MAX_SIDE_LIGHTS     = 4;
+static const float	LAMP_SIDE_LOW       = 0.34f;
+static const float	LAMP_SIDE_MIN_REACH = 20.0f;
+static const float	LAMP_MAX_TAN   = 1.732f;	// a map is never wider than 60 degrees off its axis: past that the light has no shadow
+
+struct LampMap
+{
+	Vector3               lamp, axis;		// world; the axis as the light is aimed
+	float                 tanHalf;			// of its square view
+	float                 nearPlane, farPlane;
+	Bool                  point;			// an engine point light's downward map, not a beam's
+	Vector3               boundCentre;		// the light's own sphere
+	float                 boundRadius;
+	const RenderObjClass *owner;			// the object the lamp is part of
+	float                 selfNear;			// its own object casts only past this depth
+	D3DXMATRIX            viewProj;			// world to the map's clip space, row vectors
+};
+static LampMap			s_lampMaps[MAX_LAMP_MAPS];
+static Int				s_lampMapCount = 0;
+// Ronin @feature 11/10/2026 DX9: last frame's maps are kept - their depth in the other atlas, their matrices here - so each light reads
+// its shadow as it is and as it was: where the two differ, the shadow MOVED, and TAA's change mask is told (stage C).
+static LampMap			s_lampMapsPrev[MAX_LAMP_MAPS];
+static Int				s_lampPrevCount = 0;
+static Int				s_lampFlip      = 0;	// which of the two depth atlases holds this frame's maps
+// Ronin @feature 11/10/2026 DX9: skinned casters are deformed into this, once a frame each, when a map first wants them.
+static const Int		LAMP_SKIN_VERTS = 65536;
+static Vector3			s_skinVerts[LAMP_SKIN_VERTS];
+static Int				s_skinUsed      = 0;
+static TextureClass		*s_lampColour  = NULL;	// the same depth as colour, two bytes a texel: what `lights view 4` shows
+static ZTextureClass	*s_lampDepth[2] = { NULL, NULL };	// D24S8, compared by the sampler - as the sun's map; this frame's and last frame's
+static Bool				s_lampFailed   = FALSE;
+static Bool				s_lampDrawn    = FALSE;	// this frame's tiles are in the atlas
+static Bool				s_lampMapsOn   = TRUE;	// `lights lampmaps`
+static float			s_lampShadows  = 1.0f;	// `lights lampshadows`
+static float			s_lampBias     = 1.0f;	// `lights lampbias`
+// Ronin @feature 11/10/2026 DX9: 152 of the art's 1210 beams start inside their own model (72 of 226 headlights): as casters those
+// models would put the lamp out. Cut off for the first fifth of the beam, 1 is left (scratchpad lamp_self_survey2.py).
+static Bool				s_lampSelf     = TRUE;	// `lights lampself`
+static float			s_lampSelfNear = 0.2f;	// `lights lampselfnear`
+static Bool				s_pointMaps    = TRUE;	// `lights pointmaps`
+static Bool				s_pointSides   = TRUE;	// `lights pointsides`
+// Ronin @feature 11/10/2026 DX9: the receiver's bias, from the off-line preview (lampmap_read_sim2.py): along the normal x the sine of
+// the light's angle off it, and towards the lamp; in map texels at the receiver, plus a little in units.
+static const float		LAMP_BIAS_NORMAL = 1.5f;
+static const float		LAMP_BIAS_LIGHT  = 1.0f;
+static const float		LAMP_BIAS_UNITS  = 0.05f;
+
+void  W3DLocalLights::setLampMaps(Bool on)		{ s_lampMapsOn = on; }
+Bool  W3DLocalLights::getLampMaps(void)			{ return s_lampMapsOn; }
+void  W3DLocalLights::setLampShadows(float v)	{ s_lampShadows = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float W3DLocalLights::getLampShadows(void)		{ return s_lampShadows; }
+void  W3DLocalLights::setLampBias(float v)		{ s_lampBias = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getLampBias(void)			{ return s_lampBias; }
+void  W3DLocalLights::setLampSelf(Bool on)		{ s_lampSelf = on; }
+Bool  W3DLocalLights::getLampSelf(void)			{ return s_lampSelf; }
+void  W3DLocalLights::setLampSelfNear(float v)	{ s_lampSelfNear = (v < 0.0f) ? 0.0f : ((v > 0.5f) ? 0.5f : v); }
+float W3DLocalLights::getLampSelfNear(void)		{ return s_lampSelfNear; }
+void  W3DLocalLights::setPointMaps(Bool on)		{ s_pointMaps = on; }
+Bool  W3DLocalLights::getPointMaps(void)		{ return s_pointMaps; }
+void  W3DLocalLights::setPointSides(Bool on)	{ s_pointSides = on; }
+Bool  W3DLocalLights::getPointSides(void)		{ return s_pointSides; }
+
+// Ronin @feature 11/10/2026 DX9: TextureClass targets, so the texture manager carries them across a device reset - as TAA's mask pair.
+static Bool ensureLampTargets(void)
+{
+	if (s_lampColour != NULL && s_lampDepth[0] != NULL && s_lampDepth[1] != NULL)
+		return TRUE;
+	if (s_lampFailed)
+		return FALSE;
+	s_lampColour = NEW_REF(TextureClass, (LAMP_ATLAS, LAMP_ATLAS, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1,
+										  TextureClass::POOL_DEFAULT, true));
+	for (Int i = 0; i < 2; ++i)
+		s_lampDepth[i] = NEW_REF(ZTextureClass, (LAMP_ATLAS, LAMP_ATLAS, WW3D_ZFORMAT_D24S8, MIP_LEVELS_1,
+												 TextureClass::POOL_DEFAULT));
+	if (s_lampColour->Peek_D3D_Base_Texture() == NULL || s_lampDepth[0]->Peek_D3D_Base_Texture() == NULL ||
+		s_lampDepth[1]->Peek_D3D_Base_Texture() == NULL)
+	{
+		REF_PTR_RELEASE(s_lampColour);
+		REF_PTR_RELEASE(s_lampDepth[0]);
+		REF_PTR_RELEASE(s_lampDepth[1]);
+		s_lampFailed = TRUE;
+		return FALSE;
+	}
+	return TRUE;
+}
+
+// Ronin @feature 11/10/2026 DX9: draws this frame's maps. Target, depth surface and every state it touches that the pass does not
+// set again are read raw and written back raw. Called with the pass's own states already saved.
+static void drawLampMaps(IDirect3DDevice9 *dev)
+{
+	s_lampDrawn = FALSE;
+	if (s_lampMapCount <= 0 || s_lampVS == NULL || s_lampPS == NULL || !ensureLampTargets())
+		return;
+	s_lampFlip ^= 1;		// last frame's atlas is left as it is
+	IDirect3DSurface9 *cSurf  = s_lampColour->Get_D3D_Surface_Level();
+	IDirect3DSurface9 *zSurf  = s_lampDepth[s_lampFlip]->Get_D3D_Surface_Level();
+	IDirect3DSurface9 *prevRT = NULL;
+	IDirect3DSurface9 *prevDS = NULL;
+	if (cSurf != NULL && zSurf != NULL && SUCCEEDED(dev->GetRenderTarget(0, &prevRT)) && prevRT != NULL)
+	{
+		dev->GetDepthStencilSurface(&prevDS);		// none while the scene depth is suspended
+		DWORD zFunc, slopeBias, depthBias, scissor, clipOn;
+		float savedPlane[4];
+		dev->GetRenderState(D3DRS_CLIPPLANEENABLE,     &clipOn);
+		const Bool havePlane = SUCCEEDED(dev->GetClipPlane(0, savedPlane));
+		dev->GetRenderState(D3DRS_ZFUNC,               &zFunc);
+		dev->GetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, &slopeBias);
+		dev->GetRenderState(D3DRS_DEPTHBIAS,           &depthBias);
+		dev->GetRenderState(D3DRS_SCISSORTESTENABLE,   &scissor);
+		float savedVS[8 * 4];
+		const Bool haveVS = SUCCEEDED(dev->GetVertexShaderConstantF(0, savedVS, 8));
+		if (SUCCEEDED(dev->SetRenderTarget(0, cSurf)) && SUCCEEDED(dev->SetDepthStencilSurface(zSurf)))
+		{
+			dev->SetRenderState(D3DRS_ZENABLE,             D3DZB_TRUE);
+			dev->SetRenderState(D3DRS_ZWRITEENABLE,        TRUE);
+			dev->SetRenderState(D3DRS_ZFUNC,               D3DCMP_LESSEQUAL);
+			dev->SetRenderState(D3DRS_CULLMODE,            D3DCULL_NONE);
+			dev->SetRenderState(D3DRS_ALPHABLENDENABLE,    FALSE);
+			dev->SetRenderState(D3DRS_ALPHATESTENABLE,     FALSE);
+			dev->SetRenderState(D3DRS_STENCILENABLE,       FALSE);
+			dev->SetRenderState(D3DRS_SCISSORTESTENABLE,   FALSE);
+			// Ronin @feature 11/10/2026 DX9: no rasteriser bias: the bias goes on the receiver when the lights read the maps (B2), as the sun's.
+			dev->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, 0);
+			dev->SetRenderState(D3DRS_DEPTHBIAS,           0);
+			dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
+														D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
+			DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ, "W3DLocalLights::lampMaps");
+			dev->SetVertexShader(s_lampVS);		// AFTER the layout bind - it clears the VS
+			dev->SetPixelShader(s_lampPS);
+			for (Int i = 0; i < s_lampMapCount; ++i)
+			{
+				LampMap &lm = s_lampMaps[i];
+				// Ronin @feature 11/10/2026 DX9: Clear is held to the viewport: only this lamp's tile. White = depth 1 = nothing in its light.
+				D3DVIEWPORT9 tile;
+				tile.X = (DWORD)((i % LAMP_TILES_ROW) * LAMP_TILE);
+				tile.Y = (DWORD)((i / LAMP_TILES_ROW) * LAMP_TILE);
+				tile.Width = LAMP_TILE; tile.Height = LAMP_TILE; tile.MinZ = 0.0f; tile.MaxZ = 1.0f;
+				dev->SetViewport(&tile);
+				dev->Clear(0, NULL, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, D3DCOLOR_ARGB(255, 255, 255, 255), 1.0f, 0);
+
+				const D3DXVECTOR3 eye(lm.lamp.X, lm.lamp.Y, lm.lamp.Z);
+				const D3DXVECTOR3 at(lm.lamp.X + lm.axis.X, lm.lamp.Y + lm.axis.Y, lm.lamp.Z + lm.axis.Z);
+				const D3DXVECTOR3 up((fabsf(lm.axis.Z) > 0.99f) ? 1.0f : 0.0f, 0.0f, (fabsf(lm.axis.Z) > 0.99f) ? 0.0f : 1.0f);
+				D3DXMATRIX view, proj;
+				D3DXMatrixLookAtLH(&view, &eye, &at, &up);
+				D3DXMatrixPerspectiveFovLH(&proj, 2.0f * atanf(lm.tanHalf), 1.0f, lm.nearPlane, lm.farPlane);
+				D3DXMatrixMultiply(&lm.viewProj, &view, &proj);
+				// Ronin @feature 11/10/2026 DX9: the lamp's own object is cut off nearer than selfNear. With a vertex shader the plane is in
+				// clip space, where depth is w and z = w * _33 + _43: this is w - selfNear >= 0.
+				const float ownPlane[4] = { 0.0f, 0.0f, -lm.selfNear / proj._43, 1.0f + lm.selfNear * proj._33 / proj._43 };
+				dev->SetClipPlane(0, ownPlane);
+
+				// Ronin @feature 11/10/2026 DX9: the cone round the map's square view - its corners are sqrt 2 further out than its sides.
+				const float coneCos = 1.0f / sqrtf(1.0f + 2.0f * lm.tanHalf * lm.tanHalf);
+				const float coneSin = sqrtf(1.0f - coneCos * coneCos);
+				const float centre[3] = { lm.boundCentre.X, lm.boundCentre.Y, lm.boundCentre.Z };
+				Int draws = 0;
+				for (Int ci = 0; ci < s_casterCount; ++ci)
+				{
+					LampCaster &lc = s_casters[ci];
+					float d2 = 0.0f;		// its box against the light's sphere
+					for (Int ax = 0; ax < 3; ++ax)
+					{
+						const float gap = fabsf(centre[ax] - lc.boxC[ax]) - lc.boxE[ax];
+						if (gap > 0.0f)
+							d2 += gap * gap;
+					}
+					if (d2 > lm.boundRadius * lm.boundRadius)
+						continue;
+					// Ronin @feature 11/10/2026 DX9: then the sphere round its box against the cone: behind the lamp, or wholly off to a side.
+					const Vector3 d(lc.boxC[0] - lm.lamp.X, lc.boxC[1] - lm.lamp.Y, lc.boxC[2] - lm.lamp.Z);
+					const float r     = sqrtf(lc.boxE[0] * lc.boxE[0] + lc.boxE[1] * lc.boxE[1] + lc.boxE[2] * lc.boxE[2]);
+					const float along = Vector3::Dot_Product(d, lm.axis);
+					const float off2  = Vector3::Dot_Product(d, d) - along * along;
+					const float off   = (off2 > 0.0f) ? sqrtf(off2) : 0.0f;
+					if (along + r < lm.nearPlane || off * coneCos - along * coneSin > r)
+						continue;
+					const Bool own = (lc.root == lm.owner) ? TRUE : FALSE;
+					if (own && !s_lampSelf)
+					{
+						++s_stats.lampOwn;
+						continue;
+					}
+					MeshModelClass *mdl = lc.mesh->Peek_Model();
+					if (mdl == NULL)
+						continue;
+					const Int vcount = mdl->Get_Vertex_Count();
+					const Int pcount = mdl->Get_Polygon_Count();
+					const TriIndex *polys = mdl->Get_Polygon_Array();
+					if (vcount <= 0 || pcount <= 0 || vcount > 65535 || polys == NULL)	// 16-bit indices
+						continue;
+					const Vector3 *verts = NULL;
+					D3DXMATRIX m, mT;
+					if (lc.skin)
+					{
+						// Ronin @feature 11/10/2026 DX9: stage C: a skin's vertices as its bones leave them this frame - in world space.
+						if (lc.skinAt == -1)
+						{
+							lc.skinAt = -2;
+							if (s_skinUsed + vcount <= LAMP_SKIN_VERTS)
+							{
+								lc.mesh->Get_Deformed_Vertices(s_skinVerts + s_skinUsed);
+								lc.skinAt = s_skinUsed;
+								s_skinUsed += vcount;
+							}
+						}
+						if (lc.skinAt < 0)
+						{
+							++s_stats.lampSkins;
+							continue;
+						}
+						verts = s_skinVerts + lc.skinAt;
+						m     = lm.viewProj;
+					}
+					else
+					{
+						verts = mdl->Get_Vertex_Array();
+						if (verts == NULL)
+							continue;
+						D3DXMATRIX w(To_D3DMATRIX(lc.mesh->Get_Transform()));
+						D3DXMatrixMultiply(&m, &w, &lm.viewProj);
+					}
+					D3DXMatrixTranspose(&mT, &m);
+					dev->SetVertexShaderConstantF(0, (const float *)&mT, 4);
+					dev->SetVertexShaderConstantF(4, (const float *)&mT, 4);	// TaaVelMesh.vso's second output, unused
+					dev->SetRenderState(D3DRS_CLIPPLANEENABLE, own ? D3DCLIPPLANE0 : 0);
+					if (!lc.perPoly)
+					{
+						dev->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, (UINT)vcount, (UINT)pcount,
+													polys, D3DFMT_INDEX16, verts, sizeof(Vector3));
+						s_stats.lampTris += pcount;
+						++draws;
+						continue;
+					}
+					// Ronin @feature 11/10/2026 DX9: a shader per polygon: the solid ones, in runs.
+					Int start = -1;
+					for (Int p = 0; p <= pcount; ++p)
+					{
+						const Bool solid = (p < pcount && castsLampShadow(mdl->Get_Shader(p, 0))) ? TRUE : FALSE;
+						if (solid && start < 0)
+							start = p;
+						else if (!solid && start >= 0)
+						{
+							dev->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, (UINT)vcount, (UINT)(p - start),
+														polys + start, D3DFMT_INDEX16, verts, sizeof(Vector3));
+							s_stats.lampTris += p - start;
+							++draws;
+							start = -1;
+						}
+					}
+				}
+				s_stats.lampDraws += draws;
+				if (lm.point)
+					++s_stats.lampPoints;
+				if (draws > s_stats.lampMost)
+					s_stats.lampMost = draws;
+			}
+			s_stats.lampMaps = s_lampMapCount;
+			s_lampDrawn = TRUE;
+		}
+		dev->SetRenderTarget(0, prevRT);
+		dev->SetDepthStencilSurface(prevDS);
+		dev->SetRenderState(D3DRS_ZFUNC,               zFunc);
+		dev->SetRenderState(D3DRS_SLOPESCALEDEPTHBIAS, slopeBias);
+		dev->SetRenderState(D3DRS_DEPTHBIAS,           depthBias);
+		dev->SetRenderState(D3DRS_SCISSORTESTENABLE,   scissor);
+		dev->SetRenderState(D3DRS_CLIPPLANEENABLE,     clipOn);
+		if (havePlane)
+			dev->SetClipPlane(0, savedPlane);
+		if (haveVS)
+			dev->SetVertexShaderConstantF(0, savedVS, 8);
+	}
+	if (prevRT != NULL) prevRT->Release();
+	if (prevDS != NULL) prevDS->Release();
+	if (cSurf  != NULL) cSurf->Release();
+	if (zSurf  != NULL) zSurf->Release();
+}
+
+// Ronin @feature 11/10/2026 DX9: view space to a lamp's tile, as atlas uv x w, depth, w - transposed for upload - and the tile in uv.
+// D3D9: a pixel's centre is a whole number and a texel's is a half, hence the + 0.5.
+static void lampRegisters(const LampMap &lm, Int tileIndex, const D3DXMATRIX &viewToWorld, float *clip16, float *tile4)
+{
+	const float atlas = (float)LAMP_ATLAS;
+	const float tx = (float)((tileIndex % LAMP_TILES_ROW) * LAMP_TILE), ty = (float)((tileIndex / LAMP_TILES_ROW) * LAMP_TILE);
+	D3DXMATRIX toTile, m, mT;
+	D3DXMatrixIdentity(&toTile);
+	toTile._11 =  0.5f * (float)LAMP_TILE / atlas;
+	toTile._22 = -0.5f * (float)LAMP_TILE / atlas;
+	toTile._41 = (tx + 0.5f * (float)LAMP_TILE + 0.5f) / atlas;
+	toTile._42 = (ty + 0.5f * (float)LAMP_TILE + 0.5f) / atlas;
+	D3DXMatrixMultiply(&m, &viewToWorld, &lm.viewProj);
+	D3DXMatrixMultiply(&m, &m, &toTile);
+	D3DXMatrixTranspose(&mT, &m);
+	memcpy(clip16, &mT, 16 * sizeof(float));
+	tile4[0] = tx / atlas; tile4[1] = ty / atlas;
+	tile4[2] = (tx + (float)LAMP_TILE) / atlas; tile4[3] = (ty + (float)LAMP_TILE) / atlas;
+}
+
 Bool W3DLocalLights::beamsHiddenIn(const MeshClass *mesh)
 {
 	return (s_beamsOn && mesh != NULL && mesh->Get_Light_Fixture() == 2) ? TRUE : FALSE;
@@ -1004,7 +1394,7 @@ void W3DLocalLights::setOver(float v)		{ s_over = (v < 1.0f) ? 1.0f : ((v > 8.0f
 float W3DLocalLights::getOver(void)			{ return s_over; }
 void W3DLocalLights::setBoost(float v)		{ s_boost = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
 float W3DLocalLights::getBoost(void)		{ return s_boost; }
-void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v > 3) ? 3 : v); }
+void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v > 4) ? 4 : v); }
 Int  W3DLocalLights::getView(void)			{ return s_view; }
 Bool W3DLocalLights::ownsDynamicLights(void)	{ return s_active; }
 void W3DLocalLights::setRange(float v)		{ s_range = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
@@ -1146,6 +1536,15 @@ void W3DLocalLights::beginFrame(void)
 	s_stats.beams      = 0;
 	s_stats.glows      = 0;
 	s_stats.pools      = 0;
+	s_stats.casters    = 0;
+	s_stats.lampMaps   = 0;
+	s_stats.lampDraws  = 0;
+	s_stats.lampMost   = 0;
+	s_stats.lampTris   = 0;
+	s_stats.lampOwn    = 0;
+	s_stats.lampPoints = 0;
+	s_stats.lampSides  = 0;
+	s_stats.lampSkins  = 0;
 	s_stats.beamMeshes = 0;
 	s_stats.beamModels = s_fixModelCount;
 	if (!s_passDone)
@@ -1196,11 +1595,23 @@ void W3DLocalLights::beginFrame(void)
 	s_shadeWritten = FALSE;
 	s_shadeBeside  = NULL;
 	DX8InstanceManagerClass::Set_Sun_Shade_Hooks(&W3DLocalLights::beginSunShade, &W3DLocalLights::endSunShade);
+	// Ronin @feature 11/10/2026 DX9: the lamp shadow maps: the frame's casters are listed from here to the light pass.
+	s_casterCount  = 0;
+	s_casterOpen   = (active && s_lampMapsOn && (s_beamsOn || s_pointMaps)) ? TRUE : FALSE;	// point lights want casters without any beam
+	// Ronin @feature 11/10/2026 DX9: stage C: what last frame's maps were, before this frame's take the list.
+	s_lampPrevCount = s_lampDrawn ? s_lampMapCount : 0;
+	for (Int pm = 0; pm < s_lampPrevCount; ++pm)
+		s_lampMapsPrev[pm] = s_lampMaps[pm];
+	s_lampMapCount = 0;
+	s_lampDrawn    = FALSE;
+	s_skinUsed     = 0;
+	MeshClass::Set_Light_Caster_Note_Func(&W3DLocalLights::noteCaster);
 }
 
 void W3DLocalLights::endFrame(void)
 {
 	s_shadeOpen = FALSE;
+	s_casterOpen = FALSE;
 	endSunShade();
 	if (!s_ownsDepth)
 		return;
@@ -1277,6 +1688,9 @@ static Bool makeDraw(LightDraw &d, const LightMemo &now, const LightMemo &was, c
 	d.y0 = (r0[1] < r1[1]) ? r0[1] : r1[1];
 	d.x1 = (r0[2] > r1[2]) ? r0[2] : r1[2];
 	d.y1 = (r0[3] > r1[3]) ? r0[3] : r1[3];
+	d.map = -1;
+	d.sides = -1;
+	d.mapWas = was.map;		// a light that was not there copies this frame's memo, which has none yet
 
 	const LightMemo *src[2]  = { &now, &was };
 	const Vector3   *view[2] = { &viewNow, &viewWas };
@@ -1305,6 +1719,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		return;
 	s_passDone = TRUE;
 	s_shadeOpen = FALSE;		// Ronin @feature 10/10/2026 DX9: part 3: what is drawn from here on is not under the lights
+	s_casterOpen = FALSE;
+	s_stats.casters = s_casterCount;
 	endSunShade();
 	s_collect  = FALSE;		// Ronin @feature 09/10/2026 DX9: the beams are in; later renders this frame only skip
 
@@ -1351,6 +1767,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	{
 		const Matrix3D &cameraTM = camera.Get_Transform();
 		const ViewMap vm = { zNear, zFar, planeMin.X, planeMax.Y, planeW, planeH, vx0, vy0, vx1, vy1 };
+		Int pointLights = 0, sideLights = 0;		// with a downward map; with four level ones as well
 		RefRenderObjListIterator it(scene->getDynamicLights());
 		for (it.First(); !it.Is_Done(); it.Next())
 		{
@@ -1405,6 +1822,44 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			s_memo[s_memoCount++] = now;
 			++count;
 			++lightCount;
+			// Ronin @feature 11/10/2026 DX9: lamp shadow maps, stage D first piece - an engine point light gets ONE map, straight down:
+			// what is under it shadows the ground (the pool under a firing unit). The beams' tiles are kept for them.
+			if (s_lampMapsOn && s_pointMaps && pointLights < MAX_POINT_MAPS && s_lampMapCount + s_frameBeamCount < MAX_LAMP_MAPS)
+			{
+				draws[count - 1].map = s_lampMapCount;
+				s_memo[s_memoCount - 1].map = s_lampMapCount;
+				LampMap &lm = s_lampMaps[s_lampMapCount++];
+				lm.lamp        = now.world;
+				lm.axis.Set(0.0f, 0.0f, -1.0f);
+				lm.tanHalf     = LAMP_POINT_TAN;
+				lm.nearPlane   = LAMP_POINT_NEAR;
+				lm.farPlane    = (now.outer > LAMP_POINT_NEAR * 4.0f) ? now.outer : (LAMP_POINT_NEAR * 4.0f);
+				lm.point       = TRUE;
+				lm.boundCentre = now.boundCentre;
+				lm.boundRadius = now.boundRadius;
+				lm.owner       = NULL;				// who fired is not known here: the near plane does its job
+				lm.selfNear    = LAMP_POINT_NEAR;
+				++pointLights;
+				// Ronin @feature 11/10/2026 DX9: a big light low over the ground (a blast) reaches past what the downward map sees: four
+				// more maps, level, a quarter turn apart - what stands round it shadows the ground behind.
+				const float ground = (TheTerrainLogic != NULL) ? TheTerrainLogic->getGroundHeight(now.world.X, now.world.Y) : now.world.Z;
+				if (s_pointSides && sideLights < MAX_SIDE_LIGHTS && now.outer >= LAMP_SIDE_MIN_REACH &&
+					now.world.Z - ground < LAMP_SIDE_LOW * now.outer && s_lampMapCount + 4 + s_frameBeamCount <= MAX_LAMP_MAPS)
+				{
+					// Ronin @feature 11/10/2026 DX9: +X, -X, +Y, -Y: LocalLight_ps lampSide counts on this order.
+					static const float SIDE_AXES[4][2] = { { 1.0f, 0.0f }, { -1.0f, 0.0f }, { 0.0f, 1.0f }, { 0.0f, -1.0f } };
+					draws[count - 1].sides = s_lampMapCount;
+					s_stats.lampSides = ++sideLights;
+					for (Int face = 0; face < 4; ++face)
+					{
+						LampMap &sm = s_lampMaps[s_lampMapCount++];
+						sm = lm;
+						sm.axis.Set(SIDE_AXES[face][0], SIDE_AXES[face][1], 0.0f);
+						sm.tanHalf = 1.0f;
+						sm.point   = FALSE;		// its light is counted once, by the downward map
+					}
+				}
+			}
 		}
 
 		// Ronin @feature 09/10/2026 DX9: the beams: a spot at the lamp, as wide as the art's cone, reaching a little past its end; a level
@@ -1490,6 +1945,27 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			s_memo[s_memoCount++] = now;
 			++count;
 			++lightCount;
+			// Ronin @feature 11/10/2026 DX9: lamp shadow maps, stage B1 - this beam's map: from the lamp, along the light as aimed, as wide
+			// as its spill and as deep as its reach. Drawn by drawLampMaps once the pass has saved its states.
+			if (s_lampMapsOn && s_lampMapCount < MAX_LAMP_MAPS)
+			{
+				draws[count - 1].map = s_lampMapCount;
+				s_memo[s_memoCount - 1].map = s_lampMapCount;
+				LampMap &lm = s_lampMaps[s_lampMapCount++];
+				lm.selfNear    = (s_lampSelfNear * len > LAMP_NEAR) ? (s_lampSelfNear * len) : LAMP_NEAR;
+				lm.nearPlane   = LAMP_NEAR;
+				lm.point       = FALSE;
+				lm.lamp        = now.world;
+				lm.axis        = now.axis;
+				lm.tanHalf     = (tanSpill < LAMP_MAX_TAN) ? tanSpill : LAMP_MAX_TAN;
+				lm.farPlane    = (now.outer > LAMP_NEAR * 4.0f) ? now.outer : (LAMP_NEAR * 4.0f);
+				lm.boundCentre = now.boundCentre;
+				lm.boundRadius = now.boundRadius;
+				const RenderObjClass *top = (const MeshClass *)beam.mesh;
+				while (top->Get_Container() != NULL)
+					top = top->Get_Container();
+				lm.owner = top;
+			}
 			++s_stats.beams;
 		}
 
@@ -1675,8 +2151,11 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	dev->GetRenderState(D3DRS_DESTBLEND,        &destBlend);
 	D3DVIEWPORT9 oldVP;
 	const Bool haveVP = SUCCEEDED(dev->GetViewport(&oldVP));
-	float savedConstants[16 * 4];
-	const Bool haveConstants = SUCCEEDED(dev->GetPixelShaderConstantF(0, savedConstants, 16));
+	float savedConstants[33 * 4];		// c0..c15, c16..c29: a light's shadow maps, c30..c32: the world's axes
+	const Bool haveConstants = SUCCEEDED(dev->GetPixelShaderConstantF(0, savedConstants, 33));
+
+	// Ronin @feature 11/10/2026 DX9: lamp shadow maps, stage B1: into their own target, before the pass sets anything of its own.
+	drawLampMaps(dev);
 
 	dev->SetRenderState(D3DRS_ZENABLE, FALSE);
 	dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
@@ -1720,7 +2199,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	s_stats.sunShade = (shadeUse > 0.0f) ? ((meshShade ? 1 : 0) + ((groundShade != NULL) ? 2 : 0)) : 0;
 	const float shared[5 * 4] =
 	{
-		zNear, zFar, (float)s_view, s_over,
+		zNear, zFar, (s_view == 4) ? 0.0f : (float)s_view, s_over,		// view 4 is the lit frame with the maps over it
 		planeMin.X, planeMax.Y, planeW, planeH,
 		vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y,
 		1.0f / targetW, 1.0f / targetH, shadeUse, s_sunErase,
@@ -1733,6 +2212,13 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	W3DTaa::getJitterNDC(&jitterX, &jitterY);
 	const float jitter[4] = { -0.5f * jitterX, 0.5f * jitterY, 0.0f, 0.0f };		// the shift, in viewport widths and heights
 	dev->SetPixelShaderConstantF(15, jitter, 1);
+	// Ronin @feature 11/10/2026 DX9: the world's axes in view space, for every light: a blast's level maps are picked by world direction.
+	Vector3 worldX, worldY, worldZ;
+	Matrix3D::Inverse_Rotate_Vector(camera.Get_Transform(), Vector3(1.0f, 0.0f, 0.0f), &worldX);
+	Matrix3D::Inverse_Rotate_Vector(camera.Get_Transform(), Vector3(0.0f, 1.0f, 0.0f), &worldY);
+	Matrix3D::Inverse_Rotate_Vector(camera.Get_Transform(), Vector3(0.0f, 0.0f, 1.0f), &worldZ);
+	const float axes[3 * 4] = { worldX.X, worldX.Y, worldX.Z, 0.0f, worldY.X, worldY.Y, worldY.Z, 0.0f, worldZ.X, worldZ.Y, worldZ.Z, 0.0f };
+	dev->SetPixelShaderConstantF(30, axes, 3);
 
 	for (DWORD stage = 0; stage < 4; ++stage)
 	{
@@ -1746,6 +2232,28 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	dev->SetTexture(1, s_copy->Peek_D3D_Texture());
 	dev->SetTexture(2, (shadeUse > 0.0f && meshShade) ? s_shadeTex->Peek_D3D_Texture() : NULL);
 	dev->SetTexture(3, (shadeUse > 0.0f) ? groundShade : NULL);
+	// Ronin @feature 11/10/2026 DX9: the lamps' shadow maps: this frame's atlas on s4, last frame's on s6, LINEAR - the sampler
+	// compares 2x2 texels and blends.
+	IDirect3DBaseTexture9 *mapsNow = (s_lampDrawn && s_lampShadows > 0.0f && s_lampDepth[s_lampFlip] != NULL)
+									 ? s_lampDepth[s_lampFlip]->Peek_D3D_Base_Texture() : NULL;
+	IDirect3DBaseTexture9 *mapsWas = (s_lampPrevCount > 0 && s_lampDepth[s_lampFlip ^ 1] != NULL)
+									 ? s_lampDepth[s_lampFlip ^ 1]->Peek_D3D_Base_Texture() : NULL;
+	const Bool readMaps = (mapsNow != NULL) ? TRUE : FALSE;
+	for (DWORD stage = 4; stage <= 6; stage += 2)
+	{
+		dev->SetSamplerState(stage, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(stage, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(stage, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(stage, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(stage, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	}
+	dev->SetTexture(4, mapsNow);
+	dev->SetTexture(6, readMaps ? mapsWas : NULL);
+	const D3DXMATRIX viewToWorld(To_D3DMATRIX(camera.Get_Transform()));
+	float noMap[14 * 4];						// tiles of no size: the shader finds every pixel outside them, so lit
+	memset(noMap, 0, sizeof(noMap));
+	noMap[52] = -1.0f;							// c29.x: no level maps
+	Bool mapUp = TRUE;							// whatever c16..c29 hold is not ours yet
 
 	// Ronin @feature 09/10/2026 DX9: the layout goes through the wrapper - a raw SetFVF leaves its cached layout stale.
 	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::renderPass");
@@ -1756,6 +2264,44 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	{
 		const LightDraw &d = draws[i];
 		dev->SetPixelShaderConstantF(5, d.c, 10);
+		const Bool mapNow = (readMaps && d.map >= 0) ? TRUE : FALSE;
+		const Bool mapWas = (readMaps && mapsWas != NULL && d.mapWas >= 0 && d.mapWas < s_lampPrevCount) ? TRUE : FALSE;
+		if (mapNow || mapWas)
+		{
+			// Ronin @feature 11/10/2026 DX9: c16-c22 this frame's map, c23-c28 last frame's map of the same light - through THIS
+			// frame's view, so one pixel asks both about the same place. A map that is missing stays a tile of no size.
+			float lamp[14 * 4];
+			memset(lamp, 0, sizeof(lamp));
+			lamp[52] = -1.0f;
+			if (mapNow && d.sides >= 0)
+			{
+				// Ronin @feature 11/10/2026 DX9: c29 - a blast's four level maps: the first tile, the two terms of their depth, a texel.
+				const LampMap &sm = s_lampMaps[d.sides];
+				lamp[52] = (float)d.sides;
+				lamp[53] = sm.farPlane / (sm.farPlane - sm.nearPlane);
+				lamp[54] = sm.nearPlane * sm.farPlane / (sm.farPlane - sm.nearPlane);
+				lamp[55] = 2.0f * sm.tanHalf / (float)LAMP_TILE;
+			}
+			if (mapNow)
+			{
+				lampRegisters(s_lampMaps[d.map], d.map, viewToWorld, lamp, lamp + 16);
+				lamp[20] = 2.0f * s_lampMaps[d.map].tanHalf / (float)LAMP_TILE;		// a texel's width at depth 1
+			}
+			lamp[21] = LAMP_BIAS_NORMAL * s_lampBias; lamp[22] = LAMP_BIAS_LIGHT * s_lampBias; lamp[23] = LAMP_BIAS_UNITS * s_lampBias;
+			lamp[24] = 0.5f / (float)LAMP_ATLAS; lamp[25] = s_lampShadows;
+			if (mapWas)
+			{
+				lampRegisters(s_lampMapsPrev[d.mapWas], d.mapWas, viewToWorld, lamp + 28, lamp + 44);
+				lamp[48] = 2.0f * s_lampMapsPrev[d.mapWas].tanHalf / (float)LAMP_TILE;
+			}
+			dev->SetPixelShaderConstantF(16, lamp, 14);
+			mapUp = TRUE;
+		}
+		else if (mapUp)
+		{
+			dev->SetPixelShaderConstantF(16, noMap, 14);
+			mapUp = FALSE;
+		}
 
 		// Ronin @feature 09/10/2026 DX9: D3D9 texel centres sit half a pixel off pixel centres: the geometry moves, the UVs stay exact.
 		const float l = ((d.x0 - 0.5f) / targetW) * 2.0f - 1.0f;
@@ -1775,14 +2321,64 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	if (masked)
 		W3DTaa::endLightMask();
 
-	// Ronin @feature 09/10/2026 DX9: unbind, then the 3D viewport, the frame's depth, states and constants; the wrapper re-asserts itself.
+	// Ronin @feature 11/10/2026 DX9: the lights are in: the frame's depth goes back before the maps' view, which writes it.
 	dev->SetTexture(0, NULL);
+	dev->SetTexture(4, NULL);
+	dev->SetTexture(6, NULL);
+	DX8Wrapper::Resume_Scene_Depth();
+
+	// Ronin @diagnostic 11/10/2026 DX9: `lights view 4` - the lamps' shadow maps, a tile each, from the top right of the view, over the
+	// lit frame. Written at the nearest depth: the water and the effects, drawn later, covered them.
+	if (s_view == 4 && s_lampDrawn && s_lampColour != NULL && s_lampColour->Peek_D3D_Texture() != NULL)
+	{
+		const float showMaps[4] = { zNear, zFar, 4.0f, s_over };
+		dev->SetPixelShaderConstantF(0, showMaps, 1);
+		DWORD zFuncWas;
+		dev->GetRenderState(D3DRS_ZFUNC, &zFuncWas);
+		dev->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+		dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+		dev->SetRenderState(D3DRS_ZFUNC, D3DCMP_ALWAYS);
+		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+		dev->SetSamplerState(5, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+		dev->SetSamplerState(5, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+		dev->SetSamplerState(5, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(5, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(5, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		dev->SetTexture(5, s_lampColour->Peek_D3D_Texture());
+		const Int   columns = 6;
+		const float side    = floorf((vx1 - vx0) / 12.0f);
+		const float share   = (float)LAMP_TILE / (float)LAMP_ATLAS;
+		for (Int i = 0; i < s_lampMapCount; ++i)
+		{
+			const float x0 = vx1 - (float)(columns - (i % columns)) * (side + 2.0f);
+			const float y0 = vy0 + 2.0f + (float)(i / columns) * (side + 2.0f);
+			if (y0 + side > vy1)
+				break;
+			const float depths[4] = { s_lampMaps[i].nearPlane, s_lampMaps[i].farPlane, 0.0f, 0.0f };
+			dev->SetPixelShaderConstantF(5, depths, 1);
+			const float l = ((x0 - 0.5f) / targetW) * 2.0f - 1.0f;
+			const float r = ((x0 + side - 0.5f) / targetW) * 2.0f - 1.0f;
+			const float t = 1.0f - ((y0 - 0.5f) / targetH) * 2.0f;
+			const float b = 1.0f - ((y0 + side - 0.5f) / targetH) * 2.0f;
+			const float u0 = (float)(i % LAMP_TILES_ROW) * share, u1 = u0 + share;
+			const float v0 = (float)(i / LAMP_TILES_ROW) * share, v1 = v0 + share;
+			struct TileVertex { float x, y, z; float u, v; } q[4];
+			q[0].x = l; q[0].y = t; q[0].z = 0.0f; q[0].u = u0; q[0].v = v0;
+			q[1].x = r; q[1].y = t; q[1].z = 0.0f; q[1].u = u1; q[1].v = v0;
+			q[2].x = l; q[2].y = b; q[2].z = 0.0f; q[2].u = u0; q[2].v = v1;
+			q[3].x = r; q[3].y = b; q[3].z = 0.0f; q[3].u = u1; q[3].v = v1;
+			dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(TileVertex));
+		}
+		dev->SetTexture(5, NULL);
+		dev->SetRenderState(D3DRS_ZFUNC, zFuncWas);
+	}
+
+	// Ronin @feature 09/10/2026 DX9: unbind, then the 3D viewport, the frame's depth, states and constants; the wrapper re-asserts itself.
 	dev->SetTexture(1, NULL);
 	dev->SetTexture(2, NULL);
 	dev->SetTexture(3, NULL);
 	if (haveVP)
 		dev->SetViewport(&oldVP);
-	DX8Wrapper::Resume_Scene_Depth();
 	dev->SetRenderState(D3DRS_ZENABLE,          zEnable);
 	dev->SetRenderState(D3DRS_ZWRITEENABLE,     zWrite);
 	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, alphaBlend);
@@ -1793,7 +2389,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	dev->SetRenderState(D3DRS_SRCBLEND,         srcBlend);
 	dev->SetRenderState(D3DRS_DESTBLEND,        destBlend);
 	if (haveConstants)
-		dev->SetPixelShaderConstantF(0, savedConstants, 16);
+		dev->SetPixelShaderConstantF(0, savedConstants, 33);
 
 	dev->SetVertexShader(NULL);
 	dev->SetPixelShader(NULL);
@@ -1805,6 +2401,8 @@ void W3DLocalLights::shutdown(void)
 	// Ronin @feature 09/10/2026 DX9: the beams: every swapped texture gets its own surface back, and meshes stop asking.
 	MeshClass::Set_Light_Fixture_Note_Func(NULL);
 	DX8InstanceManagerClass::Set_Sun_Shade_Hooks(NULL, NULL);
+	MeshClass::Set_Light_Caster_Note_Func(NULL);
+	s_casterOpen = FALSE;
 	endSunShade();
 	s_shadeOpen = FALSE;
 	REF_PTR_RELEASE(s_shadeTex);
@@ -1827,6 +2425,23 @@ void W3DLocalLights::shutdown(void)
 	s_copyW = 0;
 	s_copyH = 0;
 	s_copyFormat = D3DFMT_UNKNOWN;
+	REF_PTR_RELEASE(s_lampColour);
+	REF_PTR_RELEASE(s_lampDepth[0]);
+	REF_PTR_RELEASE(s_lampDepth[1]);
+	s_lampPrevCount = 0;
+	s_lampFailed   = FALSE;
+	s_lampDrawn    = FALSE;
+	s_lampMapCount = 0;
+	if (s_lampVS != NULL)
+	{
+		s_lampVS->Release();
+		s_lampVS = NULL;
+	}
+	if (s_lampPS != NULL)
+	{
+		s_lampPS->Release();
+		s_lampPS = NULL;
+	}
 	if (s_lightPS != NULL)
 	{
 		s_lightPS->Release();

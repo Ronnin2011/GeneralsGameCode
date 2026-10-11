@@ -133,6 +133,8 @@ MeshClass::ShadowMoverNoteFunc MeshClass::s_ShadowMoverNote = NULL;
 MeshClass::TaaMeshNoteFunc MeshClass::s_TaaMeshNote = NULL;
 // Ronin @feature 09/10/2026 DX9: set by W3DLocalLights so a mesh that only looks like a light can report itself (lighting part 2).
 MeshClass::LightFixtureNoteFunc MeshClass::s_LightFixtureNote = NULL;
+// Ronin @feature 11/10/2026 DX9: set by W3DLocalLights: every drawn mesh reports itself as a possible caster of a lamp's shadow.
+MeshClass::LightCasterNoteFunc MeshClass::s_LightCasterNote = NULL;
 // Ronin @perf 26/08/2026 DX9: §29i.5 — FALSE except inside the shadow depth-pass scene render.
 bool MeshClass::s_InShadowDepthPass = false;
 static SimpleDynVecClass<uint32> temp_apt;
@@ -688,6 +690,12 @@ void MeshClass::Render(RenderInfoClass & rinfo)
 		if (fixture == 2) {
 			return;
 		}
+	}
+
+	// Ronin @feature 11/10/2026 DX9: lamp shadow maps - this mesh is drawn, so it may stand in a lamp's light. After the check above:
+	// a beam mesh that is not drawn casts nothing. Not in the sun's depth pass.
+	if (s_LightCasterNote != NULL && !s_InShadowDepthPass) {
+		s_LightCasterNote(this);
 	}
 
 	// Ronin @feature 24/09/2026 DX9: TAA motion vectors, §14. Main pass only - the shadow depth pass renders the

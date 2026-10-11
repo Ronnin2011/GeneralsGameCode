@@ -34,6 +34,9 @@ public:
 	// Ronin @feature 09/10/2026 DX9: lighting part 2, the beams. MeshClass::Render asks this about every mesh once: 0 = no light fixture,
 	// 1 = one, draw it, 2 = one whose beam a spot light replaces this frame: do not draw it. Lighting_Work.md 4.2.
 	static int  noteFixtureMesh(MeshClass *mesh);
+	// Ronin @feature 11/10/2026 DX9: lamp shadow maps. MeshClass::Render calls this for every mesh it draws; kept for the frame
+	// (main pass, solid meshes) so each lamp's map can be drawn from what stands in its light. Lighting_Work.md 6b.
+	static void noteCaster(MeshClass *mesh);
 	// Ronin @feature 09/10/2026 DX9: TRUE = this mesh's beam polygons are clear this frame (their texture is swapped); TAA must not
 	// treat the mesh as a moving-texture translucent one on their account.
 	static Bool beamsHiddenIn(const MeshClass *mesh);
@@ -51,7 +54,7 @@ public:
 	static float getRange(void);
 	static void  setSmall(Bool on);			// see wantsSmallLights
 	static Bool  getSmall(void);
-	static void  setView(Int v);			// 0 off, 1 the light alone, 2 the facing used, 3 the rectangles drawn
+	static void  setView(Int v);			// 0 off, 1 the light alone, 2 the facing used, 3 the rectangles drawn, 4 the lamps' shadow maps
 	static Int   getView(void);
 	static void  setBeams(float v);			// the beams' strength as lights; 0 = the art's own beams, no lights
 	static float getBeams(void);
@@ -77,6 +80,21 @@ public:
 	static float getPoolFill(void);
 	static void  setHotspot(float v);		// the share of a beam's cone at full strength; 0 = it fades from the axis out
 	static float getHotspot(void);
+	// Ronin @feature 11/10/2026 DX9: lamp shadow maps: a depth map per beam, drawn from its lamp, and read by its light (stage B).
+	static void  setLampMaps(Bool on);		// FALSE = no maps drawn, so no lamp shadows
+	static Bool  getLampMaps(void);
+	static void  setLampShadows(float v);	// how much a beam's shadow takes; 0 = the maps are drawn and not read
+	static float getLampShadows(void);
+	static void  setLampBias(float v);		// multiplies the receiver's bias: lower = tighter contact, more risk of stripes
+	static float getLampBias(void);
+	static void  setLampSelf(Bool on);		// TRUE = the lamp's own object casts in its light too
+	static Bool  getLampSelf(void);
+	static void  setLampSelfNear(float v);	// ... but only past this share of the beam's length: a housing round the bulb casts nothing
+	static float getLampSelfNear(void);
+	static void  setPointMaps(Bool on);		// TRUE = the engine's point lights (firing flashes, blasts) get a map too, straight down
+	static Bool  getPointMaps(void);
+	static void  setPointSides(Bool on);	// TRUE = a big point light low over the ground (a blast) gets four level maps as well
+	static Bool  getPointSides(void);
 	// Ronin @feature 10/10/2026 DX9: lighting part 3, step 1. Called round the mesh shader's draws (DX8InstanceManagerClass hooks): binds a
 	// second target that takes the sun's shade (RigidInstance_ps COLOR1), in the main pass only.
 	static void  beginSunShade(void);
@@ -102,6 +120,15 @@ public:
 		Int   glows;			// lamp glows that became point lights
 		Int   pools;			// painted pools no lamp covers that got a light of their own
 		Int   sunShade;			// the sun's shade the lights read this frame: 1 = the meshes', 2 = the terrain's, 3 = both
+		Int   casters;			// lamp shadow maps: solid meshes drawn this frame, the casters to choose from
+		Int   lampMaps;			// ... lights that got a map
+		Int   lampPoints;		// ... of them the engine's point lights (the rest are beams)
+		Int   lampSides;		// ... and of those, the ones with four level maps as well (blasts)
+		Int   lampDraws;		// ... draws into the maps, summed
+		Int   lampMost;			// ... the most any one map took
+		Int   lampTris;			// ... and their triangles, summed
+		Int   lampOwn;			// ... casters left out as the lamp's own object (`lights lampself 0`)
+		Int   lampSkins;		// ... and skinned meshes there was no room to deform
 		Int   beamMeshes;		// beam-only meshes left undrawn (every pass counts)
 		Int   beamModels;		// beam models read so far
 	};

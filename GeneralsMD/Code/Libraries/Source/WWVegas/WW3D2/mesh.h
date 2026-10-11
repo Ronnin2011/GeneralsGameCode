@@ -197,6 +197,12 @@ public:
 	static LightFixtureNoteFunc	s_LightFixtureNote;
 	unsigned char					Get_Light_Fixture() const { return LightFixture; }
 
+	// Ronin @feature 11/10/2026 DX9: lamp shadow maps - every mesh that is drawn reports itself, so W3DLocalLights knows what stands in
+	// each lamp's light (docs/Lighting_Work.md 6b). The callback itself sorts out which pass this is.
+	typedef void					(*LightCasterNoteFunc)(MeshClass *mesh);
+	static void						Set_Light_Caster_Note_Func(LightCasterNoteFunc fn) { s_LightCasterNote = fn; }
+	static LightCasterNoteFunc	s_LightCasterNote;
+
 protected:
 
 	virtual void					Add_Dependencies_To_List (DynamicVectorClass<StringClass> &file_list, bool textures_only = false) override;

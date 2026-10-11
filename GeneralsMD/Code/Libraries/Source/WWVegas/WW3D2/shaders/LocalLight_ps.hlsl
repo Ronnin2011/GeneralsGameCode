@@ -6,6 +6,9 @@
 sampler2D g_SceneDepth : register(s0);      // INTZ, POINT, CLAMP
 sampler2D g_Frame      : register(s1);      // the frame as it stood before any light, POINT, CLAMP
 sampler2D g_SunShade   : register(s2);      // rgb = what the sun's shadow left of each mesh pixel (RigidInstance_ps COLOR1); a = 1 where one wrote
+sampler2D g_LampDepth  : register(s4);      // the lamps' shadow maps: D24S8, LINEAR, CLAMP - the sampler compares and returns lit or not
+sampler2D g_LampDepthWas : register(s6);    // ... and last frame's, for the change mask
+sampler2D g_LampMap    : register(s5);      // `lights view 4` only: the same maps as colour, depth over two bytes, POINT, CLAMP
 sampler2D g_GroundShade : register(s3);     // the same for the terrain, as its own shadow pass composited it; white = none taken
 
 float4 g_Camera     : register(c0);         // x = camera near, y = camera far, z = view mode, w = overbright
@@ -26,6 +29,17 @@ float4 g_LightAxis  : register(c11);        // xyz = the axis, away from the lam
 float4 g_PrevAxis   : register(c12);        // the same, last frame, in THIS frame's view space
 float4 g_Shaft      : register(c13);        // the beam in the air: x = its strength now, y = last frame's (0 = none); z = the spill's strength, w = 1 / its width
 float4 g_Jitter     : register(c15);        // xy = how far TAA shifted this frame on screen, in viewport widths and heights (0 without TAA)
+float4x4 g_LampClip : register(c16);        // a beam's shadow map: view space to its tile - atlas uv x w, depth, w
+float4 g_LampTile   : register(c20);        // ... the tile in atlas uv: xy = min, zw = max; all 0 = this light has no map
+float4 g_LampBias   : register(c21);        // ... x = a texel's width at depth 1; the bias: y = along the normal, z = to the lamp (texels), w = to the lamp (units)
+float4 g_LampTaps   : register(c22);        // ... x = half a texel in atlas uv, y = how much the shadow takes
+float4x4 g_LampClipWas : register(c23);     // the same light's map LAST frame: THIS frame's view space to its tile then
+float4 g_LampTileWas : register(c27);       // ... that tile; all 0 = it had none
+float4 g_LampWas    : register(c28);        // ... x = a texel's width at depth 1 in that map
+float4 g_LampSides  : register(c29);        // a blast's four level maps: x = the first one's tile (+X, -X, +Y, -Y follow; below 0 = none), depth = y - z / distance, w = a texel's width at depth 1
+float4 g_WorldX     : register(c30);        // the world's axes in view space, the same for every light
+float4 g_WorldY     : register(c31);
+float4 g_WorldZ     : register(c32);
 float4 g_Corona     : register(c14);        // a lamp's own glow: x = radius, y = strength; z, w = last frame's (0 = none). A beam: x, z = where its shaft ends
 
 struct PS_OUTPUT
@@ -145,6 +159,72 @@ float corona(float3 P, float3 lamp, float radius)
     return g * g * seen * step(0.0f, t);
 }
 
+static const float LAMP_TILES_ROW = 8.0f;       // W3DLocalLights: LAMP_ATLAS / LAMP_TILE
+
+// Ronin @feature 11/10/2026 DX9: a big point light low over the ground (a blast) has four more maps, level, a quarter turn apart. Which
+// one holds a point, and where in it, is worked out by hand - one register a light, no matrix a face (scratchpad lampside_math_check.py).
+struct LampSide
+{
+    float3 at;      // atlas uv, and the depth to compare
+    float4 rect;    // that face's tile, half a texel in
+    float  use;     // 1 = one of the four holds the point
+};
+
+LampSide lampSide(float3 P, float3 N, float3 lamp)
+{
+    LampSide o;
+    float3 toL   = lamp - P;
+    float  dist  = max(length(toL), 0.001f);
+    toL /= dist;
+    float  texel = g_LampSides.w * dist;
+    float  ndl   = saturate(dot(N, toL));
+    float3 dv    = P + N * (g_LampBias.y * texel * sqrt(1.0f - ndl * ndl)) + toL * (g_LampBias.z * texel + g_LampBias.w) - lamp;
+    float3 d     = float3(dot(dv, g_WorldX.xyz), dot(dv, g_WorldY.xyz), dot(dv, g_WorldZ.xyz));
+    bool   onX   = abs(d.x) >= abs(d.y);
+    float  major = onX ? d.x : d.y;
+    float  m     = max(abs(major), 0.0001f);
+    float  safe  = (major < 0.0f) ? -m : m;
+    float  nx    = onX ? (d.y / safe) : (-d.x / safe);
+    float  ny    = d.z / m;
+    float  face  = onX ? ((d.x > 0.0f) ? 0.0f : 1.0f) : ((d.y > 0.0f) ? 2.0f : 3.0f);
+    float  index = g_LampSides.x + face;
+    float  row   = floor((index + 0.5f) / LAMP_TILES_ROW);
+    float2 origin = float2(index - row * LAMP_TILES_ROW, row) / LAMP_TILES_ROW;
+    o.at   = float3(origin + float2(nx * 0.5f + 0.5f, 0.5f - ny * 0.5f) / LAMP_TILES_ROW + g_LampTaps.xx, g_LampSides.y - g_LampSides.z / m);
+    o.rect = float4(origin + g_LampTaps.xx, origin + 1.0f / LAMP_TILES_ROW - g_LampTaps.xx);
+    o.use  = (g_LampSides.x >= 0.0f && abs(ny) < 1.0f) ? 1.0f : 0.0f;      // within 45 degrees of level; the downward map has the rest
+    return o;
+}
+
+// Ronin @feature 11/10/2026 DX9: LAMP SHADOW MAPS, the read (Lighting_Work.md 6b). 1 = the lamp sees this point. The bias is on the
+// receiver: along its normal by the light's slant, and towards the lamp, in map texels at its own distance.
+float lampShadow(sampler2D map, float4x4 toTile, float4 tile, float texelAt1, float3 P, float3 N, float3 lamp, LampSide side)
+{
+    float3 toL   = lamp - P;
+    float  dist  = max(length(toL), 0.001f);
+    toL /= dist;
+    float  texel = texelAt1 * dist;
+    float  ndl   = saturate(dot(N, toL));
+    float3 Pb    = P + N * (g_LampBias.y * texel * sqrt(1.0f - ndl * ndl)) + toL * (g_LampBias.z * texel + g_LampBias.w);
+    float4 c     = mul(float4(Pb, 1.0f), toTile);
+    float3 s     = c.xyz / max(c.w, 0.0001f);
+    // Ronin @feature 11/10/2026 DX9: outside its tile (or no tile: all zero) the lamp has no map - lit. The taps stay half a texel inside.
+    float  inMap = (c.w > 0.0f && s.x > tile.x && s.x < tile.z && s.y > tile.y && s.y < tile.w) ? 1.0f : 0.0f;
+    float2 lo    = tile.xy + g_LampTaps.xx;
+    float2 hi    = tile.zw - g_LampTaps.xx;
+    // Ronin @feature 11/10/2026 DX9: a blast's level map where one holds the point: the same four taps, in that tile.
+    s     = lerp(s, side.at, side.use);
+    lo    = lerp(lo, side.rect.xy, side.use);
+    hi    = lerp(hi, side.rect.zw, side.use);
+    inMap = max(inMap, side.use);
+    float  z     = min(s.z, 1.0f);
+    float  sum   = tex2Dproj(map, float4(clamp(s.xy + float2(-g_LampTaps.x, -g_LampTaps.x), lo, hi), z, 1.0f)).r
+                 + tex2Dproj(map, float4(clamp(s.xy + float2( g_LampTaps.x, -g_LampTaps.x), lo, hi), z, 1.0f)).r
+                 + tex2Dproj(map, float4(clamp(s.xy + float2(-g_LampTaps.x,  g_LampTaps.x), lo, hi), z, 1.0f)).r
+                 + tex2Dproj(map, float4(clamp(s.xy + float2( g_LampTaps.x,  g_LampTaps.x), lo, hi), z, 1.0f)).r;
+    return lerp(1.0f, sum * 0.25f, inMap * g_LampTaps.y);
+}
+
 PS_OUTPUT main(float2 uv : TEXCOORD0)
 {
     PS_OUTPUT o;
@@ -153,6 +233,17 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
     if (view == 3)
     {
         o.color = float4(0.10f, 0.03f, 0.0f, 0.0f);    // the rectangle each light costs
+        return o;
+    }
+    // Ronin @diagnostic 11/10/2026 DX9: lamp shadow maps - one lamp's map as it was drawn: bright near the lamp, dark far from it,
+    // blue where nothing stands in its light. uv = its tile in the atlas; g_LightPos.xy = the map's near and far.
+    if (view == 4)
+    {
+        float2 e     = tex2Dlod(g_LampMap, float4(uv, 0.0f, 0.0f)).rg;
+        float  z     = (e.x * 65280.0f + e.y * 255.0f) / 65535.0f;     // TaaMoverLight_ps: the high byte, then the low
+        float  share = g_LightPos.x / max(g_LightPos.y - z * (g_LightPos.y - g_LightPos.x), 0.0001f);    // its distance, in the map's reach
+        float  grey  = 1.0f - 0.8f * saturate(share);
+        o.color = (z > 0.99998f) ? float4(0.03f, 0.06f, 0.14f, 0.0f) : float4(grey, grey, grey, 0.0f);
         return o;
     }
 
@@ -170,24 +261,31 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
 
     float3 result  = float3(0.0f, 0.0f, 0.0f);
     float3 resultP = float3(0.0f, 0.0f, 0.0f);     // what the light added as it was last frame
+    // Ronin @feature 09/10/2026 DX9: facing from the neighbouring depth texels, the smaller step on each axis so an edge does not bend it.
+    float3 Pr = viewPosition(uv + float2(g_TexelSize.x, 0.0f));
+    float3 Pl = viewPosition(uv - float2(g_TexelSize.x, 0.0f));
+    float3 Pd = viewPosition(uv + float2(0.0f, g_TexelSize.y));
+    float3 Pu = viewPosition(uv - float2(0.0f, g_TexelSize.y));
+    float3 dx = (abs(Pr.z - P.z) < abs(P.z - Pl.z)) ? (Pr - P) : (P - Pl);
+    float3 dy = (abs(Pd.z - P.z) < abs(P.z - Pu.z)) ? (Pd - P) : (P - Pu);
+    float3 N  = normalize(cross(dy, dx));
+    if (dot(N, -P) < 0.0f)
+        N = -N;                                 // face the camera
+    // Ronin @feature 11/10/2026 DX9: the lamp's shadow map, read out here: fxc refuses the compared read inside a branch (it needs
+    // the screen's gradients). As it is now and as it was last frame: where a shadow moved, the change mask below says so.
+    LampSide side = lampSide(P, N, g_LightPos.xyz);
+    LampSide none = side;
+    none.use = 0.0f;
+    float lampLit  = lampShadow(g_LampDepth, g_LampClip, g_LampTile, g_LampBias.x, P, N, g_LightPos.xyz, side);
+    float lampLitP = lampShadow(g_LampDepthWas, g_LampClipWas, g_LampTileWas, g_LampWas.x, P, N, g_PrevPos.xyz, none);
+    lampLitP = lerp(lampLitP, lampLit, side.use);      // the level maps keep no last frame: there the shadow counts as unmoved
     [branch]
     if (reach + reachP > 0.0f)
     {
-        // Ronin @feature 09/10/2026 DX9: facing from the neighbouring depth texels, the smaller step on each axis so an edge does not bend it.
-        float3 Pr = viewPosition(uv + float2(g_TexelSize.x, 0.0f));
-        float3 Pl = viewPosition(uv - float2(g_TexelSize.x, 0.0f));
-        float3 Pd = viewPosition(uv + float2(0.0f, g_TexelSize.y));
-        float3 Pu = viewPosition(uv - float2(0.0f, g_TexelSize.y));
-        float3 dx = (abs(Pr.z - P.z) < abs(P.z - Pl.z)) ? (Pr - P) : (P - Pl);
-        float3 dy = (abs(Pd.z - P.z) < abs(P.z - Pu.z)) ? (Pd - P) : (P - Pu);
-        float3 N  = normalize(cross(dy, dx));
-        if (dot(N, -P) < 0.0f)
-            N = -N;                             // face the camera
-
         float  ndl   = saturate(dot(N, toL / max(dist, 0.001f)));
-        float3 light = (g_LightDiff.rgb * ndl + g_LightAmb.rgb) * reach;
+        float3 light = (g_LightDiff.rgb * ndl + g_LightAmb.rgb) * (reach * lampLit);
         float  ndlP   = saturate(dot(N, toP / max(distP, 0.001f)));
-        float3 lightP = (g_PrevDiff.rgb * ndlP + g_PrevAmb.rgb) * reachP;
+        float3 lightP = (g_PrevDiff.rgb * ndlP + g_PrevAmb.rgb) * (reachP * lampLitP);
 
         if (view == 1)
             result = light * 0.5f;              // the light alone, on a grey world
