@@ -47,6 +47,8 @@ float4 g_ViewportRect     : register(c23);   // xy = viewport origin, zw = viewp
 // RigidInstance_ps, and PS constants are global device state, not per-shader.
 float4x4 g_LightViewProjFar : register(c24); // c24..c27, TRANSPOSED
 float4 g_CascadeParams : register(c28);      // x = far bias, y = far texel world size, z = cascade count
+// Ronin @feature 11/10/2026 DX9: what a sun shadow leaves on THIS map, as on terrain and meshes (W3DLocalLights publishMapShadow).
+float4 g_ShadeColour  : register(c29);       // rgb = the shade's floor, w = how far it is followed (0 = the old 0.45 everywhere)
 
 struct PS_INPUT
 {
@@ -190,7 +192,10 @@ PS_OUTPUT main(PS_INPUT input)
             float hist = clamp(histT.r, shadeMin, shadeMax);
             shade = lerp(shade, hist, g_ScreenInvSize.z * valid);
 
-            color.rgb *= shade;
+            // Ronin @feature 11/10/2026 DX9: the history above keeps its plain 0.45..1 scale; what multiplies the colour is the map's own
+            // shade - its depth and its tint.
+            float3 shadeFloor = lerp(float3(0.45f, 0.45f, 0.45f), g_ShadeColour.rgb, g_ShadeColour.w);
+            color.rgb *= lerp(shadeFloor, float3(1.0f, 1.0f, 1.0f), saturate((shade - 0.45f) / 0.55f));
             o.term = float4(shade, shade, shade, 1.0f);
         }
     }

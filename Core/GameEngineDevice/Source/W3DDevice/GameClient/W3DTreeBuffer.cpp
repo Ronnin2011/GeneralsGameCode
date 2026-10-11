@@ -1840,6 +1840,9 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 										 TheTerrainShadowPass.texelWorldSizeFar,
 										 TheTerrainShadowPass.cascadeCount, 0.0f };
 				psDev->SetPixelShaderConstantF(28, psC28, 1);
+				// Ronin @feature 11/10/2026 DX9: c29 - what a sun shadow leaves on this map; the trees kept a flat 0.45 when terrain and
+				// meshes began to follow it.
+				psDev->SetPixelShaderConstantF(29, TheTerrainShadowPass.shadeColour, 1);
 				psDev->SetTexture(5, TheTerrainShadowPass.shadowTexFar ?
 									 TheTerrainShadowPass.shadowTexFar : TheTerrainShadowPass.shadowTex);
 				psDev->SetSamplerState(5, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
