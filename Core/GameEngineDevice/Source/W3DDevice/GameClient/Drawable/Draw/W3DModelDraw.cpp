@@ -3724,13 +3724,16 @@ Bool W3DModelDraw::handleWeaponFireFX(WeaponSlotType wslot, Int specificBarrelTo
 
 	if (fxl)
 	{
-		if (info.m_fxBone && m_renderObject)
+		// Ronin @bugfix 11/10/2026 DX9: no fire bone named: the muzzle flash's bone is the muzzle. The Strategy Center's and the artillery
+		// platform's blasts (and their light) played at the building's own position, on the ground in its middle.
+		const Int fxBone = (info.m_fxBone != 0) ? info.m_fxBone : info.m_muzzleFlashBone;
+		if (fxBone && m_renderObject)
 		{
 			const Object *logicObject = getDrawable()->getObject();// This is slow, so store it
 			if( ! m_renderObject->Is_Hidden() || (logicObject == nullptr) )
 			{
 				// I can ask the drawable's bone position if I am not hidden (if I have no object I have no choice)
-				const Matrix3D& mtx = m_renderObject->Get_Bone_Transform(info.m_fxBone);
+				const Matrix3D& mtx = m_renderObject->Get_Bone_Transform(fxBone);
 				Coord3D pos;
 				pos.x = mtx.Get_X_Translation();
 				pos.y = mtx.Get_Y_Translation();
