@@ -592,6 +592,8 @@ static IDirect3DBaseTexture9* s_shadowMapTexFar     = nullptr;
 static float                  s_shadowLightVPFar[16] = { 0 };
 static float                  s_shadowDepthBiasFar   = 0.0f;
 static float                  s_shadowTexelWorldFar  = 0.0f;
+// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. See Set_Shadow_Shade. w stays 0 until it is called: the old 0.45.
+static float                  s_shadowShade[4]       = { 0.45f, 0.45f, 0.45f, 0.0f };
 
 void DX8InstanceManagerClass::Set_Shadow_Map(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
                                              float texelOffset, float depthBias,
@@ -622,6 +624,12 @@ void DX8InstanceManagerClass::Set_Shadow_Map_Far(IDirect3DBaseTexture9* tex, con
 // Ronin @feature 10/10/2026 DX9: lighting part 3 - set by W3DLocalLights, called round Flush_Single_Rigid's draws.
 DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_SunShadeBegin = nullptr;
 DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_SunShadeEnd = nullptr;
+
+void DX8InstanceManagerClass::Set_Shadow_Shade(const float* rgbw)
+{
+	if (rgbw != nullptr)
+		memcpy(s_shadowShade, rgbw, sizeof(float) * 4);
+}
 
 
 // Ronin @diagnostic 26/06/2026 DX9 P2: how many category flushes per frame (=> avg batch size).
@@ -1293,6 +1301,8 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		const float psC22[4] = { s_shadowDepthBiasFar, s_shadowTexelWorldFar,
 								 (s_shadowMapTexFar != nullptr) ? 2.0f : 1.0f, 0.0f };
 		dev->SetPixelShaderConstantF(22, psC22, 1);
+		// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2 - c24: what a sun shadow leaves on this map, and how far to follow it.
+		dev->SetPixelShaderConstantF(24, s_shadowShade, 1);
 		dev->SetTexture(4, (s_shadowMapTexFar != nullptr) ? s_shadowMapTexFar : s_shadowMapTex);
 		dev->SetSamplerState(4, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
 		dev->SetSamplerState(4, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);

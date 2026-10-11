@@ -1105,8 +1105,52 @@ float W3DLocalLights::getSunFill(void)		{ return s_sunFill; }
 void  W3DLocalLights::setSunErase(float v)	{ s_sunErase = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
 float W3DLocalLights::getSunErase(void)		{ return s_sunErase; }
 
+// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2 - what a sun shadow leaves on THIS map: its light without the sun over its light
+// with it, on flat ground, per channel (it was 0.45 everywhere). For TerrainShadow_ps (c21) and RigidInstance_ps (c24).
+static float				s_mapShadow     = 1.0f;	// `lights mapshadow`
+
+static void publishMapShadow(void)
+{
+	float rest[3] = { 0.0f, 0.0f, 0.0f };
+	float sun[3]  = { 0.0f, 0.0f, 0.0f };
+	if (TheGlobalData != NULL)
+	{
+		for (Int i = 0; i < MAX_GLOBAL_LIGHTS; ++i)
+		{
+			const GlobalData::TerrainLighting &tl = TheGlobalData->m_terrainLighting[TheGlobalData->m_timeOfDay][i];
+			const float len = sqrtf(tl.lightPos.x * tl.lightPos.x + tl.lightPos.y * tl.lightPos.y + tl.lightPos.z * tl.lightPos.z);
+			float down = (len > 0.0001f) ? (-tl.lightPos.z / len) : 0.0f;
+			if (down < 0.0f)
+				down = 0.0f;
+			const float direct[3] = { tl.diffuse.red * down, tl.diffuse.green * down, tl.diffuse.blue * down };
+			float *into = (i == 0) ? sun : rest;		// light 0 is the sun: the one the shadow map is fitted to
+			into[0] += direct[0];
+			into[1] += direct[1];
+			into[2] += direct[2];
+			rest[0] += tl.ambient.red;
+			rest[1] += tl.ambient.green;
+			rest[2] += tl.ambient.blue;
+		}
+	}
+	float *out = TheTerrainShadowPass.shadeColour;
+	for (Int c = 0; c < 3; ++c)
+	{
+		const float total = rest[c] + sun[c];
+		float v = (total > 0.001f) ? (rest[c] / total) : 0.45f;
+		if (v < 0.1f) v = 0.1f;
+		if (v > 1.0f) v = 1.0f;
+		out[c] = v;
+	}
+	out[3] = s_mapShadow;
+	DX8InstanceManagerClass::Set_Shadow_Shade(out);
+}
+
+void  W3DLocalLights::setMapShadow(float v)	{ s_mapShadow = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float W3DLocalLights::getMapShadow(void)	{ return s_mapShadow; }
+
 void W3DLocalLights::beginFrame(void)
 {
+	publishMapShadow();		// Ronin @feature 10/10/2026 DX9: every frame, whether or not the light pass runs
 	s_shown = s_stats;
 	s_stats.live     = 0;
 	s_stats.drawn    = 0;

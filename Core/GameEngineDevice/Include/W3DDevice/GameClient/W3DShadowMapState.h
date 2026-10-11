@@ -80,6 +80,9 @@ struct TerrainShadowPassState
 	// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. TRUE with inDepthPass while the MAIN camera renders depth only: a
 	// second render like the light's, but none of the light's culls apply. APPENDED - rebuild GeneralsMD and Core.
 	Bool viewDepthPass;
+	// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. What a sun shadow leaves on this map, per channel (rgb), and how far to
+	// follow it (w; 0 = the old 0.45). Written by W3DLocalLights each frame. APPENDED - rebuild GeneralsMD and Core.
+	float shadeColour[4];
 };
 
 

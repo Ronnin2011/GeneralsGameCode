@@ -2594,6 +2594,8 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 	const float emaWeight = ShaderClass::Is_Backface_Culling_Inverted() ? 0.0f : sm.accumWeight;
 	const float psC4[4] = { emaWeight, sm.depthBias, sm.texelOffset, sm.texelOffset };
 	dev->SetPixelShaderConstantF(4, psC4, 1);
+	// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2 - c21: what a shadow leaves on this map (rgb), how far to follow it (w).
+	dev->SetPixelShaderConstantF(21, sm.shadeColour, 1);
 
 	// Ronin @bugfix 05/09/2026 DX9: §29j.13h. RENDER TARGET size, not the viewport — VPOS is in
 	// render-target space and the two differ by the command bar. Doc §9.14.

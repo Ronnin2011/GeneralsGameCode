@@ -5,7 +5,7 @@
 
 sampler2D g_SceneDepth : register(s0);      // INTZ, POINT, CLAMP
 sampler2D g_Frame      : register(s1);      // the frame as it stood before any light, POINT, CLAMP
-sampler2D g_SunShade   : register(s2);      // what the sun's shadow left of each mesh pixel (RigidInstance_ps COLOR1); 0 = not written
+sampler2D g_SunShade   : register(s2);      // rgb = what the sun's shadow left of each mesh pixel (RigidInstance_ps COLOR1); a = 1 where one wrote
 sampler2D g_GroundShade : register(s3);     // the same for the terrain, as its own shadow pass composited it; white = none taken
 
 float4 g_Camera     : register(c0);         // x = camera near, y = camera far, z = view mode, w = overbright
@@ -249,10 +249,11 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
             float3 frame   = tex2Dlod(g_Frame, float4(uv, 0.0f, 0.0f)).rgb;
             // Ronin @feature 10/10/2026 DX9: lighting part 3 - the frame is darker where the sun's shadow fell; the mesh's own draw recorded by
             // how much, so the lamp lights the surface as it is, not as the shadow left it.
-            float  shadeM  = tex2Dlod(g_SunShade, float4(uv, 0.0f, 0.0f)).r;
-            float  shadeG  = tex2Dlod(g_GroundShade, float4(uv, 0.0f, 0.0f)).r;
-            float  shade   = (shadeM > 0.2f) ? shadeM : ((shadeG > 0.2f) ? shadeG : 1.0f);    // a mesh's own first, else the ground's
-            shade = lerp(1.0f, min(shade, 1.0f), g_TexelSize.z);
+            float4 shadeM  = tex2Dlod(g_SunShade, float4(uv, 0.0f, 0.0f));
+            float3 shadeG  = tex2Dlod(g_GroundShade, float4(uv, 0.0f, 0.0f)).rgb;
+            float3 white   = float3(1.0f, 1.0f, 1.0f);
+            float3 shade   = (shadeM.a > 0.5f) ? shadeM.rgb : ((max(shadeG.r, max(shadeG.g, shadeG.b)) > 0.05f) ? shadeG : white);    // a mesh's own first, else the ground's
+            shade = lerp(white, clamp(shade, 0.05f, 1.0f), g_TexelSize.z);
             float3 surface = saturate(frame * g_SceneLight.rgb / shade);
             float3 ceiling = max(frame, surface * g_Camera.w);
             // Ronin @feature 10/10/2026 DX9: and the lamp gives back what the sun's shadow took, in step with its own strength here: the

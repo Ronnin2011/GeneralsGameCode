@@ -96,6 +96,9 @@ public:
 	static void Set_Sun_Shade_Hooks(SunShadeHookFunc begin, SunShadeHookFunc end) { s_SunShadeBegin = begin; s_SunShadeEnd = end; }
 	static SunShadeHookFunc s_SunShadeBegin;
 	static SunShadeHookFunc s_SunShadeEnd;
+	// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. What a sun shadow leaves on this map (rgb) and how far to follow it (w; 0 =
+	// the old 0.45) - RigidInstance_ps c24. Pushed down by W3DLocalLights, as the shadow map is.
+	static void Set_Shadow_Shade(const float* rgbw);
 
 
 	/**

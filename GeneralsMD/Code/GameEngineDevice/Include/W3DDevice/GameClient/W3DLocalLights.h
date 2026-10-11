@@ -91,6 +91,8 @@ public:
 	static float getSunFill(void);
 	static void  setSunErase(float v);		// how fast a lamp restores what the sun's shadow took: gone at lamp strength 1 / this; 0 = never
 	static float getSunErase(void);
+	static void  setMapShadow(float v);		// 1 = a sun shadow leaves what this map's light is without its sun; 0 = 0.45 on every map
+	static float getMapShadow(void);
 
 	// Ronin @diagnostic 09/10/2026 DX9: last frame's numbers, for the panel's [LIGHT] row.
 	struct Stats

@@ -45,6 +45,9 @@ float4 g_CascadeParams : register(c22);  // x = far bias, y = far texel world si
 // carries this mesh's own alpha, and needs no depth equality. zw == 0 means the map has no shroud.
 sampler2D g_ShroudSampler : register(s5);
 float4 g_ShroudMap : register(c23);  // xy = world offset, zw = 1/(cellSize * textureSize)
+// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. What a sun shadow leaves on this map (rgb): its light without the sun over its
+// light with it. w = how far to follow it; 0 = 0.45 on every map, as before.
+float4 g_ShadeColour : register(c24);
 
 struct PS_INPUT
 {
@@ -57,9 +60,9 @@ struct PS_INPUT
 
 // Ronin @feature 10/10/2026 DX9: lighting part 3. sunShade = what the sun's shadow left of this pixel (1 = it took nothing); main
 // writes it to COLOR1 for W3DLocalLights, which binds a target there in the main pass.
-float4 meshColour(PS_INPUT input, out float sunShade)
+float4 meshColour(PS_INPUT input, out float3 sunShade)
 {
-    sunShade = 1.0f;
+    sunShade = float3(1.0f, 1.0f, 1.0f);
     const int debugMode = (int) (g_DebugParams.x + 0.5f);
 
     float4 texel = tex2D(g_DiffuseSampler, input.uv0);
@@ -213,7 +216,7 @@ float4 meshColour(PS_INPUT input, out float sunShade)
             }
             // A surface turning away from the sun can only get DARKER — min(), not lerp().
             float lit = min((inNear ? sumN : sumF) * (1.0f / 9.0f), geo);
-            sunShade = lerp(0.45f, 1.0f, lit);
+            sunShade = lerp(lerp(float3(0.45f, 0.45f, 0.45f), g_ShadeColour.rgb, g_ShadeColour.w), float3(1.0f, 1.0f, 1.0f), lit);
             color.rgb *= sunShade;
         }
     }
@@ -232,14 +235,14 @@ float4 meshColour(PS_INPUT input, out float sunShade)
 struct PS_OUTPUT
 {
     float4 color    : COLOR0;
-    float4 sunShade : COLOR1;       // r = the sun's shade; ignored unless a second target is bound
+    float4 sunShade : COLOR1;       // rgb = the sun's shade, a = 1; ignored unless a second target is bound
 };
 
 PS_OUTPUT main(PS_INPUT input)
 {
     PS_OUTPUT o;
-    float sunShade;
+    float3 sunShade;
     o.color    = meshColour(input, sunShade);
-    o.sunShade = float4(sunShade, 0.0f, 0.0f, 1.0f);
+    o.sunShade = float4(sunShade, 1.0f);
     return o;
 }

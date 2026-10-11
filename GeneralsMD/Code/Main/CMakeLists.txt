@@ -123,6 +123,10 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/TerrainShadow.vso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/TerrainShadow.vso"
+        # Ronin @build 10/10/2026 Deploy terrain shadows pixel shader too.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TerrainShadow.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TerrainShadow.pso"
         # Ronin @build 25/08/2026 §29i.4 Deploy tree shaders; override the vs_1_1 pair in ShadersZH.big.
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/Trees.vso"

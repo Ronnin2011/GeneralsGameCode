@@ -35,6 +35,9 @@ float4 g_ViewportRect : register(c11);   // xy = viewport origin, zw = viewport 
 float4x4 g_CurViewProj : register(c12);  // c12..c15, TRANSPOSED — §29j.13q
 float4x4 g_LightViewProjFar : register(c16); // c16..c19, TRANSPOSED — §29i.3 step 2
 float4 g_CascadeParams : register(c20);  // x = far bias, y = far texel world size, z = cascade count
+// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. What a shadow leaves on this map: its light without the sun over its light
+// with it (W3DLocalLights). w = how far to follow it; 0 = 0.45 on every map, as before.
+float4 g_ShadeColour : register(c21);
 
 struct PS_INPUT
 {
@@ -193,9 +196,12 @@ float4 main(PS_INPUT input) : COLOR0
     litMin = min(litMin, geo);
     litMax = min(litMax, geo);
 
-    float shade    = lerp(0.45f, 1.0f, lit);
-    float shadeMin = lerp(0.45f, 1.0f, litMin);
-    float shadeMax = lerp(0.45f, 1.0f, litMax);
+    // Ronin @feature 10/10/2026 DX9: the shade's floor is the map's own (g_ShadeColour). The history below runs on the RED channel, as it
+    // always has; the colour is rebuilt from it at the return.
+    float3 shadeFloor = lerp(float3(0.45f, 0.45f, 0.45f), g_ShadeColour.rgb, g_ShadeColour.w);
+    float shade    = lerp(shadeFloor.r, 1.0f, lit);
+    float shadeMin = lerp(shadeFloor.r, 1.0f, litMin);
+    float shadeMax = lerp(shadeFloor.r, 1.0f, litMax);
 
     // Ronin @bugfix 06/09/2026 DX9: §29j.13j. Neighbourhood clamp — rejects history the shadow map no
     // longer supports at this point. Doc §8.
@@ -205,6 +211,7 @@ float4 main(PS_INPUT input) : COLOR0
     shade = lerp(shade, hist, g_ShadowParams.x * onScreen * (1.0f - strength));
     // Ronin @feature 13/09/2026 DX9: §29i.3. ALPHA = moving-caster memory for next frame. The caller writes RGB only to the
     // frame, so it never reaches the screen.
-    return float4(shade, shade, shade, moving);
+    float litOut = saturate((shade - shadeFloor.r) / max(1.0f - shadeFloor.r, 0.001f));
+    return float4(lerp(shadeFloor, float3(1.0f, 1.0f, 1.0f), litOut), moving);
 }
 
