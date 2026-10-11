@@ -12,7 +12,7 @@ float4 g_Camera     : register(c0);         // x = camera near, y = camera far, 
 float4 g_ViewPlane  : register(c1);         // x = view-plane min X, y = view-plane max Y, z = width, w = height, at depth 1
 float4 g_Viewport   : register(c2);         // xy = 3D viewport min, zw = its size - both 0..1 of the render target
 float4 g_TexelSize  : register(c3);         // xy = 1 / target size, z = how much of the sun's shade the lights undo (0 = none known), w = how fast a lamp restores it
-float4 g_SceneLight : register(c4);         // rgb = 1 / the map's own light on open ground: frame * this ~ surface colour; w = how much the lights' shadows take
+float4 g_SceneLight : register(c4);         // rgb = 1 / the map's own light on open ground: frame * this ~ surface colour
 float4 g_LightPos   : register(c5);         // xyz = the light in view space, w = 1 / (outer - inner)
 float4 g_LightDiff  : register(c6);         // rgb = diffuse * intensity, w = inner radius
 float4 g_LightAmb   : register(c7);         // rgb = ambient * intensity, w = the cone's edge: 1 / (cos inner - cos outer)
@@ -24,8 +24,7 @@ float4 g_PrevAmb    : register(c10);        // rgb = ambient * intensity, w = th
 // A point light uploads cosine -2 and edge 1, so its cone term is 1 everywhere.
 float4 g_LightAxis  : register(c11);        // xyz = the axis, away from the lamp; w = cos outer
 float4 g_PrevAxis   : register(c12);        // the same, last frame, in THIS frame's view space
-float4 g_Shaft      : register(c13);        // the beam in the air: x = its strength now, y = last frame's (0 = none; below 0 = a light that casts no shadow); z = the spill's strength, w = 1 / its width
-float4 g_Noise      : register(c15);        // x = this frame's shift of the shadow rays' dither (TAA averages it; below 0 = none), y = taps in a row a thing must cover to cast, z = how far towards the lamp the ray is walked
+float4 g_Shaft      : register(c13);        // the beam in the air: x = its strength now, y = last frame's (0 = none); z = the spill's strength, w = 1 / its width
 float4 g_Corona     : register(c14);        // a lamp's own glow: x = radius, y = strength; z, w = last frame's (0 = none). A beam: x, z = where its shaft ends
 
 struct PS_OUTPUT
@@ -48,42 +47,6 @@ float3 viewPosition(float2 uv)
 }
 
 static const int SHAFT_STEPS  = 6;
-static const int SHADOW_STEPS = 32;
-
-// Ronin @feature 10/10/2026 DX9: local lights cast shadows from what the frame itself shows: the line from the surface to the lamp is walked
-// through the scene depth. 1 = the lamp is seen from here. A sample counts when it lies BEHIND the frame, but not far behind.
-float lampSeen(float3 P, float3 N, float3 L, float2 uv, out float where)
-{
-    where = 0.0f;       // `lights view 4`: how far along the ray the longest run of covered taps began
-    float3 start = P + N * (0.25f - 0.0015f * P.z);
-    float3 d     = L - start;
-    float  dist  = length(d);
-    float  thick = max(3.0f, 0.25f * dist);
-    // Ronin @feature 10/10/2026 DX9: each pixel starts its taps at its own place along the ray, moved every frame: fixed taps drew a post's
-    // shadow as dashes (scratchpad light/ss_shadow_sim.py). Interleaved gradient noise.
-    float2 px    = uv / g_TexelSize.xy + g_Noise.x;
-    float  shift = (g_Noise.x < 0.0f) ? 0.5f : frac(52.9829189f * frac(0.06711056f * px.x + 0.00583715f * px.y));
-    // Ronin @feature 10/10/2026 DX9: a thing casts only if it covers g_Noise.y taps in a row: fences, poles and the flag caught one tap here
-    // and there, which was the speckle round them. At 32 taps a vehicle still covers several.
-    float  run   = 0.0f;
-    float  occ   = 0.0f;
-    for (int i = 0; i < SHADOW_STEPS; ++i)
-    {
-        float  t    = (i + shift) * (g_Noise.z / SHADOW_STEPS);          // not the last stretch: the lamp's own housing
-        float3 S    = start + d * t;
-        float  e    = max(-S.z, 0.001f);
-        float2 s    = float2((S.x / e - g_ViewPlane.x) / g_ViewPlane.z, (g_ViewPlane.y - S.y / e) / g_ViewPlane.w);
-        float  raw  = tex2Dlod(g_SceneDepth, float4(g_Viewport.xy + s * g_Viewport.zw, 0.0f, 0.0f)).r;
-        float  se   = (g_Camera.x * g_Camera.y) / max(g_Camera.y - raw * (g_Camera.y - g_Camera.x), 0.0001f);
-        float  diff = e - se;
-        float  in01 = (s.x > 0.0f && s.x < 1.0f && s.y > 0.0f && s.y < 1.0f) ? 1.0f : 0.0f;    // off the view: nothing known
-        float  hit  = (diff > 0.15f + 0.0015f * e + 0.01f * t * dist && diff < thick) ? in01 : 0.0f;
-        run = hit * (run + hit);
-        where = (run > occ) ? (t - (run - 1.0f) * (g_Noise.z / SHADOW_STEPS)) / g_Noise.z : where;
-        occ = max(occ, run);
-    }
-    return 1.0f - saturate(occ - (g_Noise.y - 1.0f));
-}
 
 // Ronin @bugfix 09/10/2026 DX9: every falloff ends through this - no slope and no curvature where the light runs out. A ramp
 // that stops dead reads as a dark band round the pool, and the sharpening deepens it.
@@ -219,29 +182,15 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
         if (dot(N, -P) < 0.0f)
             N = -N;                             // face the camera
 
-        // Ronin @feature 10/10/2026 DX9: the shadow goes on this frame's light AND last frame's, so the change mask says nothing about it
-        // and TAA is free to average the dithered rays into a soft shadow (marked, it could not: the sizzle of the first form).
-        float  seen  = 1.0f;
-        [branch]
-        float  where = 0.0f;
-        if ((g_SceneLight.w > 0.0f || view == 4) && g_Shaft.x >= 0.0f && reach > 0.0f && view != 2)
-            seen = lerp(1.0f, lampSeen(P, N, g_LightPos.xyz, uv, where), (view == 4) ? 1.0f : g_SceneLight.w);
         float  ndl   = saturate(dot(N, toL / max(dist, 0.001f)));
-        float3 light = (g_LightDiff.rgb * ndl + g_LightAmb.rgb) * (reach * seen);
+        float3 light = (g_LightDiff.rgb * ndl + g_LightAmb.rgb) * reach;
         float  ndlP   = saturate(dot(N, toP / max(distP, 0.001f)));
-        float3 lightP = (g_PrevDiff.rgb * ndlP + g_PrevAmb.rgb) * (reachP * seen);
+        float3 lightP = (g_PrevDiff.rgb * ndlP + g_PrevAmb.rgb) * reachP;
 
         if (view == 1)
             result = light * 0.5f;              // the light alone, on a grey world
         else if (view == 2)
             result = N * 0.5f + 0.5f;           // the facing it was given
-        else if (view == 4)
-        {
-            // Ronin @diagnostic 10/10/2026 DX9: where a light's shadow was caught: red = by the surface the ray starts from, green = by something
-            // between, blue = close to the lamp (hidden from the camera). Grey = lit. The lights' shadows, localised.
-            float3 at = (where < 0.2f) ? float3(1.0f, 0.1f, 0.1f) : ((where > 0.7f) ? float3(0.2f, 0.3f, 1.0f) : float3(0.1f, 0.9f, 0.2f));
-            result = lerp(float3(0.25f, 0.25f, 0.25f), at, 1.0f - seen) * saturate(reach * 4.0f);
-        }
         else
         {
             // Ronin @feature 09/10/2026 DX9: the frame is surface colour x the map's light: undo that light, light the surface, and stop at

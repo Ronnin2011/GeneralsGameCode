@@ -51,7 +51,7 @@ public:
 	static float getRange(void);
 	static void  setSmall(Bool on);			// see wantsSmallLights
 	static Bool  getSmall(void);
-	static void  setView(Int v);			// 0 off, 1 the light alone, 2 the facing used, 3 the rectangles drawn, 4 where each light's shadow was caught
+	static void  setView(Int v);			// 0 off, 1 the light alone, 2 the facing used, 3 the rectangles drawn
 	static Int   getView(void);
 	static void  setBeams(float v);			// the beams' strength as lights; 0 = the art's own beams, no lights
 	static float getBeams(void);
@@ -77,12 +77,6 @@ public:
 	static float getPoolFill(void);
 	static void  setHotspot(float v);		// the share of a beam's cone at full strength; 0 = it fades from the axis out
 	static float getHotspot(void);
-	static void  setShadows(float v);		// how much a local light's shadow takes (walked through the frame's depth); 0 = no shadows
-	static float getShadows(void);
-	static void  setShadowThin(float v);	// taps in a row (of 32 a ray) a thing must cover to cast a light's shadow; 1 = anything casts
-	static float getShadowThin(void);
-	static void  setShadowEnd(float v);		// how far towards the lamp a shadow ray is walked, 0.3..1 of the way
-	static float getShadowEnd(void);
 	// Ronin @feature 10/10/2026 DX9: lighting part 3, step 1. Called round the mesh shader's draws (DX8InstanceManagerClass hooks): binds a
 	// second target that takes the sun's shade (RigidInstance_ps COLOR1), in the main pass only.
 	static void  beginSunShade(void);

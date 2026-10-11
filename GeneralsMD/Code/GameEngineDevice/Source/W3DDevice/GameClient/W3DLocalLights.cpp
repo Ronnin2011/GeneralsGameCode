@@ -284,13 +284,6 @@ static float		s_coronaSize = 1.0f;	// `lights coronasize`: its radius, in the ar
 static Bool			s_coronasOn = FALSE;
 static float		s_beamReach = 1.8f;		// `lights beamreach`: a beam's light on surfaces ends this far along, in the art cone's length
 static float		s_hotspot   = 0.5f;		// `lights hotspot`: the share of a beam's cone at full strength; the rest fades to its edge
-// Ronin @bugfix 10/10/2026 DX9: OFF by default - an experiment. Second form (dithered rays that TAA averages); in the simulation it
-// still lets a third of the light through true shadow and thin things cast almost none (Lighting_Work.md 6).
-static float		s_shadows   = 0.0f;		// `lights shadows`: local lights cast shadows from the frame's own depth (LocalLight_ps lampSeen)
-// Ronin @bugfix 10/10/2026 DX9: 0.6, not 0.92. A lamp under a canopy or an eave is hidden from the camera, and the last stretch of
-// every ray to it lies behind what the camera sees: simulated, 92% of the lit ground was falsely shadowed; at 0.6, 5%.
-static float		s_shadowEnd  = 0.6f;		// `lights shadowend`: how far towards the lamp a shadow ray is walked
-static float		s_shadowThin = 2.0f;	// `lights shadowthin`: taps in a row a thing must cover to cast; 2 = fences, poles, flags cast nothing
 static float		s_poolFill  = 0.6f;		// `lights poolfill`: the light that stands in for a painted pool no lamp covers; 0 = none
 static Bool			s_poolsOn   = FALSE;
 static Bool			s_keepPools = FALSE;	// `lights pools 1`: the glow textures stay drawn (lamp glows welded into meshes, painted pools)
@@ -1002,12 +995,6 @@ void  W3DLocalLights::setPoolFill(float v)	{ s_poolFill = (v < 0.0f) ? 0.0f : ((
 float W3DLocalLights::getPoolFill(void)	{ return s_poolFill; }
 void  W3DLocalLights::setHotspot(float v)	{ s_hotspot = (v < 0.0f) ? 0.0f : ((v > 0.9f) ? 0.9f : v); }
 float W3DLocalLights::getHotspot(void)	{ return s_hotspot; }
-void  W3DLocalLights::setShadows(float v)	{ s_shadows = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-float W3DLocalLights::getShadows(void)	{ return s_shadows; }
-void  W3DLocalLights::setShadowThin(float v)	{ s_shadowThin = (v < 1.0f) ? 1.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getShadowThin(void)	{ return s_shadowThin; }
-void  W3DLocalLights::setShadowEnd(float v)	{ s_shadowEnd = (v < 0.3f) ? 0.3f : ((v > 1.0f) ? 1.0f : v); }
-float W3DLocalLights::getShadowEnd(void)	{ return s_shadowEnd; }
 
 void W3DLocalLights::setEnabled(Bool on)	{ s_enabled = on; }
 Bool W3DLocalLights::isEnabled(void)		{ return s_enabled; }
@@ -1017,7 +1004,7 @@ void W3DLocalLights::setOver(float v)		{ s_over = (v < 1.0f) ? 1.0f : ((v > 8.0f
 float W3DLocalLights::getOver(void)			{ return s_over; }
 void W3DLocalLights::setBoost(float v)		{ s_boost = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
 float W3DLocalLights::getBoost(void)		{ return s_boost; }
-void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v > 4) ? 4 : v); }
+void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v > 3) ? 3 : v); }
 Int  W3DLocalLights::getView(void)			{ return s_view; }
 Bool W3DLocalLights::ownsDynamicLights(void)	{ return s_active; }
 void W3DLocalLights::setRange(float v)		{ s_range = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
@@ -1530,7 +1517,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			now.axis.Set(0.0f, 0.0f, 1.0f);
 			now.cosOuter = -2.0f;
 			now.edge     = 1.0f;
-			now.shaft    = -1.0f;		// Ronin @feature 10/10/2026 DX9: no shadow: dozens of small lamps, and the cost is per light
+			now.shaft    = 0.0f;
 			now.boundCentre = now.world;
 			now.boundRadius = now.outer;
 			for (Int ch = 0; ch < 3; ++ch)
@@ -1590,7 +1577,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			now.axis.Set(0.0f, 0.0f, 1.0f);
 			now.cosOuter = -2.0f;
 			now.edge     = 1.0f;
-			now.shaft    = -1.0f;		// Ronin @feature 10/10/2026 DX9: no shadow: it sits in the surface it lights
+			now.shaft    = 0.0f;
 			now.boundCentre = now.world;
 			now.boundRadius = now.outer;
 			for (Int ch = 0; ch < 3; ++ch)
@@ -1697,7 +1684,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
 	dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
 	// Ronin @feature 09/10/2026 DX9: added to the frame (views 1 and 2 replace it). RGB only - destination alpha is the frame's.
-	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, (s_view == 1 || s_view == 2 || s_view == 4) ? FALSE : TRUE);
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, (s_view == 1 || s_view == 2) ? FALSE : TRUE);
 	dev->SetRenderState(D3DRS_SRCBLEND,  D3DBLEND_ONE);
 	dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
 	dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
@@ -1737,12 +1724,9 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		planeMin.X, planeMax.Y, planeW, planeH,
 		vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y,
 		1.0f / targetW, 1.0f / targetH, shadeUse, s_sunErase,
-		factor[0], factor[1], factor[2], s_shadows
+		factor[0], factor[1], factor[2], 0.0f
 	};
 	dev->SetPixelShaderConstantF(0, shared, 5);
-	// Ronin @feature 10/10/2026 DX9: the shadow rays' dither moves every frame while TAA runs and averages it; without TAA it would only be grain.
-	const float noise[4] = { W3DTaa::ownsDepth() ? (float)(s_fixFrame & 63) * 5.588238f : -1.0f, s_shadowThin, s_shadowEnd, 0.0f };
-	dev->SetPixelShaderConstantF(15, noise, 1);
 
 	for (DWORD stage = 0; stage < 4; ++stage)
 	{
