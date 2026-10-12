@@ -304,6 +304,8 @@ static float		s_beams     = 1.5f;		// `lights beams`
 static float		s_spill     = 0.5f;		// `lights spill`: the dim light around a beam's cone, beside the cone's own
 static float		s_spillWide = 2.2f;		// `lights spillwide`: how wide it reaches, in cone widths
 static float		s_shafts    = 0.4f;		// `lights shafts`: the beam in the air, beside the light's own strength
+static float		s_rays      = 0.5f;		// `lights rays`: soft rays from the lamp in that beam (LocalLight_ps shaft); 0 = the smooth cone
+static Bool			s_rayTurn   = FALSE;	// `lights rayturn`: the rays turn with the world as the camera goes round a beam; 0 = they stay with the view
 static Bool			s_beamsOn   = FALSE;	// this frame the beams are lights (decided in beginFrame)
 static float		s_glows     = 0.5f;		// `lights glows`: the lamp glows as point lights, their strength; 0 = none
 static float		s_glowReach = 0.8f;		// `lights glowreach`: multiplies GLOW_TABLE's reach
@@ -1458,6 +1460,10 @@ void  W3DLocalLights::setBeams(float v)	{ s_beams = (v < 0.0f) ? 0.0f : ((v > 4.
 float W3DLocalLights::getBeams(void)	{ return s_beams; }
 void  W3DLocalLights::setShafts(float v)	{ s_shafts = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
 float W3DLocalLights::getShafts(void)	{ return s_shafts; }
+void  W3DLocalLights::setRays(float v)	{ s_rays = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float W3DLocalLights::getRays(void)	{ return s_rays; }
+void  W3DLocalLights::setRayTurn(Bool on)	{ s_rayTurn = on; }
+Bool  W3DLocalLights::getRayTurn(void)	{ return s_rayTurn; }
 void  W3DLocalLights::setSpill(float v)	{ s_spill = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
 float W3DLocalLights::getSpill(void)	{ return s_spill; }
 void  W3DLocalLights::setSpillWide(float v)	{ s_spillWide = (v < 1.2f) ? 1.2f : ((v > 4.0f) ? 4.0f : v); }
@@ -1788,8 +1794,10 @@ static Bool makeDraw(LightDraw &d, const LightMemo &now, const LightMemo &was, c
 	const LightMemo *src[2]  = { &now, &was };
 	const Vector3   *view[2] = { &viewNow, &viewWas };
 	const Vector3   *axis[2] = { &axisNow, &axisWas };
-	d.c[34] = s_spill;
-	d.c[35] = 1.0f / s_spillWide;
+	// Ronin @feature 11/10/2026 DX9: `lights rays`: this lamp's own turn of the ray pattern (c13.z), the same for as long as it lives.
+	const UnsignedInt seed = ((UnsignedInt)(size_t)now.key >> 4) * 2654435761u + (UnsignedInt)(now.sub + 1) * 40503u;
+	d.c[34] = (float)((seed >> 12) & 1023) / 1024.0f;
+	d.c[35] = 0.0f;
 	for (Int s = 0; s < 2; ++s)
 	{
 		float *x = d.c + 24 + s * 4;
@@ -2311,14 +2319,16 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	// if it had not, a point is up to 0.15 units off its surface: the pools of lamps close to what they light flickered in shadow.
 	float jitterX = 0.0f, jitterY = 0.0f;
 	W3DTaa::getJitterNDC(&jitterX, &jitterY);
-	const float jitter[4] = { -0.5f * jitterX, 0.5f * jitterY, 0.0f, 0.0f };		// the shift, in viewport widths and heights
+	const float jitter[4] = { -0.5f * jitterX, 0.5f * jitterY, s_rays, 0.0f };		// the shift, in viewport widths and heights; z: `lights rays`
 	dev->SetPixelShaderConstantF(15, jitter, 1);
 	// Ronin @feature 11/10/2026 DX9: the world's axes in view space, for every light: a blast's level maps are picked by world direction.
 	Vector3 worldX, worldY, worldZ;
 	Matrix3D::Inverse_Rotate_Vector(camera.Get_Transform(), Vector3(1.0f, 0.0f, 0.0f), &worldX);
 	Matrix3D::Inverse_Rotate_Vector(camera.Get_Transform(), Vector3(0.0f, 1.0f, 0.0f), &worldY);
 	Matrix3D::Inverse_Rotate_Vector(camera.Get_Transform(), Vector3(0.0f, 0.0f, 1.0f), &worldZ);
-	const float axes[3 * 4] = { worldX.X, worldX.Y, worldX.Z, 0.0f, worldY.X, worldY.Y, worldY.Z, 0.0f, worldZ.X, worldZ.Y, worldZ.Z, 0.0f };
+	// Ronin @feature 11/10/2026 DX9: their w: what else every light shares - the spill's strength and 1 / its width, `lights rayturn`.
+	const float axes[3 * 4] = { worldX.X, worldX.Y, worldX.Z, s_spill, worldY.X, worldY.Y, worldY.Z, 1.0f / s_spillWide,
+								worldZ.X, worldZ.Y, worldZ.Z, s_rayTurn ? 1.0f : 0.0f };
 	dev->SetPixelShaderConstantF(30, axes, 3);
 
 	for (DWORD stage = 0; stage < 4; ++stage)

@@ -60,6 +60,10 @@ public:
 	static float getBeams(void);
 	static void  setShafts(float v);		// the beam in the air, drawn by the shader: its strength beside the light's; 0 = none
 	static float getShafts(void);
+	static void  setRays(float v);			// soft rays from the lamp in that beam; 0 = the smooth cone
+	static float getRays(void);
+	static void  setRayTurn(Bool on);		// the rays turn with the world as the camera goes round a beam; off = they stay with the view
+	static Bool  getRayTurn(void);
 	static void  setSpill(float v);			// the dim light around a beam's cone: its strength beside the cone's; 0 = none
 	static float getSpill(void);
 	static void  setSpillWide(float v);		// ... and how wide it reaches, in cone widths

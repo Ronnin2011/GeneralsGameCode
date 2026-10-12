@@ -27,8 +27,8 @@ float4 g_PrevAmb    : register(c10);        // rgb = ambient * intensity, w = th
 // A point light uploads cosine -2 and edge 1, so its cone term is 1 everywhere.
 float4 g_LightAxis  : register(c11);        // xyz = the axis, away from the lamp; w = cos outer
 float4 g_PrevAxis   : register(c12);        // the same, last frame, in THIS frame's view space
-float4 g_Shaft      : register(c13);        // the beam in the air: x = its strength now, y = last frame's (0 = none); z = the spill's strength, w = 1 / its width
-float4 g_Jitter     : register(c15);        // xy = how far TAA shifted this frame on screen, in viewport widths and heights (0 without TAA)
+float4 g_Shaft      : register(c13);        // the beam in the air: x = its strength now, y = last frame's (0 = none); z = this lamp's own turn of its rays, 0..1
+float4 g_Jitter     : register(c15);        // xy = how far TAA shifted this frame on screen, in viewport widths and heights (0 without TAA); z = `lights rays`
 float4x4 g_LampClip : register(c16);        // a beam's shadow map: view space to its tile - atlas uv x w, depth, w
 float4 g_LampTile   : register(c20);        // ... the tile in atlas uv: xy = min, zw = max; all 0 = this light has no map
 float4 g_LampBias   : register(c21);        // ... x = a texel's width at depth 1; the bias: y = along the normal, z = to the lamp (texels), w = to the lamp (units)
@@ -37,9 +37,9 @@ float4x4 g_LampClipWas : register(c23);     // the same light's map LAST frame: 
 float4 g_LampTileWas : register(c27);       // ... that tile; all 0 = it had none
 float4 g_LampWas    : register(c28);        // ... x = a texel's width at depth 1 in that map
 float4 g_LampSides  : register(c29);        // a blast's four level maps: x = the first one's tile (+X, -X, +Y, -Y follow; below 0 = none), depth = y - z / distance, w = a texel's width at depth 1
-float4 g_WorldX     : register(c30);        // the world's axes in view space, the same for every light
-float4 g_WorldY     : register(c31);
-float4 g_WorldZ     : register(c32);
+float4 g_WorldX     : register(c30);        // the world's axes in view space, the same for every light; w = the spill's strength
+float4 g_WorldY     : register(c31);        // w = 1 / the spill's width
+float4 g_WorldZ     : register(c32);        // w = `lights rayturn`
 float4 g_Corona     : register(c14);        // a lamp's own glow: x = radius, y = strength; z, w = last frame's (0 = none). A beam: x, z = where its shaft ends
 
 struct PS_OUTPUT
@@ -71,7 +71,7 @@ float ease(float x)
     return x * x * x * (x * (x * 6.0f - 15.0f) + 10.0f);
 }
 
-// Ronin @feature 09/10/2026 DX9: a spot's cone: the art's at full strength, inside a dim, wider spill (g_Shaft.zw) - a lamp's light does not
+// Ronin @feature 09/10/2026 DX9: a spot's cone: the art's at full strength, inside a dim, wider spill (c30.w, c31.w) - a lamp's light does not
 // stop at a line (a hard disc showed on whatever a headlight touched). A point light (cosine -2) comes out as 1.
 float coneTerm(float cosA, float4 axis, float edge)
 {
@@ -81,8 +81,8 @@ float coneTerm(float cosA, float4 axis, float edge)
     float u     = sqrt((max(1.0f - ca * ca, 0.0f) * c * c) / max((1.0f - c * c) * ca * ca, 0.000001f));    // tangent off the axis, in cone widths
     // Ronin @bugfix 09/10/2026 DX9: the spill is ONE curve from the axis to its end, under the core. As a second S-curve it began flat
     // exactly where the core ended: pool, shelf, edge - which read as a dark ring round the pool.
-    float spill = (1.0f - ease(saturate(u * g_Shaft.w))) * step(0.0f, cosA);
-    return (axis.w < -1.5f) ? 1.0f : lerp(spill * g_Shaft.z, 1.0f, core);
+    float spill = (1.0f - ease(saturate(u * g_WorldY.w))) * step(0.0f, cosA);
+    return (axis.w < -1.5f) ? 1.0f : lerp(spill * g_WorldX.w, 1.0f, core);
 }
 
 // Ronin @feature 09/10/2026 DX9: the beam in the air, with no cone texture: how much of the line of sight to this pixel lies inside the
@@ -143,7 +143,30 @@ float shaft(float3 P, float3 lamp, float end, float4 axis, float edge)
         float  reach = saturate(1.0f - (dist - inner) * span);
         sum += cone * reach * (s * s) / (dist * dist + s * s);
     }
-    return ok * (sum / SHAFT_STEPS) * (t1 - t0) / max(tanO * s, 0.0001f);
+    float  beam  = ok * (sum / SHAFT_STEPS) * (t1 - t0) / max(tanO * s, 0.0001f);
+    // Ronin @feature 11/10/2026 DX9: `lights rays` - soft rays from the lamp: a pattern of where the line of sight crosses the plane through
+    // the axis that faces the camera, in cone widths (u; a constant u is a line from the lamp). Faint at the lamp and seen end-on.
+    [branch]
+    if (g_Jitter.z > 0.0f)                 // off costs nothing
+    {
+        float3 m     = cross(axis.xyz, co);
+        float  ml    = length(m);
+        m /= max(ml, 0.0001f);
+        float3 n     = cross(axis.xyz, m);
+        float  dn    = dot(v, n);
+        float3 x     = v * (dot(lamp, n) / ((abs(dn) < 0.00001f) ? 0.00001f : dn)) - lamp;
+        float  sa    = dot(x, axis.xyz);
+        float  u     = dot(x, m) / max(sa * tanO, 0.0001f);
+        float  fade  = smoothstep(0.08f, 0.35f, sa / max(end, 0.001f)) * smoothstep(0.25f, 0.6f, ml / max(sqrt(coco), 0.001f));
+        // Ronin @feature 11/10/2026 DX9: each lamp turns the pattern its own way (c13.z); with `lights rayturn` it turns with the world
+        // too: by the angle of the way to the camera round the axis, from a start fixed in the world.
+        float3 ref   = (abs(dot(axis.xyz, g_WorldZ.xyz)) < 0.9f) ? g_WorldZ.xyz : g_WorldX.xyz;
+        float3 e1    = normalize(cross(axis.xyz, ref));
+        float  th    = u * 1.5708f + g_Shaft.z * 6.2832f + g_WorldZ.w * atan2(dot(co, cross(axis.xyz, e1)), dot(co, e1));
+        float  rays  = 0.5f * cos(th * 3.0f + 0.7f) + 0.3f * cos(th * 5.0f + 2.1f) + 0.2f * cos(th * 8.0f + 4.4f);
+        beam *= max(1.0f + g_Jitter.z * fade * rays, 0.0f);
+    }
+    return beam;
 }
 
 // Ronin @feature 09/10/2026 DX9: a lamp's own glow, with no texture: by how near the line of sight passes the lamp, so it is round from
