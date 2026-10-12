@@ -3,24 +3,24 @@
 **	DX9 port: the water ini - the advanced look of the reflective water (WaterType 2), kept by the player.
 */
 
-// Ronin @feature 04/10/2026 DX9: every knob of W3DWaterSeaTuning.h, per water kind, in a file beside Options.ini. Read
+// Ronin @feature 04/10/2026 DX9: every knob of W3DWaterSeaTuning.h, per water kind, in a file of its own. Read
 // when the water is created and by `water load`, written by `water save`; a missing file or key keeps the built-in value.
 #pragma once
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <direct.h>
 #include "Common/GlobalData.h"
+#include "Common/FileSystem.h"
+#include "Common/File.h"
 #include "W3DDevice/GameClient/W3DWaterSeaTuning.h"
 
-// The file: DX9Water.ini in the user data folder, where Options.ini is.
+// Ronin @bugfix 12/10/2026 DX9: the file is a modder's, not a player's setting: in the game's own Data\INI, where a loose
+// GameData.ini goes. It was beside Options.ini.
 inline AsciiString WaterSea_IniPath()
 {
-	AsciiString path;
-	if (TheGlobalData != nullptr)
-		path = TheGlobalData->getPath_UserData();
-	path.concat("DX9Water.ini");
-	return path;
+	return AsciiString("Data\\INI\\DX9Water.ini");
 }
 
 // [All] holds the switches for all water, then one section per kind, in WaterKind order.
@@ -32,13 +32,20 @@ inline Int WaterSea_LoadIni(const char *path, Int *skipped)
 {
 	if (skipped != nullptr)
 		*skipped = 0;
-	FILE *file = fopen(path, "rt");
+	// Ronin @bugfix 12/10/2026 DX9: through the game's file system - a loose file first, then the archives: a mod's .big can carry it.
+	File *file = (TheFileSystem != nullptr) ? TheFileSystem->openFile(path, File::READ | File::BINARY) : nullptr;
 	if (file == nullptr)
 		return -1;
+	static char text[16384];
+	const Int size = file->read(text, (Int)sizeof(text) - 1);
+	file->close();
+	text[(size > 0) ? size : 0] = 0;
 	Int section = -1, set = 0, bad = 0;
-	char line[256];
-	while (fgets(line, sizeof(line), file) != nullptr)
+	for (char *line = text, *next = nullptr; line != nullptr && *line != 0; line = next)
 	{
+		next = strchr(line, '\n');
+		if (next != nullptr)
+			*next++ = 0;
 		char *p = line;
 		while (*p == ' ' || *p == '\t')
 			p++;
@@ -96,7 +103,6 @@ inline Int WaterSea_LoadIni(const char *path, Int *skipped)
 		WaterSea_SetKnob(base, *knob, number);
 		set++;
 	}
-	fclose(file);
 	if (skipped != nullptr)
 		*skipped = bad;
 	return set;
@@ -119,10 +125,12 @@ inline void WaterSea_WriteKnobs(FILE *file, const void *base, const WaterKnobInf
 // Writes every saved knob as it stands. FALSE when the file cannot be written.
 inline Bool WaterSea_SaveIni(const char *path)
 {
+	_mkdir("Data");		// a loose file in the game's folder
+	_mkdir("Data\\INI");
 	FILE *file = fopen(path, "wt");
 	if (file == nullptr)
 		return FALSE;
-	fprintf(file, "; DX9 water: the advanced look of the reflective water (WaterType 2).\n");
+	fprintf(file, "; DX9 water: the advanced look of the reflective water (WaterType 2). For modders.\n");
 	fprintf(file, "; Written by `water save` in the debug panel; read when the game starts and by `water load`.\n");
 	fprintf(file, "; The names are the panel's `water` knobs. A missing line keeps the built-in value;\n");
 	fprintf(file, "; delete the file to return to the built-in look.\n");
