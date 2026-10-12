@@ -89,6 +89,8 @@ struct LightMemo
 	float       boundRadius;
 	Bool        seen;		// a light of this frame matched it
 	Int         map = -1;	// its shadow map's tile that frame, or -1
+	Vector3     mapLamp, mapAxis;	// ... and the pose that map was drawn from, kept while the lamp only sways
+	Bool        mapHeld = FALSE;
 };
 static LightMemo				s_memo[MAX_LIGHTS_DRAWN];
 static Int						s_memoCount     = 0;
@@ -1136,6 +1138,9 @@ void W3DLocalLights::noteCaster(MeshClass *mesh)
 // from the lamp, and its light reads it (LocalLight_ps lampShadow). `lights view 4` shows the tiles.
 static const Int	LAMP_ATLAS     = 2048;
 static const Int	LAMP_TILE      = 256;
+// Ronin @bugfix 12/10/2026 DX9: a beam's map keeps its pose while its lamp stays this near it: 2 degrees (the cosine) and 0.1 units.
+static const float	LAMP_HOLD_COS  = 0.99939f;
+static const float	LAMP_HOLD_MOVE = 0.1f;
 static const Int	LAMP_TILES_ROW = LAMP_ATLAS / LAMP_TILE;
 static const Int	MAX_LAMP_MAPS  = LAMP_TILES_ROW * LAMP_TILES_ROW;
 static const float	LAMP_NEAR      = 0.5f;
@@ -2039,12 +2044,20 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			{
 				draws[count - 1].map = s_lampMapCount;
 				s_memo[s_memoCount - 1].map = s_lampMapCount;
+				// Ronin @bugfix 12/10/2026 DX9: the oil derrick's lamp art sways by under a degree (the only shipped beam that does). Its
+				// map swung with it, its texels sliding over bars thinner than a texel: the lattice's shadows flickered. The map holds still.
+				LightMemo &kept = s_memo[s_memoCount - 1];
+				const Bool hold = (was.mapHeld && (was.mapLamp - now.world).Length() < LAMP_HOLD_MOVE &&
+								   Vector3::Dot_Product(was.mapAxis, now.axis) > LAMP_HOLD_COS) ? TRUE : FALSE;
+				kept.mapLamp = hold ? was.mapLamp : now.world;
+				kept.mapAxis = hold ? was.mapAxis : now.axis;
+				kept.mapHeld = TRUE;
 				LampMap &lm = s_lampMaps[s_lampMapCount++];
 				lm.selfNear    = (s_lampSelfNear * len > LAMP_NEAR) ? (s_lampSelfNear * len) : LAMP_NEAR;
 				lm.nearPlane   = LAMP_NEAR;
 				lm.point       = FALSE;
-				lm.lamp        = now.world;
-				lm.axis        = now.axis;
+				lm.lamp        = kept.mapLamp;
+				lm.axis        = kept.mapAxis;
 				lm.tanHalf     = (tanSpill < LAMP_MAX_TAN) ? tanSpill : LAMP_MAX_TAN;
 				lm.farPlane    = (now.outer > LAMP_NEAR * 4.0f) ? now.outer : (LAMP_NEAR * 4.0f);
 				lm.boundCentre = now.boundCentre;
