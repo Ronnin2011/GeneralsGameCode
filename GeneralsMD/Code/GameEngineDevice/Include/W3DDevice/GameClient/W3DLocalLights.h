@@ -42,6 +42,24 @@ public:
 	static Bool beamsHiddenIn(const MeshClass *mesh);
 
 	// Ronin @diagnostic 09/10/2026 DX9: the panel's `lights` knobs. Session only, not saved.
+	// Ronin @feature 12/10/2026 DX9: every `lights` knob by its name - one table for the debug panel and for DX9Lights.ini, a
+	// modder's file in the game's Data\INI (`lights save` writes it; read at the first frame and by `lights load`).
+	struct Knob
+	{
+		const char *name;
+		Bool        whole;				// a switch or a count: printed and written without decimals
+		Bool        saved;				// FALSE: not in the file (the debug view)
+		void      (*set)(float);		// held to the knob's own range by its setter
+		float     (*get)(void);
+	};
+	static Int         knobCount(void);
+	static const Knob *knobAt(Int index);
+	static const Knob *findKnob(const char *name);
+	static void        iniPath(char *out, Int size);
+	static Int         loadIni(Int *skipped);	// how many values were set, or -1 with no file; `skipped`: lines it could not use
+	static Bool        saveIni(void);
+	static void        resetDefaults(void);		// the built-in values; the file is untouched
+
 	static void  setEnabled(Bool on);
 	static Bool  isEnabled(void);
 	static void  setIntensity(float v);		// multiplies every light's colour

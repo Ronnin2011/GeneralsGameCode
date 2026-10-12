@@ -753,7 +753,7 @@ namespace
 	}
 
 	// Ronin @feature 09/10/2026 DX9: `lights` - local lights drawn in screen space (W3DLocalLights). 0 hands them back to
-	// the old per-vertex terrain and per-object paths, for an A/B at one spot. Not saved.
+	// the old per-vertex terrain and per-object paths, for an A/B at one spot. The knobs are kept by `lights save` (DX9Lights.ini).
 	void cmdLights(Int argc, const AsciiString *argv)
 	{
 		Bool ok = (argc == 1);
@@ -762,56 +762,55 @@ namespace
 			W3DLocalLights::setEnabled(atoi(argv[1].str()) != 0);
 			ok = TRUE;
 		}
+		// Ronin @feature 12/10/2026 DX9: the lights' ini, as the water's: `save` writes every knob as it stands, `load` reads the file
+		// again, `defaults` returns to the built-in values. Each then prints the state below.
+		else if (argc == 2)
+		{
+			char path[512];
+			W3DLocalLights::iniPath(path, (Int)sizeof(path));
+			AsciiString note;
+			if (stricmp(argv[1].str(), "save") == 0)
+			{
+				ok = W3DLocalLights::saveIni();
+				note.format(ok ? "lights: saved to %s" : "lights: could not write %s", path);
+				printAscii(note, !ok);
+				if (!ok)
+					return;
+			}
+			else if (stricmp(argv[1].str(), "load") == 0)
+			{
+				Int skipped = 0;
+				const Int count = W3DLocalLights::loadIni(&skipped);
+				if (count < 0)
+				{
+					note.format("lights: no file %s", path);
+					printAscii(note, TRUE);
+					return;
+				}
+				note.format("lights: %d values read from %s (%d lines skipped)", count, path, skipped);
+				printAscii(note, skipped > 0);
+				ok = TRUE;
+			}
+			else if (stricmp(argv[1].str(), "defaults") == 0)
+			{
+				W3DLocalLights::resetDefaults();
+				printAscii(AsciiString("lights: the built-in values (the file is untouched; `lights save` to keep them)"), FALSE);
+				ok = TRUE;
+			}
+		}
+		// Ronin @feature 12/10/2026 DX9: every knob by its name (W3DLocalLights' table); what each does: the usage below.
 		else if (argc == 3)
 		{
-			if      (stricmp(argv[1].str(), "intensity") == 0) { W3DLocalLights::setIntensity((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "over")      == 0) { W3DLocalLights::setOver((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "boost")     == 0) { W3DLocalLights::setBoost((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "range")     == 0) { W3DLocalLights::setRange((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "small")     == 0) { W3DLocalLights::setSmall(atoi(argv[2].str()) != 0); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "view")      == 0) { W3DLocalLights::setView(atoi(argv[2].str())); ok = TRUE; }
-			// Ronin @feature 09/10/2026 DX9: the beams (headlights, lamp cones) as spot lights: their strength; 0 = the art's own beams.
-			else if (stricmp(argv[1].str(), "beams")     == 0) { W3DLocalLights::setBeams((float)atof(argv[2].str())); ok = TRUE; }
-			// Ronin @feature 09/10/2026 DX9: the beam in the air, drawn by the shader in place of the cone texture; 0 = none.
-			else if (stricmp(argv[1].str(), "shafts")    == 0) { W3DLocalLights::setShafts((float)atof(argv[2].str())); ok = TRUE; }
-			// Ronin @feature 11/10/2026 DX9: soft rays from the lamp in a beam's shaft; 0 = the smooth cone.
-			else if (stricmp(argv[1].str(), "rays")      == 0) { W3DLocalLights::setRays((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "lampwidth") == 0) { W3DLocalLights::setLampWidth((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "rayturn")   == 0) { W3DLocalLights::setRayTurn(atoi(argv[2].str()) != 0); ok = TRUE; }
-			// Ronin @feature 09/10/2026 DX9: the dim light around a beam's cone: its strength, and how wide it reaches in cone widths.
-			else if (stricmp(argv[1].str(), "spill")     == 0) { W3DLocalLights::setSpill((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "spillwide") == 0) { W3DLocalLights::setSpillWide((float)atof(argv[2].str())); ok = TRUE; }
-			// Ronin @feature 09/10/2026 DX9: the lamp glows as point lights: their strength (0 = none) and their reach.
-			else if (stricmp(argv[1].str(), "glows")     == 0) { W3DLocalLights::setGlows((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "glowreach") == 0) { W3DLocalLights::setGlowReach((float)atof(argv[2].str())); ok = TRUE; }
-			// Ronin @feature 09/10/2026 DX9: the lamp's own glow drawn by the shader in place of its glow texture: strength (0 = the texture) and size.
-			else if (stricmp(argv[1].str(), "coronas")    == 0) { W3DLocalLights::setCoronas((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "coronasize") == 0) { W3DLocalLights::setCoronaSize((float)atof(argv[2].str())); ok = TRUE; }
-			// Ronin @feature 09/10/2026 DX9: 1 = the pools of light the art paints on ground and walls stay drawn; 0 = the real lights make them.
-			else if (stricmp(argv[1].str(), "pools")      == 0) { W3DLocalLights::setPools(atoi(argv[2].str()) != 0); ok = TRUE; }
-			// Ronin @feature 09/10/2026 DX9: how far a beam's light runs on surfaces, and the light that fills a painted pool no lamp covers.
-			else if (stricmp(argv[1].str(), "beamreach")  == 0) { W3DLocalLights::setBeamReach((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "poolfill")   == 0) { W3DLocalLights::setPoolFill((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "hotspot")    == 0) { W3DLocalLights::setHotspot((float)atof(argv[2].str())); ok = TRUE; }
-			// Ronin @feature 10/10/2026 DX9: part 3: how much of the sun's shadow a lamp fills on a mesh (the crane's shadow in the War Factory's pool).
-			else if (stricmp(argv[1].str(), "sunfill")    == 0) { W3DLocalLights::setSunFill((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "sunerase")   == 0) { W3DLocalLights::setSunErase((float)atof(argv[2].str())); ok = TRUE; }
-			// Ronin @feature 10/10/2026 DX9: part 3 step 2: how far the sun's shadows follow the map's own light (depth and tint); 0 = 0.45 everywhere.
-			else if (stricmp(argv[1].str(), "mapshadow")  == 0) { W3DLocalLights::setMapShadow((float)atof(argv[2].str())); ok = TRUE; }
-			// Ronin @feature 11/10/2026 DX9: lamp shadow maps: a depth map per beam, drawn from its lamp and read by its light; view 4 shows them.
-			else if (stricmp(argv[1].str(), "lampmaps")   == 0) { W3DLocalLights::setLampMaps(atoi(argv[2].str()) != 0); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "lampshadows") == 0) { W3DLocalLights::setLampShadows((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "lampbias")   == 0) { W3DLocalLights::setLampBias((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "lampself")   == 0) { W3DLocalLights::setLampSelf(atoi(argv[2].str()) != 0); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "lampselfnear") == 0) { W3DLocalLights::setLampSelfNear((float)atof(argv[2].str())); ok = TRUE; }
-			// Ronin @feature 11/10/2026 DX9: the engine's point lights (firing flashes, blasts) get a shadow map too, one, straight down.
-			else if (stricmp(argv[1].str(), "pointmaps")  == 0) { W3DLocalLights::setPointMaps(atoi(argv[2].str()) != 0); ok = TRUE; }
-			// Ronin @feature 11/10/2026 DX9: a big point light low over the ground (a blast) gets four level maps as well.
-			else if (stricmp(argv[1].str(), "pointsides") == 0) { W3DLocalLights::setPointSides(atoi(argv[2].str()) != 0); ok = TRUE; }
+			const W3DLocalLights::Knob *knob = W3DLocalLights::findKnob(argv[1].str());
+			if (knob != nullptr)
+			{
+				knob->set((float)atof(argv[2].str()));
+				ok = TRUE;
+			}
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: lights [0|1] | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..4> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
+			printAscii(AsciiString("usage: lights [0|1] | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..4> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
 			printAscii(AsciiString("  beams: headlights and lamp cones as spot lights, their strength; 0 = the art's own beams, no lights; shafts: the beam in the air, drawn by the shader - its strength beside the light's, 0 = none; rays: soft rays from the lamp in that beam, 0 = the smooth cone; rayturn: 1 = they turn with the world as the camera goes round a beam, 0 = they stay with the view; lampwidth: how wide the beam leaves its lamp, in the art's own width there, 0 = from a point"), FALSE);
 			printAscii(AsciiString("  spill: the dim light around a beam's cone, its strength beside the cone's, 0 = a hard cone; spillwide: how wide it reaches, in cone widths"), FALSE);
 			printAscii(AsciiString("  glows: the lamp glows (street lamps, warning and runway lights) as point lights, their strength, 0 = none; glowreach: their reach"), FALSE);
@@ -830,13 +829,19 @@ namespace
 			printAscii(AsciiString("  over: ceiling above a surface's own colour - only a light stronger than 1 reaches it; boost: frame-to-surface factor, 0 = from the map's light; view: 1 light alone, 2 facing, 3 rectangles, 4 the lamps' shadow maps"), FALSE);
 			return;
 		}
-		AsciiString state;
-		state.format("lights: enabled=%d  intensity=%.2f  range=%.2f  small=%d  over=%.2f  boost=%.2f%s  view=%d  beams=%.2f  shafts=%.2f  rays=%.2f  rayturn=%d  lampwidth=%.2f  spill=%.2f  spillwide=%.2f  glows=%.2f  glowreach=%.2f  coronas=%.2f  coronasize=%.2f  pools=%d  beamreach=%.2f  poolfill=%.2f  hotspot=%.2f  sunfill=%.2f  sunerase=%.2f  mapshadow=%.2f  lampmaps=%d  lampshadows=%.2f  lampbias=%.2f  lampself=%d  lampselfnear=%.2f  pointmaps=%d  pointsides=%d",
-			W3DLocalLights::isEnabled() ? 1 : 0, W3DLocalLights::getIntensity(), W3DLocalLights::getRange(),
-			W3DLocalLights::getSmall() ? 1 : 0, W3DLocalLights::getOver(),
-			W3DLocalLights::getBoost(), (W3DLocalLights::getBoost() > 0.0f) ? "" : " (auto)", W3DLocalLights::getView(), W3DLocalLights::getBeams(), W3DLocalLights::getShafts(), W3DLocalLights::getRays(), W3DLocalLights::getRayTurn() ? 1 : 0, W3DLocalLights::getLampWidth(), W3DLocalLights::getSpill(), W3DLocalLights::getSpillWide(), W3DLocalLights::getGlows(), W3DLocalLights::getGlowReach(), W3DLocalLights::getCoronas(), W3DLocalLights::getCoronaSize(), W3DLocalLights::getPools() ? 1 : 0, W3DLocalLights::getBeamReach(), W3DLocalLights::getPoolFill(), W3DLocalLights::getHotspot(), W3DLocalLights::getSunFill(), W3DLocalLights::getSunErase(), W3DLocalLights::getMapShadow(),
-			W3DLocalLights::getLampMaps() ? 1 : 0, W3DLocalLights::getLampShadows(), W3DLocalLights::getLampBias(),
-			W3DLocalLights::getLampSelf() ? 1 : 0, W3DLocalLights::getLampSelfNear(), W3DLocalLights::getPointMaps() ? 1 : 0, W3DLocalLights::getPointSides() ? 1 : 0);
+		AsciiString state, one;
+		state.format("lights: enabled=%d", W3DLocalLights::isEnabled() ? 1 : 0);
+		for (Int k = 0; k < W3DLocalLights::knobCount(); ++k)
+		{
+			const W3DLocalLights::Knob *knob = W3DLocalLights::knobAt(k);
+			if (knob->whole)
+				one.format("  %s=%d", knob->name, (Int)knob->get());
+			else
+				one.format("  %s=%.2f", knob->name, knob->get());
+			state.concat(one);
+			if (stricmp(knob->name, "boost") == 0 && knob->get() <= 0.0f)
+				state.concat(" (auto)");
+		}
 		printAscii(state, FALSE);
 	}
 
@@ -3145,7 +3150,7 @@ void W3DDebugPanel::update(void)
 		registerCommand("taa", "taa [0|1] | taa <knob> <v> - temporal AA; the [TAA] row shows live state", cmdTaa);
 		registerCommand("ssao", "ssao [0..3] | ssao trees <auto|0|1> | ssao view [0..3] - ambient occlusion quality (not saved); trees: AO on trees; view: 1 depth, 2 raw AO, 3 blurred AO in the corner", cmdSsao);
 		registerCommand("shadows", "shadows [0..3] - shadow-map quality, 0 off (stencil shadows) .. 3 ultra (not saved)", cmdShadows);
-		registerCommand("lights", "lights [0|1] | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths (not saved)", cmdLights);
+		registerCommand("lights", "lights [0|1] | save|load|defaults | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths; save keeps the knobs in DX9Lights.ini", cmdLights);
 		registerCommand("timesetting", "timesetting [1..4] - time of day: 1 morning, 2 afternoon, 3 evening, 4 night (not saved; not in LAN/online)", cmdTimeSetting);
 		registerCommand("clouds", "clouds [on|off] - cloud shadows on terrain and models (not saved; none at night)", cmdClouds);
 		registerCommand("msaa", "msaa [0|2|4|8] - anti-aliasing level, by a device reset (not saved); TAA does not run with it", cmdMsaa);

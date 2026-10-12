@@ -29,6 +29,11 @@
 #include "W3DDevice/GameClient/W3DSsao.h"
 #include "W3DDevice/GameClient/W3DTaa.h"
 #include <d3dx9math.h>				// Ronin @feature 11/10/2026 DX9: the lamp shadow maps' matrices, as W3DTaa.cpp
+#include "Common/FileSystem.h"		// Ronin @feature 12/10/2026 DX9: DX9Lights.ini
+#include "Common/File.h"
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 // Ronin @feature 09/10/2026 DX9: more lights than this in one frame are counted (live) and left undrawn.
 static const Int MAX_LIGHTS_DRAWN = 256;
@@ -1646,8 +1651,170 @@ static void publishMapShadow(void)
 void  W3DLocalLights::setMapShadow(float v)	{ s_mapShadow = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
 float W3DLocalLights::getMapShadow(void)	{ return s_mapShadow; }
 
+// Ronin @feature 12/10/2026 DX9: THE LIGHTS' INI. Every `lights` knob by its name, in the panel's order: one table for the panel
+// (set, print) and for DX9Lights.ini, a modder's file. A knob added here is tunable and kept, with nothing else to touch.
+#define LIGHT_REAL(text, setter, getter)   { text, FALSE, TRUE, [](float v) { W3DLocalLights::setter(v); }, []() -> float { return W3DLocalLights::getter(); } }
+#define LIGHT_SWITCH(text, setter, getter) { text, TRUE, TRUE, [](float v) { W3DLocalLights::setter((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DLocalLights::getter() ? 1.0f : 0.0f; } }
+static const W3DLocalLights::Knob s_knobs[] =
+{
+	LIGHT_REAL("intensity", setIntensity, getIntensity),
+	LIGHT_REAL("range", setRange, getRange),
+	LIGHT_SWITCH("small", setSmall, getSmall),
+	LIGHT_REAL("over", setOver, getOver),
+	LIGHT_REAL("boost", setBoost, getBoost),
+	{ "view", TRUE, FALSE, [](float v) { W3DLocalLights::setView((Int)v); }, []() -> float { return (float)W3DLocalLights::getView(); } },
+	LIGHT_REAL("beams", setBeams, getBeams),
+	LIGHT_REAL("shafts", setShafts, getShafts),
+	LIGHT_REAL("rays", setRays, getRays),
+	LIGHT_SWITCH("rayturn", setRayTurn, getRayTurn),
+	LIGHT_REAL("lampwidth", setLampWidth, getLampWidth),
+	LIGHT_REAL("spill", setSpill, getSpill),
+	LIGHT_REAL("spillwide", setSpillWide, getSpillWide),
+	LIGHT_REAL("glows", setGlows, getGlows),
+	LIGHT_REAL("glowreach", setGlowReach, getGlowReach),
+	LIGHT_REAL("coronas", setCoronas, getCoronas),
+	LIGHT_REAL("coronasize", setCoronaSize, getCoronaSize),
+	LIGHT_SWITCH("pools", setPools, getPools),
+	LIGHT_REAL("beamreach", setBeamReach, getBeamReach),
+	LIGHT_REAL("poolfill", setPoolFill, getPoolFill),
+	LIGHT_REAL("hotspot", setHotspot, getHotspot),
+	LIGHT_REAL("sunfill", setSunFill, getSunFill),
+	LIGHT_REAL("sunerase", setSunErase, getSunErase),
+	LIGHT_REAL("mapshadow", setMapShadow, getMapShadow),
+	LIGHT_SWITCH("lampmaps", setLampMaps, getLampMaps),
+	LIGHT_REAL("lampshadows", setLampShadows, getLampShadows),
+	LIGHT_REAL("lampbias", setLampBias, getLampBias),
+	LIGHT_SWITCH("lampself", setLampSelf, getLampSelf),
+	LIGHT_REAL("lampselfnear", setLampSelfNear, getLampSelfNear),
+	LIGHT_SWITCH("pointmaps", setPointMaps, getPointMaps),
+	LIGHT_SWITCH("pointsides", setPointSides, getPointSides),
+};
+#undef LIGHT_REAL
+#undef LIGHT_SWITCH
+static const Int	s_knobCount = (Int)(sizeof(s_knobs) / sizeof(s_knobs[0]));
+static float		s_knobDefaults[sizeof(s_knobs) / sizeof(s_knobs[0])];
+static Bool			s_knobsStarted = FALSE;
+
+Int W3DLocalLights::knobCount(void)	{ return s_knobCount; }
+const W3DLocalLights::Knob *W3DLocalLights::knobAt(Int index)	{ return (index >= 0 && index < s_knobCount) ? &s_knobs[index] : NULL; }
+const W3DLocalLights::Knob *W3DLocalLights::findKnob(const char *name)
+{
+	for (Int k = 0; name != NULL && k < s_knobCount; ++k)
+	{
+		if (_stricmp(name, s_knobs[k].name) == 0)
+			return &s_knobs[k];
+	}
+	return NULL;
+}
+
+// Ronin @feature 12/10/2026 DX9: the file is a modder's, not a player's setting: in the game's own Data\INI, where a loose
+// GameData.ini goes - not beside Options.ini.
+void W3DLocalLights::iniPath(char *out, Int size)
+{
+	strncpy(out, "Data\\INI\\DX9Lights.ini", (size_t)size);
+	out[size - 1] = 0;
+}
+
+// Ronin @feature 12/10/2026 DX9: reads the file over the current values: `name = value` lines, `;` or `#` comments, a missing line
+// keeps what the knob has; a switch also takes yes / no. Through the game's file system: a mod's .big can carry it.
+Int W3DLocalLights::loadIni(Int *skipped)
+{
+	if (skipped != NULL)
+		*skipped = 0;
+	char path[512];
+	iniPath(path, (Int)sizeof(path));
+	File *file = (TheFileSystem != NULL) ? TheFileSystem->openFile(path, File::READ | File::BINARY) : NULL;
+	if (file == NULL)
+		return -1;
+	static char text[8192];
+	const Int size = file->read(text, (Int)sizeof(text) - 1);
+	file->close();
+	text[(size > 0) ? size : 0] = 0;
+	Int set = 0, bad = 0;
+	for (char *line = text, *next = NULL; line != NULL && *line != 0; line = next)
+	{
+		next = strchr(line, '\n');
+		if (next != NULL)
+			*next++ = 0;
+		char *p = line;
+		while (*p == ' ' || *p == '\t')
+			++p;
+		if (*p == ';' || *p == '#' || *p == '[' || *p == '\r' || *p == '\n' || *p == 0)
+			continue;		// a comment, a blank line, the [Lights] heading
+		char *equals = strchr(p, '=');
+		if (equals == NULL)
+		{
+			++bad;
+			continue;
+		}
+		char *nameEnd = equals;
+		while (nameEnd > p && (nameEnd[-1] == ' ' || nameEnd[-1] == '\t'))
+			--nameEnd;
+		*nameEnd = 0;
+		const char *value = equals + 1;
+		while (*value == ' ' || *value == '\t')
+			++value;
+		const Knob *knob = findKnob(p);
+		if (knob == NULL || !knob->saved)
+		{
+			++bad;
+			continue;
+		}
+		knob->set((*value == 'y' || *value == 'Y') ? 1.0f : (float)atof(value));
+		++set;
+	}
+	if (skipped != NULL)
+		*skipped = bad;
+	return set;
+}
+
+Bool W3DLocalLights::saveIni(void)
+{
+	char path[512];
+	iniPath(path, (Int)sizeof(path));
+	CreateDirectoryA("Data", NULL);		// a loose file in the game's folder
+	CreateDirectoryA("Data\\INI", NULL);
+	FILE *file = fopen(path, "wt");
+	if (file == NULL)
+		return FALSE;
+	fprintf(file, "; DX9 local lights: lamps, beams, their shadows - the look of the per-pixel lights. For modders.\n");
+	fprintf(file, "; Written by `lights save` in the debug panel; read when the game starts and by `lights load`.\n");
+	fprintf(file, "; The names are the panel's `lights` knobs. A missing line keeps the built-in value;\n");
+	fprintf(file, "; delete the file to return to the built-in look.\n");
+	fprintf(file, "\n[Lights]\n");
+	for (Int k = 0; k < s_knobCount; ++k)
+	{
+		if (!s_knobs[k].saved)
+			continue;
+		if (s_knobs[k].whole)
+			fprintf(file, "%s = %d\n", s_knobs[k].name, (int)s_knobs[k].get());
+		else
+			fprintf(file, "%s = %g\n", s_knobs[k].name, s_knobs[k].get());
+	}
+	const Bool ok = (ferror(file) == 0) ? TRUE : FALSE;
+	fclose(file);
+	return ok;
+}
+
+// Ronin @feature 12/10/2026 DX9: the values the knobs had before the file was read. The debug view stays as it is.
+void W3DLocalLights::resetDefaults(void)
+{
+	for (Int k = 0; s_knobsStarted && k < s_knobCount; ++k)
+	{
+		if (s_knobs[k].saved)
+			s_knobs[k].set(s_knobDefaults[k]);
+	}
+}
+
 void W3DLocalLights::beginFrame(void)
 {
+	if (!s_knobsStarted)		// Ronin @feature 12/10/2026 DX9: once: the built-in values are noted, then the file is read over them
+	{
+		s_knobsStarted = TRUE;
+		for (Int k = 0; k < s_knobCount; ++k)
+			s_knobDefaults[k] = s_knobs[k].get();
+		loadIni(NULL);
+	}
 	publishMapShadow();		// Ronin @feature 10/10/2026 DX9: every frame, whether or not the light pass runs
 	s_shown = s_stats;
 	s_stats.live     = 0;
