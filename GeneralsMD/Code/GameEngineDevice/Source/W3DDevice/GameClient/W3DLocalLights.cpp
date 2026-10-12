@@ -84,6 +84,7 @@ struct LightMemo
 	Vector3     axis;		// a spot: away from the lamp
 	float       cosOuter, edge;	// a point light: -2 and 1, so the cone term is 1
 	float       shaft;		// the beam in the air, its strength; 0 for a point light
+	float       lampRadius = 0.0f;	// ... and how wide it leaves its lamp (c13.w)
 	float       coronaRadius = 0.0f, coronaStrength = 0.0f;	// a lamp's own glow, drawn by the shader (c14); 0 = none
 	Vector3     boundCentre;	// the sphere that holds everything it reaches
 	float       boundRadius;
@@ -224,6 +225,8 @@ static const Int   MAX_POOLS_A_MESH   = 40;
 static const Int   MAX_FRAME_POOLS    = 128;
 static const float BEAM_REACH         = 1.3f;		// the beam in the air ends this far along, in the art cone's length
 static const float BEAM_INNER         = 0.1f;		// the light on surfaces is at full strength to this share of its reach
+static const float BEAM_LAMP_USUAL    = 0.83f;	// a beam's radius at its lamp: the median of the 5,738 shipped beam quads
+static const float BEAM_LAMP_MOST     = 0.25f;	// ... as a share of its far end's: above this the art is a sheet, not a cone
 // Ronin @feature 09/10/2026 DX9: a beam the art draws level (a headlight, 1 degree UP on the Humvee) never reaches the ground: its pool
 // was 7% of a lamp's (run 1; scratchpad beam_ground_sim.py). It is aimed at the ground this share of its length ahead.
 static const float BEAM_AIM_AHEAD     = 0.8f;
@@ -236,6 +239,7 @@ struct FixtureBeam
 {
 	Vector3 lamp, end;		// in the mesh's own space
 	float   endRadius;
+	float   lampRadius;		// Ronin @bugfix 12/10/2026 DX9: the art's beam at its lamp: no shipped beam starts from a point
 };
 struct FixtureModel
 {
@@ -291,6 +295,7 @@ struct FrameBeam
 	Int         index;
 	Vector3     lamp, end;	// world
 	float       endRadius;
+	float       lampRadius;
 	Vector3     up;			// its object's up, and the lamp's height over the object's own origin: the ground under it
 	float       height;
 };
@@ -305,6 +310,7 @@ static float		s_spill     = 0.5f;		// `lights spill`: the dim light around a bea
 static float		s_spillWide = 2.2f;		// `lights spillwide`: how wide it reaches, in cone widths
 static float		s_shafts    = 0.4f;		// `lights shafts`: the beam in the air, beside the light's own strength
 static float		s_rays      = 0.5f;		// `lights rays`: soft rays from the lamp in that beam (LocalLight_ps shaft); 0 = the smooth cone
+static float		s_lampWidth = 1.0f;		// `lights lampwidth`: how wide a beam leaves its lamp, in the art's own width there; 0 = from a point
 static Bool			s_rayTurn   = FALSE;	// `lights rayturn`: the rays turn with the world as the camera goes round a beam; 0 = they stay with the view
 static Bool			s_beamsOn   = FALSE;	// this frame the beams are lights (decided in beginFrame)
 static float		s_glows     = 0.5f;		// `lights glows`: the lamp glows as point lights, their strength; 0 = none
@@ -898,10 +904,23 @@ static const FixtureModel *fixtureModel(MeshModelClass *mdl)
 		}
 		if ((end - lamp).Length() < 0.5f || endRadius < 0.05f)
 			continue;
+		float lampRadius = 0.0f;
+		for (Int qi = 0; qi < quadCount; ++qi)
+		{
+			if (quads[qi].beam != g)
+				continue;
+			const float d = (quads[qi].lamp - lamp).Length() + quads[qi].lampR;
+			if (d > lampRadius)
+				lampRadius = d;
+		}
 		FixtureBeam &fb = s_fixBeams[s_fixBeamCount++];
 		fb.lamp      = lamp;
 		fb.end       = end;
 		fb.endRadius = endRadius;
+		// Ronin @bugfix 12/10/2026 DX9: a SHEET of diffuse light has no lamp's width to give (the derrick's: 38 units across at its
+		// lamp). 322 of the shipped quads, their narrow end over half the wide one; every other is under a fifth. Those: the usual.
+		const float most = BEAM_LAMP_MOST * endRadius;
+		fb.lampRadius = (lampRadius <= most) ? lampRadius : ((BEAM_LAMP_USUAL < most) ? BEAM_LAMP_USUAL : most);
 		++slot->beamCount;
 	}
 	return slot;
@@ -1034,6 +1053,7 @@ int W3DLocalLights::noteFixtureMesh(MeshClass *mesh)
 				if (own < 0.01f || world < 0.01f)
 					continue;
 				o.endRadius = fb.endRadius * (world / own);		// a scaled object scales its beam
+				o.lampRadius = fb.lampRadius * (world / own);
 				o.up        = rootUp;
 				o.height    = Vector3::Dot_Product(o.lamp - rootPos, rootUp);
 				o.mesh      = mesh;
@@ -1462,6 +1482,8 @@ void  W3DLocalLights::setShafts(float v)	{ s_shafts = (v < 0.0f) ? 0.0f : ((v > 
 float W3DLocalLights::getShafts(void)	{ return s_shafts; }
 void  W3DLocalLights::setRays(float v)	{ s_rays = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
 float W3DLocalLights::getRays(void)	{ return s_rays; }
+void  W3DLocalLights::setLampWidth(float v)	{ s_lampWidth = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getLampWidth(void)	{ return s_lampWidth; }
 void  W3DLocalLights::setRayTurn(Bool on)	{ s_rayTurn = on; }
 Bool  W3DLocalLights::getRayTurn(void)	{ return s_rayTurn; }
 void  W3DLocalLights::setSpill(float v)	{ s_spill = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
@@ -1797,7 +1819,7 @@ static Bool makeDraw(LightDraw &d, const LightMemo &now, const LightMemo &was, c
 	// Ronin @feature 11/10/2026 DX9: `lights rays`: this lamp's own turn of the ray pattern (c13.z), the same for as long as it lives.
 	const UnsignedInt seed = ((UnsignedInt)(size_t)now.key >> 4) * 2654435761u + (UnsignedInt)(now.sub + 1) * 40503u;
 	d.c[34] = (float)((seed >> 12) & 1023) / 1024.0f;
-	d.c[35] = 0.0f;
+	d.c[35] = now.lampRadius;
 	for (Int s = 0; s < 2; ++s)
 	{
 		float *x = d.c + 24 + s * 4;
@@ -2002,6 +2024,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			now.inner = now.outer * BEAM_INNER;
 			now.shaft = s_shafts;
 			now.coronaRadius = len * BEAM_REACH * s_range;
+			now.lampRadius = beam.lampRadius * s_lampWidth;
 			float tanOuter = beam.endRadius / len;
 			if (tanOuter < 0.05f) tanOuter = 0.05f;
 			if (tanOuter > 3.0f)  tanOuter = 3.0f;

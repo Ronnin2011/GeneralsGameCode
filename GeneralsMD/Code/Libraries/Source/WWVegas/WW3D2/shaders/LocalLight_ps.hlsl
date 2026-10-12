@@ -27,7 +27,7 @@ float4 g_PrevAmb    : register(c10);        // rgb = ambient * intensity, w = th
 // A point light uploads cosine -2 and edge 1, so its cone term is 1 everywhere.
 float4 g_LightAxis  : register(c11);        // xyz = the axis, away from the lamp; w = cos outer
 float4 g_PrevAxis   : register(c12);        // the same, last frame, in THIS frame's view space
-float4 g_Shaft      : register(c13);        // the beam in the air: x = its strength now, y = last frame's (0 = none); z = this lamp's own turn of its rays, 0..1
+float4 g_Shaft      : register(c13);        // the beam in the air: x = its strength now, y = last frame's (0 = none); z = this lamp's own turn of its rays, 0..1; w = how wide the beam leaves the lamp
 float4 g_Jitter     : register(c15);        // xy = how far TAA shifted this frame on screen, in viewport widths and heights (0 without TAA); z = `lights rays`
 float4x4 g_LampClip : register(c16);        // a beam's shadow map: view space to its tile - atlas uv x w, depth, w
 float4 g_LampTile   : register(c20);        // ... the tile in atlas uv: xy = min, zw = max; all 0 = this light has no map
@@ -94,8 +94,12 @@ float shaft(float3 P, float3 lamp, float end, float4 axis, float edge)
     float  outer = end;                 // its own end, not the light's: the light on surfaces runs further
     float  inner = 0.5f * end;
     float  span  = 2.0f / max(end, 0.001f);
-    float3 co    = -lamp;
     float  c2    = axis.w * axis.w;
+    float  tanO  = sqrt(max(1.0f - c2, 0.0f)) / max(axis.w, 0.001f);
+    // Ronin @bugfix 12/10/2026 DX9: the beam leaves its lamp as wide as the art's did (c13.w), not from a point: the cone's point sits
+    // that far behind the lamp, and the beam begins at the lamp's own plane.
+    float  back  = g_Shaft.w / max(tanO, 0.001f);
+    float3 co    = axis.xyz * back - lamp;                              // from the cone's point to the camera
     float  vd    = dot(v, axis.xyz);
     float  cod   = dot(co, axis.xyz);
     float  vco   = dot(v, co);
@@ -123,29 +127,34 @@ float shaft(float3 P, float3 lamp, float end, float4 axis, float edge)
         t1 = t0;                    // looking into the beam: inside up to the near root
         t0 = -1.0e6f;
     }
-    float  ds    = vco * vco - (coco - outer * outer);                 // and inside the light's reach
+    float  vcl   = -dot(v, lamp);
+    float  ds    = vcl * vcl - (dot(lamp, lamp) - outer * outer);       // and inside the light's reach, round the lamp
     ok *= (ds > 0.0f) ? 1.0f : 0.0f;
     float  sds   = sqrt(max(ds, 0.0f));
-    t0 = max(t0, max(-vco - sds, 0.0f));
-    t1 = min(t1, min(-vco + sds, tMax));
+    t0 = max(t0, max(-vcl - sds, 0.0f));
+    t1 = min(t1, min(-vcl + sds, tMax));
+    float  tl    = dot(lamp, axis.xyz) / ((abs(vd) < 0.00001f) ? ((vd >= 0.0f) ? 0.00001f : -0.00001f) : vd);    // and past the lamp's plane
+    if (vd > 0.0f)
+        t0 = max(t0, tl);
+    else
+        t1 = min(t1, tl);
     ok *= (t1 > t0) ? 1.0f : 0.0f;
     // Ronin @feature 09/10/2026 DX9: brightest near the lamp: the light thins as 1/d^2 while the cone widens as d.
     float  s     = 0.12f * outer;
-    float  tanO  = sqrt(max(1.0f - c2, 0.0f)) / max(axis.w, 0.001f);
     float  sum   = 0.0f;
     for (int i = 0; i < SHAFT_STEPS; ++i)
     {
         float  t     = t0 + (t1 - t0) * ((i + 0.5f) / SHAFT_STEPS);
-        float3 to    = v * t - lamp;
+        float3 to    = v * t + co;                                      // from the cone's point
         float  dist  = length(to);
         float  cone  = saturate((dot(to, axis.xyz) / max(dist, 0.001f) - axis.w) * edge);
         cone = cone * cone * (3.0f - 2.0f * cone);
-        float  reach = saturate(1.0f - (dist - inner) * span);
+        float  reach = saturate(1.0f - (length(v * t - lamp) - inner) * span);
         sum += cone * reach * (s * s) / (dist * dist + s * s);
     }
     float  beam  = ok * (sum / SHAFT_STEPS) * (t1 - t0) / max(tanO * s, 0.0001f);
     // Ronin @feature 11/10/2026 DX9: `lights rays` - soft rays from the lamp: a pattern of where the line of sight crosses the plane through
-    // the axis that faces the camera, in cone widths (u; a constant u is a line from the lamp). Faint at the lamp and seen end-on.
+    // the axis that faces the camera, in cone widths (u; a constant u is a line from the cone's point). Faint at the lamp and seen end-on.
     [branch]
     if (g_Jitter.z > 0.0f)                 // off costs nothing
     {
@@ -154,10 +163,10 @@ float shaft(float3 P, float3 lamp, float end, float4 axis, float edge)
         m /= max(ml, 0.0001f);
         float3 n     = cross(axis.xyz, m);
         float  dn    = dot(v, n);
-        float3 x     = v * (dot(lamp, n) / ((abs(dn) < 0.00001f) ? 0.00001f : dn)) - lamp;
+        float3 x     = co - v * (dot(co, n) / ((abs(dn) < 0.00001f) ? 0.00001f : dn));
         float  sa    = dot(x, axis.xyz);
         float  u     = dot(x, m) / max(sa * tanO, 0.0001f);
-        float  fade  = smoothstep(0.08f, 0.35f, sa / max(end, 0.001f)) * smoothstep(0.25f, 0.6f, ml / max(sqrt(coco), 0.001f));
+        float  fade  = smoothstep(0.08f, 0.35f, (sa - back) / max(end, 0.001f)) * smoothstep(0.25f, 0.6f, ml / max(sqrt(coco), 0.001f));
         // Ronin @feature 11/10/2026 DX9: each lamp turns the pattern its own way (c13.z); with `lights rayturn` it turns with the world
         // too: by the angle of the way to the camera round the axis, from a start fixed in the world.
         float3 ref   = (abs(dot(axis.xyz, g_WorldZ.xyz)) < 0.9f) ? g_WorldZ.xyz : g_WorldX.xyz;

@@ -62,6 +62,8 @@ public:
 	static float getShafts(void);
 	static void  setRays(float v);			// soft rays from the lamp in that beam; 0 = the smooth cone
 	static float getRays(void);
+	static void  setLampWidth(float v);		// how wide a beam leaves its lamp, in the art's own width there; 0 = from a point
+	static float getLampWidth(void);
 	static void  setRayTurn(Bool on);		// the rays turn with the world as the camera goes round a beam; off = they stay with the view
 	static Bool  getRayTurn(void);
 	static void  setSpill(float v);			// the dim light around a beam's cone: its strength beside the cone's; 0 = none
