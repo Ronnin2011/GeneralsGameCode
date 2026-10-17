@@ -69,6 +69,8 @@ public:
 
 	void setEnabled(Bool enabled) { m_enabled = enabled; m_decayRange = false; m_decayFrameCount = 0; m_decayColor = false; m_increaseFrameCount = 0;};
 	Bool isEnabled() {return m_enabled;};
+	// Ronin @feature 17/10/2026 DX9: 0 = never fades - only the police car's search light (every FX pulse has a fade).
+	UnsignedInt getDecayFrames() const {return m_decayFrameCount;};
 
 
 	/// 0 frameIncreaseTime means it starts out full size/intensity, 0 decay time means it lasts forever.

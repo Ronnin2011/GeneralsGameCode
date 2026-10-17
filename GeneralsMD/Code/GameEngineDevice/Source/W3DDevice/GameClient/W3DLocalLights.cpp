@@ -1586,6 +1586,11 @@ static float				s_fxReach       = 1.0f;	// `lights fxreach`
 static Bool					s_fxMerge       = TRUE;	// `lights fxmerge`
 static Bool					s_fxFlares      = FALSE;	// `lights fxflares`
 static float				s_fxFire        = 40.0f;	// `lights fxfire`
+static Bool					s_searchLight   = TRUE;	// `lights searchlight`: the police car's 2003 light is its beacons' light
+static const Int			SEARCH_LIGHTS   = 32;
+static const float			SEARCH_BEACONS  = 6.0f;	// a lamp glow this near it is one of its beacons (2.1 and 2.8 on the car)
+static W3DDynamicLight		*s_searchKeys[SEARCH_LIGHTS];	// last pass's search lights: one fades for 5 frames at the car's end
+static Int						s_searchCount   = 0;
 static const Int			FX_CANDIDATES   = 64;		// the strongest kept while the systems are read
 static const float			FX_SIZE_CAP     = 20.0f;	// a particle counts at most this wide: a lens flare's sprite is not its light
 static const float			FX_POWER_FULL   = 200.0f;	// colour x size^2 summed: strength sqrt(t / (1 + t)), t = power / this
@@ -1794,6 +1799,7 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_SWITCH("fxflares", setFxFlares, getFxFlares),
 	LIGHT_REAL("pulsemin", setPulseMin, getPulseMin),
 	LIGHT_REAL("pulsefade", setPulseFade, getPulseFade),
+	LIGHT_SWITCH("searchlight", setSearchLight, getSearchLight),
 	LIGHT_REAL("fxfire", setFxFire, getFxFire),
 	// Ronin @feature 15/10/2026 DX9: the night look and the dark lift live in W3DTaa; listed here so DX9Lights.ini keeps them.
 	{ "night", TRUE, TRUE, [](float v) { W3DTaa::setNight((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DTaa::getNight() ? 1.0f : 0.0f; } },
@@ -2161,6 +2167,8 @@ void  W3DLocalLights::setFxFlares(Bool on)	{ s_fxFlares = on; }
 Bool  W3DLocalLights::getFxFlares(void)		{ return s_fxFlares; }
 void  W3DLocalLights::setFxFire(float v)	{ s_fxFire = (v < 0.0f) ? 0.0f : ((v > 200.0f) ? 200.0f : v); }
 float W3DLocalLights::getFxFire(void)		{ return s_fxFire; }
+void  W3DLocalLights::setSearchLight(Bool on)	{ s_searchLight = on; }
+Bool  W3DLocalLights::getSearchLight(void)	{ return s_searchLight; }
 float W3DLocalLights::getBounce(void)		{ return s_bounce; }
 
 // Ronin @feature 12/10/2026 DX9: HDR STAGE 1B - THE SUN LIFT. With a float frame the sun may be brighter than 1: one quad adds the
@@ -2339,6 +2347,13 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		const Matrix3D &cameraTM = camera.Get_Transform();
 		const ViewMap vm = { zNear, zFar, planeMin.X, planeMax.Y, planeW, planeH, vx0, vy0, vx1, vy1 };
 		Int pointLights = 0, sideLights = 0;		// with a downward map; with four level ones as well
+		W3DDynamicLight *searchWas[SEARCH_LIGHTS];
+		const Int searchWasCount = s_searchCount;
+		for (Int w = 0; w < searchWasCount; ++w)
+			searchWas[w] = s_searchKeys[w];
+		s_searchCount = 0;
+		Vector3 searchAt[SEARCH_LIGHTS];
+		Int searchAtCount = 0;
 		RefRenderObjListIterator it(scene->getDynamicLights());
 		for (it.First(); !it.Is_Done(); it.Next())
 		{
@@ -2346,6 +2361,20 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			if (light == NULL || !light->isEnabled())
 				continue;
 			++s_stats.live;
+			// Ronin @feature 17/10/2026 DX9: the police car's search light never fades; `lights searchlight 0` leaves it out (its
+			// beacons' glows light the car), also over its 5-frame fade when the car goes.
+			Bool search = (light->getDecayFrames() == 0) ? TRUE : FALSE;
+			for (Int w = 0; !search && w < searchWasCount; ++w)
+				search = (searchWas[w] == light) ? TRUE : FALSE;
+			if (search)
+			{
+				if (s_searchCount < SEARCH_LIGHTS)
+					s_searchKeys[s_searchCount++] = light;
+				if (!s_searchLight)
+					continue;
+				if (searchAtCount < SEARCH_LIGHTS)
+					searchAt[searchAtCount++] = light->Get_Position();
+			}
 			if (count >= MAX_LIGHTS_DRAWN || light->Get_Type() != LightClass::POINT)
 				continue;
 
@@ -2410,7 +2439,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			++lightCount;
 			// Ronin @feature 11/10/2026 DX9: lamp shadow maps, stage D first piece - an engine point light gets ONE map, straight down:
 			// what is under it shadows the ground (the pool under a firing unit). The beams' tiles are kept for them.
-			if (s_lampMapsOn && s_pointMaps && pointLights < MAX_POINT_MAPS && s_lampMapCount + s_frameBeamCount < MAX_LAMP_MAPS)
+			// Ronin @bugfix 17/10/2026 DX9: not the police car's light - 2003 gave it no shadow, and 8 up it sits inside the car's body.
+			if (!search && s_lampMapsOn && s_pointMaps && pointLights < MAX_POINT_MAPS && s_lampMapCount + s_frameBeamCount < MAX_LAMP_MAPS)
 			{
 				draws[count - 1].map = s_lampMapCount;
 				s_memo[s_memoCount - 1].map = s_lampMapCount;
@@ -2583,6 +2613,15 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			now.seen  = FALSE;
 			now.world = glow.pos;
 			now.outer = gk.reach * glow.scale * s_glowReach * s_range;
+			// Ronin @feature 17/10/2026 DX9: a police car's beacon - the car's own light lights round it; the glow keeps its corona.
+			for (Int s = 0; s < searchAtCount; ++s)
+			{
+				if ((searchAt[s] - glow.pos).Length() <= SEARCH_BEACONS)
+				{
+					now.outer = now.coronaRadius;
+					break;
+				}
+			}
 			now.inner = now.outer * 0.25f;
 			if (now.outer - now.inner < 0.5f)
 				continue;

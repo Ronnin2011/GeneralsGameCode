@@ -39,6 +39,9 @@ public:
 	static float getPulseMin(void);
 	static void  setPulseFade(float v);
 	static float getPulseFade(void);
+	// Ronin @feature 17/10/2026 DX9: `lights searchlight` - the police car's 2003 light lights round its beacons (0: our glow lights do).
+	static void  setSearchLight(Bool on);
+	static Bool  getSearchLight(void);
 
 	// Ronin @feature 09/10/2026 DX9: lighting part 2, the beams. MeshClass::Render asks this about every mesh once: 0 = no light fixture,
 	// 1 = one, draw it, 2 = one whose beam a spot light replaces this frame: do not draw it. Lighting_Work.md 4.2.
