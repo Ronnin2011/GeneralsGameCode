@@ -1548,11 +1548,13 @@ static Bool					s_shadeWritten  = FALSE;	// bound at least once this frame
 static const void			*s_shadeBeside  = NULL;	// the target it was first bound beside this frame: compared, never used
 static float				s_sunFill       = 1.0f;	// `lights sunfill`
 static float				s_sunErase      = 3.0f;	// `lights sunerase`: a lamp restores what the sun's shadow took; gone at strength 1/3
+static Bool					s_shadeFrame    = FALSE;	// this frame records the shade (lights on, a scene depth): kept to the next frame's start
+static float				s_aoSun         = 1.0f;	// `lights aosun`
 static Int						s_reflect       = 2;		// `lights reflect`
 
 void W3DLocalLights::beginSunShade(void)
 {
-	if (!s_shadeOpen || s_shadeBound || s_sunFill <= 0.0f || ShaderClass::Is_Backface_Culling_Inverted() ||
+	if (!s_shadeOpen || s_shadeBound || (s_sunFill <= 0.0f && s_aoSun <= 0.0f) || ShaderClass::Is_Backface_Culling_Inverted() ||
 		TheTerrainShadowPass.inDepthPass || TheTerrainShadowPass.viewDepthPass)
 		return;		// not the main pass (the mirror draws with culling inverted), or not wanted
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
@@ -1653,8 +1655,60 @@ static void publishMapShadow(void)
 void  W3DLocalLights::setMapShadow(float v)	{ s_mapShadow = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
 float W3DLocalLights::getMapShadow(void)	{ return s_mapShadow; }
 
+// Ronin @feature 12/10/2026 DX9: LIGHTING, STEP 3 - SSAO is the shade of the map's AMBIENT. Where the sun reaches, the ambient is only
+// the shade's floor over the shade of the pixel's light: SSAO's multiply (SsaoShow_ps) takes that much. Needs the sun's shadow maps.
+void W3DLocalLights::bindSunShadeForAO(void)
+{
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev == NULL)
+		return;
+	IDirect3DBaseTexture9 *mesh = NULL;
+	IDirect3DBaseTexture9 *ground = NULL;
+	IDirect3DSurface9 *rt = NULL;
+	if (s_aoSun > 0.0f && s_shadeFrame && TheTerrainShadowPass.enabled && SUCCEEDED(dev->GetRenderTarget(0, &rt)) && rt != NULL)
+	{
+		D3DSURFACE_DESC rd;
+		if (SUCCEEDED(rt->GetDesc(&rd)) && rd.MultiSampleType == D3DMULTISAMPLE_NONE)		// neither record is written under MSAA
+		{
+			if (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height)
+				mesh = s_shadeTex->Peek_D3D_Texture();
+			D3DSURFACE_DESC gd;
+			if (TheTerrainShadowPass.accumSurf != NULL && TheTerrainShadowPass.accumCur != NULL &&
+				SUCCEEDED(((IDirect3DTexture9 *)TheTerrainShadowPass.accumCur)->GetLevelDesc(0, &gd)) && gd.Width == rd.Width &&
+				gd.Height == rd.Height)
+				ground = TheTerrainShadowPass.accumCur;
+		}
+	}
+	if (rt != NULL)
+		rt->Release();
+	// Ronin @feature 12/10/2026 DX9: the floor as both shadow shaders make it (TerrainShadow_ps, RigidInstance_ps): 0.45, or the map's own.
+	const float *map = TheTerrainShadowPass.shadeColour;
+	float c[2 * 4] = { 0.45f, 0.45f, 0.45f, (mesh != NULL || ground != NULL) ? s_aoSun : 0.0f,
+					   (mesh != NULL) ? 1.0f : 0.0f, (ground != NULL) ? 1.0f : 0.0f, 0.0f, 0.0f };
+	for (Int ch = 0; ch < 3; ++ch)
+	{
+		c[ch] += (map[ch] - 0.45f) * map[3];
+		if (c[ch] < 0.05f)
+			c[ch] = 0.05f;
+	}
+	dev->SetPixelShaderConstantF(0, c, 2);
+	for (DWORD stage = 1; stage <= 2; ++stage)
+	{
+		dev->SetSamplerState(stage, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+		dev->SetSamplerState(stage, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+		dev->SetSamplerState(stage, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(stage, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(stage, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	}
+	dev->SetTexture(1, mesh);
+	dev->SetTexture(2, ground);
+}
+
+void  W3DLocalLights::setAoSun(float v)	{ s_aoSun = (v < 0.0f) ? 0.0f : ((v > 3.0f) ? 3.0f : v); }
+float W3DLocalLights::getAoSun(void)		{ return s_aoSun; }
 void  W3DLocalLights::setReflect(float v)	{ s_reflect = (v < 0.5f) ? 0 : ((v < 1.5f) ? 1 : 2); }
 float W3DLocalLights::getReflect(void)	{ return (float)s_reflect; }
+
 // Ronin @feature 12/10/2026 DX9: THE LIGHTS' INI. Every `lights` knob by its name, in the panel's order: one table for the panel
 // (set, print) and for DX9Lights.ini, a modder's file. A knob added here is tunable and kept, with nothing else to touch.
 #define LIGHT_REAL(text, setter, getter)   { text, FALSE, TRUE, [](float v) { W3DLocalLights::setter(v); }, []() -> float { return W3DLocalLights::getter(); } }
@@ -1685,6 +1739,7 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("sunfill", setSunFill, getSunFill),
 	LIGHT_REAL("sunerase", setSunErase, getSunErase),
 	LIGHT_REAL("mapshadow", setMapShadow, getMapShadow),
+	LIGHT_REAL("aosun", setAoSun, getAoSun),
 	LIGHT_REAL("reflect", setReflect, getReflect),
 	LIGHT_SWITCH("lampmaps", setLampMaps, getLampMaps),
 	LIGHT_REAL("lampshadows", setLampShadows, getLampShadows),
@@ -1888,6 +1943,7 @@ void W3DLocalLights::beginFrame(void)
 	// Ronin @feature 10/10/2026 DX9: part 3: the sun's shade is recorded from here to the light pass. The hooks are set every frame.
 	endSunShade();
 	s_shadeOpen    = active;
+	s_shadeFrame   = active;
 	s_shadeWritten = FALSE;
 	s_shadeBeside  = NULL;
 	DX8InstanceManagerClass::Set_Sun_Shade_Hooks(&W3DLocalLights::beginSunShade, &W3DLocalLights::endSunShade);
@@ -2745,6 +2801,7 @@ void W3DLocalLights::shutdown(void)
 	s_casterOpen = FALSE;
 	endSunShade();
 	s_shadeOpen = FALSE;
+	s_shadeFrame = FALSE;
 	REF_PTR_RELEASE(s_shadeTex);
 	s_shadeW = 0;
 	s_shadeH = 0;

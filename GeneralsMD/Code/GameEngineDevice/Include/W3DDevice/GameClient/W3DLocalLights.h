@@ -129,6 +129,11 @@ public:
 	static float getSunErase(void);
 	static void  setMapShadow(float v);		// 1 = a sun shadow leaves what this map's light is without its sun; 0 = 0.45 on every map
 	static float getMapShadow(void);
+	// Ronin @feature 12/10/2026 DX9: lighting, step 3. SSAO shades the map's ambient, not its sun. For SSAO's show shader: the sun's shade
+	// records on stages 1 and 2, their floor in pixel constant c0 (w = `lights aosun`, 0 = SSAO as before), which exist in c1.
+	static void  bindSunShadeForAO(void);
+	static void  setAoSun(float v);			// how far SSAO steps back where the sun reaches: 1 = down to the ambient's share; 0 = not at all
+	static float getAoSun(void);
 	// Ronin @feature 12/10/2026 DX9: lighting, step 5. What a reflective mesh mirrors: 0 = the art's one picture (as before), 1 = the
 	// map's sky cube, 2 = the cube with the sky in every pane (seen from above, a pane mirrors the ground).
 	static void  setReflect(float v);

@@ -18,6 +18,7 @@
 #include "WW3D2/ww3d.h"						// Ronin @feature 06/10/2026 DX9: the depth prepass renders the scene
 #include "WW3D2/statistics.h"
 #include "W3DDevice/GameClient/W3DShadowMapState.h"
+#include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 12/10/2026 DX9: the sun's shade, for the AO's multiply
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 2. The two tuning knobs, in world units and as a multiplier.
 static const float AO_RADIUS    = 20.0f;
@@ -456,6 +457,9 @@ void W3DSsao::renderPass(const CameraClass &camera, Bool afterTrees)
 		dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_SRCCOLOR);
 		dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
 							D3DCOLORWRITEENABLE_BLUE);
+		// Ronin @feature 12/10/2026 DX9: lighting step 3. The sun's shade on stages 1 and 2, its floor in c0: AO shades the ambient
+		// only. The invalidate below unbinds both.
+		W3DLocalLights::bindSunShadeForAO();
 		drawScreenQuad(dev, s_showPS, (float)rd.Width, (float)rd.Height, 0.0f, 0.0f, (float)rd.Width, (float)rd.Height);
 	}
 
@@ -547,6 +551,11 @@ void W3DSsao::drawDebugView(const CameraClass *camera)
 	else if (view == 2)
 	{
 		uploadAOConstants(dev, *camera, dd.Width, dd.Height);
+	}
+	else
+	{
+		// Ronin @feature 12/10/2026 DX9: view 3 is the AO as the frame takes it: lifted where the sun reaches (`lights aosun`).
+		W3DLocalLights::bindSunShadeForAO();
 	}
 
 	dev->SetTexture(0, tex);
