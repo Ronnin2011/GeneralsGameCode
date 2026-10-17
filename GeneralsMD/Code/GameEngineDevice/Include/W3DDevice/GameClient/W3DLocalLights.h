@@ -30,6 +30,8 @@ public:
 	// Ronin @feature 09/10/2026 DX9: TRUE = W3DDisplay::createLightPulse keeps the pulses it drops as too small for the 10-unit
 	// vertex grid (26 of the game's 65). Per pixel they show.
 	static Bool wantsSmallLights(void);
+	// Ronin @feature 17/10/2026 DX9: W3DSsao runs its view depth prepass under MSAA for this too, SSAO or not: the lights need a depth.
+	static Bool wantsDepthPrepass(void);
 	// Ronin @feature 17/10/2026 DX9: an engine pulse's minimum reach (inner + width) and fade frames while the lights run - called
 	// by W3DDisplay::createLightPulse. `lights pulsemin` / `pulsefade`, 0 = as the FX asks.
 	static void minimumPulse(Real innerRadius, Real *attenuationWidth, UnsignedInt *decayFrames);

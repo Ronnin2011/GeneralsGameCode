@@ -307,7 +307,9 @@ void W3DSsao::updateDepthPrepass(CameraClass *camera, SceneClass *scene)
 {
 	s_prepassThisFrame = FALSE;
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
-	if (dev == NULL || camera == NULL || scene == NULL || getQuality() <= 0 || !DX8Wrapper::Begin_Scene_Depth_Prepass())
+	// Ronin @feature 17/10/2026 DX9: for the local lights too, with SSAO off - under MSAA this is their only scene depth.
+	if (dev == NULL || camera == NULL || scene == NULL || (getQuality() <= 0 && !W3DLocalLights::wantsDepthPrepass()) ||
+		!DX8Wrapper::Begin_Scene_Depth_Prepass())
 		return;
 
 	DWORD oldColorWrite = 0xFFFFFFFF;

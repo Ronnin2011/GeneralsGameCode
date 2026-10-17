@@ -2043,7 +2043,8 @@ AGAIN:
 				W3DShadowMap::updateRenderTargetTexture(primaryW3DView->get3DCamera(), m_3DScene);
 
 			// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. The solid scene's depth into a readable texture - after the
-			// shadow map, whose receiver state it switches off and puts back. A no-op without MSAA or without SSAO.
+			// shadow map, whose receiver state it switches off and puts back. A no-op without MSAA.
+			// Ronin @feature 17/10/2026 DX9: and with neither SSAO nor the local lights on - under MSAA it is their only scene depth.
 			W3DSsao::updateDepthPrepass(primaryW3DView ? primaryW3DView->get3DCamera() : NULL, m_3DScene);
 		}
 

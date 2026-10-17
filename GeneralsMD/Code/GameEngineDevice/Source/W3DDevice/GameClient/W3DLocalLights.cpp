@@ -1550,6 +1550,8 @@ void  W3DLocalLights::setPulseFade(float v)	{ s_pulseFade = (v < 0.5f) ? 0 : ((v
 float W3DLocalLights::getPulseFade(void)	{ return (float)s_pulseFade; }
 
 Bool W3DLocalLights::wantsSmallLights(void)	{ return (s_active && s_small) ? TRUE : FALSE; }
+// Ronin @feature 17/10/2026 DX9: under MSAA the scene depth comes only from the view prepass - asked for while the lights are on.
+Bool W3DLocalLights::wantsDepthPrepass(void)	{ return s_enabled ? TRUE : FALSE; }
 
 
 void W3DLocalLights::getStats(Stats *out)
@@ -1972,9 +1974,9 @@ void W3DLocalLights::beginFrame(void)
 		ensureShaders(dev);
 		if (s_quadVS != NULL && s_lightPS != NULL)
 		{
-			// Ronin @feature 09/10/2026 DX9: SSAO and TAA begin before this and each may hold the scene depth; begin it here only
-			// when neither did - Begin_Scene_Depth refuses a second start. Under MSAA without SSAO there is none: old paths stay.
-			if (W3DSsao::isActive() || W3DTaa::ownsDepth())
+			// Ronin @feature 09/10/2026 DX9: SSAO and TAA begin the scene depth before this; begin it here only when neither did.
+			// Ronin @feature 17/10/2026 DX9: under MSAA the view prepass fills it - for SSAO, or for the lights alone (wantsDepthPrepass).
+			if (W3DSsao::isActive() || W3DTaa::ownsDepth() || W3DSsao::getPrepassTarget() != 0)
 				active = TRUE;
 			else
 			{
