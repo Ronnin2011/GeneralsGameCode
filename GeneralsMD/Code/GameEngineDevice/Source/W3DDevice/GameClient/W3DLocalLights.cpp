@@ -26,6 +26,9 @@
 #include "W3DDevice/GameClient/W3DLocalLights.h"
 #include "W3DDevice/GameClient/W3DSkyCube.h"	// Ronin @feature 12/10/2026 DX9: the sky cube: kept current each frame, shown by view 5
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
+#include "GameClient/ParticleSys.h"			// Ronin @feature 15/10/2026 DX9: item 7, glowing effects as lights
+#include "GameLogic/GameLogic.h"			// Ronin @bugfix 17/10/2026 DX9: a projectile's exhaust is lit at the projectile
+#include "GameLogic/Object.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DSsao.h"
 #include "W3DDevice/GameClient/W3DTaa.h"
@@ -92,6 +95,7 @@ struct LightMemo
 	float       shaft;		// the beam in the air, its strength; 0 for a point light
 	float       lampRadius = 0.0f;	// ... and how wide it leaves its lamp (c13.w)
 	float       coronaRadius = 0.0f, coronaStrength = 0.0f;	// a lamp's own glow, drawn by the shader (c14); 0 = none
+	float       peakLum = 0.0f, peakOuter = 0.0f;	// an engine pulse: its brightest and its widest so far (its smooth end)
 	Vector3     boundCentre;	// the sphere that holds everything it reaches
 	float       boundRadius;
 	Bool        seen;		// a light of this frame matched it
@@ -1528,6 +1532,23 @@ void W3DLocalLights::setRange(float v)		{ s_range = (v < 0.25f) ? 0.25f : ((v > 
 float W3DLocalLights::getRange(void)		{ return s_range; }
 void W3DLocalLights::setSmall(Bool on)		{ s_small = on; }
 Bool W3DLocalLights::getSmall(void)			{ return s_small; }
+// Ronin @feature 17/10/2026 DX9: the pulse minimum - `lights pulsemin` (units of reach) and `lights pulsefade` (frames).
+static float s_pulseMin  = 18.0f;		// value for the testers, 17/10
+static Int   s_pulseFade = 11;
+void W3DLocalLights::minimumPulse(Real innerRadius, Real *attenuationWidth, UnsignedInt *decayFrames)
+{
+	if (!s_active || attenuationWidth == NULL || decayFrames == NULL)
+		return;
+	if (s_pulseMin > 0.0f && innerRadius + *attenuationWidth < s_pulseMin)
+		*attenuationWidth = s_pulseMin - innerRadius;
+	if (s_pulseFade > 0 && *decayFrames != 0 && *decayFrames < (UnsignedInt)s_pulseFade)
+		*decayFrames = (UnsignedInt)s_pulseFade;		// 0 = a pulse that never fades: left so
+}
+void  W3DLocalLights::setPulseMin(float v)	{ s_pulseMin = (v < 0.0f) ? 0.0f : ((v > 60.0f) ? 60.0f : v); }
+float W3DLocalLights::getPulseMin(void)	{ return s_pulseMin; }
+void  W3DLocalLights::setPulseFade(float v)	{ s_pulseFade = (v < 0.5f) ? 0 : ((v > 30.0f) ? 30 : (Int)(v + 0.5f)); }
+float W3DLocalLights::getPulseFade(void)	{ return (float)s_pulseFade; }
+
 Bool W3DLocalLights::wantsSmallLights(void)	{ return (s_active && s_small) ? TRUE : FALSE; }
 
 
@@ -1552,6 +1573,19 @@ static Bool					s_shadeFrame    = FALSE;	// this frame records the shade (lights
 static float				s_aoSun         = 1.0f;	// `lights aosun`
 static Bool					s_treeShadeFrame = FALSE;	// the trees drew into their own shade record this frame (noteTreeShade)
 static float				s_bounce        = 1.0f;	// `lights bounce`
+static Int						s_fxLights      = 24;		// `lights fxlights`: the strongest glowing effects drawn as lights
+static float				s_sunTime[4]    = { 1.0f, 1.0f, 0.5f, 0.0f };	// `lights sunmorning..sunnight`: how far each time is day
+static float				s_sunNow        = 1.0f;	// this frame's, from the time of day (beginFrame)
+static float				s_daySun        = 0.2f;	// `lights daysun`: by day a local light keeps 20% where the sun shines
+static float				s_dayShade      = 0.5f;	// `lights dayshade`: ... and 50% in a sun shadow
+static float				s_fxStrength    = 1.0f;	// `lights fxstrength`
+static float				s_fxReach       = 1.0f;	// `lights fxreach`
+static Bool					s_fxMerge       = TRUE;	// `lights fxmerge`
+static Bool					s_fxFlares      = FALSE;	// `lights fxflares`
+static float				s_fxFire        = 40.0f;	// `lights fxfire`
+static const Int			FX_CANDIDATES   = 64;		// the strongest kept while the systems are read
+static const float			FX_SIZE_CAP     = 20.0f;	// a particle counts at most this wide: a lens flare's sprite is not its light
+static const float			FX_POWER_FULL   = 200.0f;	// colour x size^2 summed: strength sqrt(t / (1 + t)), t = power / this
 static Int						s_reflect       = 2;		// `lights reflect`
 
 void W3DLocalLights::beginSunShade(void)
@@ -1744,6 +1778,20 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("aosun", setAoSun, getAoSun),
 	LIGHT_REAL("reflect", setReflect, getReflect),
 	LIGHT_REAL("bounce", setBounce, getBounce),
+	{ "sunmorning", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(1, v); }, []() -> float { return W3DLocalLights::getSunTime(1); } },
+	{ "sunafternoon", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(2, v); }, []() -> float { return W3DLocalLights::getSunTime(2); } },
+	{ "sunevening", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(3, v); }, []() -> float { return W3DLocalLights::getSunTime(3); } },
+	{ "sunnight", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(4, v); }, []() -> float { return W3DLocalLights::getSunTime(4); } },
+	LIGHT_REAL("daysun", setDaySun, getDaySun),
+	LIGHT_REAL("dayshade", setDayShade, getDayShade),
+	LIGHT_REAL("fxlights", setFxLights, getFxLights),
+	LIGHT_REAL("fxstrength", setFxStrength, getFxStrength),
+	LIGHT_REAL("fxreach", setFxReach, getFxReach),
+	LIGHT_SWITCH("fxmerge", setFxMerge, getFxMerge),
+	LIGHT_SWITCH("fxflares", setFxFlares, getFxFlares),
+	LIGHT_REAL("pulsemin", setPulseMin, getPulseMin),
+	LIGHT_REAL("pulsefade", setPulseFade, getPulseFade),
+	LIGHT_REAL("fxfire", setFxFire, getFxFire),
 	// Ronin @feature 15/10/2026 DX9: the night look and the dark lift live in W3DTaa; listed here so DX9Lights.ini keeps them.
 	{ "night", TRUE, TRUE, [](float v) { W3DTaa::setNight((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DTaa::getNight() ? 1.0f : 0.0f; } },
 	{ "nighttint", FALSE, TRUE, [](float v) { W3DTaa::setNightTint(v); }, []() -> float { return W3DTaa::getNightTint(); } },
@@ -1898,6 +1946,9 @@ void W3DLocalLights::beginFrame(void)
 	s_stats.beams      = 0;
 	s_stats.glows      = 0;
 	s_stats.pools      = 0;
+	s_stats.fx         = 0;
+	s_stats.fxCandidates = 0;
+	s_stats.fxGlowing  = 0;
 	s_stats.casters    = 0;
 	s_stats.lampMaps   = 0;
 	s_stats.lampDraws  = 0;
@@ -1942,6 +1993,12 @@ void W3DLocalLights::beginFrame(void)
 	s_frameBeamCount = 0;
 	s_frameGlowCount = 0;
 	s_framePoolCount = 0;
+	// Ronin @feature 15/10/2026 DX9: how far this time of day is day, for `daysun` / `dayshade` / `sunerase`. The glows light at every time.
+	{
+		const Int tod = (TheGlobalData != NULL) ? (Int)TheGlobalData->m_timeOfDay : 4;
+		s_sunNow = s_sunTime[(tod >= 1 && tod <= 4) ? (tod - 1) : 3];
+	}
+	// Ronin @bugfix 15/10/2026 DX9: on at every time of day: the swap keeps the art's old pools and cones hidden.
 	s_beamsOn = (active && s_beams > 0.0f) ? TRUE : FALSE;
 	s_glowsOn = (active && s_glows > 0.0f) ? TRUE : FALSE;
 	s_coronasOn = (s_glowsOn && s_coronas > 0.0f) ? TRUE : FALSE;
@@ -2083,6 +2140,24 @@ static Bool makeDraw(LightDraw &d, const LightMemo &now, const LightMemo &was, c
 // without it the record on that target is an older frame's.
 void W3DLocalLights::noteTreeShade(void)	{ s_treeShadeFrame = TRUE; }
 void  W3DLocalLights::setBounce(float v)	{ s_bounce = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+void  W3DLocalLights::setSunTime(Int tod, float v)	{ if (tod >= 1 && tod <= 4) s_sunTime[tod - 1] = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float W3DLocalLights::getSunTime(Int tod)			{ return (tod >= 1 && tod <= 4) ? s_sunTime[tod - 1] : 0.0f; }
+void  W3DLocalLights::setDaySun(float v)	{ s_daySun = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float W3DLocalLights::getDaySun(void)		{ return s_daySun; }
+void  W3DLocalLights::setDayShade(float v)	{ s_dayShade = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float W3DLocalLights::getDayShade(void)	{ return s_dayShade; }
+void  W3DLocalLights::setFxLights(float v)	{ s_fxLights = (v < 0.5f) ? 0 : ((v > 64.0f) ? 64 : (Int)(v + 0.5f)); }
+float W3DLocalLights::getFxLights(void)		{ return (float)s_fxLights; }
+void  W3DLocalLights::setFxStrength(float v)	{ s_fxStrength = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getFxStrength(void)	{ return s_fxStrength; }
+void  W3DLocalLights::setFxReach(float v)	{ s_fxReach = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getFxReach(void)		{ return s_fxReach; }
+void  W3DLocalLights::setFxMerge(Bool on)	{ s_fxMerge = on; }
+Bool  W3DLocalLights::getFxMerge(void)		{ return s_fxMerge; }
+void  W3DLocalLights::setFxFlares(Bool on)	{ s_fxFlares = on; }
+Bool  W3DLocalLights::getFxFlares(void)		{ return s_fxFlares; }
+void  W3DLocalLights::setFxFire(float v)	{ s_fxFire = (v < 0.0f) ? 0.0f : ((v > 200.0f) ? 200.0f : v); }
+float W3DLocalLights::getFxFire(void)		{ return s_fxFire; }
 float W3DLocalLights::getBounce(void)		{ return s_bounce; }
 
 // Ronin @feature 12/10/2026 DX9: HDR STAGE 1B - THE SUN LIFT. With a float frame the sun may be brighter than 1: one quad adds the
@@ -2283,10 +2358,6 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			light->Get_Far_Attenuation_Range(now.inner, now.outer);
 			now.inner *= s_range;
 			now.outer *= s_range;
-			now.boundCentre = now.world;
-			now.boundRadius = now.outer;
-			if (now.outer - now.inner < 0.5f)
-				continue;
 			Vector3 diffuse, ambient;
 			light->Get_Diffuse(&diffuse);
 			light->Get_Ambient(&ambient);
@@ -2309,6 +2380,25 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 					break;
 				}
 			}
+			// Ronin @bugfix 16/10/2026 DX9: a pulse shrinks to its inner radius, then only fades (W3DDynamicLight); it was dropped the
+			// moment the two met, still half bright. From there it keeps closing with its fade, over a soft edge.
+			{
+				const float lumNow = 0.299f * (now.diffuse[0] + now.ambient[0]) + 0.587f * (now.diffuse[1] + now.ambient[1]) +
+									 0.114f * (now.diffuse[2] + now.ambient[2]);
+				now.peakLum   = (was.peakLum > lumNow) ? was.peakLum : lumNow;
+				now.peakOuter = (was.peakOuter > now.outer) ? was.peakOuter : now.outer;
+				if (now.outer - now.inner < 0.5f)
+				{
+					const float closing = (now.peakLum > 0.0001f) ? now.peakOuter * lumNow / now.peakLum : now.outer;
+					if (closing < now.outer)
+						now.outer = closing;
+					now.inner = now.outer * 0.7f;
+				}
+				if (now.outer < 0.5f)
+					continue;
+			}
+			now.boundCentre = now.world;
+			now.boundRadius = now.outer;
 			if (!makeDraw(draws[count], now, was, cameraTM, vm))
 				continue;		// off screen
 			s_stats.coverage += ((draws[count].x1 - draws[count].x0) * (draws[count].y1 - draws[count].y0)) / (targetW * targetH);
@@ -2583,6 +2673,243 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			++s_stats.pools;
 		}
 
+		// Ronin @feature 15/10/2026 DX9: GLOBAL LIGHT ITEM 7 - GLOWING EFFECTS LIGHT THEIR SURROUNDINGS in their own colour. Each additive
+		// particle system with particles on screen is one point light at their centre, reaching past their spread; the strongest kept.
+		if (s_fxLights > 0 && s_fxStrength > 0.0f && TheParticleSystemManager != NULL)
+		{
+			struct FxGlow { const ParticleSystem *sys; Vector3 at; float col[3]; float power; float spread; Bool fire; };
+			static FxGlow fx[FX_CANDIDATES];
+			Int fxCount = 0;
+			ParticleSystemManager::ParticleSystemList &systems = TheParticleSystemManager->getAllParticleSystems();
+			for (ParticleSystemManager::ParticleSystemListIt sit = systems.begin(); sit != systems.end(); ++sit)
+			{
+				ParticleSystem *sys = *sit;
+				if (sys == NULL || sys->getShaderType() != ParticleSystemInfo::ADDITIVE)
+					continue;
+				// Ronin @bugfix 17/10/2026 DX9: a ripple or shock-wave ring (all 40 on EXShockWav, flat) is water or air moving, not a light -
+				// the battleship's ripples lit the whole ship white.
+				if (_strnicmp(sys->getParticleTypeName().str(), "exshockwav", 10) == 0)
+					continue;
+				// Ronin @feature 16/10/2026 DX9: a lens flare is a camera's glare, not a light in the world - its big sprite made the Humvee's
+				// wide pool (`lights fxflares`).
+				Bool isFire = FALSE;
+				if (sys->getTemplate() != NULL)
+				{
+					char low[96];
+					const char *name = sys->getTemplate()->getName().str();
+					Int n = 0;
+					for (; name[n] != 0 && n < (Int)sizeof(low) - 1; ++n)
+						low[n] = (char)tolower((unsigned char)name[n]);
+					low[n] = 0;
+					if (!s_fxFlares && (strstr(low, "flare") != NULL || strstr(low, "lenz") != NULL || strstr(low, "lens") != NULL))
+						continue;
+					// Ronin @feature 16/10/2026 DX9: fires by name - fire casts light round it (118 of the 475 non-flare additive systems).
+					static const char *const FIRE_WORDS[] = { "fire", "flame", "burn", "smolder", "ember", "napalm", "inferno" };
+					for (Int fw = 0; fw < (Int)(sizeof(FIRE_WORDS) / sizeof(FIRE_WORDS[0])) && !isFire; ++fw)
+						isFire = (strstr(low, FIRE_WORDS[fw]) != NULL) ? TRUE : FALSE;
+				}
+				++s_stats.fxGlowing;
+				FxGlow g;
+				g.sys = sys;
+				g.fire = isFire;
+				g.power = 0.0f;
+				g.spread = 0.0f;
+				float wsum = 0.0f, sizeSum = 0.0f, pos[3] = { 0.0f, 0.0f, 0.0f };
+				g.col[0] = g.col[1] = g.col[2] = 0.0f;
+				// Ronin @bugfix 15/10/2026 DX9: every particle, not only the unculled - that flag is the last particle draw's, which at
+				// this point is not this view's (fx=0/0/208 in his shot). Off-screen lights are dropped below, by their sphere.
+				for (Particle *p = sys->getFirstParticle(); p != NULL; p = p->m_systemNext)
+				{
+					const float size = (p->getSize() < FX_SIZE_CAP) ? p->getSize() : FX_SIZE_CAP;
+					// Ronin @bugfix 16/10/2026 DX9: each counts by the light it gives, colour luminance x area: not alpha (additive is ONE / ONE,
+					// 284 of 589 keep alpha 0), not area alone (a rocket's faded trail puffs pulled the light back along its path).
+					const RGBColor *c = p->getColor();
+					const float w = (0.299f * c->red + 0.587f * c->green + 0.114f * c->blue) * size * size;
+					if (w <= 0.0f)
+						continue;
+					const Coord3D *at = p->getPosition();
+					g.col[0] += c->red * w; g.col[1] += c->green * w; g.col[2] += c->blue * w;
+					pos[0] += at->x * w; pos[1] += at->y * w; pos[2] += at->z * w;
+					g.power += w;
+					wsum += w;
+					sizeSum += w * size;
+				}
+				if (wsum <= 0.0f || g.power <= 0.0f)
+					continue;
+				for (Int k = 0; k < 3; ++k)
+					g.col[k] /= wsum;
+				g.at.Set(pos[0] / wsum, pos[1] / wsum, pos[2] / wsum);
+				// Ronin @bugfix 17/10/2026 DX9: a projectile's exhaust is lit at its youngest particle; once its projectile is gone, not at
+				// all (the blast lights the impact). By ID: a system drops its attachment when its object goes (ParticleSys.cpp:2344).
+				static ParticleSystemID s_trailIds[256];
+				static Int s_trailNext = 0;
+				Bool trail = FALSE;
+				{
+					Object *owner = (sys->getAttachedObject() != INVALID_ID && TheGameLogic != NULL)
+									? TheGameLogic->findObjectByID(sys->getAttachedObject()) : NULL;
+					Bool known = FALSE;
+					for (Int t = 0; t < 256 && !known; ++t)
+						known = (s_trailIds[t] == sys->getSystemID()) ? TRUE : FALSE;
+					if (owner != NULL && owner->isKindOf(KINDOF_PROJECTILE))
+					{
+						trail = TRUE;
+						if (!known)
+						{
+							s_trailIds[s_trailNext] = sys->getSystemID();
+							s_trailNext = (s_trailNext + 1) & 255;
+						}
+					}
+					else if (known)
+						continue;		// a spent trail: its projectile is gone
+				}
+				UnsignedInt youngest = 0xFFFFFFFFu;
+				if (trail)
+				{
+					for (Particle *p = sys->getFirstParticle(); p != NULL; p = p->m_systemNext)
+					{
+						if (p->getElapsedFrames() < youngest)
+						{
+							youngest = p->getElapsedFrames();
+							const Coord3D *at = p->getPosition();
+							g.at.Set(at->x, at->y, at->z);
+						}
+					}
+				}
+				// Ronin @bugfix 16/10/2026 DX9: the spread by weight (1.5 x the RMS distance), not the farthest particle - a blast's few
+				// far-flung flames made its pool huge.
+				float d2sum = 0.0f, wNear = 0.0f, sizeNear = 0.0f;
+				for (Particle *p = sys->getFirstParticle(); p != NULL; p = p->m_systemNext)
+				{
+					if (trail && p->getElapsedFrames() > youngest + 6)
+						continue;
+					const float size = (p->getSize() < FX_SIZE_CAP) ? p->getSize() : FX_SIZE_CAP;
+					const RGBColor *c = p->getColor();
+					const Coord3D *at = p->getPosition();
+					const float d = (Vector3(at->x, at->y, at->z) - g.at).Length();
+					const float w = (0.299f * c->red + 0.587f * c->green + 0.114f * c->blue) * size * size;
+					d2sum += w * d * d;
+					wNear += w;
+					sizeNear += w * size;
+				}
+				// Ronin @feature 16/10/2026 DX9: the effect's size - its particles' spread and half their sprites' weighted size.
+				g.spread = (wNear > 0.0f) ? (1.5f * sqrtf(d2sum / wNear) + 0.5f * (sizeNear / wNear)) : 0.5f * (sizeSum / wsum);
+				// Ronin @bugfix 15/10/2026 DX9: on this camera's screen, as the light it would be - else it never takes a slot.
+				{
+					Vector3 inView;
+					Matrix3D::Inverse_Transform_Vector(cameraTM, g.at, &inView);
+					float onScreen[4];
+					if (!spherePixelRect(inView, (2.0f * g.spread + (isFire ? s_fxFire : 0.0f)) * s_fxReach * s_range, vm, onScreen))
+						continue;
+				}
+				++s_stats.fxCandidates;
+				// Ronin @feature 15/10/2026 DX9: keep the FX_CANDIDATES strongest, strongest first.
+				Int slot = fxCount;
+				if (fxCount < FX_CANDIDATES)
+					++fxCount;
+				else if (g.power <= fx[FX_CANDIDATES - 1].power)
+					continue;
+				else
+					slot = FX_CANDIDATES - 1;
+				while (slot > 0 && fx[slot - 1].power < g.power)
+				{
+					fx[slot] = fx[slot - 1];
+					--slot;
+				}
+				fx[slot] = g;
+			}
+			// Ronin @bugfix 16/10/2026 DX9: the reach is the effect's own size, up to twice it by its brightness (no fixed 40: casings lit a
+			// 40-unit pool); a fire reaches at least its size + `fxfire` x its brightness share - fire lights round it.
+			auto fxReachOf = [](float size, float power, Bool fire) -> float
+			{
+				const float t = power / FX_POWER_FULL;
+				const float soft = sqrtf(t / (1.0f + t));
+				const float bySize = size * (1.0f + soft);
+				const float byFire = fire ? (size + s_fxFire * soft) : 0.0f;
+				return (byFire > bySize) ? byFire : bySize;
+			};
+			// Ronin @bugfix 16/10/2026 DX9: one blast is several glowing systems at one spot, and each was a light - stacked, far too
+			// bright. Centres within half the bigger reach are one light: power summed, centre and colour by power. `lights fxmerge`.
+			static FxGlow merged[FX_CANDIDATES];
+			Int mergedCount = 0;
+			for (Int f = 0; f < fxCount; ++f)
+			{
+				const FxGlow &g = fx[f];
+				Int into = -1;
+				for (Int m = 0; m < mergedCount && into < 0 && s_fxMerge; ++m)
+				{
+					const float ra = fxReachOf(merged[m].spread, merged[m].power, merged[m].fire), rb = fxReachOf(g.spread, g.power, g.fire);
+					if ((merged[m].at - g.at).Length() < 0.5f * ((ra > rb) ? ra : rb) * s_fxReach)
+						into = m;
+				}
+				if (into < 0)
+				{
+					merged[mergedCount++] = g;
+					continue;
+				}
+				FxGlow &mm = merged[into];
+				const float total = mm.power + g.power;
+				const Vector3 at = (mm.at * mm.power + g.at * g.power) / total;
+				const float reachA = mm.spread + (mm.at - at).Length(), reachB = g.spread + (g.at - at).Length();
+				for (Int k = 0; k < 3; ++k)
+					mm.col[k] = (mm.col[k] * mm.power + g.col[k] * g.power) / total;
+				mm.at = at;
+				mm.spread = (reachA > reachB) ? reachA : reachB;
+				mm.power = total;
+				mm.fire = (mm.fire || g.fire) ? TRUE : FALSE;
+			}
+			const Int fxKeep = (mergedCount < s_fxLights) ? mergedCount : s_fxLights;
+			for (Int f = 0; f < fxKeep && count < MAX_LIGHTS_DRAWN; ++f)
+			{
+				const FxGlow &g = merged[f];
+				const float peak = (g.col[0] > g.col[1]) ? ((g.col[0] > g.col[2]) ? g.col[0] : g.col[2]) : ((g.col[1] > g.col[2]) ? g.col[1] : g.col[2]);
+				if (peak < 0.02f)
+					continue;
+				// Ronin @bugfix 16/10/2026 DX9: no hard knee - it held full strength and dropped at the end; now it fades all the way.
+				const float t = g.power / FX_POWER_FULL;
+				const float strength = s_fxStrength * s_intensity * sqrtf(t / (1.0f + t));
+				LightMemo now;
+				now.key   = g.sys;
+				now.sub   = 3000;		// apart from every other kind
+				now.seen  = FALSE;
+				now.world = g.at;
+				now.outer = fxReachOf(g.spread, g.power, g.fire) * s_fxReach * s_range;
+				now.inner = now.outer * 0.15f;
+				if (now.outer - now.inner < 0.5f)
+					continue;
+				now.axis.Set(0.0f, 0.0f, 1.0f);
+				now.cosOuter = -2.0f;
+				now.edge     = 1.0f;
+				now.shaft    = 0.0f;
+				now.boundCentre = now.world;
+				now.boundRadius = now.outer;
+				for (Int ch = 0; ch < 3; ++ch)
+				{
+					now.diffuse[ch] = g.col[ch] / peak * strength;		// its own colour at full, its brightness in the strength
+					now.ambient[ch] = now.diffuse[ch] * 0.25f;			// a little on faces turned away
+				}
+				LightMemo was = now;
+				was.diffuse[0] = was.diffuse[1] = was.diffuse[2] = 0.0f;
+				was.ambient[0] = was.ambient[1] = was.ambient[2] = 0.0f;
+				for (Int m = 0; m < lastCount; ++m)
+				{
+					if (last[m].key == now.key && last[m].sub == now.sub)
+					{
+						was = last[m];
+						last[m].seen = TRUE;
+						break;
+					}
+				}
+				if (!makeDraw(draws[count], now, was, cameraTM, vm))
+					continue;		// off screen
+				s_stats.coverage += ((draws[count].x1 - draws[count].x0) * (draws[count].y1 - draws[count].y0)) / (targetW * targetH);
+				s_memo[s_memoCount++] = now;
+				++count;
+				++lightCount;
+				++s_stats.live;
+				++s_stats.fx;
+			}
+		}
+
 		// Ronin @bugfix 09/10/2026 DX9: a light drawn last frame and gone now gets one dark draw, so the mask marks where it went out.
 		for (Int m = 0; m < lastCount && count < MAX_LIGHTS_DRAWN; ++m)
 		{
@@ -2657,8 +2984,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	dev->GetRenderState(D3DRS_DESTBLEND,        &destBlend);
 	D3DVIEWPORT9 oldVP;
 	const Bool haveVP = SUCCEEDED(dev->GetViewport(&oldVP));
-	float savedConstants[33 * 4];		// c0..c15, c16..c29: a light's shadow maps, c30..c32: the world's axes
-	const Bool haveConstants = SUCCEEDED(dev->GetPixelShaderConstantF(0, savedConstants, 33));
+	float savedConstants[34 * 4];		// c0..c15, c16..c29: a light's shadow maps, c30..c32: the world's axes, c33: `dayshade`
+	const Bool haveConstants = SUCCEEDED(dev->GetPixelShaderConstantF(0, savedConstants, 34));
 
 	// Ronin @feature 11/10/2026 DX9: lamp shadow maps, stage B1: into their own target, before the pass sets anything of its own.
 	drawLampMaps(dev);
@@ -2703,21 +3030,30 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	}
 	const float shadeUse = (meshShade || groundShade != NULL) ? s_sunFill : 0.0f;
 	s_stats.sunShade = (shadeUse > 0.0f) ? ((meshShade ? 1 : 0) + ((groundShade != NULL) ? 2 : 0)) : 0;
+	// Ronin @feature 15/10/2026 DX9: the shade's floor, as the shadow shaders make it, as one luminance (c4.w): where a pixel is in the sun.
+	float floorLum = 0.45f;
+	{
+		const float *sc = TheTerrainShadowPass.shadeColour;
+		floorLum = 0.299f * (0.45f + (sc[0] - 0.45f) * sc[3]) + 0.587f * (0.45f + (sc[1] - 0.45f) * sc[3]) + 0.114f * (0.45f + (sc[2] - 0.45f) * sc[3]);
+	}
 	const float shared[5 * 4] =
 	{
 		zNear, zFar, (s_view >= 4) ? 0.0f : (float)s_view, s_over,		// views 4 and 5 are the lit frame with something drawn over it
 		planeMin.X, planeMax.Y, planeW, planeH,
 		vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y,
-		1.0f / targetW, 1.0f / targetH, shadeUse, s_sunErase,
-		factor[0], factor[1], factor[2], 0.0f
+		1.0f / targetW, 1.0f / targetH, shadeUse, s_sunErase * (1.0f - s_sunNow),		// Ronin @bugfix 16/10/2026 DX9: sunerase not by day
+		factor[0], factor[1], factor[2], floorLum
 	};
 	dev->SetPixelShaderConstantF(0, shared, 5);
 	// Ronin @bugfix 11/10/2026 DX9: TAA shifts the frame by part of a pixel, another each frame (camera.cpp). Rebuilt from the depth as
 	// if it had not, a point is up to 0.15 units off its surface: the pools of lamps close to what they light flickered in shadow.
 	float jitterX = 0.0f, jitterY = 0.0f;
 	W3DTaa::getJitterNDC(&jitterX, &jitterY);
-	const float jitter[4] = { -0.5f * jitterX, 0.5f * jitterY, s_rays, 0.0f };		// the shift, in viewport widths and heights; z: `lights rays`
+	const float jitter[4] = { -0.5f * jitterX, 0.5f * jitterY, s_rays, 1.0f + (s_daySun - 1.0f) * s_sunNow };		// the shift, in viewport widths and heights; z: `lights rays`
 	dev->SetPixelShaderConstantF(15, jitter, 1);
+	// Ronin @feature 16/10/2026 DX9: c33.x - a local light's strength in a sun shadow, by the time of day (`dayshade`).
+	const float dayShade[4] = { 1.0f + (s_dayShade - 1.0f) * s_sunNow, 0.0f, 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(33, dayShade, 1);
 	// Ronin @feature 11/10/2026 DX9: the world's axes in view space, for every light: a blast's level maps are picked by world direction.
 	Vector3 worldX, worldY, worldZ;
 	Matrix3D::Inverse_Rotate_Vector(camera.Get_Transform(), Vector3(1.0f, 0.0f, 0.0f), &worldX);
@@ -2967,7 +3303,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	dev->SetRenderState(D3DRS_SRCBLEND,         srcBlend);
 	dev->SetRenderState(D3DRS_DESTBLEND,        destBlend);
 	if (haveConstants)
-		dev->SetPixelShaderConstantF(0, savedConstants, 33);
+		dev->SetPixelShaderConstantF(0, savedConstants, 34);
 
 	dev->SetVertexShader(NULL);
 	dev->SetPixelShader(NULL);

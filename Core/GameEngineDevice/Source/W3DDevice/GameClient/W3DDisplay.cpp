@@ -2304,6 +2304,9 @@ void W3DDisplay::createLightPulse( const Coord3D *pos, const RGBColor *color,
 {
 	if (m_3DScene == nullptr)
 		return;
+	// Ronin @feature 17/10/2026 DX9: with the screen-space lights a pulse gets a minimum reach and fade (`lights pulsemin`,
+	// `pulsefade`) - a Gatling's muzzle pulse was 10 units for 3 frames.
+	W3DLocalLights::minimumPulse(innerRadius, &attenuationWidth, &decayFrameTime);
 	// Ronin @feature 09/10/2026 DX9: the vertex paths could not show a pulse under two cells of reach; per pixel it shows.
 	if (innerRadius+attenuationWidth<2.0*PATHFIND_CELL_SIZE_F + 1.0f && !W3DLocalLights::wantsSmallLights()) {
 		return; // it basically won't make any visual difference.  jba.

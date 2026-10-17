@@ -30,6 +30,8 @@ float4 g_LightAxis  : register(c11);        // xyz = the axis, away from the lam
 float4 g_PrevAxis   : register(c12);        // the same, last frame, in THIS frame's view space
 float4 g_Shaft      : register(c13);        // the beam in the air: x = its strength now, y = last frame's (0 = none); z = this lamp's own turn of its rays, 0..1; w = how wide the beam leaves the lamp
 float4 g_Jitter     : register(c15);        // xy = how far TAA shifted this frame on screen, in viewport widths and heights (0 without TAA); z = `lights rays`
+                                            // Ronin @feature 16/10/2026 DX9: w = a local light's strength in the sun, by the time of day (`daysun`)
+float4 g_DayShade   : register(c33);        // x = its strength in a sun shadow, by the time of day (`dayshade`)
 float4x4 g_LampClip : register(c16);        // a beam's shadow map: view space to its tile - atlas uv x w, depth, w
 float4 g_LampTile   : register(c20);        // ... the tile in atlas uv: xy = min, zw = max; all 0 = this light has no map
 float4 g_LampBias   : register(c21);        // ... x = a texel's width at depth 1; the bias: y = along the normal, z = to the lamp (texels), w = to the lamp (units)
@@ -392,6 +394,14 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
             float3 white   = float3(1.0f, 1.0f, 1.0f);
             float3 shade   = (shadeM.a > 0.5f) ? shadeM.rgb : ((max(shadeG.r, max(shadeG.g, shadeG.b)) > 0.05f) ? shadeG : white);    // a mesh's own first, else the ground's
             shade = lerp(white, clamp(shade, 0.05f, 1.0f), g_TexelSize.z);
+            // Ronin @feature 16/10/2026 DX9: by day a local light keeps c15.w where the sun shines, c33.x in a shadow (1 at night).
+            // Sunlit: the shade over the map's floor (c4.w = its luminance). lightSun: as it would be in the sun, for the cap below.
+            float sunLit = saturate((dot(shade, float3(0.299f, 0.587f, 0.114f)) - g_SceneLight.w) / max(1.0f - g_SceneLight.w, 0.05f));
+            float3 lightSun  = light  * g_Jitter.w;
+            float3 lightSunP = lightP * g_Jitter.w;
+            float  dayKeep   = lerp(g_DayShade.x, g_Jitter.w, sunLit);
+            light  *= dayKeep;
+            lightP *= dayKeep;
             float3 surface = saturate(frame * g_SceneLight.rgb / shade);
             float3 ceiling = max(frame, surface * g_Camera.w);
             // Ronin @feature 10/10/2026 DX9: and the lamp gives back what the sun's shadow took, in step with its own strength here: the
@@ -399,8 +409,10 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
             float3 lost    = frame / shade - frame;
             float  lamp    = saturate(max(light.r, max(light.g, light.b)) * g_TexelSize.w);
             float  lampP   = saturate(max(lightP.r, max(lightP.g, lightP.b)) * g_TexelSize.w);
-            result  = min(frame + lost * lamp + surface * light, ceiling) - frame;
-            resultP = min(frame + lost * lampP + surface * lightP, ceiling) - frame;
+            // Ronin @bugfix 16/10/2026 DX9: a shadowed pixel never brighter than it would be in the sun under the same light - the
+            // lit shadow shapes round muzzle flashes and police cars. A sunlit pixel and the night are not changed by it.
+            result  = min(min(frame + lost * lamp + surface * light, ceiling), frame + lost + surface * lightSun) - frame;
+            resultP = min(min(frame + lost * lampP + surface * lightP, ceiling), frame + lost + surface * lightSunP) - frame;
         }
     }
 

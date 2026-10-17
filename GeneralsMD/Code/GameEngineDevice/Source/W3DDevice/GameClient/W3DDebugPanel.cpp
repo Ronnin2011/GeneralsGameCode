@@ -59,6 +59,7 @@
 #include "W3DDevice/GameClient/W3DWaterSeaTuning.h"	// Ronin @feature 29/09/2026 DX9: the WaterSea look knobs
 #include "W3DDevice/GameClient/W3DWaterSeaIni.h"	// Ronin @feature 04/10/2026 DX9: `water save` / `water load`
 #include "W3DDevice/GameClient/W3DSkyCube.h"		// Ronin @feature 12/10/2026 DX9: `sky`
+#include "GameClient/ParticleSys.h"				// Ronin @diagnostic 15/10/2026 DX9: `glowfx`
 // Ronin @feature 28/09/2026 DX9: the readouts moved in from W3DDisplay.cpp.
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -811,16 +812,20 @@ namespace
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: lights [0|1] | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..6> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | aosun <0..3> | reflect <0..2> | bounce <0..2> | night... (as `night`) | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
+			printAscii(AsciiString("usage: lights [0|1] | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..6> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | aosun <0..3> | reflect <0..2> | bounce <0..2> | fxlights <0..64> | fxstrength <0..4> | fxreach <0.25..4> | night... (as `night`) | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
 			printAscii(AsciiString("  beams: headlights and lamp cones as spot lights, their strength; 0 = the art's own beams, no lights; shafts: the beam in the air, drawn by the shader - its strength beside the light's, 0 = none; rays: soft rays from the lamp in that beam, 0 = the smooth cone; rayturn: 1 = they turn with the world as the camera goes round a beam, 0 = they stay with the view; lampwidth: how wide the beam leaves its lamp, in the art's own width there, 0 = from a point"), FALSE);
 			printAscii(AsciiString("  spill: the dim light around a beam's cone, its strength beside the cone's, 0 = a hard cone; spillwide: how wide it reaches, in cone widths"), FALSE);
 			printAscii(AsciiString("  glows: the lamp glows (street lamps, warning and runway lights) as point lights, their strength, 0 = none; glowreach: their reach"), FALSE);
 			printAscii(AsciiString("  coronas: the lamp's own glow drawn by the shader, its strength, 0 = the art's glow textures; coronasize: its radius, in the art glow's own"), FALSE);
 			printAscii(AsciiString("  beamreach: how far a beam's light runs on surfaces, in the art cone's length (it fades all the way); poolfill: the light that stands in for a painted pool with no lamp near, 0 = none; hotspot: the share of a beam's cone at full strength, 0 = it fades from the axis out"), FALSE);
 			printAscii(AsciiString("  sunfill: how much of the sun's shadow a lamp fills on a mesh, 1 = all of it, 0 = the lamp only scales what the shadow left"), FALSE);
-			printAscii(AsciiString("  sunerase: how fast a lamp gives back what the sun's shadow took - the shadow is gone where the lamp's strength reaches 1 / this; 0 = never"), FALSE);
+			printAscii(AsciiString("  sunerase: how fast a lamp gives back what the sun's shadow took - the shadow is gone where the lamp's strength reaches 1 / this; 0 = never. Night only (by sunnight..sunmorning)"), FALSE);
 			printAscii(AsciiString("  mapshadow: the SUN's shadows on terrain and meshes - 1 = they leave what this map's light is without its sun (depth and tint), 0 = 0.45 on every map"), FALSE);
 			printAscii(AsciiString("  aosun: SSAO where the sun reaches - 1 = it shades the map's ambient only (all of it in a sun shadow, the ambient's share in the sun), more = less still in the sun, 0 = everywhere alike as before. `ssao view 3` shows it"), FALSE);
+			printAscii(AsciiString("  sunmorning / sunafternoon / sunevening / sunnight: how far that time of day is day for the local lights (1, 1, .5, 0)"), FALSE);
+			printAscii(AsciiString("  daysun / dayshade: by day a local light's strength where the sun shines / in a sun shadow (.2 / .5); a shadow never gets brighter than the sun beside it"), FALSE);
+			printAscii(AsciiString("  pulsemin / pulsefade: the game's own light pulses (muzzle flashes, blasts) reach at least this far and fade over at least this many frames; 0 = as the FX asks"), FALSE);
+			printAscii(AsciiString("  fxlights: glowing effects (fire, flames, explosions) as lights in their own colour - how many, the strongest first; fxstrength / fxreach: their strength and reach; fxmerge 1: systems at one spot (a blast's parts) are one light; fxflares 1: lens flares light too (a camera's glare: off); fxfire: how far fires reach past their size, by their brightness"), FALSE);
 			printAscii(AsciiString("  bounce: the ground as a light - a wall or an underside takes what the ground under it sends up instead of the flat ambient (warm over sand, darker over asphalt); 0 = off"), FALSE);
 			printAscii(AsciiString("  reflect: what glass and polished meshes mirror - 0 = the art's one picture (a lake at dusk, on every map), 1 = this map's sky cube, 2 = the cube with the sky in every pane (seen from above a pane mirrors the ground)"), FALSE);
 			printAscii(AsciiString("  lampshadows: how much the shadow of a beam (headlight, lamp cone) takes - cast by the solid meshes in its light, from a depth map drawn at the lamp; 0 = none. lampmaps 0 = the maps are not drawn at all"), FALSE);
@@ -847,6 +852,92 @@ namespace
 				state.concat(" (auto)");
 		}
 		printAscii(state, FALSE);
+	}
+
+	// Ronin @diagnostic 15/10/2026 DX9: `glowfx` - global light item 7, measured first: the glowing (additive) particle systems now, and
+	// the strongest by colour x alpha x size^2 - what a light per system would have to carry, and how many there would be.
+	void cmdGlowFx(Int argc, const AsciiString *argv)
+	{
+		(void)argc; (void)argv;
+		if (TheParticleSystemManager == NULL)
+		{
+			printAscii(AsciiString("glowfx: no particle manager"), TRUE);
+			return;
+		}
+		struct Glow { AsciiString name; Int parts; Int seen; float power; float col[3]; float pos[3]; float spread; };
+		const Int TOP = 8;
+		Glow top[TOP];
+		Int topN = 0, systems = 0, additive = 0, onScreen = 0, parts = 0, seenParts = 0;
+		float powerAll = 0.0f;
+		ParticleSystemManager::ParticleSystemList &all = TheParticleSystemManager->getAllParticleSystems();
+		for (ParticleSystemManager::ParticleSystemListIt it = all.begin(); it != all.end(); ++it)
+		{
+			ParticleSystem *sys = *it;
+			++systems;
+			if (sys == NULL || sys->getShaderType() != ParticleSystemInfo::ADDITIVE)
+				continue;
+			++additive;
+			Glow g;
+			g.parts = 0; g.seen = 0; g.power = 0.0f; g.spread = 0.0f;
+			float wsum = 0.0f;
+			for (Int k = 0; k < 3; ++k) { g.col[k] = 0.0f; g.pos[k] = 0.0f; }
+			for (Particle *p = sys->getFirstParticle(); p != NULL; p = p->m_systemNext)
+			{
+				++g.parts;
+				if (p->isCulled())
+					continue;
+				const RGBColor *c = p->getColor();
+				const float w = p->getSize() * p->getSize();		// Ronin @bugfix 16/10/2026 DX9: not by alpha - additive is drawn ONE / ONE
+				if (w <= 0.0f)
+					continue;
+				++g.seen;
+				const Coord3D *at = p->getPosition();
+				g.col[0] += c->red * w; g.col[1] += c->green * w; g.col[2] += c->blue * w;
+				g.pos[0] += at->x * w; g.pos[1] += at->y * w; g.pos[2] += at->z * w;
+				g.power += (0.299f * c->red + 0.587f * c->green + 0.114f * c->blue) * w;
+				wsum += w;
+			}
+			parts += g.parts;
+			if (g.seen == 0 || wsum <= 0.0f)
+				continue;
+			++onScreen;
+			seenParts += g.seen;
+			powerAll += g.power;
+			for (Int k = 0; k < 3; ++k) { g.col[k] /= wsum; g.pos[k] /= wsum; }
+			for (Particle *p = sys->getFirstParticle(); p != NULL; p = p->m_systemNext)
+			{
+				if (p->isCulled())
+					continue;
+				const Coord3D *at = p->getPosition();
+				const float dx = at->x - g.pos[0], dy = at->y - g.pos[1], dz = at->z - g.pos[2];
+				const float d = sqrtf(dx * dx + dy * dy + dz * dz) + 0.5f * p->getSize();
+				if (d > g.spread)
+					g.spread = d;
+			}
+			const ParticleSystemTemplate *tmpl = sys->getTemplate();
+			g.name = (tmpl != NULL) ? tmpl->getName() : AsciiString("?");
+			Int slot = (topN < TOP) ? topN++ : TOP - 1;
+			if (slot == TOP - 1 && topN == TOP && g.power <= top[TOP - 1].power)
+				continue;
+			while (slot > 0 && top[slot - 1].power < g.power)
+			{
+				top[slot] = top[slot - 1];
+				--slot;
+			}
+			top[slot] = g;
+		}
+		AsciiString line;
+		line.format("glowfx: %d particle systems, %d glowing (additive), %d of them on screen; particles %d, on screen %d; total power %.0f",
+					systems, additive, onScreen, parts, seenParts, powerAll);
+		printAscii(line, FALSE);
+		for (Int i = 0; i < topN; ++i)
+		{
+			const Glow &g = top[i];
+			line.format("  %-28s power %6.0f (%2.0f%%)  colour %.2f %.2f %.2f  at %.0f %.0f %.0f  spread %.0f  particles %d/%d",
+						g.name.str(), g.power, (powerAll > 0.0f) ? 100.0f * g.power / powerAll : 0.0f, g.col[0], g.col[1], g.col[2],
+						g.pos[0], g.pos[1], g.pos[2], g.spread, g.seen, g.parts);
+			printAscii(line, FALSE);
+		}
 	}
 
 	// Ronin @feature 15/10/2026 DX9: `night` - the night look at night (TAA's pass 2, or its own without TAA): dim colour into one
@@ -3114,24 +3205,26 @@ namespace
 
 		// Ronin @diagnostic 09/10/2026 DX9: [LIGHT] - last frame. on = the screen-space pass owns the lights (else the old paths
 		// do); live = enabled lights; drawn = on screen; area = their rectangles in screens; surf = frame-to-surface factor.
+		// Ronin @diagnostic 17/10/2026 DX9: and the lamp glows, pool fills and effect lights (drawn / candidates / glowing).
 		if (s_rowOn[W3DDebugPanel::ROW_LIGHT])
 		{
 			W3DLocalLights::Stats ls;
 			W3DLocalLights::getStats(&ls);
-			text.format(L"[LIGHT] on=%d  depth=%s  live=%d  drawn=%d  area=%.2f  taamask=%d  surf=%.2f/%.2f/%.2f  sunshade=%d",
+			text.format(L"[LIGHT] on=%d  depth=%s  live=%d  drawn=%d  area=%.2f  taamask=%d  surf=%.2f/%.2f/%.2f  sunshade=%d  glows=%d  poolfill=%d  fx=%d/%d/%d",
 				ls.active ? 1 : 0, ls.active ? (ls.ownsDepth ? L"own" : L"shared") : L"none",
-				ls.live, ls.drawn, ls.coverage, ls.masked ? 1 : 0, ls.sceneLight[0], ls.sceneLight[1], ls.sceneLight[2], ls.sunShade);
+				ls.live, ls.drawn, ls.coverage, ls.masked ? 1 : 0, ls.sceneLight[0], ls.sceneLight[1], ls.sceneLight[2], ls.sunShade,
+				ls.glows, ls.pools, ls.fx, ls.fxCandidates, ls.fxGlowing);
 			putRow(W3DDebugPanel::ROW_LIGHT, text, GameMakeColor(255, 190, 110, 255));
 		}
-		// Ronin @diagnostic 11/10/2026 DX9: [LIGHT2] - the lamps: beams as spot lights, glows, pool fills; and the lamp shadow maps:
-		// casters = solid meshes drawn, lampmaps = beams with a map, then what was drawn into them and what was left out.
+		// Ronin @diagnostic 11/10/2026 DX9: [LIGHT2] - the beams as spot lights (art meshes skipped, models read); the lamp shadow
+		// maps: casters = solid meshes drawn, lampmaps = lights with a map, then what was drawn into them.
 		if (s_rowOn[W3DDebugPanel::ROW_LIGHT2])
 		{
 			W3DLocalLights::Stats ls;
 			W3DLocalLights::getStats(&ls);
-			text.format(L"[LIGHT2] beams=%d (meshes skipped %d, models %d)  glows=%d  poolfill=%d  casters=%d  lampmaps=%d (%d point lights, %d with sides; %d draws, most %d, %.1fk tris; left out: %d own, %d skinned)",
-				ls.beams, ls.beamMeshes, ls.beamModels, ls.glows, ls.pools,
-				ls.casters, ls.lampMaps, ls.lampPoints, ls.lampSides, ls.lampDraws, ls.lampMost, (float)ls.lampTris / 1000.0f, ls.lampOwn, ls.lampSkins);
+			text.format(L"[LIGHT2] beams=%d (meshes skipped %d, models %d)  casters=%d  lampmaps=%d (%d point lights, %d with sides; %d draws, %.1fk tris)",
+				ls.beams, ls.beamMeshes, ls.beamModels, ls.casters, ls.lampMaps, ls.lampPoints, ls.lampSides, ls.lampDraws,
+				(float)ls.lampTris / 1000.0f);
 			putRow(W3DDebugPanel::ROW_LIGHT2, text, GameMakeColor(255, 190, 110, 255));
 		}
 	}
@@ -3226,7 +3319,8 @@ void W3DDebugPanel::update(void)
 		registerCommand("taa", "taa [0|1] | taa <knob> <v> - temporal AA; the [TAA] row shows live state", cmdTaa);
 		registerCommand("ssao", "ssao [0..3] | ssao trees <auto|0|1> | ssao view [0..3] - ambient occlusion quality (not saved); trees: AO on trees; view: 1 depth, 2 raw AO, 3 blurred AO in the corner", cmdSsao);
 		registerCommand("shadows", "shadows [0..3] - shadow-map quality, 0 off (stencil shadows) .. 3 ultra (not saved)", cmdShadows);
-		registerCommand("lights", "lights [0|1] | save|load|defaults | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|aosun|reflect|bounce|night*|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths; save keeps the knobs in DX9Lights.ini", cmdLights);
+		registerCommand("lights", "lights [0|1] | save|load|defaults | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|aosun|reflect|bounce|fxlights|fxstrength|fxreach|fxmerge|fxflares|fxfire|pulsemin|pulsefade|night*|daysun|dayshade|sun*|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths; save keeps the knobs in DX9Lights.ini", cmdLights);
+		registerCommand("glowfx", "glowfx - the glowing (additive) particle systems now: how many, how many on screen, the strongest by colour x alpha x size^2", cmdGlowFx);
 		registerCommand("night", "night [0|1] | night tint|lo|hi|floor|full|lift <v> - the night look and the dark lift: dim colour into one tint from the map's light, lamps keep theirs (at night; not saved)", cmdNight);
 		registerCommand("hdr", "hdr [0|1] | hdr sun <1..4> | hdr warm <0..1> | hdr white <1..2> - HDR stage 1: a float scene, the sun lifted above 1, a tone curve (needs MSAA off; not saved)", cmdHdr);
 		registerCommand("sky", "sky | sky rebuild - the map's sky cube: its source, its ground, the ambient's six colours (`lights view 5` shows it)", cmdSky);

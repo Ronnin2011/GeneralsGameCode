@@ -30,6 +30,13 @@ public:
 	// Ronin @feature 09/10/2026 DX9: TRUE = W3DDisplay::createLightPulse keeps the pulses it drops as too small for the 10-unit
 	// vertex grid (26 of the game's 65). Per pixel they show.
 	static Bool wantsSmallLights(void);
+	// Ronin @feature 17/10/2026 DX9: an engine pulse's minimum reach (inner + width) and fade frames while the lights run - called
+	// by W3DDisplay::createLightPulse. `lights pulsemin` / `pulsefade`, 0 = as the FX asks.
+	static void minimumPulse(Real innerRadius, Real *attenuationWidth, UnsignedInt *decayFrames);
+	static void  setPulseMin(float v);
+	static float getPulseMin(void);
+	static void  setPulseFade(float v);
+	static float getPulseFade(void);
 
 	// Ronin @feature 09/10/2026 DX9: lighting part 2, the beams. MeshClass::Render asks this about every mesh once: 0 = no light fixture,
 	// 1 = one, draw it, 2 = one whose beam a spot light replaces this frame: do not draw it. Lighting_Work.md 4.2.
@@ -145,6 +152,28 @@ public:
 	// (1 = by the ambient's measure, 0 = off).
 	static void  setBounce(float v);
 	static float getBounce(void);
+	// Ronin @feature 15/10/2026 DX9: how far each time of day is "day" for the local lights, 0..1: the sun up full, dusk half, the
+	// moon none. 1 = `daysun` / `dayshade` in full; 0 = the lights at full strength and `sunerase` in full.
+	static void  setSunTime(Int timeOfDay, float v);		// 1 morning, 2 afternoon, 3 evening, 4 night
+	static float getSunTime(Int timeOfDay);
+	static void  setDaySun(float v);		// by day, a local light's strength where the sun shines (1 = all of it)
+	static float getDaySun(void);
+	static void  setDayShade(float v);		// by day, its strength in a sun shadow (1 = all of it)
+	static float getDayShade(void);
+	// Ronin @feature 15/10/2026 DX9: global light item 7 - glowing effects (additive particle systems) as point lights in their own
+	// colour: how many (the strongest first; 0 = none), their strength and their reach.
+	static void  setFxLights(float v);
+	static float getFxLights(void);
+	static void  setFxStrength(float v);
+	static float getFxStrength(void);
+	static void  setFxReach(float v);
+	static float getFxReach(void);
+	static void  setFxMerge(Bool on);		// glowing systems at one spot become one light (a blast's shock wave, flare, flames)
+	static Bool  getFxMerge(void);
+	static void  setFxFlares(Bool on);		// lens flares make effect lights too (they are a camera's glare: off by default)
+	static void  setFxFire(float v);		// a fire reaches at least its size + this x its brightness share (fire casts light round it)
+	static float getFxFire(void);
+	static Bool  getFxFlares(void);
 
 	// Ronin @diagnostic 09/10/2026 DX9: last frame's numbers, for the panel's [LIGHT] row.
 	struct Stats
@@ -159,6 +188,9 @@ public:
 		Int   beams;			// beams that became spot lights
 		Int   glows;			// lamp glows that became point lights
 		Int   pools;			// painted pools no lamp covers that got a light of their own
+		Int   fx;				// Ronin @feature 15/10/2026 DX9: glowing effects drawn as lights (item 7)
+		Int   fxCandidates;		// ... those with weight on screen
+		Int   fxGlowing;		// ... the additive systems walked
 		Int   sunShade;			// the sun's shade the lights read this frame: 1 = the meshes', 2 = the terrain's, 3 = both
 		Int   casters;			// lamp shadow maps: solid meshes drawn this frame, the casters to choose from
 		Int   lampMaps;			// ... lights that got a map
