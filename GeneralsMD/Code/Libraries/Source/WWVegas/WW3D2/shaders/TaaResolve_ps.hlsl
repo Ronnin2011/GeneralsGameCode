@@ -51,6 +51,22 @@ float3 toneCurve(float3 c)
     return (g_Tone.y > 0.5f) ? ((c > knee) ? bent : c) : c;
 }
 
+// Ronin @feature 15/10/2026 DX9: THE NIGHT LOOK. Night vision has no colour in the dim: a pixel keeps its own colour as far as
+// it is bright (lo..hi, never under the floor); the rest is its luminance in one tint, a share of the map light's cast.
+float4   g_Night     : register(c17);    // rgb = the dim's tint (luminance 1), w = the look's strength (0 = off): the map light's colour
+float4   g_NightKeep : register(c18);    // x = lo, y = hi (the luminance where a pixel starts / ends keeping its colour), z = floor,
+                                         // Ronin @feature 16/10/2026 DX9: w = 1: the light mask (s8) is bound - its alpha = the lamp light a pixel took
+
+float3 nightLook(float3 c, float2 uv)
+{
+    float l    = dot(c, float3(0.299f, 0.587f, 0.114f));
+    float keep = max(g_NightKeep.z, smoothstep(g_NightKeep.x, g_NightKeep.y, l));
+    if (g_NightKeep.w > 0.5f)
+        keep = max(keep, tex2Dlod(g_LightMask, float4(uv, 0.0f, 0.0f)).a);     // lit by a lamp: its own colour
+    keep = lerp(1.0f, keep, g_Night.w);
+    return saturate(lerp(l * g_Night.rgb, c, keep));
+}
+
 // Ronin @feature 21/09/2026 DX9: Catmull-Rom history fetch, 9 taps.
 //
 // WHY NOT BILINEAR: the history is re-fetched at a subpixel position every frame and fed straight back in. Bilinear
@@ -192,6 +208,10 @@ float4 resolve(float2 uv, out float3 lowBits)
         // Ronin @feature 26/09/2026 DX9: CAS on the way to the screen (`taa sharpen`). This pass does not feed the history,
         // so the sharpening cannot compound frame over frame. c7.x is 0 in pass 1.
         float3 shown = (g_TaaSharpen.x > 0.0f) ? casSharpen(uv, g_TaaSharpen.x) : scene;
+        // Ronin @feature 15/10/2026 DX9: the night look - one saturated map light on two paints read as two scenes. Before the
+        // flash, which keeps its colour.
+        if (g_Night.w > 0.0f)
+            shown = nightLook(shown, uv);
         // Ronin @bugfix 09/10/2026 DX9: SELECTION FLASH, after the resolve. Lit like a local light: the surface colour (frame over the
         // map's light) x the flash, never past the surface's own colour. The history never sees it, so nothing lags.
         if (g_FlashPrm.w > 0.0f)

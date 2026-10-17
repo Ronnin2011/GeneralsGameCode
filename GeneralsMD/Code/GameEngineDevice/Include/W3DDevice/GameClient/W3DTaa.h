@@ -48,6 +48,9 @@ public:
 	// Ronin @feature 17/10/2026 DX9: with TAA off and MSAA off, HDR alone takes the redirect too - the same pair runs.
 	static Bool preRender(const CameraClass &camera);
 	static void postRender(void);
+	// Ronin @feature 17/10/2026 DX9: when preRender declined - TAA off or MSAA on: the night look in a pass of
+	// its own over the scene just drawn. Nothing at all by day.
+	static void finishScene(const CameraClass &camera);
 
 	// Ronin @feature 20/09/2026 DX9: reprojection needs the INTZ scene depth. SSAO owns that buffer when it is on; when
 	// it is off TAA begins it, and then TAA must end it. Called beside W3DSsao's pair in W3DDisplay::draw.
@@ -94,6 +97,21 @@ public:
 	static void  setWhite(float v);
 	static float getWhite(void);
 	static Bool  getSunLift(float rgb[3]);	// FALSE: no float scene this frame, or no gain - nothing to draw
+	// Ronin @feature 15/10/2026 DX9: THE NIGHT LOOK (TAA's pass 2 or finishScene): dim colour goes to one tint (the map light's cast),
+	// bright keeps its own. tint 0..1; lo / hi: the luminance where a pixel starts / ends keeping its colour; floor: the least it keeps.
+	static void  setNight(Bool on);
+	static Bool  getNight(void);
+	static void  setNightTint(float v);
+	static float getNightTint(void);
+	static void  setNightLo(float v);
+	static float getNightLo(void);
+	static void  setNightHi(float v);
+	static float getNightHi(void);
+	static void  setNightFloor(float v);
+	static float getNightFloor(void);
+	static void  setNightFull(float v);		// the map light's saturation at which the look is at full strength; milder lights get less
+	static float getNightFull(void);
+	static void  describeNight(char *out, Int size);	// one line for the panel's `night`
 	// Ronin @feature 26/09/2026 DX9: mipbias - texture mip LOD bias while TAA runs, -2..0; default -1 (Options.ini DX9TAAMipBias).
 	static void  setMipBias(float b);
 	static float getMipBias(void);

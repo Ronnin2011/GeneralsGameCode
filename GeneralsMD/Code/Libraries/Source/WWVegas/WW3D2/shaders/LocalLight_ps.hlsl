@@ -397,6 +397,9 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
     {
         float3 change = abs(result - resultP);
         o.mask = saturate(max(change.r, max(change.g, change.b)) * 128.0f);
+        // Ronin @feature 15/10/2026 DX9: alpha = how much lamp light this pixel took, summed over the lights: the night look keeps a
+        // lamp-lit pixel's own colour by it, not by how bright the pixel is.
+        o.mask.a = saturate(dot(result, float3(0.299f, 0.587f, 0.114f)) * 6.0f);
     }
     o.color = float4(result, 0.0f);
     return o;

@@ -26,6 +26,7 @@
 #include "WW3D2/dx8wrapper.h"
 #include "WW3D2/shader.h"
 #include "WW3D2/texture.h"
+#include "WW3D2/formconv.h"		// Ronin @feature 17/10/2026 DX9: the finish pass copies the frame in its own format
 #include "WW3D2/camera.h"
 #include "WW3D2/mesh.h"		// Ronin @feature 24/09/2026 DX9: mesh motion vectors (§14)
 #include "WW3D2/meshmdl.h"
@@ -387,6 +388,114 @@ Bool W3DTaa::getSunLift(float rgb[3])
 	return TRUE;
 }
 
+// Ronin @feature 15/10/2026 DX9: THE NIGHT LOOK (`night`; docs/Lighting_Work.md 4.4c). Decided on Dark Night: tint .55, lo .15,
+// hi .60; the floor keeps team colours readable in the dark.
+static Bool  s_nightOn    = TRUE;
+static float s_nightTint  = 0.55f;
+static float s_nightLo    = 0.15f;
+static float s_nightHi    = 0.60f;
+static float s_nightFloor = 0.30f;
+static float s_nightFull  = 0.65f;	// `night full`: Dark Night's light (saturation 0.65) gets all of it, GameData's night (0.33) a third
+
+// Ronin @feature 15/10/2026 DX9: the map's light on level ground now, as the terrain takes it (BaseHeightMap::doTheLight: light 1's
+// ambient + each light's diffuse x how far it points down).
+static void mapLevelLight(float out[3])
+{
+	out[0] = out[1] = out[2] = 0.0f;
+	if (TheGlobalData == NULL)
+		return;
+	const GlobalData::TerrainLighting *tl = TheGlobalData->m_terrainLighting[TheGlobalData->m_timeOfDay];
+	out[0] = tl[0].ambient.red;
+	out[1] = tl[0].ambient.green;
+	out[2] = tl[0].ambient.blue;
+	for (Int i = 0; i < MAX_GLOBAL_LIGHTS; ++i)
+	{
+		const float len = sqrtf(tl[i].lightPos.x * tl[i].lightPos.x + tl[i].lightPos.y * tl[i].lightPos.y + tl[i].lightPos.z * tl[i].lightPos.z);
+		const float down = (len > 0.0001f && tl[i].lightPos.z < 0.0f) ? (-tl[i].lightPos.z / len) : 0.0f;
+		out[0] += tl[i].diffuse.red * down;
+		out[1] += tl[i].diffuse.green * down;
+		out[2] += tl[i].diffuse.blue * down;
+	}
+}
+
+// Ronin @feature 15/10/2026 DX9: c17 = the dim's tint - the map light's cast (its colour over its luminance) to the power `tint`,
+// back to luminance 1 - and w = on; c18 = lo, hi, floor.
+static void nightConstants(float c[8], float levelOut[3], Bool lampMask)
+{
+	mapLevelLight(levelOut);
+	const float *e = levelOut;
+	const float l = 0.299f * e[0] + 0.587f * e[1] + 0.114f * e[2];
+	float tint[3] = { 1.0f, 1.0f, 1.0f };
+	if (l > 0.001f)
+	{
+		for (Int k = 0; k < 3; ++k)
+			tint[k] = powf(((e[k] > 0.0001f) ? e[k] : 0.0001f) / l, s_nightTint);
+		const float tl = 0.299f * tint[0] + 0.587f * tint[1] + 0.114f * tint[2];
+		for (Int k = 0; k < 3; ++k)
+			tint[k] /= tl;
+	}
+	const Bool on = (s_nightOn && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+	// Ronin @feature 15/10/2026 DX9: the strength follows how coloured the map's light is: the look counters a saturated light.
+	const float hi = (e[0] > e[1]) ? ((e[0] > e[2]) ? e[0] : e[2]) : ((e[1] > e[2]) ? e[1] : e[2]);
+	const float lo = (e[0] < e[1]) ? ((e[0] < e[2]) ? e[0] : e[2]) : ((e[1] < e[2]) ? e[1] : e[2]);
+	const float sat = (hi > 0.0001f) ? ((hi - lo) / hi) : 0.0f;
+	const float span = (s_nightFull > 0.16f) ? (s_nightFull - 0.15f) : 0.01f;
+	float t = (sat - 0.15f) / span;
+	t = (t < 0.0f) ? 0.0f : ((t > 1.0f) ? 1.0f : t);
+	c[0] = tint[0];
+	c[1] = tint[1];
+	c[2] = tint[2];
+	c[3] = on ? (t * t * (3.0f - 2.0f * t)) : 0.0f;
+	c[4] = s_nightLo;
+	c[5] = (s_nightHi > s_nightLo + 0.01f) ? s_nightHi : (s_nightLo + 0.01f);
+	c[6] = s_nightFloor;
+	c[7] = lampMask ? 1.0f : 0.0f;
+}
+
+// Ronin @feature 17/10/2026 DX9: THE FINISH PASS - with TAA off or MSAA on, the night look runs in a pass of
+// its own after the scene (finishScene): the frame is copied and drawn back through the resolve shader's screen copy.
+static UnsignedInt   s_frameNo        = 0;		// every frame, TAA or not (beginFrame)
+static UnsignedInt   s_lightMaskFrame = 0;		// the s_frameNo the light mask was drawn in
+static TextureClass *s_finishCopy     = NULL;	// the frame at its own size and format: StretchRect resolves MSAA into it
+static UnsignedInt   s_finishW = 0, s_finishH = 0;
+static D3DFORMAT     s_finishFormat   = D3DFMT_UNKNOWN;
+static Bool finishWanted(void)
+{
+	if (s_active || !s_nightOn || TheGlobalData == NULL || TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT)
+		return FALSE;
+	float c[8], e[3];
+	nightConstants(c, e, FALSE);
+	return (c[3] > 0.0f) ? TRUE : FALSE;
+}
+
+static float clamp01(float v)	{ return (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+void  W3DTaa::setNight(Bool on)			{ s_nightOn = on; }
+Bool  W3DTaa::getNight(void)			{ return s_nightOn; }
+void  W3DTaa::setNightTint(float v)		{ s_nightTint = clamp01(v); }
+float W3DTaa::getNightTint(void)		{ return s_nightTint; }
+void  W3DTaa::setNightLo(float v)		{ s_nightLo = clamp01(v); }
+float W3DTaa::getNightLo(void)			{ return s_nightLo; }
+void  W3DTaa::setNightHi(float v)		{ s_nightHi = clamp01(v); }
+float W3DTaa::getNightHi(void)			{ return s_nightHi; }
+void  W3DTaa::setNightFloor(float v)	{ s_nightFloor = clamp01(v); }
+float W3DTaa::getNightFloor(void)		{ return s_nightFloor; }
+void  W3DTaa::setNightFull(float v)		{ s_nightFull = (v < 0.2f) ? 0.2f : ((v > 1.0f) ? 1.0f : v); }
+float W3DTaa::getNightFull(void)		{ return s_nightFull; }
+
+void W3DTaa::describeNight(char *out, Int size)
+{
+	if (out == NULL || size <= 0)
+		return;
+	float c[8], e[3];
+	nightConstants(c, e, FALSE);
+	const Bool night = (TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+	_snprintf(out, size, "night: %d (%s)  strength %.2f (full at %.2f)  tint %.2f  lo %.2f  hi %.2f  floor %.2f;  the map's light now %.2f %.2f %.2f (blue %.1f x red) -> the dim's tint %.2f %.2f %.2f",
+			  s_nightOn ? 1 : 0, !night ? "waits for night" : (s_active ? "showing" : ((DX8Wrapper::Get_Anti_Aliasing_Level() != 0) ?
+			  "showing in its own pass - MSAA: lamps keep their colour by brightness only" : "showing in its own pass (TAA off)")), c[3], s_nightFull,
+			  s_nightTint, s_nightLo, c[5], s_nightFloor, e[0], e[1], e[2], (e[0] > 0.0001f) ? (e[2] / e[0]) : 0.0f, c[0], c[1], c[2]);
+	out[size - 1] = 0;
+}
+
 void W3DTaa::setFloatScene(Bool on)
 {
 	s_floatScene   = on;
@@ -471,6 +580,7 @@ static void currentJitterPixels(float *outX, float *outY)
 
 void W3DTaa::beginFrame(void)
 {
+	++s_frameNo;		// Ronin @feature 17/10/2026 DX9: the finish pass's frame stamp
 	// Ronin @feature 26/09/2026 DX9: Options.ini `DX9TAA`, `DX9TAASharpness`, `DX9TAAMipBias` apply at the first frame; the console
 	// still overrides them for the session.
 	static Bool s_iniApplied = FALSE;
@@ -1219,7 +1329,8 @@ Bool W3DTaa::getWaterMaskDrawn(void) { return s_waterMaskLast; }
 Bool W3DTaa::beginLightMask(void)
 {
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
-	if (!s_redirected || dev == NULL)
+	// Ronin @feature 17/10/2026 DX9: or for the finish pass - it keeps a lamp-lit pixel's colour by it. Not under MSAA (below).
+	if ((!s_redirected && !finishWanted()) || dev == NULL)
 		return FALSE;
 	if (s_lightMaskCaps < 0)
 	{
@@ -1263,6 +1374,7 @@ Bool W3DTaa::beginLightMask(void)
 		dev->SetRenderState(D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
 													 D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
 		s_lightMaskStamp = s_moverFrame;
+		s_lightMaskFrame = s_frameNo;
 	}
 	return ok;
 }
@@ -1712,6 +1824,9 @@ void W3DTaa::shutdown(void)
 	s_lightMaskW     = 0;
 	s_lightMaskH     = 0;
 	s_lightMaskStamp = 0;
+	REF_PTR_RELEASE(s_finishCopy);		// Ronin @feature 17/10/2026 DX9: the finish pass's copy
+	s_finishW        = 0;
+	s_finishH        = 0;
 	s_waterMaskW     = 0;
 	s_waterMaskH     = 0;
 	s_waterMaskReady = FALSE;
@@ -1719,7 +1834,7 @@ void W3DTaa::shutdown(void)
 }
 
 // Ronin @feature 17/10/2026 DX9: the screen copy without TAA - `src` over `vp` through the resolve shader at weight 0: the tone curve
-// for the float scene. No history, CAS or flash (the scene drew its own).
+// for the float scene, then at night the night look. No history, CAS or flash (the scene drew its own).
 static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DVIEWPORT9 &vp, UnsignedInt texW, UnsignedInt texH,
 					   Bool floatScene)
 {
@@ -1769,10 +1884,21 @@ static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DV
 	dev->SetPixelShaderConstantF(8, c8, 1);			// no flash: without TAA the scene draws its own
 	const float c9[4] = { s_white, floatScene ? 1.0f : 0.0f, 0.0f, 0.0f };
 	dev->SetPixelShaderConstantF(9, c9, 1);			// the tone curve bends a float scene only
+	const Bool nightMask = (s_lightMaskTex != NULL && s_lightMaskFrame == s_frameNo && s_lightMaskW == texW &&
+							s_lightMaskH == texH) ? TRUE : FALSE;
+	if (nightMask)
+	{
+		dev->SetTexture(8, s_lightMaskTex->Peek_D3D_Texture());
+		setResolveSampler(dev, 8);
+	}
+	float nightC[8], nightLevel[3];
+	nightConstants(nightC, nightLevel, nightMask);
+	dev->SetPixelShaderConstantF(17, nightC, 2);
 	dev->SetTexture(0, src);
 	setResolveSampler(dev, 0);
 	dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
 
+	dev->SetTexture(8, NULL);
 	dev->SetTexture(0, NULL);
 	dev->SetVertexShader(NULL);
 	dev->SetPixelShader(NULL);
@@ -1880,6 +2006,68 @@ Bool W3DTaa::preRender(const CameraClass &camera)
 	s_redirected = TRUE;
 	s_floatNow   = s_floatReady;
 	return TRUE;
+}
+
+// Ronin @feature 17/10/2026 DX9: THE FINISH PASS (finishWanted): the frame copied, then drawFinish over the camera's viewport.
+void W3DTaa::finishScene(const CameraClass &camera)
+{
+	if (!finishWanted())
+		return;
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev == NULL || W3DShaderManager::isRenderingToTexture())
+		return;		// a script's view filter holds the frame
+	ensureShaders(dev);
+	if (s_quadVS == NULL || s_resolvePS == NULL)
+		return;
+	IDirect3DSurface9 *rt = NULL;
+	if (FAILED(dev->GetRenderTarget(0, &rt)) || rt == NULL)
+		return;
+	D3DSURFACE_DESC rd;
+	Bool ready = (SUCCEEDED(rt->GetDesc(&rd)) && rd.Width > 0 && rd.Height > 0) ? TRUE : FALSE;
+	if (ready && (s_finishCopy == NULL || s_finishW != rd.Width || s_finishH != rd.Height || s_finishFormat != rd.Format))
+	{
+		REF_PTR_RELEASE(s_finishCopy);
+		s_finishW = 0;
+		s_finishH = 0;
+		WW3DFormat wwFormat = D3DFormat_To_WW3DFormat(rd.Format);
+		if (wwFormat == WW3D_FORMAT_UNKNOWN)
+			wwFormat = WW3D_FORMAT_A8R8G8B8;
+		s_finishCopy = NEW_REF(TextureClass, (rd.Width, rd.Height, wwFormat, MIP_LEVELS_1, TextureClass::POOL_DEFAULT, true));
+		if (s_finishCopy->Peek_D3D_Base_Texture() == NULL)
+		{
+			REF_PTR_RELEASE(s_finishCopy);	// a macro with its own if - keep the braces
+			ready = FALSE;
+		}
+		else
+		{
+			s_finishW = rd.Width;
+			s_finishH = rd.Height;
+			s_finishFormat = rd.Format;
+		}
+	}
+	if (ready)
+	{
+		IDirect3DSurface9 *copySurf = s_finishCopy->Get_D3D_Surface_Level();
+		ready = (copySurf != NULL && SUCCEEDED(dev->StretchRect(rt, NULL, copySurf, NULL, D3DTEXF_NONE))) ? TRUE : FALSE;
+		if (copySurf != NULL)
+			copySurf->Release();
+	}
+	rt->Release();
+	if (!ready)
+		return;
+
+	Vector2 vpMin, vpMax;
+	camera.Get_Viewport(vpMin, vpMax);
+	D3DVIEWPORT9 vp;
+	vp.X      = (DWORD)(vpMin.X * (float)rd.Width + 0.5f);
+	vp.Y      = (DWORD)(vpMin.Y * (float)rd.Height + 0.5f);
+	vp.Width  = (DWORD)((vpMax.X - vpMin.X) * (float)rd.Width + 0.5f);
+	vp.Height = (DWORD)((vpMax.Y - vpMin.Y) * (float)rd.Height + 0.5f);
+	vp.MinZ   = 0.0f;
+	vp.MaxZ   = 1.0f;
+	if (vp.Width == 0 || vp.Height == 0 || vp.X + vp.Width > rd.Width || vp.Y + vp.Height > rd.Height)
+		return;
+	drawFinish(dev, s_finishCopy->Peek_D3D_Texture(), vp, rd.Width, rd.Height, FALSE);
 }
 
 void W3DTaa::postRender(void)
@@ -2505,6 +2693,18 @@ void W3DTaa::postRender(void)
 		// Ronin @feature 12/10/2026 DX9: HDR stage 1b: stage 0 is the bent history here - or, without one, the raw float scene.
 		const float c9copy[4] = { s_white, (s_floatNow && !wroteHistory) ? 1.0f : 0.0f, 0.0f, 0.0f };
 		dev->SetPixelShaderConstantF(9, c9copy, 1);
+		// Ronin @feature 15/10/2026 DX9: THE NIGHT LOOK (`night`): c17 = the dim's tint, w = on; c18 = lo, hi, floor.
+		// Ronin @feature 15/10/2026 DX9: the light mask at s8 too when it is this frame's: its alpha keeps a lamp-lit pixel's colour.
+		const Bool nightMask = (s_lightMaskTex != NULL && s_lightMaskStamp == s_moverFrame && s_lightMaskW == (UnsignedInt)fbW &&
+								s_lightMaskH == (UnsignedInt)fbH) ? TRUE : FALSE;
+		if (nightMask)
+		{
+			dev->SetTexture(8, s_lightMaskTex->Peek_D3D_Texture());
+			setResolveSampler(dev, 8);
+		}
+		float nightC[8], nightLevel[3];
+		nightConstants(nightC, nightLevel, nightMask);
+		dev->SetPixelShaderConstantF(17, nightC, 2);
 		// Ronin @bugfix 09/10/2026 DX9: the selection flash, added here - after the resolve, never in the history. c8 = 1 / the map's light
 		// (frame -> surface colour, as the local lights use) and the strength; s10 = the mask the velocity pass drew.
 		const Bool useFlash = (s_flashTex != NULL && s_flashStamp == s_moverFrame && s_flashW == (UnsignedInt)fbW &&
@@ -2523,6 +2723,7 @@ void W3DTaa::postRender(void)
 		setResolveSampler(dev, 0);
 		dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
 		dev->SetTexture(10, NULL);
+		dev->SetTexture(8, NULL);	// Ronin @feature 15/10/2026 DX9: the night look's light mask
 	}
 
 	if (wroteHistory)

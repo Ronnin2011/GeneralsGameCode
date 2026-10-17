@@ -1742,6 +1742,13 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("mapshadow", setMapShadow, getMapShadow),
 	LIGHT_REAL("aosun", setAoSun, getAoSun),
 	LIGHT_REAL("reflect", setReflect, getReflect),
+	// Ronin @feature 15/10/2026 DX9: the night look lives in W3DTaa; listed here so DX9Lights.ini keeps them.
+	{ "night", TRUE, TRUE, [](float v) { W3DTaa::setNight((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DTaa::getNight() ? 1.0f : 0.0f; } },
+	{ "nighttint", FALSE, TRUE, [](float v) { W3DTaa::setNightTint(v); }, []() -> float { return W3DTaa::getNightTint(); } },
+	{ "nightlo", FALSE, TRUE, [](float v) { W3DTaa::setNightLo(v); }, []() -> float { return W3DTaa::getNightLo(); } },
+	{ "nighthi", FALSE, TRUE, [](float v) { W3DTaa::setNightHi(v); }, []() -> float { return W3DTaa::getNightHi(); } },
+	{ "nightfloor", FALSE, TRUE, [](float v) { W3DTaa::setNightFloor(v); }, []() -> float { return W3DTaa::getNightFloor(); } },
+	{ "nightfull", FALSE, TRUE, [](float v) { W3DTaa::setNightFull(v); }, []() -> float { return W3DTaa::getNightFull(); } },
 	LIGHT_SWITCH("lampmaps", setLampMaps, getLampMaps),
 	LIGHT_REAL("lampshadows", setLampShadows, getLampShadows),
 	LIGHT_REAL("lampbias", setLampBias, getLampBias),

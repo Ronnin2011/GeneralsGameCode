@@ -1889,6 +1889,8 @@ void W3DView::draw()
 		// Back to the frame buffer, then resolve the scene texture against the history. A no-op if preRender declined.
 		if (taaRedirected)
 			W3DTaa::postRender();
+		else
+			W3DTaa::finishScene(*m_3DCamera);	// Ronin @feature 17/10/2026 DX9: the night look without TAA
 	}
 
 	if (m_viewFilterMode &&
