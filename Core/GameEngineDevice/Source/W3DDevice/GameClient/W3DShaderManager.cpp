@@ -3464,6 +3464,36 @@ IDirect3DTexture8 *W3DShaderManager::getRenderTexture()
 	return m_renderTexture;
 }
 
+// Ronin @feature 12/10/2026 DX9: HDR stage 1a. See the header. At the frame buffer's size, as init made it; the old texture
+// is let go only once the new one stands. A device reset runs init again: the frame buffer's format is back.
+Bool W3DShaderManager::remakeRenderTexture(D3DFORMAT format)
+{
+	LPDIRECT3DDEVICE8 dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev == nullptr || m_renderingToTexture || m_oldRenderSurface == nullptr || m_renderTexture == nullptr)
+		return FALSE;
+	D3DSURFACE_DESC desc;
+	if (FAILED(m_oldRenderSurface->GetDesc(&desc)))
+		return FALSE;
+	if (format == D3DFMT_UNKNOWN)
+		format = desc.Format;
+	IDirect3DTexture8 *texture = nullptr;
+	IDirect3DSurface8 *surface = nullptr;
+	if (FAILED(dev->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, &texture, NULL)) ||
+		texture == nullptr)
+		return FALSE;
+	if (FAILED(texture->GetSurfaceLevel(0, &surface)) || surface == nullptr)
+	{
+		texture->Release();
+		return FALSE;
+	}
+	if (m_newRenderSurface)
+		m_newRenderSurface->Release();
+	m_renderTexture->Release();
+	m_renderTexture = texture;
+	m_newRenderSurface = surface;
+	return TRUE;
+}
+
 enum GraphicsVenderID CPP_11(: Int)
 {
 	DC_NVIDIA_VENDOR_ID	= 0x10DE,

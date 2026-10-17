@@ -1550,6 +1550,7 @@ static float				s_sunFill       = 1.0f;	// `lights sunfill`
 static float				s_sunErase      = 3.0f;	// `lights sunerase`: a lamp restores what the sun's shadow took; gone at strength 1/3
 static Bool					s_shadeFrame    = FALSE;	// this frame records the shade (lights on, a scene depth): kept to the next frame's start
 static float				s_aoSun         = 1.0f;	// `lights aosun`
+static Bool					s_treeShadeFrame = FALSE;	// the trees drew into their own shade record this frame (noteTreeShade)
 static Int						s_reflect       = 2;		// `lights reflect`
 
 void W3DLocalLights::beginSunShade(void)
@@ -1944,6 +1945,7 @@ void W3DLocalLights::beginFrame(void)
 	endSunShade();
 	s_shadeOpen    = active;
 	s_shadeFrame   = active;
+	s_treeShadeFrame = FALSE;
 	s_shadeWritten = FALSE;
 	s_shadeBeside  = NULL;
 	DX8InstanceManagerClass::Set_Sun_Shade_Hooks(&W3DLocalLights::beginSunShade, &W3DLocalLights::endSunShade);
@@ -2065,6 +2067,131 @@ static Bool makeDraw(LightDraw &d, const LightMemo &now, const LightMemo &was, c
 		c[8] = src[s]->ambient[0]; c[9] = src[s]->ambient[1]; c[10] = src[s]->ambient[2]; c[11] = src[s]->edge;
 	}
 	return TRUE;
+}
+
+// Ronin @feature 12/10/2026 DX9: called by W3DTreeBuffer once it has cleared and bound the trees' shade record for the frame:
+// without it the record on that target is an older frame's.
+void W3DLocalLights::noteTreeShade(void)	{ s_treeShadeFrame = TRUE; }
+
+// Ronin @feature 12/10/2026 DX9: HDR STAGE 1B - THE SUN LIFT. With a float frame the sun may be brighter than 1: one quad adds the
+// frame times (gain - 1) times the sun's share of each pixel, from the two shade records. Before the lamps' copy of the frame.
+static void drawSunLift(IDirect3DDevice9 *dev, const D3DSURFACE_DESC &rd)
+{
+	float lift[3];
+	if (s_view == 1 || s_view == 2 || s_quadVS == NULL || s_lightPS == NULL || rd.Format != D3DFMT_A16B16G16R16F ||
+		rd.MultiSampleType != D3DMULTISAMPLE_NONE || !s_shadeFrame || !TheTerrainShadowPass.enabled || !W3DTaa::getSunLift(lift))
+		return;
+	IDirect3DSurface9 *rt1 = NULL;
+	if (SUCCEEDED(dev->GetRenderTarget(1, &rt1)) && rt1 != NULL)
+	{
+		rt1->Release();		// a second target still bound: not this pass's frame
+		return;
+	}
+	IDirect3DBaseTexture9 *mesh = NULL;
+	IDirect3DBaseTexture9 *ground = NULL;
+	if (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height)
+		mesh = s_shadeTex->Peek_D3D_Texture();
+	D3DSURFACE_DESC gd;
+	if (TheTerrainShadowPass.accumSurf != NULL && TheTerrainShadowPass.accumCur != NULL &&
+		SUCCEEDED(((IDirect3DTexture9 *)TheTerrainShadowPass.accumCur)->GetLevelDesc(0, &gd)) && gd.Width == rd.Width &&
+		gd.Height == rd.Height)
+		ground = TheTerrainShadowPass.accumCur;
+	if (mesh == NULL && ground == NULL)
+		return;
+	// Ronin @feature 12/10/2026 DX9: the trees' own record, if they drew into it this frame; else a canopy takes the ground's behind it.
+	IDirect3DBaseTexture9 *trees = NULL;
+	if (s_treeShadeFrame && TheTerrainShadowPass.treeAccumCur != NULL &&
+		SUCCEEDED(((IDirect3DTexture9 *)TheTerrainShadowPass.treeAccumCur)->GetLevelDesc(0, &gd)) && gd.Width == rd.Width &&
+		gd.Height == rd.Height)
+		trees = TheTerrainShadowPass.treeAccumCur;
+
+	// Ronin @feature 12/10/2026 DX9: everything touched is read raw and written back raw, as the light pass does.
+	DWORD zEnable, zWrite, alphaBlend, alphaTest, stencil, cull, colorWrite, srcBlend, destBlend;
+	dev->GetRenderState(D3DRS_ZENABLE,          &zEnable);
+	dev->GetRenderState(D3DRS_ZWRITEENABLE,     &zWrite);
+	dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
+	dev->GetRenderState(D3DRS_ALPHATESTENABLE,  &alphaTest);
+	dev->GetRenderState(D3DRS_STENCILENABLE,    &stencil);
+	dev->GetRenderState(D3DRS_CULLMODE,         &cull);
+	dev->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
+	dev->GetRenderState(D3DRS_SRCBLEND,         &srcBlend);
+	dev->GetRenderState(D3DRS_DESTBLEND,        &destBlend);
+	D3DVIEWPORT9 oldVP;
+	const Bool haveVP = SUCCEEDED(dev->GetViewport(&oldVP));
+	float saved[7 * 4];		// c0..c6
+	const Bool haveConstants = SUCCEEDED(dev->GetPixelShaderConstantF(0, saved, 7));
+
+	dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+	dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+	dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+	dev->SetRenderState(D3DRS_SRCBLEND,  D3DBLEND_DESTCOLOR);		// frame x this ...
+	dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);			// ... + frame
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+	D3DVIEWPORT9 fullVP;
+	fullVP.X = 0; fullVP.Y = 0; fullVP.Width = rd.Width; fullVP.Height = rd.Height; fullVP.MinZ = 0.0f; fullVP.MaxZ = 1.0f;
+	dev->SetViewport(&fullVP);
+
+	// Ronin @feature 12/10/2026 DX9: the floor as both shadow shaders make it: 0.45, or the map's own (as bindSunShadeForAO).
+	const float *map = TheTerrainShadowPass.shadeColour;
+	float c[7 * 4];
+	memset(c, 0, sizeof(c));
+	c[2] = 6.0f;		// c0.z: the shader's view 6
+	c[3] = (trees != NULL) ? 1.0f : 0.0f;
+	for (Int ch = 0; ch < 3; ++ch)
+	{
+		float f = 0.45f + (map[ch] - 0.45f) * map[3];
+		c[5 * 4 + ch] = (f < 0.05f) ? 0.05f : f;		// c5.rgb
+		c[6 * 4 + ch] = lift[ch];						// c6.rgb
+	}
+	c[5 * 4 + 3] = (mesh != NULL) ? 1.0f : 0.0f;
+	c[6 * 4 + 3] = (ground != NULL) ? 1.0f : 0.0f;
+	dev->SetPixelShaderConstantF(0, c, 7);
+	static const DWORD stages[3] = { 2, 3, 5 };
+	for (Int n = 0; n < 3; ++n)
+	{
+		const DWORD stage = stages[n];
+		dev->SetSamplerState(stage, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+		dev->SetSamplerState(stage, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+		dev->SetSamplerState(stage, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(stage, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(stage, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	}
+	dev->SetTexture(2, mesh);
+	dev->SetTexture(3, ground);
+	dev->SetTexture(5, trees);
+
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::drawSunLift");
+	dev->SetVertexShader(s_quadVS);		// AFTER the layout bind - BindLayoutFVF clears the VS
+	dev->SetPixelShader(s_lightPS);
+	const float w = (float)rd.Width, h = (float)rd.Height;
+	const float l = (-0.5f / w) * 2.0f - 1.0f, r = ((w - 0.5f) / w) * 2.0f - 1.0f;		// half a pixel: the UVs stay exact
+	const float t = 1.0f - (-0.5f / h) * 2.0f, b = 1.0f - ((h - 0.5f) / h) * 2.0f;
+	struct LiftVertex { float x, y, z; float u, v; };
+	const LiftVertex q[4] = { { l, t, 0.0f, 0.0f, 0.0f }, { r, t, 0.0f, 1.0f, 0.0f }, { l, b, 0.0f, 0.0f, 1.0f }, { r, b, 0.0f, 1.0f, 1.0f } };
+	dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(LiftVertex));
+
+	dev->SetTexture(2, NULL);
+	dev->SetTexture(3, NULL);
+	dev->SetTexture(5, NULL);
+	if (haveVP)
+		dev->SetViewport(&oldVP);
+	dev->SetRenderState(D3DRS_ZENABLE,          zEnable);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE,     zWrite);
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, alphaBlend);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE,  alphaTest);
+	dev->SetRenderState(D3DRS_STENCILENABLE,    stencil);
+	dev->SetRenderState(D3DRS_CULLMODE,         cull);
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, colorWrite);
+	dev->SetRenderState(D3DRS_SRCBLEND,         srcBlend);
+	dev->SetRenderState(D3DRS_DESTBLEND,        destBlend);
+	if (haveConstants)
+		dev->SetPixelShaderConstantF(0, saved, 7);
+	dev->SetVertexShader(NULL);
+	dev->SetPixelShader(NULL);
+	DX8Wrapper::Invalidate_Cached_Render_States();
 }
 
 void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
@@ -2458,6 +2585,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			++count;
 		}
 	}
+	drawSunLift(dev, rd);		// Ronin @feature 12/10/2026 DX9: HDR stage 1b: with or without a light on screen
 	if (count == 0 && s_view != 5)		// Ronin @diagnostic 12/10/2026 DX9: view 5 (the sky cube) draws with no light on screen too
 	{
 		rt->Release();

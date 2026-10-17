@@ -40,6 +40,17 @@ float4x4 g_ToSun     : register(c12);
 float4   g_MoverPrm  : register(c16);    // x = drawn this frame (2 = and `taa maskcap`), y = half texel, z = dilation (uv),
                                          // w = depth bias
 
+// Ronin @feature 12/10/2026 DX9: HDR stage 1b - the TONE CURVE. A float scene is bent as it is read: as it is up to the knee
+// (2 - white), then a parabola that meets it there with the same slope and reaches 1 at `white`. White 1 = no bend.
+float4   g_Tone      : register(c9);     // x = `hdr white` (1..2), y = 1: stage 0 and g_Opaque hold the float scene
+float3 toneCurve(float3 c)
+{
+    float  knee = 2.0f - g_Tone.x;
+    float3 t    = saturate((c - knee) / max(g_Tone.x - knee, 0.0001f));
+    float3 bent = knee + (1.0f - knee) * (1.0f - (1.0f - t) * (1.0f - t));
+    return (g_Tone.y > 0.5f) ? ((c > knee) ? bent : c) : c;
+}
+
 // Ronin @feature 21/09/2026 DX9: Catmull-Rom history fetch, 9 taps.
 //
 // WHY NOT BILINEAR: the history is re-fetched at a subpixel position every frame and fed straight back in. Bilinear
@@ -138,7 +149,7 @@ float3 casSharpen(float2 uv, float sharpness)
     float2 px = g_TaaParams.yz;
     float2 lo = g_Viewport.xy + 0.5f * px;
     float2 hi = g_Viewport.xy + g_Viewport.zw - 0.5f * px;
-    #define CAS_TAP(OX, OY) tex2Dlod(g_Scene, float4(clamp(uv + float2(OX, OY) * px, lo, hi), 0.0f, 0.0f)).rgb
+    #define CAS_TAP(OX, OY) toneCurve(tex2Dlod(g_Scene, float4(clamp(uv + float2(OX, OY) * px, lo, hi), 0.0f, 0.0f)).rgb)
     float3 a = CAS_TAP(-1.0f, -1.0f);  float3 b = CAS_TAP(0.0f, -1.0f);  float3 c = CAS_TAP(1.0f, -1.0f);
     float3 d = CAS_TAP(-1.0f,  0.0f);  float3 e = CAS_TAP(0.0f,  0.0f);  float3 f = CAS_TAP(1.0f,  0.0f);
     float3 g = CAS_TAP(-1.0f,  1.0f);  float3 h = CAS_TAP(0.0f,  1.0f);  float3 i = CAS_TAP(1.0f,  1.0f);
@@ -160,7 +171,7 @@ float luminance(float3 c)
 float4 resolve(float2 uv, out float3 lowBits)
 {
     lowBits = float3(0.5f, 0.5f, 0.5f);		// no remainder, on every early return
-    float3 scene = tex2D(g_Scene, uv).rgb;
+    float3 scene = toneCurve(tex2D(g_Scene, uv).rgb);
 
     // No usable history: first frame after a toggle, a resize, a device reset, or a target that could not be made.
     // Degrade to a straight copy rather than blend into a buffer nobody wrote — the mistake that cost the terrain its
@@ -332,7 +343,7 @@ float4 resolve(float2 uv, out float3 lowBits)
         // left is clamped too. Particles had no velocity and no clamp: the beaded missile trail, the smeared fire.
         if (g_TaaVel.w > 0.0f)
         {
-            float3 dd = abs(scene - tex2Dlod(g_Opaque, float4(uv, 0.0f, 0.0f)).rgb);
+            float3 dd = abs(scene - toneCurve(tex2Dlod(g_Opaque, float4(uv, 0.0f, 0.0f)).rgb));
             float  pa = tex2Dlod(g_PrevDepth, float4(camHistUV, 0.0f, 0.0f)).a;
             // Ronin @bugfix 08/10/2026 DX9: PROPORTIONAL (c11.y). On/off left a hard-edged field with no AA round thin smoke; the
             // history now gives way only as far as the effect covers the pixel. Last frame's value rides in the alpha.
@@ -402,7 +413,7 @@ float4 resolve(float2 uv, out float3 lowBits)
     float3 lo = scene;
     float3 hi = scene;
     float3 s2;
-    #define TAA_TAP(OFF) s2 = tex2D(g_Scene, OFF).rgb; m1 += s2; m2 += s2 * s2; lo = min(lo, s2); hi = max(hi, s2);
+    #define TAA_TAP(OFF) s2 = toneCurve(tex2D(g_Scene, OFF).rgb); m1 += s2; m2 += s2 * s2; lo = min(lo, s2); hi = max(hi, s2);
     TAA_TAP(uv - du)
     TAA_TAP(uv + du)
     TAA_TAP(uv - dv)
@@ -590,7 +601,7 @@ float4 resolve(float2 uv, out float3 lowBits)
     // Ronin @bugfix 09/10/2026 DX9: AN EFFECT LEFT. A slow particle is still next door to the pixel it left, so the
     // clamp above keeps its ghost: the smeared snowflake. The frame BEFORE effects IS this pixel without it: take that.
     if (effectLeft > 0.0f)
-        history = lerp(history, tex2Dlod(g_Opaque, float4(uv, 0.0f, 0.0f)).rgb, effectLeft);
+        history = lerp(history, toneCurve(tex2Dlod(g_Opaque, float4(uv, 0.0f, 0.0f)).rgb), effectLeft);
     float invalid  = saturate(max(max(depthBad, motion), disocc));
     // Ronin @bugfix 27/09/2026 DX9: DEBUG 14 - the moving-shadow mask. BLUE = in a moving mesh's shadow now, RED = clamped (in or
     // near one now or last frame), YELLOW = also weight-capped (`taa maskcap`). Returned from pass 1, like 13.

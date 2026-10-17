@@ -45,6 +45,7 @@ public:
 	// Ronin @feature 20/09/2026 DX9: wraps the 3D scene render so it lands in a texture we can read back. preRender
 	// returns TRUE when it took the redirect, and ONLY then may postRender run. Both no-op when TAA is off or when a
 	// script's view filter already owns the render-to-texture path - those are cinematic and win.
+	// Ronin @feature 17/10/2026 DX9: with TAA off and MSAA off, HDR alone takes the redirect too - the same pair runs.
 	static Bool preRender(const CameraClass &camera);
 	static void postRender(void);
 
@@ -79,6 +80,20 @@ public:
 	static Int   getDebug(void);
 	static void  setSharpen(float s);
 	static float getSharpen(void);
+	// Ronin @feature 12/10/2026 DX9: HDR stage 1a. The scene's redirect target (the engine's render texture) as 16-bit float, kept so
+	// across device resets. Redirected while TAA runs, or for HDR alone (TAA off, MSAA off); unchanged until something writes above 1.
+	static void  setFloatScene(Bool on);
+	static Bool  getFloatScene(void);
+	static void  describeScene(char *out, Int size);	// one line for the panel's `hdr`
+	// Ronin @feature 12/10/2026 DX9: HDR stage 1b. The sun brighter than 1 (W3DLocalLights lifts the sun's share of the frame by the
+	// gain of this time of day, tinted by `warm`), and `white`: the scene value the resolve's tone curve shows as white.
+	static void  setSunGain(float v);
+	static float getSunGain(void);
+	static void  setSunWarm(float v);
+	static float getSunWarm(void);
+	static void  setWhite(float v);
+	static float getWhite(void);
+	static Bool  getSunLift(float rgb[3]);	// FALSE: no float scene this frame, or no gain - nothing to draw
 	// Ronin @feature 26/09/2026 DX9: mipbias - texture mip LOD bias while TAA runs, -2..0; default -1 (Options.ini DX9TAAMipBias).
 	static void  setMipBias(float b);
 	static float getMipBias(void);

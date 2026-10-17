@@ -138,6 +138,9 @@ public:
 	// map's sky cube, 2 = the cube with the sky in every pane (seen from above, a pane mirrors the ground).
 	static void  setReflect(float v);
 	static float getReflect(void);
+	// Ronin @feature 12/10/2026 DX9: HDR stage 1b. W3DTreeBuffer says its shade record (Trees_ps COLOR1) is this frame's: the sun
+	// lift then gives a canopy its own sun, not the ground's behind it.
+	static void  noteTreeShade(void);
 
 	// Ronin @diagnostic 09/10/2026 DX9: last frame's numbers, for the panel's [LIGHT] row.
 	struct Stats

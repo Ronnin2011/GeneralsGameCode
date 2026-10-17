@@ -848,6 +848,30 @@ namespace
 		printAscii(state, FALSE);
 	}
 
+	// Ronin @feature 12/10/2026 DX9: `hdr` - HDR stage 1: the scene in a 16-bit float target (TAA's redirect, or its own with TAA off), the sun
+	// lifted above 1 there and a tone curve back to the screen. Not saved.
+	void cmdHdr(Int argc, const AsciiString *argv)
+	{
+		if (argc == 2)
+			W3DTaa::setFloatScene((atoi(argv[1].str()) != 0) ? TRUE : FALSE);
+		else if (argc == 3 && stricmp(argv[1].str(), "sun") == 0)
+			W3DTaa::setSunGain((float)atof(argv[2].str()));
+		else if (argc == 3 && stricmp(argv[1].str(), "warm") == 0)
+			W3DTaa::setSunWarm((float)atof(argv[2].str()));
+		else if (argc == 3 && stricmp(argv[1].str(), "white") == 0)
+			W3DTaa::setWhite((float)atof(argv[2].str()));
+		else if (argc != 1)
+		{
+			printAscii(AsciiString("usage: hdr [0|1] | hdr sun <1..4> | hdr warm <0..1> | hdr white <1..2>   (needs MSAA off; the sun lift also needs the lights on and the sun's shadow maps)"), TRUE);
+			printAscii(AsciiString("  sun: how bright the sun is on what it reaches, for the time of day now showing; 1 = as before"), FALSE);
+			printAscii(AsciiString("  warm: the lift's tint, 0 = none, 1 = strongly warm;  white: the scene value shown as white - higher keeps more detail in the brightest, flatter"), FALSE);
+			return;
+		}
+		char line[512];
+		W3DTaa::describeScene(line, (Int)sizeof(line));
+		printAscii(AsciiString(line), FALSE);
+	}
+
 	// Ronin @feature 12/10/2026 DX9: `sky` - the map's sky cube (W3DSkyCube): which sky it was made from, its ground, the six
 	// colours an ambient takes from it. `sky rebuild` makes it again; `lights view 5` shows it.
 	void cmdSky(Int argc, const AsciiString *argv)
@@ -3170,6 +3194,7 @@ void W3DDebugPanel::update(void)
 		registerCommand("ssao", "ssao [0..3] | ssao trees <auto|0|1> | ssao view [0..3] - ambient occlusion quality (not saved); trees: AO on trees; view: 1 depth, 2 raw AO, 3 blurred AO in the corner", cmdSsao);
 		registerCommand("shadows", "shadows [0..3] - shadow-map quality, 0 off (stencil shadows) .. 3 ultra (not saved)", cmdShadows);
 		registerCommand("lights", "lights [0|1] | save|load|defaults | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|aosun|reflect|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths; save keeps the knobs in DX9Lights.ini", cmdLights);
+		registerCommand("hdr", "hdr [0|1] | hdr sun <1..4> | hdr warm <0..1> | hdr white <1..2> - HDR stage 1: a float scene, the sun lifted above 1, a tone curve (needs MSAA off; not saved)", cmdHdr);
 		registerCommand("sky", "sky | sky rebuild - the map's sky cube: its source, its ground, the ambient's six colours (`lights view 5` shows it)", cmdSky);
 		registerCommand("timesetting", "timesetting [1..4] - time of day: 1 morning, 2 afternoon, 3 evening, 4 night (not saved; not in LAN/online)", cmdTimeSetting);
 		registerCommand("clouds", "clouds [on|off] - cloud shadows on terrain and models (not saved; none at night)", cmdClouds);

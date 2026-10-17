@@ -85,6 +85,7 @@ enum
 #include "W3DDevice/GameClient/W3DProjectedShadow.h"
 #include "W3DDevice/GameClient/W3DShadowMapState.h"
 #include "W3DDevice/GameClient/W3DWaterMirror.h"	// Ronin @bugfix 01/10/2026 DX9: the mirror plane, for cull()
+#include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 12/10/2026 DX9: HDR: noteTreeShade
 #include "WW3D2/camera.h"
 #include "WW3D2/dx8wrapper.h"
 #include "WW3D2/dx8renderer.h"
@@ -1886,6 +1887,7 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 						psDev->SetRenderTarget(0, oldRT);
 						psDev->SetViewport(&savedVP);	// SetRenderTarget resets it (§29j.13h)
 						psDev->SetRenderTarget(1, TheTerrainShadowPass.treeAccumSurf);
+						W3DLocalLights::noteTreeShade();	// Ronin @feature 12/10/2026 DX9: HDR: the record is this frame's
 					}
 
 					// §29g: VIEW is cached by the wrapper and only reaches the device on a flush.

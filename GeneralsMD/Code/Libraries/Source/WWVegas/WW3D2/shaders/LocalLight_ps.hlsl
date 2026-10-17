@@ -287,6 +287,23 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
         o.color = float4(texCUBElod(g_SkyCube, float4(cos(rise) * cos(turn), cos(rise) * sin(turn), sin(rise), 0.0f)).rgb, 0.0f);
         return o;
     }
+    // Ronin @feature 12/10/2026 DX9: HDR stage 1b - THE SUN LIFT, one quad over the frame, blended dest x this + dest: the gain
+    // times the sun's share of the pixel (1 - the shade's floor over its shade). g_LightPos = floor, g_LightDiff = gain; w = a record.
+    if (view == 6)
+    {
+        float4 shadeM = tex2Dlod(g_SunShade, float4(uv, 0.0f, 0.0f));
+        float3 shadeG = tex2Dlod(g_GroundShade, float4(uv, 0.0f, 0.0f)).rgb;
+        float3 shade  = g_LightPos.rgb;         // no record of this pixel: no sun known, nothing added
+        if (g_LightDiff.w > 0.0f && max(shadeG.r, max(shadeG.g, shadeG.b)) > 0.05f)
+            shade = shadeG;
+        if (g_LightPos.w > 0.0f && shadeM.a > 0.5f)
+            shade = shadeM.rgb;
+        float4 shadeT = tex2Dlod(g_LampMap, float4(uv, 0.0f, 0.0f));   // here: the trees' own record (Trees_ps COLOR1), 0.45..1
+        if (g_Camera.w > 0.0f && shadeT.a > 0.5f)
+            shade = lerp(g_LightPos.rgb, float3(1.0f, 1.0f, 1.0f), saturate((shadeT.r - 0.45f) / 0.55f));    // a canopy is in front
+        o.color = float4(g_LightDiff.rgb * saturate(1.0f - g_LightPos.rgb / max(shade, g_LightPos.rgb)), 0.0f);
+        return o;
+    }
 
     clip(0.99999f - tex2Dlod(g_SceneDepth, float4(uv, 0.0f, 0.0f)).r);     // nothing drew here (sky, off-map)
 

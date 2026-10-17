@@ -121,9 +121,22 @@ static float         s_autoReact   = 0.03f;
 // On/off left a hard-edged field with no AA round thin smoke. At or below `autoreact` it is the old on/off again.
 static float         s_autoFull    = 0.20f;
 static float autoReactSlope(void) { const float span = s_autoFull - s_autoReact; return (span > 0.001f) ? 1.0f / span : 1000.0f; }
-static TextureClass *s_opaqueTex   = NULL;
+// Ronin @feature 12/10/2026 DX9: HDR stage 1b: a raw texture in the scene target's own format (it is compared with the scene; 8
+// bits would clip what the sun's lift raised). Not the texture manager's: let go in releaseResources before a reset.
+static IDirect3DTexture9 *s_opaqueTex = NULL;
+static D3DFORMAT     s_opaqueFormat = D3DFMT_UNKNOWN;
 static UnsignedInt   s_opaqueW = 0, s_opaqueH = 0;
 static Bool          s_opaqueOK    = FALSE;
+static void releaseOpaque(void)
+{
+	if (s_opaqueTex != NULL)
+		s_opaqueTex->Release();
+	s_opaqueTex    = NULL;
+	s_opaqueFormat = D3DFMT_UNKNOWN;
+	s_opaqueW      = 0;
+	s_opaqueH      = 0;
+	s_opaqueOK     = FALSE;
+}
 static UnsignedInt   s_opaqueStamp = 0;
 // Ronin @bugfix 26/09/2026 DX9: the build-placement bib (red while the spot is illegal). Terrain geometry that follows the
 // cursor: no velocity, no depth change, so the pixels it left kept it in their history - the red trail. Its world corners
@@ -318,6 +331,94 @@ void  W3DTaa::setSharpen(float s)     { s_sharpen = taaKnob(s, 0.0f, 1.0f, 0.0f)
 void  W3DTaa::setMipBias(float b)     { s_mipBias = taaKnob(b, -2.0f, 0.0f, -1.0f); }
 float W3DTaa::getMipBias(void)        { return s_mipBias; }
 float W3DTaa::getSharpen(void)        { return s_sharpen; }
+
+// Ronin @feature 12/10/2026 DX9: HDR STAGE 1A - the scene's target as 16-bit float (`hdr`). Nothing else changes yet: the resolve
+// still writes 8-bit history and the 8-bit frame. A reset gives the engine's texture its old format; beginFrame asks again.
+static Bool s_floatScene   = FALSE;
+static Bool s_floatRefused = FALSE;	// the device would not make it: not asked again every frame
+// Ronin @feature 12/10/2026 DX9: HDR stage 1b. This frame the scene IS drawn into a float target; and the look's three knobs.
+static Bool  s_floatNow    = FALSE;
+static Bool  s_floatReady  = FALSE;	// Ronin @feature 17/10/2026 DX9: the float target stands and MSAA is off - TAA or not
+static float s_sunGain[4]  = { 2.0f, 1.8f, 2.0f, 1.0f };	// `hdr sun`: morning, afternoon, evening, night
+static float s_sunWarm     = 0.35f;						// `hdr warm`
+static float s_white       = 1.5f;						// `hdr white`
+
+static void keepSceneFormat(void)
+{
+	s_floatReady = FALSE;
+	IDirect3DTexture9 *tex = W3DShaderManager::getRenderTexture();
+	D3DSURFACE_DESC d;
+	if (tex == NULL || FAILED(tex->GetLevelDesc(0, &d)))
+		return;
+	Bool isFloat = (d.Format == D3DFMT_A16B16G16R16F) ? TRUE : FALSE;
+	if (isFloat != s_floatScene && !(s_floatScene && s_floatRefused))
+	{
+		if (W3DShaderManager::remakeRenderTexture(s_floatScene ? D3DFMT_A16B16G16R16F : D3DFMT_UNKNOWN))
+			isFloat = s_floatScene;
+		else if (s_floatScene)
+			s_floatRefused = TRUE;
+	}
+	s_floatReady = (isFloat && DX8Wrapper::Get_Anti_Aliasing_Level() == 0) ? TRUE : FALSE;	// preRender makes it s_floatNow
+}
+
+static Int sunGainSlot(void)
+{
+	const Int slot = (TheGlobalData != NULL) ? (Int)TheGlobalData->m_timeOfDay - 1 : 1;
+	return (slot < 0 || slot > 3) ? 1 : slot;
+}
+
+void  W3DTaa::setSunGain(float v)	{ s_sunGain[sunGainSlot()] = (v < 1.0f) ? 1.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DTaa::getSunGain(void)		{ return s_sunGain[sunGainSlot()]; }
+void  W3DTaa::setSunWarm(float v)	{ s_sunWarm = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float W3DTaa::getSunWarm(void)		{ return s_sunWarm; }
+void  W3DTaa::setWhite(float v)		{ s_white = (v < 1.0f) ? 1.0f : ((v > 2.0f) ? 2.0f : v); }
+float W3DTaa::getWhite(void)		{ return s_white; }
+
+// Ronin @feature 12/10/2026 DX9: what the lift adds to a wholly sunlit pixel, as a share of it: gain - 1, less in green and
+// blue by `warm` (to 0.90 and 0.72 of it).
+Bool W3DTaa::getSunLift(float rgb[3])
+{
+	const float more = s_sunGain[sunGainSlot()] - 1.0f;
+	if (!s_floatNow || more <= 0.0f)
+		return FALSE;
+	rgb[0] = more;
+	rgb[1] = more * (1.0f - 0.10f * s_sunWarm);
+	rgb[2] = more * (1.0f - 0.28f * s_sunWarm);
+	return TRUE;
+}
+
+void W3DTaa::setFloatScene(Bool on)
+{
+	s_floatScene   = on;
+	s_floatRefused = FALSE;
+	keepSceneFormat();		// the panel runs between frames: never while the scene is redirected
+}
+
+Bool W3DTaa::getFloatScene(void)	{ return s_floatScene; }
+
+void W3DTaa::describeScene(char *out, Int size)
+{
+	if (out == NULL || size <= 0)
+		return;
+	IDirect3DTexture9 *tex = W3DShaderManager::getRenderTexture();
+	D3DSURFACE_DESC d;
+	const char *name = "none";
+	UnsignedInt w = 0, h = 0;
+	if (tex != NULL && SUCCEEDED(tex->GetLevelDesc(0, &d)))
+	{
+		name = (d.Format == D3DFMT_A16B16G16R16F) ? "A16B16G16R16F (16-bit float)"
+			 : ((d.Format == D3DFMT_A8R8G8B8) ? "A8R8G8B8 (8-bit)" : ((d.Format == D3DFMT_X8R8G8B8) ? "X8R8G8B8 (8-bit)" : "another format"));
+		w = d.Width;
+		h = d.Height;
+	}
+	_snprintf(out, size, "hdr: %d (needs MSAA off)%s  scene target: %s, %u x %u. The scene %s  sun %.2f (this time of day; all four %.2f %.2f %.2f %.2f)  warm %.2f  white %.2f",
+			  s_floatScene ? 1 : 0, s_floatRefused ? " (REFUSED by the device)" : "", name, w, h,
+			  s_active ? "is drawn into it (TAA runs)." : ((DX8Wrapper::Get_Anti_Aliasing_Level() != 0) ?
+			  "is NOT drawn into it: MSAA is on." : (s_floatReady ? "is drawn into it (TAA off: the tone curve alone brings it back)." :
+			  "is NOT drawn into it: TAA and hdr are off - it goes straight to the frame buffer.")),
+			  s_sunGain[sunGainSlot()], s_sunGain[0], s_sunGain[1], s_sunGain[2], s_sunGain[3], s_sunWarm, s_white);
+	out[size - 1] = 0;
+}
 void  W3DTaa::setClamp(float v)       { s_clamp = taaKnob(v, 0.0f, 1.0f, 1.0f); }
 float W3DTaa::getClamp(void)          { return s_clamp; }
 void  W3DTaa::setShadowMask(Bool on)  { s_moverOn = on; }
@@ -386,6 +487,7 @@ void W3DTaa::beginFrame(void)
 	if (active && !s_active)
 		s_historyValid = FALSE;		// the history is from before the pause
 	s_active = active;
+	keepSceneFormat();		// Ronin @feature 12/10/2026 DX9: HDR stage 1a: `hdr`, again after a device reset
 
 	// Ronin @feature 26/09/2026 DX9: the mip bias, on every sampler, only while TAA runs. Written every frame while non-zero
 	// so a device reset (which restores 0) cannot drop it; once back at 0 it is left alone - zero cost with TAA off.
@@ -635,27 +737,25 @@ void W3DTaa::noteOpaqueDone(void)
 	D3DSURFACE_DESC desc;
 	if (SUCCEEDED(rt->GetDesc(&desc)))
 	{
-		if (s_opaqueTex == NULL || s_opaqueW != desc.Width || s_opaqueH != desc.Height)
+		if (s_opaqueTex == NULL || s_opaqueW != desc.Width || s_opaqueH != desc.Height || s_opaqueFormat != desc.Format)
 		{
-			REF_PTR_RELEASE(s_opaqueTex);
-			s_opaqueW = 0;
-			s_opaqueH = 0;
-			s_opaqueTex = NEW_REF(TextureClass, (desc.Width, desc.Height, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1,
-												  TextureClass::POOL_DEFAULT, true));
-			if (s_opaqueTex->Peek_D3D_Base_Texture() == NULL)
+			releaseOpaque();
+			if (FAILED(dev->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format, D3DPOOL_DEFAULT,
+										  &s_opaqueTex, NULL)))
 			{
-				REF_PTR_RELEASE(s_opaqueTex);
+				s_opaqueTex = NULL;
 			}
 			else
 			{
 				s_opaqueW = desc.Width;
 				s_opaqueH = desc.Height;
+				s_opaqueFormat = desc.Format;
 			}
 		}
 		if (s_opaqueTex != NULL)
 		{
-			IDirect3DSurface9 *dst = s_opaqueTex->Get_D3D_Surface_Level();
-			if (dst != NULL)
+			IDirect3DSurface9 *dst = NULL;
+			if (SUCCEEDED(s_opaqueTex->GetSurfaceLevel(0, &dst)) && dst != NULL)
 			{
 				s_opaqueOK = SUCCEEDED(dev->StretchRect(rt, NULL, dst, NULL, D3DTEXF_NONE)) ? TRUE : FALSE;
 				dst->Release();
@@ -1549,6 +1649,7 @@ void W3DTaa::releaseResources(void)
 {
 	s_gpuRemake = (s_gpuRemake || s_gpuOK) ? TRUE : FALSE;
 	gpuRelease();
+	releaseOpaque();		// Ronin @feature 12/10/2026 DX9: a raw default-pool texture: a reset fails while it lives
 }
 
 void W3DTaa::shutdown(void)
@@ -1559,10 +1660,7 @@ void W3DTaa::shutdown(void)
 	if (s_depthStorePS != NULL) { s_depthStorePS->Release(); s_depthStorePS = NULL; }
 	if (s_velMeshVS != NULL) { s_velMeshVS->Release(); s_velMeshVS = NULL; }
 	if (s_velSkinVS != NULL) { s_velSkinVS->Release(); s_velSkinVS = NULL; }
-	REF_PTR_RELEASE(s_opaqueTex);
-	s_opaqueW  = 0;
-	s_opaqueH  = 0;
-	s_opaqueOK = FALSE;
+	releaseOpaque();
 	for (Int i = 0; i < TAA_MESH_SLOTS; ++i)
 	{
 		delete [] s_meshSlots[i].skin[0];
@@ -1620,13 +1718,123 @@ void W3DTaa::shutdown(void)
 	s_waterMaskDrawn = FALSE;
 }
 
+// Ronin @feature 17/10/2026 DX9: the screen copy without TAA - `src` over `vp` through the resolve shader at weight 0: the tone curve
+// for the float scene. No history, CAS or flash (the scene drew its own).
+static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DVIEWPORT9 &vp, UnsignedInt texW, UnsignedInt texH,
+					   Bool floatScene)
+{
+	D3DVIEWPORT9 oldVp;
+	const Bool haveOldVp = SUCCEEDED(dev->GetViewport(&oldVp)) ? TRUE : FALSE;
+	dev->SetViewport(&vp);
+	DWORD oldZ = 0, oldZW = 0, oldAB = 0, oldAT = 0, oldCull = 0, oldCW = 0;
+	dev->GetRenderState(D3DRS_ZENABLE,          &oldZ);
+	dev->GetRenderState(D3DRS_ZWRITEENABLE,     &oldZW);
+	dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &oldAB);
+	dev->GetRenderState(D3DRS_ALPHATESTENABLE,  &oldAT);
+	dev->GetRenderState(D3DRS_CULLMODE,         &oldCull);
+	dev->GetRenderState(D3DRS_COLORWRITEENABLE, &oldCW);
+	dev->SetRenderState(D3DRS_ZENABLE,          FALSE);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE,     FALSE);
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE,  FALSE);
+	dev->SetRenderState(D3DRS_CULLMODE,         D3DCULL_NONE);
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+
+	// Ronin @feature 17/10/2026 DX9: as postRender's screen copy - the quad spans the viewport, its UVs that sub-rect of `src`.
+	const float u0 = (float)vp.X / (float)texW;
+	const float v0 = (float)vp.Y / (float)texH;
+	const float u1 = (float)(vp.X + vp.Width)  / (float)texW;
+	const float v1 = (float)(vp.Y + vp.Height) / (float)texH;
+	const float hx = 1.0f / (float)vp.Width;
+	const float hy = 1.0f / (float)vp.Height;
+	struct QuadVertex { float x, y, z; float u, v; } q[4];
+	q[0].x = -1.0f - hx; q[0].y =  1.0f + hy; q[0].u = u0; q[0].v = v0;
+	q[1].x =  1.0f - hx; q[1].y =  1.0f + hy; q[1].u = u1; q[1].v = v0;
+	q[2].x = -1.0f - hx; q[2].y = -1.0f + hy; q[2].u = u0; q[2].v = v1;
+	q[3].x =  1.0f - hx; q[3].y = -1.0f + hy; q[3].u = u1; q[3].v = v1;
+	for (int i = 0; i < 4; ++i)
+		q[i].z = 0.0f;
+
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::drawFinish");
+	dev->SetVertexShader(s_quadVS);		// after the layout bind - BindLayoutFVF clears the VS
+	dev->SetPixelShader(s_resolvePS);
+	const float c0[4] = { 0.0f, 1.0f / (float)texW, 1.0f / (float)texH, 0.0f };
+	dev->SetPixelShaderConstantF(0, c0, 1);
+	const float c5[4] = { u0, v0, u1 - u0, v1 - v0 };
+	dev->SetPixelShaderConstantF(5, c5, 1);
+	const float zero4[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(6, zero4, 1);		// no debug view
+	dev->SetPixelShaderConstantF(7, zero4, 1);		// no CAS: it is TAA's
+	const float c8[4] = { 1.0f, 1.0f, 1.0f, 0.0f };
+	dev->SetPixelShaderConstantF(8, c8, 1);			// no flash: without TAA the scene draws its own
+	const float c9[4] = { s_white, floatScene ? 1.0f : 0.0f, 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(9, c9, 1);			// the tone curve bends a float scene only
+	dev->SetTexture(0, src);
+	setResolveSampler(dev, 0);
+	dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
+
+	dev->SetTexture(0, NULL);
+	dev->SetVertexShader(NULL);
+	dev->SetPixelShader(NULL);
+	dev->SetRenderState(D3DRS_ZENABLE,          oldZ);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE,     oldZW);
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, oldAB);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE,  oldAT);
+	dev->SetRenderState(D3DRS_CULLMODE,         oldCull);
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, oldCW);
+	if (haveOldVp)
+		dev->SetViewport(&oldVp);
+	ShaderClass::Invalidate();
+	DX8Wrapper::Invalidate_Cached_Render_States();
+	DX8Wrapper::Invalidate_Texture_State(0, 1);
+}
+
+// Ronin @feature 17/10/2026 DX9: HDR WITHOUT TAA (MSAA off) - the scene still goes to the float target; postRender brings it back
+// through drawFinish. TAA's own passes key off s_redirected, which stays FALSE: none of them runs.
+static Bool s_hdrAlone = FALSE;
+static Bool beginHdrAlone(void)
+{
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (!s_floatReady || dev == NULL)
+		return FALSE;
+	ensureShaders(dev);
+	s_viewportOK = SUCCEEDED(dev->GetViewport(&s_viewport)) ? TRUE : FALSE;
+	if (s_quadVS == NULL || s_resolvePS == NULL || !s_viewportOK || !W3DShaderManager::canRenderToTexture() ||
+		W3DShaderManager::isRenderingToTexture())
+		return FALSE;
+	W3DShaderManager::startRenderToTexture();
+	s_hdrAlone = W3DShaderManager::isRenderingToTexture() ? TRUE : FALSE;
+	s_floatNow = s_hdrAlone;
+	return s_hdrAlone;
+}
+
+static void endHdrAlone(void)
+{
+	s_hdrAlone = FALSE;
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	IDirect3DTexture9 *sceneTex = W3DShaderManager::endRenderToTexture();
+	if (dev == NULL || sceneTex == NULL)
+		return;
+	// Ronin @feature 17/10/2026 DX9: as postRender - endRenderToTexture rebound the frame buffer's own depth; suspend and resume
+	// bind the scene depth again for the rest of the frame.
+	const Bool depthSuspended = DX8Wrapper::Suspend_Scene_Depth() ? TRUE : FALSE;
+	Int fbW = 0, fbH = 0, bits = 0;
+	bool windowed = false;
+	WW3D::Get_Render_Target_Resolution(fbW, fbH, bits, windowed);
+	if (fbW > 0 && fbH > 0 && s_viewportOK)
+		drawFinish(dev, sceneTex, s_viewport, (UnsignedInt)fbW, (UnsignedInt)fbH, TRUE);
+	if (depthSuspended)
+		DX8Wrapper::Resume_Scene_Depth();
+}
+
 Bool W3DTaa::preRender(const CameraClass &camera)
 {
 	s_redirected = FALSE;
+	s_floatNow   = FALSE;		// Ronin @feature 17/10/2026 DX9: float only once a redirect is taken
 	s_waterMaskReady = FALSE;	// Ronin @bugfix 03/10/2026 DX9: set below, once this frame's target is cleared
 	s_waterMaskDrawn = FALSE;
 	if (!s_active)
-		return FALSE;
+		return beginHdrAlone();		// Ronin @feature 17/10/2026 DX9: HDR without TAA
 	s_camera = &camera;
 	s_meshDrawCount = 0;
 	s_meshSeen      = 0;
@@ -1670,11 +1878,17 @@ Bool W3DTaa::preRender(const CameraClass &camera)
 		return FALSE;
 
 	s_redirected = TRUE;
+	s_floatNow   = s_floatReady;
 	return TRUE;
 }
 
 void W3DTaa::postRender(void)
 {
+	if (s_hdrAlone)
+	{
+		endHdrAlone();		// Ronin @feature 17/10/2026 DX9: HDR without TAA
+		return;
+	}
 	if (!s_redirected)
 		return;
 	s_redirected = FALSE;
@@ -2164,6 +2378,10 @@ void W3DTaa::postRender(void)
 				const float c7[4] = { 0.0f, (s_lastVelOK && s_velTex != NULL) ? 1.0f : 0.0f, 0.0f, s_clamp };	// x = 0: no CAS into the history
 				dev->SetPixelShaderConstantF(6, c6, 1);
 				dev->SetPixelShaderConstantF(7, c7, 1);
+				// Ronin @feature 12/10/2026 DX9: HDR stage 1b: c9 = the tone curve - x = `hdr white`, y = 1: stage 0 and the copy before
+				// particles hold the float scene and are bent as they are read. The history stays 8-bit, already bent.
+				const float c9[4] = { s_white, s_floatNow ? 1.0f : 0.0f, 0.0f, 0.0f };
+				dev->SetPixelShaderConstantF(9, c9, 1);
 
 				const Bool usePrevVel = (s_prevVelOK && s_velPrevTex != NULL);	// disocc AND last frame's reactive flags
 				if (usePrevVel)
@@ -2184,7 +2402,7 @@ void W3DTaa::postRender(void)
 				const Bool useAuto = autoReactUsable(fbW, fbH);
 				if (useAuto)
 				{
-					dev->SetTexture(7, s_opaqueTex->Peek_D3D_Texture());
+					dev->SetTexture(7, s_opaqueTex);
 					setResolveSampler(dev, 7);		// POINT - compared 1:1 with the scene
 				}
 				const float c11[4] = { 1.0f, autoReactSlope(), s_disoccV, useAuto ? s_autoReact : 0.0f };	// Ronin @bugfix 08/10/2026 DX9: x = an effect that left resets, y = the mask's slope
@@ -2251,7 +2469,7 @@ void W3DTaa::postRender(void)
 				setResolveSampler(dev, 0);
 				if (useAutoD)
 				{
-					dev->SetTexture(7, s_opaqueTex->Peek_D3D_Texture());
+					dev->SetTexture(7, s_opaqueTex);
 					setResolveSampler(dev, 7);
 				}
 				dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
@@ -2284,6 +2502,9 @@ void W3DTaa::postRender(void)
 		dev->SetPixelShaderConstantF(6, c6off, 1);
 		const float c7cas[4] = { s_sharpen, 0.0f, 0.0f, 0.0f };	// Ronin @feature 26/09/2026 DX9: CAS here, never in pass 1
 		dev->SetPixelShaderConstantF(7, c7cas, 1);
+		// Ronin @feature 12/10/2026 DX9: HDR stage 1b: stage 0 is the bent history here - or, without one, the raw float scene.
+		const float c9copy[4] = { s_white, (s_floatNow && !wroteHistory) ? 1.0f : 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(9, c9copy, 1);
 		// Ronin @bugfix 09/10/2026 DX9: the selection flash, added here - after the resolve, never in the history. c8 = 1 / the map's light
 		// (frame -> surface colour, as the local lights use) and the strength; s10 = the mask the velocity pass drew.
 		const Bool useFlash = (s_flashTex != NULL && s_flashStamp == s_moverFrame && s_flashW == (UnsignedInt)fbW &&

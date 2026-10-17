@@ -140,6 +140,9 @@ public:
 	static IDirect3DTexture8 * endRenderToTexture(); ///< Ends render to texture, & returns texture.
 	static IDirect3DTexture8 * getRenderTexture();	///< returns last used render target texture
 	static Bool isRenderingToTexture() {return m_renderingToTexture; }
+	// Ronin @feature 12/10/2026 DX9: HDR stage 1a. Makes the redirect texture again in another format (D3DFMT_UNKNOWN = the frame
+	// buffer's own). FALSE, and the old texture kept, if it cannot be made or the scene is being redirected right now.
+	static Bool remakeRenderTexture(D3DFORMAT format);
 	static void drawViewport(Int color);	///<draws 2 triangles covering the current tactical viewport
 
 
