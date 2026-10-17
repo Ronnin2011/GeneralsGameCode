@@ -315,7 +315,8 @@ struct SeenMesh { const MeshClass *mesh; UnsignedInt frame; };
 static SeenMesh		s_seenMesh[512];
 static UnsignedInt	s_fixFrame  = 1;
 static Bool			s_collect   = FALSE;	// between beginFrame and the pass: a rendered beam mesh adds its beams
-static float		s_beams     = 1.5f;		// `lights beams`
+static float		s_beams     = 0.9f;		// `lights beams`: the light on surfaces (1.5 until 17/10: pools far too strong)
+static const float	BEAM_CONE_REF = 1.5f;	// the `beams` the cone in the air was tuned at: it keeps that look at any `beams`
 static float		s_spill     = 0.5f;		// `lights spill`: the dim light around a beam's cone, beside the cone's own
 static float		s_spillWide = 2.2f;		// `lights spillwide`: how wide it reaches, in cone widths
 static float		s_shafts    = 0.4f;		// `lights shafts`: the beam in the air, beside the light's own strength
@@ -2484,7 +2485,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			// ramp: an edge round every pool). The beam in the air keeps its own end - c14.x, the corona's slot, unused by a spot.
 			now.outer = len * s_beamReach * s_range;
 			now.inner = now.outer * BEAM_INNER;
-			now.shaft = s_shafts;
+			// Ronin @bugfix 17/10/2026 DX9: the cone in the air no longer follows `beams` - the pools can be turned down alone.
+			now.shaft = s_shafts * BEAM_CONE_REF / ((s_beams > 0.01f) ? s_beams : 0.01f);
 			now.coronaRadius = len * BEAM_REACH * s_range;
 			now.lampRadius = beam.lampRadius * s_lampWidth;
 			float tanOuter = beam.endRadius / len;
