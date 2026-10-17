@@ -58,6 +58,7 @@
 #include "GameClient/Water.h"
 #include "W3DDevice/GameClient/W3DWaterSeaTuning.h"	// Ronin @feature 29/09/2026 DX9: the WaterSea look knobs
 #include "W3DDevice/GameClient/W3DWaterSeaIni.h"	// Ronin @feature 04/10/2026 DX9: `water save` / `water load`
+#include "W3DDevice/GameClient/W3DSkyCube.h"		// Ronin @feature 12/10/2026 DX9: `sky`
 // Ronin @feature 28/09/2026 DX9: the readouts moved in from W3DDisplay.cpp.
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -810,7 +811,7 @@ namespace
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: lights [0|1] | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..4> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
+			printAscii(AsciiString("usage: lights [0|1] | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..5> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | reflect <0..2> | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
 			printAscii(AsciiString("  beams: headlights and lamp cones as spot lights, their strength; 0 = the art's own beams, no lights; shafts: the beam in the air, drawn by the shader - its strength beside the light's, 0 = none; rays: soft rays from the lamp in that beam, 0 = the smooth cone; rayturn: 1 = they turn with the world as the camera goes round a beam, 0 = they stay with the view; lampwidth: how wide the beam leaves its lamp, in the art's own width there, 0 = from a point"), FALSE);
 			printAscii(AsciiString("  spill: the dim light around a beam's cone, its strength beside the cone's, 0 = a hard cone; spillwide: how wide it reaches, in cone widths"), FALSE);
 			printAscii(AsciiString("  glows: the lamp glows (street lamps, warning and runway lights) as point lights, their strength, 0 = none; glowreach: their reach"), FALSE);
@@ -819,6 +820,7 @@ namespace
 			printAscii(AsciiString("  sunfill: how much of the sun's shadow a lamp fills on a mesh, 1 = all of it, 0 = the lamp only scales what the shadow left"), FALSE);
 			printAscii(AsciiString("  sunerase: how fast a lamp gives back what the sun's shadow took - the shadow is gone where the lamp's strength reaches 1 / this; 0 = never"), FALSE);
 			printAscii(AsciiString("  mapshadow: the SUN's shadows on terrain and meshes - 1 = they leave what this map's light is without its sun (depth and tint), 0 = 0.45 on every map"), FALSE);
+			printAscii(AsciiString("  reflect: what glass and polished meshes mirror - 0 = the art's one picture (a lake at dusk, on every map), 1 = this map's sky cube, 2 = the cube with the sky in every pane (seen from above a pane mirrors the ground)"), FALSE);
 			printAscii(AsciiString("  lampshadows: how much the shadow of a beam (headlight, lamp cone) takes - cast by the solid meshes in its light, from a depth map drawn at the lamp; 0 = none. lampmaps 0 = the maps are not drawn at all"), FALSE);
 			printAscii(AsciiString("  lampbias: the shadows' offset from their casters - lower = tighter, stripes on lit surfaces if too low; higher = shadows let go of what casts them"), FALSE);
 			printAscii(AsciiString("  lampself: 1 = the lamp's own object casts in its light too; lampselfnear: ... but only past this share of the beam's length (a housing round the bulb would put the lamp out)"), FALSE);
@@ -826,7 +828,7 @@ namespace
 			printAscii(AsciiString("  pointsides: 1 = a big point light low over the ground (a blast) is shadowed sideways too - four more maps, level: what stands round it shadows the ground behind; 0 = only what is under it"), FALSE);
 			printAscii(AsciiString("  view 4: the maps, a tile a lamp, from the top right - bright = near the lamp, dark = far, blue = nothing in its light"), FALSE);
 			printAscii(AsciiString("  intensity: every light's strength; range: every light's reach; small: keep the pulses dropped as too small for the vertex grid"), FALSE);
-			printAscii(AsciiString("  over: ceiling above a surface's own colour - only a light stronger than 1 reaches it; boost: frame-to-surface factor, 0 = from the map's light; view: 1 light alone, 2 facing, 3 rectangles, 4 the lamps' shadow maps"), FALSE);
+			printAscii(AsciiString("  over: ceiling above a surface's own colour - only a light stronger than 1 reaches it; boost: frame-to-surface factor, 0 = from the map's light; view: 1 light alone, 2 facing, 3 rectangles, 4 the lamps' shadow maps, 5 the sky cube"), FALSE);
 			return;
 		}
 		AsciiString state, one;
@@ -843,6 +845,22 @@ namespace
 				state.concat(" (auto)");
 		}
 		printAscii(state, FALSE);
+	}
+
+	// Ronin @feature 12/10/2026 DX9: `sky` - the map's sky cube (W3DSkyCube): which sky it was made from, its ground, the six
+	// colours an ambient takes from it. `sky rebuild` makes it again; `lights view 5` shows it.
+	void cmdSky(Int argc, const AsciiString *argv)
+	{
+		if (argc == 2 && stricmp(argv[1].str(), "rebuild") == 0)
+			W3DSkyCube::rebuild();
+		else if (argc != 1)
+		{
+			printAscii(AsciiString("usage: sky | sky rebuild   (`lights view 5` shows the cube)"), TRUE);
+			return;
+		}
+		char line[512];
+		W3DSkyCube::describe(line, (Int)sizeof(line));
+		printAscii(AsciiString(line), FALSE);
 	}
 
 	// Ronin @feature 06/10/2026 DX9: `timesetting` - the time-of-day lighting, what the debug build's Ctrl+Shift+D does
@@ -3150,7 +3168,8 @@ void W3DDebugPanel::update(void)
 		registerCommand("taa", "taa [0|1] | taa <knob> <v> - temporal AA; the [TAA] row shows live state", cmdTaa);
 		registerCommand("ssao", "ssao [0..3] | ssao trees <auto|0|1> | ssao view [0..3] - ambient occlusion quality (not saved); trees: AO on trees; view: 1 depth, 2 raw AO, 3 blurred AO in the corner", cmdSsao);
 		registerCommand("shadows", "shadows [0..3] - shadow-map quality, 0 off (stencil shadows) .. 3 ultra (not saved)", cmdShadows);
-		registerCommand("lights", "lights [0|1] | save|load|defaults | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths; save keeps the knobs in DX9Lights.ini", cmdLights);
+		registerCommand("lights", "lights [0|1] | save|load|defaults | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|reflect|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths; save keeps the knobs in DX9Lights.ini", cmdLights);
+		registerCommand("sky", "sky | sky rebuild - the map's sky cube: its source, its ground, the ambient's six colours (`lights view 5` shows it)", cmdSky);
 		registerCommand("timesetting", "timesetting [1..4] - time of day: 1 morning, 2 afternoon, 3 evening, 4 night (not saved; not in LAN/online)", cmdTimeSetting);
 		registerCommand("clouds", "clouds [on|off] - cloud shadows on terrain and models (not saved; none at night)", cmdClouds);
 		registerCommand("msaa", "msaa [0|2|4|8] - anti-aliasing level, by a device reset (not saved); TAA does not run with it", cmdMsaa);

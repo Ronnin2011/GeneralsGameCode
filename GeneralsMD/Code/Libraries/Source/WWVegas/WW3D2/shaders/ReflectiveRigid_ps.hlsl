@@ -5,6 +5,10 @@
 sampler2D g_EnvSampler : register(s0); // this pass's stage-0 texture (lakedusk)
 float4    g_CameraPos  : register(c0); // world-space camera position (xyz)
 float4x4  g_View       : register(c1); // world->view; uploaded transposed (mirrors the VS g_ViewProj convention)
+// Ronin @feature 12/10/2026 DX9: lighting step 5. The map's own sky (W3DSkyCube) by the WORLD reflection vector, in place of the
+// art's one picture. g_SkyMode.x: 0 = the picture as before, 1 = the cube, 2 = the cube with the sky in every pane.
+samplerCUBE g_SkyCube  : register(s6);
+float4    g_SkyMode    : register(c6);
 // Ronin @bugfix 19/09/2026 DX9: this pass used to rely on the FFP shroud overlay reaching it (see the note below). That
 // overlay is depth-compared and blackened alpha meshes at the fog edge, so it no longer runs on programmable meshes — the
 // shroud is sampled here instead, same meaning as in RigidInstance_ps. zw == 0 means the map has no shroud.
@@ -36,7 +40,11 @@ float4 main(PS_INPUT i) : COLOR0
     // shroud/fog multiply (which DOES reach this mesh) left it the brightest object -> "stays bright
     // in fog". With the lighting factor it now dims with the scene and darkens under the shroud like
     // its neighbors, matching how the FFP env pass composited.
-    float3 reflection = tex2D(g_EnvSampler, envUV).rgb * i.col.rgb;
+    // Ronin @feature 12/10/2026 DX9: lighting step 5. Both are read (no gradient inside a branch). Seen from above a pane mirrors
+    // the ground, so mode 2 folds the vector up to the sky.
+    float3 env = tex2D(g_EnvSampler, envUV).rgb;
+    float3 sky = texCUBE(g_SkyCube, float3(R.xy, (g_SkyMode.x > 1.5f) ? abs(R.z) : R.z)).rgb;
+    float3 reflection = ((g_SkyMode.x > 0.5f) ? sky : env) * i.col.rgb;
 
     // Ronin @bugfix 19/09/2026 DX9: shroud in-shader now that the overlay pass no longer reaches programmable meshes.
     if (g_ShroudMap.z > 0.0f)

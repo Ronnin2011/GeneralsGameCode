@@ -24,6 +24,7 @@
 #include "Common/GlobalData.h"
 #include "GameLogic/TerrainLogic.h"	// Ronin @feature 11/10/2026 DX9: how high a point light is over the ground
 #include "W3DDevice/GameClient/W3DLocalLights.h"
+#include "W3DDevice/GameClient/W3DSkyCube.h"	// Ronin @feature 12/10/2026 DX9: the sky cube: kept current each frame, shown by view 5
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DSsao.h"
@@ -1520,7 +1521,7 @@ void W3DLocalLights::setOver(float v)		{ s_over = (v < 1.0f) ? 1.0f : ((v > 8.0f
 float W3DLocalLights::getOver(void)			{ return s_over; }
 void W3DLocalLights::setBoost(float v)		{ s_boost = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
 float W3DLocalLights::getBoost(void)		{ return s_boost; }
-void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v > 4) ? 4 : v); }
+void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v > 5) ? 5 : v); }
 Int  W3DLocalLights::getView(void)			{ return s_view; }
 Bool W3DLocalLights::ownsDynamicLights(void)	{ return s_active; }
 void W3DLocalLights::setRange(float v)		{ s_range = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
@@ -1547,6 +1548,7 @@ static Bool					s_shadeWritten  = FALSE;	// bound at least once this frame
 static const void			*s_shadeBeside  = NULL;	// the target it was first bound beside this frame: compared, never used
 static float				s_sunFill       = 1.0f;	// `lights sunfill`
 static float				s_sunErase      = 3.0f;	// `lights sunerase`: a lamp restores what the sun's shadow took; gone at strength 1/3
+static Int						s_reflect       = 2;		// `lights reflect`
 
 void W3DLocalLights::beginSunShade(void)
 {
@@ -1651,6 +1653,8 @@ static void publishMapShadow(void)
 void  W3DLocalLights::setMapShadow(float v)	{ s_mapShadow = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
 float W3DLocalLights::getMapShadow(void)	{ return s_mapShadow; }
 
+void  W3DLocalLights::setReflect(float v)	{ s_reflect = (v < 0.5f) ? 0 : ((v < 1.5f) ? 1 : 2); }
+float W3DLocalLights::getReflect(void)	{ return (float)s_reflect; }
 // Ronin @feature 12/10/2026 DX9: THE LIGHTS' INI. Every `lights` knob by its name, in the panel's order: one table for the panel
 // (set, print) and for DX9Lights.ini, a modder's file. A knob added here is tunable and kept, with nothing else to touch.
 #define LIGHT_REAL(text, setter, getter)   { text, FALSE, TRUE, [](float v) { W3DLocalLights::setter(v); }, []() -> float { return W3DLocalLights::getter(); } }
@@ -1681,6 +1685,7 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("sunfill", setSunFill, getSunFill),
 	LIGHT_REAL("sunerase", setSunErase, getSunErase),
 	LIGHT_REAL("mapshadow", setMapShadow, getMapShadow),
+	LIGHT_REAL("reflect", setReflect, getReflect),
 	LIGHT_SWITCH("lampmaps", setLampMaps, getLampMaps),
 	LIGHT_REAL("lampshadows", setLampShadows, getLampShadows),
 	LIGHT_REAL("lampbias", setLampBias, getLampBias),
@@ -1815,6 +1820,9 @@ void W3DLocalLights::beginFrame(void)
 			s_knobDefaults[k] = s_knobs[k].get();
 		loadIni(NULL);
 	}
+	W3DSkyCube::update();		// Ronin @feature 12/10/2026 DX9: the map's sky cube: built again when the map, its time or its sky changed
+	// Ronin @feature 12/10/2026 DX9: step 5: the reflective meshes mirror it (`lights reflect`). With the lights off, the art's picture.
+	DX8InstanceManagerClass::Set_Sky_Reflection(W3DSkyCube::peek(), s_enabled ? (float)s_reflect : 0.0f);
 	publishMapShadow();		// Ronin @feature 10/10/2026 DX9: every frame, whether or not the light pass runs
 	s_shown = s_stats;
 	s_stats.live     = 0;
@@ -2394,7 +2402,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			++count;
 		}
 	}
-	if (count == 0)
+	if (count == 0 && s_view != 5)		// Ronin @diagnostic 12/10/2026 DX9: view 5 (the sky cube) draws with no light on screen too
 	{
 		rt->Release();
 		return;
@@ -2498,7 +2506,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	s_stats.sunShade = (shadeUse > 0.0f) ? ((meshShade ? 1 : 0) + ((groundShade != NULL) ? 2 : 0)) : 0;
 	const float shared[5 * 4] =
 	{
-		zNear, zFar, (s_view == 4) ? 0.0f : (float)s_view, s_over,		// view 4 is the lit frame with the maps over it
+		zNear, zFar, (s_view >= 4) ? 0.0f : (float)s_view, s_over,		// views 4 and 5 are the lit frame with something drawn over it
 		planeMin.X, planeMax.Y, planeW, planeH,
 		vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y,
 		1.0f / targetW, 1.0f / targetH, shadeUse, s_sunErase,
@@ -2674,6 +2682,35 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		dev->SetRenderState(D3DRS_ZFUNC, zFuncWas);
 	}
 
+	// Ronin @diagnostic 12/10/2026 DX9: `lights view 5` - the sky cube as a panorama across the top of the view: all round from left
+	// to right, straight up at its top edge, straight down at its bottom. Over the lit frame, at the nearest depth as view 4 is.
+	if (s_view == 5 && W3DSkyCube::peek() != NULL)
+	{
+		const float showSky[4] = { zNear, zFar, 5.0f, s_over };
+		dev->SetPixelShaderConstantF(0, showSky, 1);
+		DWORD zFuncWas;
+		dev->GetRenderState(D3DRS_ZFUNC, &zFuncWas);
+		dev->SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE);
+		dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
+		dev->SetRenderState(D3DRS_ZFUNC, D3DCMP_ALWAYS);
+		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+		dev->SetSamplerState(7, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(7, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(7, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetTexture(7, W3DSkyCube::peek());
+		const float wide = floorf((vx1 - vx0) * 0.6f), high = floorf(wide * 0.5f);
+		const float x0 = vx0 + floorf((vx1 - vx0 - wide) * 0.5f), y0 = vy0 + 2.0f;
+		const float l = ((x0 - 0.5f) / targetW) * 2.0f - 1.0f;
+		const float r = ((x0 + wide - 0.5f) / targetW) * 2.0f - 1.0f;
+		const float t = 1.0f - ((y0 - 0.5f) / targetH) * 2.0f;
+		const float b = 1.0f - ((y0 + high - 0.5f) / targetH) * 2.0f;
+		struct SkyVertex { float x, y, z; float u, v; };
+		const SkyVertex q[4] = { { l, t, 0.0f, 0.0f, 0.0f }, { r, t, 0.0f, 1.0f, 0.0f }, { l, b, 0.0f, 0.0f, 1.0f }, { r, b, 0.0f, 1.0f, 1.0f } };
+		dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(SkyVertex));
+		dev->SetTexture(7, NULL);
+		dev->SetRenderState(D3DRS_ZFUNC, zFuncWas);
+	}
+
 	// Ronin @feature 09/10/2026 DX9: unbind, then the 3D viewport, the frame's depth, states and constants; the wrapper re-asserts itself.
 	dev->SetTexture(1, NULL);
 	dev->SetTexture(2, NULL);
@@ -2699,6 +2736,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 
 void W3DLocalLights::shutdown(void)
 {
+	DX8InstanceManagerClass::Set_Sky_Reflection(NULL, 0.0f);	// Ronin @feature 12/10/2026 DX9: the mesh renderer holds the cube too
+	W3DSkyCube::shutdown();
 	// Ronin @feature 09/10/2026 DX9: the beams: every swapped texture gets its own surface back, and meshes stop asking.
 	MeshClass::Set_Light_Fixture_Note_Func(NULL);
 	DX8InstanceManagerClass::Set_Sun_Shade_Hooks(NULL, NULL);

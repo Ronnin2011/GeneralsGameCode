@@ -99,6 +99,9 @@ public:
 	// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. What a sun shadow leaves on this map (rgb) and how far to follow it (w; 0 =
 	// the old 0.45) - RigidInstance_ps c24. Pushed down by W3DLocalLights, as the shadow map is.
 	static void Set_Shadow_Shade(const float* rgbw);
+	// Ronin @feature 12/10/2026 DX9: lighting step 5. The map's sky cube for ReflectiveRigid_ps (s6) and how to use it (c6.x: 0 = the
+	// art's picture, 1 = the cube, 2 = sky in every pane). A reference is held: pass NULL before the device goes.
+	static void Set_Sky_Reflection(IDirect3DCubeTexture9* cube, float mode);
 
 
 	/**

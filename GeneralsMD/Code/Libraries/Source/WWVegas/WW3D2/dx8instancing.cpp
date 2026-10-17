@@ -594,6 +594,9 @@ static float                  s_shadowDepthBiasFar   = 0.0f;
 static float                  s_shadowTexelWorldFar  = 0.0f;
 // Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. See Set_Shadow_Shade. w stays 0 until it is called: the old 0.45.
 static float                  s_shadowShade[4]       = { 0.45f, 0.45f, 0.45f, 0.0f };
+// Ronin @feature 12/10/2026 DX9: lighting step 5. See Set_Sky_Reflection. NULL / 0 until it is called: the art's picture.
+static IDirect3DCubeTexture9* s_skyCube              = nullptr;
+static float                  s_skyReflectMode       = 0.0f;
 
 void DX8InstanceManagerClass::Set_Shadow_Map(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
                                              float texelOffset, float depthBias,
@@ -629,6 +632,18 @@ void DX8InstanceManagerClass::Set_Shadow_Shade(const float* rgbw)
 {
 	if (rgbw != nullptr)
 		memcpy(s_shadowShade, rgbw, sizeof(float) * 4);
+}
+
+// Ronin @feature 12/10/2026 DX9: lighting step 5 - pushed down by W3DLocalLights each frame. The new cube is taken before the old
+// one is let go, so the same cube passed twice stays alive.
+void DX8InstanceManagerClass::Set_Sky_Reflection(IDirect3DCubeTexture9* cube, float mode)
+{
+	if (cube != nullptr)
+		cube->AddRef();
+	if (s_skyCube != nullptr)
+		s_skyCube->Release();
+	s_skyCube = cube;
+	s_skyReflectMode = mode;
 }
 
 
@@ -904,6 +919,19 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 		}
 	}
 
+	// Ronin @feature 12/10/2026 DX9: lighting step 5. The map's sky cube on s6 and how to use it in c6.x (Set_Sky_Reflection);
+	// always uploaded, 0 = the art's picture on s0 as before.
+	{
+		const float reflPsC6[4] = { (s_skyCube != nullptr) ? s_skyReflectMode : 0.0f, 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(6, reflPsC6, 1);
+		dev->SetTexture(6, s_skyCube);
+		if (s_skyCube != nullptr) {
+			dev->SetSamplerState(6, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(6, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(6, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+		}
+	}
+
 	// Ronin @feature DX9: reflective pass-0 depth bias. HISTORICAL: pass-0 (programmable) wrote depth
 	// ~1 LSB off the FFP pass-1 overlay, so the two z-fought -> shimmer, and we pushed pass-0 away so the
 	// overlay would land. As of the BLENDED_NRM change, pass-1 is ALSO programmable and shares pass-0's
@@ -951,6 +979,9 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	// Ronin @bugfix 14/09/2026 DX9: cleared raw — resync the wrapper's texture caches, same as Flush_Single_Rigid's teardown.
 	DX8Wrapper::Invalidate_Texture_State(1, 2);
 	DX8Wrapper::Invalidate_Texture_State(5, 1);
+	// Ronin @feature 12/10/2026 DX9: lighting step 5: the sky cube's stage, cleared and resynced the same way.
+	dev->SetTexture(6, nullptr);
+	DX8Wrapper::Invalidate_Texture_State(6, 1);
 
 	if (normalMapTex != nullptr) {
 		normalMapTex->Release_Ref();

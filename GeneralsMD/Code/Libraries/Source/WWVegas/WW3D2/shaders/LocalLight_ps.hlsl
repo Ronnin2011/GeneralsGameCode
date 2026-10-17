@@ -10,6 +10,7 @@ sampler2D g_LampDepth  : register(s4);      // the lamps' shadow maps: D24S8, LI
 sampler2D g_LampDepthWas : register(s6);    // ... and last frame's, for the change mask
 sampler2D g_LampMap    : register(s5);      // `lights view 4` only: the same maps as colour, depth over two bytes, POINT, CLAMP
 sampler2D g_GroundShade : register(s3);     // the same for the terrain, as its own shadow pass composited it; white = none taken
+samplerCUBE g_SkyCube  : register(s7);      // `lights view 5` only: the map's sky cube (W3DSkyCube), looked up by a world direction
 
 float4 g_Camera     : register(c0);         // x = camera near, y = camera far, z = view mode, w = overbright
 float4 g_ViewPlane  : register(c1);         // x = view-plane min X, y = view-plane max Y, z = width, w = height, at depth 1
@@ -276,6 +277,14 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
         float  share = g_LightPos.x / max(g_LightPos.y - z * (g_LightPos.y - g_LightPos.x), 0.0001f);    // its distance, in the map's reach
         float  grey  = 1.0f - 0.8f * saturate(share);
         o.color = (z > 0.99998f) ? float4(0.03f, 0.06f, 0.14f, 0.0f) : float4(grey, grey, grey, 0.0f);
+        return o;
+    }
+    // Ronin @diagnostic 12/10/2026 DX9: the sky cube as a panorama: all round across the quad, straight up at its top edge.
+    if (view == 5)
+    {
+        float  turn = uv.x * 6.2832f;
+        float  rise = (0.5f - uv.y) * 3.1416f;
+        o.color = float4(texCUBElod(g_SkyCube, float4(cos(rise) * cos(turn), cos(rise) * sin(turn), sin(rise), 0.0f)).rgb, 0.0f);
         return o;
     }
 
