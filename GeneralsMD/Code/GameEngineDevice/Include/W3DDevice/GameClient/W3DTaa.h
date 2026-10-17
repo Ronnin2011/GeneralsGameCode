@@ -48,8 +48,8 @@ public:
 	// Ronin @feature 17/10/2026 DX9: with TAA off and MSAA off, HDR alone takes the redirect too - the same pair runs.
 	static Bool preRender(const CameraClass &camera);
 	static void postRender(void);
-	// Ronin @feature 17/10/2026 DX9: when preRender declined - TAA off or MSAA on: the night look in a pass of
-	// its own over the scene just drawn. Nothing at all by day.
+	// Ronin @feature 17/10/2026 DX9: when preRender declined - TAA off or MSAA on: the night look and the dark lift in a pass of
+	// their own over the scene just drawn. Nothing at all by day.
 	static void finishScene(const CameraClass &camera);
 
 	// Ronin @feature 20/09/2026 DX9: reprojection needs the INTZ scene depth. SSAO owns that buffer when it is on; when
@@ -109,6 +109,8 @@ public:
 	static float getNightHi(void);
 	static void  setNightFloor(float v);
 	static float getNightFloor(void);
+	static void  setNightLift(float v);		// the dark lift at night: luminance l -> l^this, the colour kept; 1 = none
+	static float getNightLift(void);
 	static void  setNightFull(float v);		// the map light's saturation at which the look is at full strength; milder lights get less
 	static float getNightFull(void);
 	static void  describeNight(char *out, Int size);	// one line for the panel's `night`

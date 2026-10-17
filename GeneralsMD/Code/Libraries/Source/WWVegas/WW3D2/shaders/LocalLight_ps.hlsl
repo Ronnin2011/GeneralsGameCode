@@ -287,6 +287,37 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
         o.color = float4(texCUBElod(g_SkyCube, float4(cos(rise) * cos(turn), cos(rise) * sin(turn), sin(rise), 0.0f)).rgb, 0.0f);
         return o;
     }
+    // Ronin @feature 15/10/2026 DX9: GLOBAL LIGHT 3a - THE GROUND AS A LIGHT, one quad, twice (c0.w +1: dest x max(k, 0) + dest;
+    // -1: dest x (1 + min(k, 0))). k = the surface's share of (what the ground under it sends up - the flat ambient) x (1 - n.z) / 2.
+    if (view == 7)
+    {
+        clip(0.99999f - tex2Dlod(g_SceneDepth, float4(uv, 0.0f, 0.0f)).r);
+        float3 P  = viewPosition(uv);
+        float3 Pr = viewPosition(uv + float2(g_TexelSize.x, 0.0f));
+        float3 Pl = viewPosition(uv - float2(g_TexelSize.x, 0.0f));
+        float3 Pd = viewPosition(uv + float2(0.0f, g_TexelSize.y));
+        float3 Pu = viewPosition(uv - float2(0.0f, g_TexelSize.y));
+        float3 dx = (abs(Pr.z - P.z) < abs(P.z - Pl.z)) ? (Pr - P) : (P - Pl);
+        float3 dy = (abs(Pd.z - P.z) < abs(P.z - Pu.z)) ? (Pd - P) : (P - Pu);
+        float3 N  = normalize(cross(dy, dx));
+        if (dot(N, -P) < 0.0f)
+            N = -N;
+        float  down = 0.5f - 0.5f * dot(N, g_WorldZ.xyz);                     // 0 facing up, 0.5 a wall, 1 facing down
+        float2 wxy  = g_LightPos.xy + float2(dot(P, g_WorldX.xyz), dot(P, g_WorldY.xyz));     // c5.xy: the camera in the world
+        float3 G    = tex2Dlod(g_LampMap, float4((wxy - g_LightDiff.xy) * g_LightDiff.zw, 0.0f, 0.0f)).rgb * 2.0f;
+        float4 shadeM = tex2Dlod(g_SunShade, float4(uv, 0.0f, 0.0f));
+        float3 shadeG = tex2Dlod(g_GroundShade, float4(uv, 0.0f, 0.0f)).rgb;
+        float3 shade  = float3(1.0f, 1.0f, 1.0f);   // no record: as if in the sun
+        if (g_LightPos.w > 0.0f && max(shadeG.r, max(shadeG.g, shadeG.b)) > 0.05f)
+            shade = shadeG;
+        if (g_LightPos.z > 0.0f && shadeM.a > 0.5f)
+            shade = shadeM.rgb;
+        float3 k = g_SceneLight.rgb * (G - g_LightAmb.rgb) * down * g_LightAmb.w / clamp(shade, 0.05f, 1.0f);
+        o.color = float4((g_Camera.w > 0.0f) ? max(k, 0.0f) : saturate(1.0f + min(k, 0.0f)), 0.0f);
+        if (g_Camera.w == 0.0f)
+            o.color = float4(saturate(0.5f + k * 2.0f), 0.0f);     // `lights view 6`: grey = nothing, lighter = added, darker = taken
+        return o;
+    }
     // Ronin @feature 12/10/2026 DX9: HDR stage 1b - THE SUN LIFT, one quad over the frame, blended dest x this + dest: the gain
     // times the sun's share of the pixel (1 - the shade's floor over its shade). g_LightPos = floor, g_LightDiff = gain; w = a record.
     if (view == 6)

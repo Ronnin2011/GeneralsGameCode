@@ -1521,7 +1521,7 @@ void W3DLocalLights::setOver(float v)		{ s_over = (v < 1.0f) ? 1.0f : ((v > 8.0f
 float W3DLocalLights::getOver(void)			{ return s_over; }
 void W3DLocalLights::setBoost(float v)		{ s_boost = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
 float W3DLocalLights::getBoost(void)		{ return s_boost; }
-void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v > 5) ? 5 : v); }
+void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v > 6) ? 6 : v); }
 Int  W3DLocalLights::getView(void)			{ return s_view; }
 Bool W3DLocalLights::ownsDynamicLights(void)	{ return s_active; }
 void W3DLocalLights::setRange(float v)		{ s_range = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
@@ -1551,6 +1551,7 @@ static float				s_sunErase      = 3.0f;	// `lights sunerase`: a lamp restores wh
 static Bool					s_shadeFrame    = FALSE;	// this frame records the shade (lights on, a scene depth): kept to the next frame's start
 static float				s_aoSun         = 1.0f;	// `lights aosun`
 static Bool					s_treeShadeFrame = FALSE;	// the trees drew into their own shade record this frame (noteTreeShade)
+static float				s_bounce        = 1.0f;	// `lights bounce`
 static Int						s_reflect       = 2;		// `lights reflect`
 
 void W3DLocalLights::beginSunShade(void)
@@ -1742,13 +1743,15 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("mapshadow", setMapShadow, getMapShadow),
 	LIGHT_REAL("aosun", setAoSun, getAoSun),
 	LIGHT_REAL("reflect", setReflect, getReflect),
-	// Ronin @feature 15/10/2026 DX9: the night look lives in W3DTaa; listed here so DX9Lights.ini keeps them.
+	LIGHT_REAL("bounce", setBounce, getBounce),
+	// Ronin @feature 15/10/2026 DX9: the night look and the dark lift live in W3DTaa; listed here so DX9Lights.ini keeps them.
 	{ "night", TRUE, TRUE, [](float v) { W3DTaa::setNight((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DTaa::getNight() ? 1.0f : 0.0f; } },
 	{ "nighttint", FALSE, TRUE, [](float v) { W3DTaa::setNightTint(v); }, []() -> float { return W3DTaa::getNightTint(); } },
 	{ "nightlo", FALSE, TRUE, [](float v) { W3DTaa::setNightLo(v); }, []() -> float { return W3DTaa::getNightLo(); } },
 	{ "nighthi", FALSE, TRUE, [](float v) { W3DTaa::setNightHi(v); }, []() -> float { return W3DTaa::getNightHi(); } },
 	{ "nightfloor", FALSE, TRUE, [](float v) { W3DTaa::setNightFloor(v); }, []() -> float { return W3DTaa::getNightFloor(); } },
 	{ "nightfull", FALSE, TRUE, [](float v) { W3DTaa::setNightFull(v); }, []() -> float { return W3DTaa::getNightFull(); } },
+	{ "nightlift", FALSE, TRUE, [](float v) { W3DTaa::setNightLift(v); }, []() -> float { return W3DTaa::getNightLift(); } },
 	LIGHT_SWITCH("lampmaps", setLampMaps, getLampMaps),
 	LIGHT_REAL("lampshadows", setLampShadows, getLampShadows),
 	LIGHT_REAL("lampbias", setLampBias, getLampBias),
@@ -2079,6 +2082,8 @@ static Bool makeDraw(LightDraw &d, const LightMemo &now, const LightMemo &was, c
 // Ronin @feature 12/10/2026 DX9: called by W3DTreeBuffer once it has cleared and bound the trees' shade record for the frame:
 // without it the record on that target is an older frame's.
 void W3DLocalLights::noteTreeShade(void)	{ s_treeShadeFrame = TRUE; }
+void  W3DLocalLights::setBounce(float v)	{ s_bounce = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float W3DLocalLights::getBounce(void)		{ return s_bounce; }
 
 // Ronin @feature 12/10/2026 DX9: HDR STAGE 1B - THE SUN LIFT. With a float frame the sun may be brighter than 1: one quad adds the
 // frame times (gain - 1) times the sun's share of each pixel, from the two shade records. Before the lamps' copy of the frame.
@@ -2593,7 +2598,10 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		}
 	}
 	drawSunLift(dev, rd);		// Ronin @feature 12/10/2026 DX9: HDR stage 1b: with or without a light on screen
-	if (count == 0 && s_view != 5)		// Ronin @diagnostic 12/10/2026 DX9: view 5 (the sky cube) draws with no light on screen too
+	// Ronin @feature 15/10/2026 DX9: global light 3a - the ground as a light (`lights bounce`) wants the pass with no lamp on screen too.
+	float bounceUV[4], bounceAmb[3];
+	IDirect3DTexture9 *bounceMap = (s_bounce > 0.0f && (s_view == 0 || s_view == 6)) ? W3DSkyCube::groundMap(bounceUV, bounceAmb) : NULL;
+	if (count == 0 && s_view != 5 && bounceMap == NULL)		// Ronin @diagnostic 12/10/2026 DX9: view 5 (the sky cube) draws with no light on screen too
 	{
 		rt->Release();
 		return;
@@ -2759,6 +2767,47 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::renderPass");
 	dev->SetVertexShader(s_quadVS);		// AFTER the layout bind - BindLayoutFVF clears the VS
 	dev->SetPixelShader(s_lightPS);
+
+	// Ronin @feature 15/10/2026 DX9: GLOBAL LIGHT 3a - THE GROUND AS A LIGHT (docs/Lighting_Work.md 4.4c). One quad over the frame,
+	// twice: once adding, once darkening. Before the lamps, which add to it; its own constants go back for them.
+	if (bounceMap != NULL)
+	{
+		const Vector3 eye = camera.Get_Transform().Get_Translation();
+		float bc[3 * 4] = { eye.X, eye.Y, meshShade ? 1.0f : 0.0f, (groundShade != NULL) ? 1.0f : 0.0f,
+							bounceUV[0], bounceUV[1], bounceUV[2], bounceUV[3],
+							bounceAmb[0], bounceAmb[1], bounceAmb[2], s_bounce };
+		dev->SetPixelShaderConstantF(5, bc, 3);
+		dev->SetTexture(2, meshShade ? s_shadeTex->Peek_D3D_Texture() : NULL);
+		dev->SetTexture(3, groundShade);
+		dev->SetSamplerState(5, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(5, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(5, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(5, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(5, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		dev->SetTexture(5, bounceMap);
+		const float bl = (-0.5f / targetW) * 2.0f - 1.0f, br = ((targetW - 0.5f) / targetW) * 2.0f - 1.0f;
+		const float bt = 1.0f - (-0.5f / targetH) * 2.0f, bb = 1.0f - ((targetH - 0.5f) / targetH) * 2.0f;
+		struct BounceVertex { float x, y, z; float u, v; };
+		const BounceVertex bq[4] = { { bl, bt, 0.0f, 0.0f, 0.0f }, { br, bt, 0.0f, 1.0f, 0.0f }, { bl, bb, 0.0f, 0.0f, 1.0f }, { br, bb, 0.0f, 1.0f, 1.0f } };
+		// Ronin @diagnostic 15/10/2026 DX9: `lights view 6` - drawn once, over the frame, as grey round its middle.
+		if (s_view == 6)
+			dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+		for (Int half = 0; half < ((s_view == 6) ? 1 : 2); ++half)
+		{
+			const float c0[4] = { shared[0], shared[1], 7.0f, (s_view == 6) ? 0.0f : ((half == 0) ? 1.0f : -1.0f) };
+			dev->SetPixelShaderConstantF(0, c0, 1);
+			dev->SetRenderState(D3DRS_SRCBLEND,  (half == 0) ? D3DBLEND_DESTCOLOR : D3DBLEND_ZERO);
+			dev->SetRenderState(D3DRS_DESTBLEND, (half == 0) ? D3DBLEND_ONE : D3DBLEND_SRCCOLOR);
+			dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bq, sizeof(BounceVertex));
+		}
+		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
+		dev->SetRenderState(D3DRS_SRCBLEND,  D3DBLEND_ONE);
+		dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+		dev->SetPixelShaderConstantF(0, shared, 1);
+		dev->SetTexture(2, (shadeUse > 0.0f && meshShade) ? s_shadeTex->Peek_D3D_Texture() : NULL);
+		dev->SetTexture(3, (shadeUse > 0.0f) ? groundShade : NULL);
+		dev->SetTexture(5, NULL);
+	}
 
 	for (Int i = 0; i < count; ++i)
 	{

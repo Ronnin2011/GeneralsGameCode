@@ -395,6 +395,7 @@ static float s_nightTint  = 0.55f;
 static float s_nightLo    = 0.15f;
 static float s_nightHi    = 0.60f;
 static float s_nightFloor = 0.30f;
+static float s_nightLift  = 0.9f;		// `night lift`: .9 by his word 16/10 (.75 washed the meshes' shading out)
 static float s_nightFull  = 0.65f;	// `night full`: Dark Night's light (saturation 0.65) gets all of it, GameData's night (0.33) a third
 
 // Ronin @feature 15/10/2026 DX9: the map's light on level ground now, as the terrain takes it (BaseHeightMap::doTheLight: light 1's
@@ -452,8 +453,8 @@ static void nightConstants(float c[8], float levelOut[3], Bool lampMask)
 	c[7] = lampMask ? 1.0f : 0.0f;
 }
 
-// Ronin @feature 17/10/2026 DX9: THE FINISH PASS - with TAA off or MSAA on, the night look runs in a pass of
-// its own after the scene (finishScene): the frame is copied and drawn back through the resolve shader's screen copy.
+// Ronin @feature 17/10/2026 DX9: THE FINISH PASS - with TAA off or MSAA on, the night look and the dark lift run in a pass of
+// their own after the scene (finishScene): the frame is copied and drawn back through the resolve shader's screen copy.
 static UnsignedInt   s_frameNo        = 0;		// every frame, TAA or not (beginFrame)
 static UnsignedInt   s_lightMaskFrame = 0;		// the s_frameNo the light mask was drawn in
 static TextureClass *s_finishCopy     = NULL;	// the frame at its own size and format: StretchRect resolves MSAA into it
@@ -463,6 +464,8 @@ static Bool finishWanted(void)
 {
 	if (s_active || !s_nightOn || TheGlobalData == NULL || TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT)
 		return FALSE;
+	if (s_nightLift < 0.999f)
+		return TRUE;
 	float c[8], e[3];
 	nightConstants(c, e, FALSE);
 	return (c[3] > 0.0f) ? TRUE : FALSE;
@@ -479,6 +482,8 @@ void  W3DTaa::setNightHi(float v)		{ s_nightHi = clamp01(v); }
 float W3DTaa::getNightHi(void)			{ return s_nightHi; }
 void  W3DTaa::setNightFloor(float v)	{ s_nightFloor = clamp01(v); }
 float W3DTaa::getNightFloor(void)		{ return s_nightFloor; }
+void  W3DTaa::setNightLift(float v)		{ s_nightLift = (v < 0.4f) ? 0.4f : ((v > 1.0f) ? 1.0f : v); }
+float W3DTaa::getNightLift(void)		{ return s_nightLift; }
 void  W3DTaa::setNightFull(float v)		{ s_nightFull = (v < 0.2f) ? 0.2f : ((v > 1.0f) ? 1.0f : v); }
 float W3DTaa::getNightFull(void)		{ return s_nightFull; }
 
@@ -489,9 +494,9 @@ void W3DTaa::describeNight(char *out, Int size)
 	float c[8], e[3];
 	nightConstants(c, e, FALSE);
 	const Bool night = (TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
-	_snprintf(out, size, "night: %d (%s)  strength %.2f (full at %.2f)  tint %.2f  lo %.2f  hi %.2f  floor %.2f;  the map's light now %.2f %.2f %.2f (blue %.1f x red) -> the dim's tint %.2f %.2f %.2f",
+	_snprintf(out, size, "night: %d (%s)  lift %.2f  strength %.2f (full at %.2f)  tint %.2f  lo %.2f  hi %.2f  floor %.2f;  the map's light now %.2f %.2f %.2f (blue %.1f x red) -> the dim's tint %.2f %.2f %.2f",
 			  s_nightOn ? 1 : 0, !night ? "waits for night" : (s_active ? "showing" : ((DX8Wrapper::Get_Anti_Aliasing_Level() != 0) ?
-			  "showing in its own pass - MSAA: lamps keep their colour by brightness only" : "showing in its own pass (TAA off)")), c[3], s_nightFull,
+			  "showing in its own pass - MSAA: lamps keep their colour by brightness only" : "showing in its own pass (TAA off)")), s_nightLift, c[3], s_nightFull,
 			  s_nightTint, s_nightLo, c[5], s_nightFloor, e[0], e[1], e[2], (e[0] > 0.0001f) ? (e[2] / e[0]) : 0.0f, c[0], c[1], c[2]);
 	out[size - 1] = 0;
 }
@@ -1834,7 +1839,7 @@ void W3DTaa::shutdown(void)
 }
 
 // Ronin @feature 17/10/2026 DX9: the screen copy without TAA - `src` over `vp` through the resolve shader at weight 0: the tone curve
-// for the float scene, then at night the night look. No history, CAS or flash (the scene drew its own).
+// for the float scene, then at night the dark lift and the night look. No history, CAS or flash (the scene drew its own).
 static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DVIEWPORT9 &vp, UnsignedInt texW, UnsignedInt texH,
 					   Bool floatScene)
 {
@@ -1894,6 +1899,9 @@ static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DV
 	float nightC[8], nightLevel[3];
 	nightConstants(nightC, nightLevel, nightMask);
 	dev->SetPixelShaderConstantF(17, nightC, 2);
+	const Bool night = (s_nightOn && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+	const float nightLiftC[4] = { s_nightLift, night ? 1.0f : 0.0f, 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(19, nightLiftC, 1);
 	dev->SetTexture(0, src);
 	setResolveSampler(dev, 0);
 	dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
@@ -2705,6 +2713,10 @@ void W3DTaa::postRender(void)
 		float nightC[8], nightLevel[3];
 		nightConstants(nightC, nightLevel, nightMask);
 		dev->SetPixelShaderConstantF(17, nightC, 2);
+		// Ronin @feature 15/10/2026 DX9: the dark lift (`night lift`), c19: at night, with the look switched on.
+		const float nightLiftC[4] = { s_nightLift, (s_nightOn && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? 1.0f : 0.0f,
+									  0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(19, nightLiftC, 1);
 		// Ronin @bugfix 09/10/2026 DX9: the selection flash, added here - after the resolve, never in the history. c8 = 1 / the map's light
 		// (frame -> surface colour, as the local lights use) and the strength; s10 = the mask the velocity pass drew.
 		const Bool useFlash = (s_flashTex != NULL && s_flashStamp == s_moverFrame && s_flashW == (UnsignedInt)fbW &&

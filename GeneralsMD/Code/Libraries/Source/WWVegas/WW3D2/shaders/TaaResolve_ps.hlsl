@@ -57,6 +57,14 @@ float4   g_Night     : register(c17);    // rgb = the dim's tint (luminance 1), 
 float4   g_NightKeep : register(c18);    // x = lo, y = hi (the luminance where a pixel starts / ends keeping its colour), z = floor,
                                          // Ronin @feature 16/10/2026 DX9: w = 1: the light mask (s8) is bound - its alpha = the lamp light a pixel took
 
+// Ronin @feature 15/10/2026 DX9: THE DARK LIFT - at night the eye adapts to the dark: luminance l -> l^g, the colour kept. The dark
+// comes up most, the bright (lamps) hardly moves. c19.x = g (1 = none), y = 1: on.
+float4   g_NightLift : register(c19);
+float3 darkLift(float3 c)
+{
+    float l = dot(c, float3(0.299f, 0.587f, 0.114f));
+    return (l > 0.0005f) ? saturate(c * pow(max(l, 0.0005f), g_NightLift.x - 1.0f)) : c;
+}
 float3 nightLook(float3 c, float2 uv)
 {
     float l    = dot(c, float3(0.299f, 0.587f, 0.114f));
@@ -210,6 +218,8 @@ float4 resolve(float2 uv, out float3 lowBits)
         float3 shown = (g_TaaSharpen.x > 0.0f) ? casSharpen(uv, g_TaaSharpen.x) : scene;
         // Ronin @feature 15/10/2026 DX9: the night look - one saturated map light on two paints read as two scenes. Before the
         // flash, which keeps its colour.
+        if (g_NightLift.y > 0.5f && g_NightLift.x < 0.999f)
+            shown = darkLift(shown);
         if (g_Night.w > 0.0f)
             shown = nightLook(shown, uv);
         // Ronin @bugfix 09/10/2026 DX9: SELECTION FLASH, after the resolve. Lit like a local light: the surface colour (frame over the

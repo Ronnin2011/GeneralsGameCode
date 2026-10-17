@@ -38,6 +38,11 @@ static char                   s_key[160]  = "";						// what the cube was built 
 static char                   s_set[48]   = "";						// the north picture's name
 static Bool                   s_byTime    = FALSE;					// the map names no sky: picked by its time of day
 static Bool                   s_wanted    = FALSE;					// `sky rebuild`
+// Ronin @feature 15/10/2026 DX9: global light 3 - the lit terrain colour map (buildGroundMap).
+static const Int              GROUND_MAP  = 128;
+static IDirect3DTexture9     *s_groundMap = NULL;
+static float                  s_groundUV[4]  = { 0.0f, 0.0f, 0.0f, 0.0f };
+static float                  s_groundAmb[3] = { 0.0f, 0.0f, 0.0f };
 
 // Ronin @feature 12/10/2026 DX9: one sky picture as plain pixels. The archives hold them as DXT1; the device unpacks.
 static Bool readFace(IDirect3DDevice9 *dev, const char *name, SkyFace &out)
@@ -293,6 +298,102 @@ static void build(const WaterTransparencySetting *water)
 		delete [] faces[f].px;
 }
 
+// Ronin @feature 15/10/2026 DX9: GLOBAL LIGHT 3 - THE LIT TERRAIN COLOUR MAP. What the ground sends up, per texel of a 128 x 128 grid
+// over the map: its colour x the light on level ground (as groundColour), blurred twice over 5 texels. Halved into 8 bits.
+static void buildGroundMap(void)
+{
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev == NULL || TheTerrainVisual == NULL || TheTerrainLogic == NULL || TheGlobalData == NULL)
+		return;
+	Region3D extent;
+	TheTerrainLogic->getExtent(&extent);
+	const float w = extent.hi.x - extent.lo.x, h = extent.hi.y - extent.lo.y;
+	if (w < 1.0f || h < 1.0f)
+		return;
+	float light[3] = { TheGlobalData->m_terrainAmbient[0].red, TheGlobalData->m_terrainAmbient[0].green, TheGlobalData->m_terrainAmbient[0].blue };
+	for (Int i = 0; i < TheGlobalData->m_numGlobalLights; ++i)
+	{
+		const float down = -TheGlobalData->m_terrainLightPos[i].z;
+		if (down > 0.0f)
+		{
+			light[0] += down * TheGlobalData->m_terrainDiffuse[i].red;
+			light[1] += down * TheGlobalData->m_terrainDiffuse[i].green;
+			light[2] += down * TheGlobalData->m_terrainDiffuse[i].blue;
+		}
+	}
+	static float a[GROUND_MAP * GROUND_MAP * 3];
+	static float b[GROUND_MAP * GROUND_MAP * 3];
+	for (Int y = 0; y < GROUND_MAP; ++y)
+	{
+		for (Int x = 0; x < GROUND_MAP; ++x)
+		{
+			RGBColor c;
+			c.red = c.green = c.blue = 0.0f;
+			TheTerrainVisual->getTerrainColorAt(extent.lo.x + w * ((float)x + 0.5f) / (float)GROUND_MAP,
+												extent.lo.y + h * ((float)y + 0.5f) / (float)GROUND_MAP, &c);
+			float *o = &a[(y * GROUND_MAP + x) * 3];
+			o[0] = c.red * light[0];
+			o[1] = c.green * light[1];
+			o[2] = c.blue * light[2];
+		}
+	}
+	// Twice across and down, 5 texels a time: what a wall sees is the ground round it, not the texel under it.
+	for (Int pass = 0; pass < 4; ++pass)
+	{
+		const Bool across = ((pass & 1) == 0) ? TRUE : FALSE;
+		float *src = (pass & 1) ? b : a;
+		float *dst = (pass & 1) ? a : b;
+		for (Int y = 0; y < GROUND_MAP; ++y)
+		{
+			for (Int x = 0; x < GROUND_MAP; ++x)
+			{
+				float s[3] = { 0.0f, 0.0f, 0.0f };
+				for (Int t = -2; t <= 2; ++t)
+				{
+					Int sx = across ? (x + t) : x, sy = across ? y : (y + t);
+					sx = (sx < 0) ? 0 : ((sx >= GROUND_MAP) ? GROUND_MAP - 1 : sx);
+					sy = (sy < 0) ? 0 : ((sy >= GROUND_MAP) ? GROUND_MAP - 1 : sy);
+					const float *p = &src[(sy * GROUND_MAP + sx) * 3];
+					s[0] += p[0]; s[1] += p[1]; s[2] += p[2];
+				}
+				float *o = &dst[(y * GROUND_MAP + x) * 3];
+				o[0] = s[0] * 0.2f; o[1] = s[1] * 0.2f; o[2] = s[2] * 0.2f;
+			}
+		}
+	}
+	if (s_groundMap == NULL && FAILED(dev->CreateTexture(GROUND_MAP, GROUND_MAP, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &s_groundMap, NULL)))
+	{
+		s_groundMap = NULL;
+		return;
+	}
+	D3DLOCKED_RECT lock;
+	if (FAILED(s_groundMap->LockRect(0, &lock, NULL, 0)))
+		return;
+	for (Int y = 0; y < GROUND_MAP; ++y)
+	{
+		DWORD *row = (DWORD *)((BYTE *)lock.pBits + y * lock.Pitch);
+		for (Int x = 0; x < GROUND_MAP; ++x)
+		{
+			const float *p = &a[(y * GROUND_MAP + x) * 3];
+			Int v[3];
+			for (Int k = 0; k < 3; ++k)
+			{
+				const float f = p[k] * 0.5f * 255.0f + 0.5f;
+				v[k] = (f < 0.0f) ? 0 : ((f > 255.0f) ? 255 : (Int)f);
+			}
+			row[x] = 0xFF000000u | ((DWORD)v[0] << 16) | ((DWORD)v[1] << 8) | (DWORD)v[2];
+		}
+	}
+	s_groundMap->UnlockRect(0);
+	s_groundUV[0] = extent.lo.x;
+	s_groundUV[1] = extent.lo.y;
+	s_groundUV[2] = 1.0f / w;
+	s_groundUV[3] = 1.0f / h;
+	s_groundAmb[0] = TheGlobalData->m_terrainAmbient[0].red;
+	s_groundAmb[1] = TheGlobalData->m_terrainAmbient[0].green;
+	s_groundAmb[2] = TheGlobalData->m_terrainAmbient[0].blue;
+}
+
 void W3DSkyCube::update(void)
 {
 	const WaterTransparencySetting *water = TheWaterTransparency;		// none before the INIs are read
@@ -308,6 +409,7 @@ void W3DSkyCube::update(void)
 	s_wanted = FALSE;
 	strcpy(s_key, key);
 	build(water);
+	buildGroundMap();		// Ronin @feature 15/10/2026 DX9: global light 3, with the cube
 }
 
 void W3DSkyCube::rebuild(void)	{ s_wanted = TRUE; }
@@ -317,10 +419,22 @@ void W3DSkyCube::shutdown(void)
 	if (s_cube != NULL)
 		s_cube->Release();
 	s_cube = NULL;
+	if (s_groundMap != NULL)
+		s_groundMap->Release();
+	s_groundMap = NULL;
 	s_key[0] = 0;
 }
 
 IDirect3DCubeTexture9 *W3DSkyCube::peek(void)	{ return s_cube; }
+
+IDirect3DTexture9 *W3DSkyCube::groundMap(float uv[4], float ambient[3])
+{
+	for (Int k = 0; k < 4; ++k)
+		uv[k] = s_groundUV[k];
+	for (Int k = 0; k < 3; ++k)
+		ambient[k] = s_groundAmb[k];
+	return s_groundMap;
+}
 
 void W3DSkyCube::describe(char *out, Int size)
 {

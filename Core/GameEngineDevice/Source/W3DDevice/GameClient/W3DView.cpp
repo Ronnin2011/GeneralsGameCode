@@ -1890,7 +1890,7 @@ void W3DView::draw()
 		if (taaRedirected)
 			W3DTaa::postRender();
 		else
-			W3DTaa::finishScene(*m_3DCamera);	// Ronin @feature 17/10/2026 DX9: the night look without TAA
+			W3DTaa::finishScene(*m_3DCamera);	// Ronin @feature 17/10/2026 DX9: the night look and the dark lift without TAA
 	}
 
 	if (m_viewFilterMode &&

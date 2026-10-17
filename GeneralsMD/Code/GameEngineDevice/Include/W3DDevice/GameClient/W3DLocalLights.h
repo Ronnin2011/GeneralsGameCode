@@ -141,6 +141,10 @@ public:
 	// Ronin @feature 12/10/2026 DX9: HDR stage 1b. W3DTreeBuffer says its shade record (Trees_ps COLOR1) is this frame's: the sun
 	// lift then gives a canopy its own sun, not the ground's behind it.
 	static void  noteTreeShade(void);
+	// Ronin @feature 15/10/2026 DX9: global light 3a - the ground as a light: how much of what the ground sends up a face takes
+	// (1 = by the ambient's measure, 0 = off).
+	static void  setBounce(float v);
+	static float getBounce(void);
 
 	// Ronin @diagnostic 09/10/2026 DX9: last frame's numbers, for the panel's [LIGHT] row.
 	struct Stats

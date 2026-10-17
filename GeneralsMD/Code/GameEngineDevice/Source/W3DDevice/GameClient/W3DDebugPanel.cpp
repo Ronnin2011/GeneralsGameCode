@@ -811,7 +811,7 @@ namespace
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: lights [0|1] | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..5> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | aosun <0..3> | reflect <0..2> | night... (as `night`) | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
+			printAscii(AsciiString("usage: lights [0|1] | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..6> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | aosun <0..3> | reflect <0..2> | bounce <0..2> | night... (as `night`) | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
 			printAscii(AsciiString("  beams: headlights and lamp cones as spot lights, their strength; 0 = the art's own beams, no lights; shafts: the beam in the air, drawn by the shader - its strength beside the light's, 0 = none; rays: soft rays from the lamp in that beam, 0 = the smooth cone; rayturn: 1 = they turn with the world as the camera goes round a beam, 0 = they stay with the view; lampwidth: how wide the beam leaves its lamp, in the art's own width there, 0 = from a point"), FALSE);
 			printAscii(AsciiString("  spill: the dim light around a beam's cone, its strength beside the cone's, 0 = a hard cone; spillwide: how wide it reaches, in cone widths"), FALSE);
 			printAscii(AsciiString("  glows: the lamp glows (street lamps, warning and runway lights) as point lights, their strength, 0 = none; glowreach: their reach"), FALSE);
@@ -821,6 +821,7 @@ namespace
 			printAscii(AsciiString("  sunerase: how fast a lamp gives back what the sun's shadow took - the shadow is gone where the lamp's strength reaches 1 / this; 0 = never"), FALSE);
 			printAscii(AsciiString("  mapshadow: the SUN's shadows on terrain and meshes - 1 = they leave what this map's light is without its sun (depth and tint), 0 = 0.45 on every map"), FALSE);
 			printAscii(AsciiString("  aosun: SSAO where the sun reaches - 1 = it shades the map's ambient only (all of it in a sun shadow, the ambient's share in the sun), more = less still in the sun, 0 = everywhere alike as before. `ssao view 3` shows it"), FALSE);
+			printAscii(AsciiString("  bounce: the ground as a light - a wall or an underside takes what the ground under it sends up instead of the flat ambient (warm over sand, darker over asphalt); 0 = off"), FALSE);
 			printAscii(AsciiString("  reflect: what glass and polished meshes mirror - 0 = the art's one picture (a lake at dusk, on every map), 1 = this map's sky cube, 2 = the cube with the sky in every pane (seen from above a pane mirrors the ground)"), FALSE);
 			printAscii(AsciiString("  lampshadows: how much the shadow of a beam (headlight, lamp cone) takes - cast by the solid meshes in its light, from a depth map drawn at the lamp; 0 = none. lampmaps 0 = the maps are not drawn at all"), FALSE);
 			printAscii(AsciiString("  lampbias: the shadows' offset from their casters - lower = tighter, stripes on lit surfaces if too low; higher = shadows let go of what casts them"), FALSE);
@@ -829,7 +830,7 @@ namespace
 			printAscii(AsciiString("  pointsides: 1 = a big point light low over the ground (a blast) is shadowed sideways too - four more maps, level: what stands round it shadows the ground behind; 0 = only what is under it"), FALSE);
 			printAscii(AsciiString("  view 4: the maps, a tile a lamp, from the top right - bright = near the lamp, dark = far, blue = nothing in its light"), FALSE);
 			printAscii(AsciiString("  intensity: every light's strength; range: every light's reach; small: keep the pulses dropped as too small for the vertex grid"), FALSE);
-			printAscii(AsciiString("  over: ceiling above a surface's own colour - only a light stronger than 1 reaches it; boost: frame-to-surface factor, 0 = from the map's light; view: 1 light alone, 2 facing, 3 rectangles, 4 the lamps' shadow maps, 5 the sky cube"), FALSE);
+			printAscii(AsciiString("  over: ceiling above a surface's own colour - only a light stronger than 1 reaches it; boost: frame-to-surface factor, 0 = from the map's light; view: 1 light alone, 2 facing, 3 rectangles, 4 the lamps' shadow maps, 5 the sky cube, 6 the ground light (grey = none, lighter = added, darker = taken)"), FALSE);
 			return;
 		}
 		AsciiString state, one;
@@ -864,11 +865,14 @@ namespace
 			W3DTaa::setNightFloor((float)atof(argv[2].str()));
 		else if (argc == 3 && stricmp(argv[1].str(), "full") == 0)
 			W3DTaa::setNightFull((float)atof(argv[2].str()));
+		else if (argc == 3 && stricmp(argv[1].str(), "lift") == 0)
+			W3DTaa::setNightLift((float)atof(argv[2].str()));
 		else if (argc != 1)
 		{
-			printAscii(AsciiString("usage: night [0|1] | night tint <0..1> | night lo <0..1> | night hi <0..1> | night floor <0..1> | night full <0.2..1>   (at night; `lights save` keeps them)"), TRUE);
+			printAscii(AsciiString("usage: night [0|1] | night tint <0..1> | night lo <0..1> | night hi <0..1> | night floor <0..1> | night full <0.2..1> | night lift <0.4..1>   (at night; `lights save` keeps them)"), TRUE);
 			printAscii(AsciiString("  tint: how much of the map light's colour the dim parts take, 0 = grey; lo / hi: how bright a pixel must be to start / to fully keep its own colour"), FALSE);
 			printAscii(AsciiString("  floor: the least of its own colour any pixel keeps - team colours in the dark; 1 = the look off"), FALSE);
+			printAscii(AsciiString("  lift: the dark lift - the darkest parts come up most, lamps hardly move; 1 = none, .9 the default (.75 brighter)"), FALSE);
 			printAscii(AsciiString("  full: how coloured the map's light must be (its saturation) for the whole look; milder lights get less. Lamp-lit pixels keep their colour"), FALSE);
 			return;
 		}
@@ -3222,8 +3226,8 @@ void W3DDebugPanel::update(void)
 		registerCommand("taa", "taa [0|1] | taa <knob> <v> - temporal AA; the [TAA] row shows live state", cmdTaa);
 		registerCommand("ssao", "ssao [0..3] | ssao trees <auto|0|1> | ssao view [0..3] - ambient occlusion quality (not saved); trees: AO on trees; view: 1 depth, 2 raw AO, 3 blurred AO in the corner", cmdSsao);
 		registerCommand("shadows", "shadows [0..3] - shadow-map quality, 0 off (stencil shadows) .. 3 ultra (not saved)", cmdShadows);
-		registerCommand("lights", "lights [0|1] | save|load|defaults | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|aosun|reflect|night*|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths; save keeps the knobs in DX9Lights.ini", cmdLights);
-		registerCommand("night", "night [0|1] | night tint|lo|hi|floor|full <v> - the night look: dim colour into one tint from the map's light, lamps keep theirs (at night; not saved)", cmdNight);
+		registerCommand("lights", "lights [0|1] | save|load|defaults | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|aosun|reflect|bounce|night*|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths; save keeps the knobs in DX9Lights.ini", cmdLights);
+		registerCommand("night", "night [0|1] | night tint|lo|hi|floor|full|lift <v> - the night look and the dark lift: dim colour into one tint from the map's light, lamps keep theirs (at night; not saved)", cmdNight);
 		registerCommand("hdr", "hdr [0|1] | hdr sun <1..4> | hdr warm <0..1> | hdr white <1..2> - HDR stage 1: a float scene, the sun lifted above 1, a tone curve (needs MSAA off; not saved)", cmdHdr);
 		registerCommand("sky", "sky | sky rebuild - the map's sky cube: its source, its ground, the ambient's six colours (`lights view 5` shows it)", cmdSky);
 		registerCommand("timesetting", "timesetting [1..4] - time of day: 1 morning, 2 afternoon, 3 evening, 4 night (not saved; not in LAN/online)", cmdTimeSetting);
