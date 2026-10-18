@@ -1013,6 +1013,27 @@ namespace
 		printAscii(AsciiString(line), FALSE);
 	}
 
+	// Ronin @feature 18/10/2026 DX9: `campitch [degrees | default]` - the camera's tilt, as the debug build's pitch drag sets it
+	// (View::userSetPitch). A middle click resets it.
+	void cmdCamPitch(Int argc, const AsciiString *argv)
+	{
+		if (TheTacticalView == nullptr)
+			return;
+		if (argc == 2 && stricmp(argv[1].str(), "default") == 0)
+			TheTacticalView->userSetPitchToDefault();
+		else if (argc == 2)
+			TheTacticalView->userSetPitch(DEG_TO_RADF((Real)atof(argv[1].str())));
+		else if (argc != 1)
+		{
+			printAscii(AsciiString("usage: campitch [degrees | default]   (0.1..89.9; a middle click resets it)"), TRUE);
+			return;
+		}
+		AsciiString line;
+		line.format("campitch: %.1f degrees (default %.1f)", TheTacticalView->getPitch() * 180.0f / PI,
+					TheTacticalView->getDefaultPitch() * 180.0f / PI);
+		printAscii(line, FALSE);
+	}
+
 	// Ronin @feature 06/10/2026 DX9: `timesetting` - the time-of-day lighting, what the debug build's Ctrl+Shift+D does
 	// (CommandXlat MSG_META_DEMO_TIME_OF_DAY). Not saved: a map load sets the map's own again.
 	void cmdTimeSetting(Int argc, const AsciiString *argv)
@@ -3324,6 +3345,7 @@ void W3DDebugPanel::update(void)
 		registerCommand("glowfx", "glowfx - the glowing (additive) particle systems now: how many, how many on screen, the strongest by colour x alpha x size^2", cmdGlowFx);
 		registerCommand("night", "night [0|1] | night tint|lo|hi|floor|full|lift <v> - the night look and the dark lift: dim colour into one tint from the map's light, lamps keep theirs (at night; not saved)", cmdNight);
 		registerCommand("hdr", "hdr [0|1] | hdr sun <1..4> | hdr warm <0..1> | hdr white <1..2> - HDR stage 1: a float scene, the sun lifted above 1, a tone curve (needs MSAA off; not saved)", cmdHdr);
+		registerCommand("campitch", "campitch [degrees | default] - the camera's tilt (a middle click resets it)", cmdCamPitch);
 		registerCommand("sky", "sky | sky rebuild - the map's sky cube: its source, its ground, the ambient's six colours (`lights view 5` shows it)", cmdSky);
 		registerCommand("timesetting", "timesetting [1..4] - time of day: 1 morning, 2 afternoon, 3 evening, 4 night (not saved; not in LAN/online)", cmdTimeSetting);
 		registerCommand("clouds", "clouds [on|off] - cloud shadows on terrain and models (not saved; none at night)", cmdClouds);
