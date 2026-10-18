@@ -1359,6 +1359,13 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 
 	const float psC23[4] = { shroudOfsX, shroudOfsY, shroudSclX, shroudSclY };
 	dev->SetPixelShaderConstantF(23, psC23, 1);
+	// Ronin @feature 18/10/2026 DX9: 3b - the camera in the world (c25), once per flush, for the W3D specular switch (c26 below).
+	{
+		D3DXMATRIX invView;
+		D3DXMatrixInverse(&invView, nullptr, &dxView);
+		const float psC25[4] = { invView._41, invView._42, invView._43, 1.0f };
+		dev->SetPixelShaderConstantF(25, psC25, 1);
+	}
 
 	if (shroudActive) {
 		// Match the overlay's own sampling: CLAMP both axes, no mips, and the shroud's point/linear option.
@@ -1400,6 +1407,9 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	unsigned             lastFreq0 = D3DSTREAMSOURCE_INDEXEDDATA | 1; // matches the setup above
 	bool                 lastShroud = true;
 	bool                 haveShroud = false;
+	bool                 haveSpec = false;            // Ronin @feature 18/10/2026 DX9: 3b - the specular switch's c26
+	bool                 lastSpecOn = false;
+	VertexMaterialClass* lastSpecMaterial = nullptr;
 
 	unsigned i = 0;
 	while (i < count) {
@@ -1436,6 +1446,25 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 			Upload_Rigid_Shader_VS_Lighting_Constants(dev, lightingConstants);
 			lastMaterial = rec.material;
 			haveMaterial = true;
+		}
+
+		// Ronin @feature 18/10/2026 DX9: 3b - the W3D specular switch (the shader's secondary gradient), lit as the 2003 fixed-function
+		// path lit it, but in light 0's colour (2003: white) x the material's specular x (N.H)^shininess. c26.w < 0: off.
+		const bool specOn = (rec.shader.Uses_Secondary_Gradient() != 0) && (rec.material != nullptr);
+		if (!haveSpec || specOn != lastSpecOn || (specOn && rec.material != lastSpecMaterial)) {
+			float psC26[4] = { 0.0f, 0.0f, 0.0f, -1.0f };
+			if (specOn) {
+				Vector3 matSpecular;
+				rec.material->Get_Specular(&matSpecular);
+				psC26[0] = matSpecular.X;
+				psC26[1] = matSpecular.Y;
+				psC26[2] = matSpecular.Z;
+				psC26[3] = rec.material->Get_Shininess();
+			}
+			dev->SetPixelShaderConstantF(26, psC26, 1);
+			lastSpecOn = specOn;
+			lastSpecMaterial = rec.material;
+			haveSpec = true;
 		}
 
 		// Per-diffuse: bind the diffuse on sampler 0 and resolve/bind its optional normal map (s2).
@@ -1497,7 +1526,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		unsigned runLen = 1;
 		if (!rec.renderer->Is_Strip()) {
 			while ((i + runLen) < count &&
-				Single_Rigid_Records_Merge(rec, m_pendingSingleRigid[m_srOrder[i + runLen]], normalMapActive)) {
+				Single_Rigid_Records_Merge(rec, m_pendingSingleRigid[m_srOrder[i + runLen]], normalMapActive || specOn)) {
 				++runLen;
 			}
 		}
@@ -1537,6 +1566,12 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 			dev->SetPixelShaderConstantF(10, rec.inst.lightDiffuse3, 1);
 			const float psNum[4] = { rec.inst.ambient[3], 0.0f, 0.0f, 0.0f };
 			dev->SetPixelShaderConstantF(11, psNum, 1);
+		}
+		// Ronin @feature 18/10/2026 DX9: 3b - the specular switch's light: this run's light 0 (c27; a run's lights match, see above)
+		// and its colour (c28), the sun's or the moon's.
+		if (specOn) {
+			dev->SetPixelShaderConstantF(27, rec.inst.lightDir0, 1);
+			dev->SetPixelShaderConstantF(28, rec.inst.lightDiffuse0, 1);
 		}
 
 		rec.renderer->Render_Instanced(0);

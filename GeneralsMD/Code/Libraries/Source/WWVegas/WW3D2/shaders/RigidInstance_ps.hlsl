@@ -48,6 +48,12 @@ float4 g_ShroudMap : register(c23);  // xy = world offset, zw = 1/(cellSize * te
 // Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. What a sun shadow leaves on this map (rgb): its light without the sun over its
 // light with it. w = how far to follow it; 0 = 0.45 on every map, as before.
 float4 g_ShadeColour : register(c24);
+// Ronin @feature 18/10/2026 DX9: 3b - the W3D specular switch, as the 2003 fixed-function path lit it (dx8instancing c25..c28):
+// light 0's colour (2003: white) x the material's specular x (N.H)^shininess, after the texture. c26.w < 0: off.
+float4 g_SpecCamera : register(c25);    // xyz = the camera in the world
+float4 g_Specular   : register(c26);    // rgb = the material's specular, w = its shininess (< 0 = the switch is off)
+float4 g_SpecLight  : register(c27);    // light 0, towards it (world)
+float4 g_SpecColour : register(c28);    // light 0's colour - the sun's or the moon's
 
 struct PS_INPUT
 {
@@ -156,6 +162,18 @@ float4 meshColour(PS_INPUT input, out float3 sunShade)
     {
         color.rgb *= cloudSample;
     }
+    // Ronin @feature 18/10/2026 DX9: 3b - the specular switch's shine (see g_Specular); per pixel, and only where the sun reaches.
+    float3 spec    = float3(0.0f, 0.0f, 0.0f);
+    float  specLit = 1.0f;
+    [branch]
+    if (g_Specular.w >= 0.0f)
+    {
+        float3 Nsp = normalize(input.worldNormal);
+        float3 Lsp = normalize(g_SpecLight.xyz + float3(0.0f, 0.0f, 1.0e-5f));
+        float3 Vsp = normalize(g_SpecCamera.xyz - input.worldPos);
+        if (dot(Nsp, Lsp) > 0.0f)
+            spec = g_Specular.rgb * g_SpecColour.rgb * pow(saturate(dot(Nsp, normalize(Lsp + Vsp))), max(g_Specular.w, 0.001f));
+    }
     // Ronin @feature 12/08/2026 DX9: §29 phase 2 — ORTHO light, so w == 1 and the projective divide
     // is a no-op; tex2Dproj still performs the hardware depth compare + PCF.
     // Ronin @feature 17/08/2026 DX9: §29h-6. 3x3 PCF + normal-offset + N.L fade, identical maths to
@@ -216,10 +234,12 @@ float4 meshColour(PS_INPUT input, out float3 sunShade)
             }
             // A surface turning away from the sun can only get DARKER — min(), not lerp().
             float lit = min((inNear ? sumN : sumF) * (1.0f / 9.0f), geo);
+            specLit = lit;      // Ronin @feature 18/10/2026 DX9: 3b - no shine in the sun's shadow
             sunShade = lerp(lerp(float3(0.45f, 0.45f, 0.45f), g_ShadeColour.rgb, g_ShadeColour.w), float3(1.0f, 1.0f, 1.0f), lit);
             color.rgb *= sunShade;
         }
     }
+    color.rgb += spec * specLit;        // Ronin @feature 18/10/2026 DX9: 3b - after the texture, as the fixed-function path added it
 
     // Ronin @bugfix 19/09/2026 DX9: shroud / fog of war, last — so it multiplies the finished surface exactly as the old
     // overlay pass multiplied the finished framebuffer. RGB only; alpha stays this mesh's own, like Trees_ps.
