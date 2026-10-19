@@ -69,6 +69,31 @@ static float s_lastMipBias = 0.0f;
 // discontinuity - evidence the pixel shows DIFFERENT GEOMETRY - never on colour disagreement.
 static TextureClass        *s_depthHist[2] = { NULL, NULL };
 static IDirect3DPixelShader9 *s_depthStorePS = NULL;
+// Ronin @feature 18/10/2026 DX9: per history buffer, for the screen-space reflections: the s_frameNo it was written in (0 = not yet),
+// whether a depth and a camera came with it, that camera's clean view-projection and where its 3D view sat in it (c5).
+static Bool        s_depthStoredNow = FALSE;
+static UnsignedInt s_histFrame[2]   = { 0, 0 };
+static Bool        s_histWhole[2]   = { FALSE, FALSE };
+static D3DXMATRIX  s_histViewProj[2];
+static float       s_histView[2][4] = { { 0.0f } };
+// Ronin @feature 18/10/2026 DX9: the reflections' change mask (`taa reflmark`): a pane marks where its reflection changed. A visible
+// change under LEAST is the history's own drift; from LEAST + 1 / GAIN on it marks fully.
+static Int         s_reflMark       = 2;		// 0 off, 1 clamp there, 2 and restart the pixel where a unit moved
+static const float TAA_REFLMARK_LEAST = 0.02f;
+static const float TAA_REFLMARK_GAIN  = 20.0f;
+static DWORD       s_reflMarkWrite  = 0;		// target 1's write mask before beginReflectMask
+static Bool        s_reflMarkBound  = FALSE;
+// Ronin @feature 19/10/2026 DX9: screen-space reflections WITHOUT TAA - last frame kept by the frame itself (storeLastFrame): its
+// picture, its linear depth packed as TaaDepthStore_ps packs it, the s_frameNo it was kept in (0 = none), its camera and 3D view.
+static Bool         s_lastFrameWanted = FALSE;	// W3DLocalLights, every frame: the screen-space reflections are on
+static TextureClass *s_reflColour     = NULL;
+static TextureClass *s_reflDepth      = NULL;
+static UnsignedInt  s_reflW = 0, s_reflH = 0;
+static D3DFORMAT    s_reflFormat      = D3DFMT_UNKNOWN;
+static UnsignedInt  s_reflFrame       = 0;
+static D3DXMATRIX   s_reflViewProj;
+static float        s_reflView[4]     = { 0.0f, 0.0f, 0.0f, 0.0f };
+static float        s_reflFar         = 1000.0f;
 // Frame stamp for the mesh tracking table. Slots untouched for TAA_STALE_FRAMES may be reused.
 enum { TAA_STALE_FRAMES = 8 };
 static UnsignedInt  s_moverFrame = 0;
@@ -80,6 +105,7 @@ static TextureClass          *s_velTex = NULL;
 // differs from the ground's by less than the tolerance. `taa disocc` switches it.
 static TextureClass          *s_velPrevTex = NULL;
 static Bool                   s_prevVelOK  = FALSE;
+static Bool                   s_olderVelOK = FALSE;	// Ronin @feature 19/10/2026 DX9: s_velTex until postRender redraws it (reflections)
 static Int                    s_disocc     = 2;	// `taa disocc` - 0 off, 1 this pixel, 2 this pixel or a neighbour
 static UnsignedInt s_velW = 0, s_velH = 0;
 static Bool s_lastVelOK = FALSE;
@@ -1329,14 +1355,74 @@ void W3DTaa::endWaterMask(void)
 
 Bool W3DTaa::getWaterMaskDrawn(void) { return s_waterMaskLast; }
 
-// Ronin @bugfix 09/10/2026 DX9: around W3DLocalLights' draws. TRUE = render target 1 is this frame's light-change mask, cleared;
-// call endLightMask after the draws. Only inside the TAA redirect - there is no MSAA then, so two targets can pair.
-Bool W3DTaa::beginLightMask(void)
+// Ronin @feature 18/10/2026 DX9: screen-space reflections - read during this frame's scene, before postRender overwrites the older
+// buffer: the history and depth last written, with their camera; the one before them for the change mask (NULL: every hit marks).
+Bool W3DTaa::getLastFrame(IDirect3DTexture9 **colour, IDirect3DTexture9 **depth, float c[24], IDirect3DTexture9 **older,
+						  float cOlder[24])
 {
-	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
-	// Ronin @feature 17/10/2026 DX9: or for the finish pass - it keeps a lamp-lit pixel's colour by it. Not under MSAA (below).
-	if ((!s_redirected && !finishWanted()) || dev == NULL)
+	const Int last = s_historyIndex ^ 1;
+	const Int prev = s_historyIndex;
+	if (!s_active)
+	{
+		// Ronin @feature 19/10/2026 DX9: without TAA, the frame storeLastFrame kept - last frame's only. No change mask: nothing
+		// accumulates, so nothing ghosts.
+		if (s_reflFrame == 0 || s_reflFrame + 1 != s_frameNo || s_reflColour == NULL || s_reflDepth == NULL)
+			return FALSE;
+		*colour = s_reflColour->Peek_D3D_Texture();
+		*depth  = s_reflDepth->Peek_D3D_Texture();
+		if (*colour == NULL || *depth == NULL)
+			return FALSE;
+		D3DXMATRIX keptT;
+		D3DXMatrixTranspose(&keptT, &s_reflViewProj);
+		memcpy(c, (const float *)&keptT, sizeof(float) * 16);
+		for (Int k = 0; k < 4; ++k)
+			c[16 + k] = s_reflView[k];
+		c[20] = 1.0f;
+		c[21] = s_reflFar;
+		c[22] = 0.0f;
+		c[23] = 0.0f;
+		*older = NULL;
+		memset(cOlder, 0, sizeof(float) * 24);
+		return TRUE;
+	}
+	if (!s_historyValid || !s_histWhole[last] || s_history[last] == NULL || s_depthHist[last] == NULL)
 		return FALSE;
+	*colour = s_history[last]->Peek_D3D_Texture();
+	*depth  = s_depthHist[last]->Peek_D3D_Texture();
+	if (*colour == NULL || *depth == NULL)
+		return FALSE;
+	D3DXMATRIX vpT;
+	D3DXMatrixTranspose(&vpT, &s_histViewProj[last]);
+	memcpy(c, (const float *)&vpT, sizeof(float) * 16);
+	for (Int k = 0; k < 4; ++k)
+		c[16 + k] = s_histView[last][k];
+	c[20] = 1.0f;
+	c[21] = s_zFar;		// last frame's: preRender sets this frame's
+	c[22] = 0.0f;		// the caller's: how far a ray runs, how thick a hit may be
+	c[23] = 0.0f;
+	*older = NULL;
+	memset(cOlder, 0, sizeof(float) * 24);
+	cOlder[22] = TAA_REFLMARK_LEAST;
+	cOlder[23] = TAA_REFLMARK_GAIN;
+	if (s_histFrame[prev] != 0 && s_histWhole[prev] && s_history[prev] != NULL && s_histFrame[last] - s_histFrame[prev] <= 4)
+	{
+		*older = s_history[prev]->Peek_D3D_Texture();
+		if (*older != NULL)
+		{
+			D3DXMatrixTranspose(&vpT, &s_histViewProj[prev]);
+			memcpy(cOlder, (const float *)&vpT, sizeof(float) * 16);
+			for (Int k = 0; k < 4; ++k)
+				cOlder[16 + k] = s_histView[prev][k];
+			cOlder[21] = 1.0f;		// y: the older picture is there (x is the draw's: the mask is bound)
+		}
+	}
+	return TRUE;
+}
+
+// Ronin @feature 18/10/2026 DX9: the light-change mask at target 0's size, cleared once a frame: the reflective meshes mark it in the
+// scene, the lights after them. NULL when it cannot pair with target 0 (MSAA); sceneOnly: nor off the TAA frame's size.
+static IDirect3DSurface9 *lightMaskSurface(IDirect3DDevice9 *dev, Bool sceneOnly)
+{
 	if (s_lightMaskCaps < 0)
 	{
 		D3DCAPS9 caps;
@@ -1344,43 +1430,62 @@ Bool W3DTaa::beginLightMask(void)
 						   (caps.PrimitiveMiscCaps & D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING) != 0) ? 1 : 0;
 	}
 	if (s_lightMaskCaps != 1)
-		return FALSE;
+		return NULL;
 	IDirect3DSurface9 *rt0 = NULL;
 	if (FAILED(dev->GetRenderTarget(0, &rt0)) || rt0 == NULL)
-		return FALSE;
+		return NULL;
 	D3DSURFACE_DESC desc;
 	const Bool plain = (SUCCEEDED(rt0->GetDesc(&desc)) && desc.MultiSampleType == D3DMULTISAMPLE_NONE) ? TRUE : FALSE;
 	rt0->Release();
-	if (!plain)
-		return FALSE;
+	if (!plain || (sceneOnly && (desc.Width != s_historyW || desc.Height != s_historyH)))
+		return NULL;
 	if (s_lightMaskTex == NULL || s_lightMaskW != desc.Width || s_lightMaskH != desc.Height)
 	{
 		REF_PTR_RELEASE(s_lightMaskTex);
 		s_lightMaskW = 0;
 		s_lightMaskH = 0;
+		s_lightMaskFrame = 0;		// a new one is cleared below
 		s_lightMaskTex = NEW_REF(TextureClass, (desc.Width, desc.Height, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1,
 												 TextureClass::POOL_DEFAULT, true));
 		if (s_lightMaskTex->Peek_D3D_Base_Texture() == NULL)
 		{
 			REF_PTR_RELEASE(s_lightMaskTex);	// a macro with its own if - keep the braces
-			return FALSE;
+			return NULL;
 		}
 		s_lightMaskW = desc.Width;
 		s_lightMaskH = desc.Height;
 	}
 	IDirect3DSurface9 *surf = s_lightMaskTex->Get_D3D_Surface_Level();
 	if (surf == NULL)
-		return FALSE;
-	const Bool ok = (SUCCEEDED(dev->ColorFill(surf, NULL, D3DCOLOR_ARGB(0, 0, 0, 0))) &&	// not Clear: that wipes every bound target
-					 SUCCEEDED(dev->SetRenderTarget(1, surf))) ? TRUE : FALSE;
-	surf->Release();
-	if (ok)
+		return NULL;
+	if (s_lightMaskFrame != s_frameNo || s_lightMaskStamp != s_moverFrame)
 	{
-		dev->SetRenderState(D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
-													 D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
+		if (FAILED(dev->ColorFill(surf, NULL, D3DCOLOR_ARGB(0, 0, 0, 0))))	// not Clear: that wipes every bound target
+		{
+			surf->Release();
+			return NULL;
+		}
 		s_lightMaskStamp = s_moverFrame;
 		s_lightMaskFrame = s_frameNo;
 	}
+	return surf;
+}
+
+// Ronin @bugfix 09/10/2026 DX9: around W3DLocalLights' draws. TRUE = render target 1 is this frame's light-change mask, cleared;
+// call endLightMask after the draws. Only inside the TAA redirect - there is no MSAA then, so two targets can pair.
+Bool W3DTaa::beginLightMask(void)
+{
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	// Ronin @feature 17/10/2026 DX9: or for the finish pass - it keeps a lamp-lit pixel's colour by it. Not under MSAA (lightMaskSurface).
+	if ((!s_redirected && !finishWanted()) || dev == NULL)
+		return FALSE;
+	IDirect3DSurface9 *surf = lightMaskSurface(dev, FALSE);
+	if (surf == NULL)
+		return FALSE;
+	const Bool ok = SUCCEEDED(dev->SetRenderTarget(1, surf)) ? TRUE : FALSE;
+	surf->Release();
+	if (ok)		// Ronin @feature 19/10/2026 DX9: the lights' change in green, lamp light in alpha: red is the reflections'
+		dev->SetRenderState(D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_ALPHA);
 	return ok;
 }
 
@@ -1390,6 +1495,67 @@ void W3DTaa::endLightMask(void)
 	if (dev != NULL)
 		dev->SetRenderTarget(1, NULL);
 }
+
+// Ronin @feature 18/10/2026 DX9: the reflections' change mask - the light mask's red for ReflectiveRigid_ps COLOR1, where a pane's
+// reflection changed: the resolve clamps it as a light's change. Only over the TAA frame, never over another pass's target 1.
+Bool W3DTaa::beginReflectMask(void)
+{
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (!s_redirected || s_reflMark <= 0 || s_reflMarkBound || dev == NULL)
+		return FALSE;
+	IDirect3DSurface9 *other = NULL;
+	if (SUCCEEDED(dev->GetRenderTarget(1, &other)) && other != NULL)
+	{
+		other->Release();
+		return FALSE;
+	}
+	IDirect3DSurface9 *surf = lightMaskSurface(dev, TRUE);
+	if (surf == NULL)
+		return FALSE;
+	s_reflMarkBound = SUCCEEDED(dev->SetRenderTarget(1, surf)) ? TRUE : FALSE;
+	surf->Release();
+	if (s_reflMarkBound)
+	{
+		dev->GetRenderState(D3DRS_COLORWRITEENABLE1, &s_reflMarkWrite);
+		// Ronin @feature 19/10/2026 DX9: red = the reflection changed, blue = a unit was at its hit (green and alpha: the lights')
+		dev->SetRenderState(D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_BLUE);
+		// Ronin @feature 19/10/2026 DX9: the mover mark's inputs - last frame's velocity and the frame before's, as the history pair
+		// (alpha = what drew there), on s11 / s12; c75 = (both there, one texel in uv).
+		const Bool vel = (s_prevVelOK && s_olderVelOK && s_velPrevTex != NULL && s_velTex != NULL && s_velW == s_historyW &&
+						  s_velH == s_historyH) ? TRUE : FALSE;
+		dev->SetTexture(11, vel ? s_velPrevTex->Peek_D3D_Texture() : NULL);
+		dev->SetTexture(12, vel ? s_velTex->Peek_D3D_Texture() : NULL);
+		for (DWORD st = 11; st <= 12; ++st)
+		{
+			dev->SetSamplerState(st, D3DSAMP_MINFILTER, D3DTEXF_POINT);		// packed: never blended
+			dev->SetSamplerState(st, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+			dev->SetSamplerState(st, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+			dev->SetSamplerState(st, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+			dev->SetSamplerState(st, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		}
+		const float c75[4] = { vel ? 1.0f : 0.0f, 1.0f / (float)((s_velW > 0) ? s_velW : 1), 1.0f / (float)((s_velH > 0) ? s_velH : 1), 0.0f };
+		dev->SetPixelShaderConstantF(75, c75, 1);
+	}
+	return s_reflMarkBound;
+}
+
+void W3DTaa::endReflectMask(void)
+{
+	if (!s_reflMarkBound)
+		return;
+	s_reflMarkBound = FALSE;
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	if (dev == NULL)
+		return;
+	dev->SetRenderTarget(1, NULL);
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE1, s_reflMarkWrite);
+	dev->SetTexture(11, NULL);		// Ronin @feature 19/10/2026 DX9: the velocity pair goes back to postRender
+	dev->SetTexture(12, NULL);
+}
+
+void W3DTaa::setReflMark(Int mode)	{ s_reflMark = (mode < 0) ? 0 : ((mode > 2) ? 2 : mode); }
+void W3DTaa::setLastFrameWanted(Bool on)	{ s_lastFrameWanted = on; }
+Int  W3DTaa::getReflMark(void)		{ return s_reflMark; }
 
 // Ronin @bugfix 09/10/2026 DX9: the selection-flash mask, made the frame's size, cleared and bound as render target 1. ColorFill,
 // not Clear - that wipes every bound target. A TextureClass target, so a device reset is the texture manager's.
@@ -1461,6 +1627,8 @@ static Bool ensureHistory(UnsignedInt width, UnsignedInt height)
 	s_historyW     = 0;
 	s_historyH     = 0;
 	s_historyValid = FALSE;		// a resize throws the accumulated image away; it no longer lines up
+	s_histFrame[0] = 0;			// Ronin @feature 18/10/2026 DX9: and neither buffer holds a frame (the reflections)
+	s_histFrame[1] = 0;
 
 	REF_PTR_RELEASE(s_depthHist[0]);
 	REF_PTR_RELEASE(s_depthHist[1]);
@@ -1830,6 +1998,11 @@ void W3DTaa::shutdown(void)
 	s_lightMaskH     = 0;
 	s_lightMaskStamp = 0;
 	REF_PTR_RELEASE(s_finishCopy);		// Ronin @feature 17/10/2026 DX9: the finish pass's copy
+	REF_PTR_RELEASE(s_reflColour);		// Ronin @feature 19/10/2026 DX9: last frame, kept without TAA
+	REF_PTR_RELEASE(s_reflDepth);
+	s_reflW     = 0;
+	s_reflH     = 0;
+	s_reflFrame = 0;
 	s_finishW        = 0;
 	s_finishH        = 0;
 	s_waterMaskW     = 0;
@@ -1923,6 +2096,130 @@ static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DV
 	DX8Wrapper::Invalidate_Texture_State(0, 1);
 }
 
+// Ronin @feature 19/10/2026 DX9: screen-space reflections without TAA - `src` (the frame, or HDR's float scene) copied, the scene
+// depth stored beside it, linear, and their camera, for next frame's getLastFrame. vp = the 3D view in `src`.
+static void storeLastFrame(IDirect3DDevice9 *dev, IDirect3DSurface9 *src, IDirect3DTexture9 *depthTex, const CameraClass *camera,
+						   const D3DVIEWPORT9 &vp)
+{
+	s_reflFrame = 0;
+	D3DSURFACE_DESC sd, dd;
+	if (src == NULL || depthTex == NULL || camera == NULL || FAILED(src->GetDesc(&sd)) || FAILED(depthTex->GetLevelDesc(0, &dd)) ||
+		dd.Width != sd.Width || dd.Height != sd.Height || sd.Width == 0 || sd.Height == 0)
+		return;
+	ensureShaders(dev);
+	if (s_quadVS == NULL || s_depthStorePS == NULL)
+		return;
+	if (s_reflColour == NULL || s_reflDepth == NULL || s_reflW != sd.Width || s_reflH != sd.Height || s_reflFormat != sd.Format)
+	{
+		REF_PTR_RELEASE(s_reflColour);
+		REF_PTR_RELEASE(s_reflDepth);
+		s_reflW = 0;
+		s_reflH = 0;
+		WW3DFormat wwFormat = D3DFormat_To_WW3DFormat(sd.Format);
+		if (wwFormat == WW3D_FORMAT_UNKNOWN)
+			wwFormat = WW3D_FORMAT_A8R8G8B8;
+		s_reflColour = NEW_REF(TextureClass, (sd.Width, sd.Height, wwFormat, MIP_LEVELS_1, TextureClass::POOL_DEFAULT, true));
+		s_reflDepth  = NEW_REF(TextureClass, (sd.Width, sd.Height, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1, TextureClass::POOL_DEFAULT, true));
+		if (s_reflColour->Peek_D3D_Base_Texture() == NULL || s_reflDepth->Peek_D3D_Base_Texture() == NULL)
+		{
+			REF_PTR_RELEASE(s_reflColour);	// macros with their own if - keep the braces
+			REF_PTR_RELEASE(s_reflDepth);
+			return;
+		}
+		s_reflW      = sd.Width;
+		s_reflH      = sd.Height;
+		s_reflFormat = sd.Format;
+	}
+	IDirect3DSurface9 *colourSurf = s_reflColour->Get_D3D_Surface_Level();
+	IDirect3DSurface9 *depthSurf  = s_reflDepth->Get_D3D_Surface_Level();
+	IDirect3DSurface9 *oldRT = NULL, *oldDS = NULL;
+	// Ronin @feature 19/10/2026 DX9: StretchRect resolves a multisampled frame.
+	if (colourSurf != NULL && depthSurf != NULL && SUCCEEDED(dev->StretchRect(src, NULL, colourSurf, NULL, D3DTEXF_NONE)) &&
+		SUCCEEDED(dev->GetRenderTarget(0, &oldRT)) && oldRT != NULL)
+	{
+		D3DVIEWPORT9 oldVp;
+		const Bool haveOldVp = SUCCEEDED(dev->GetViewport(&oldVp)) ? TRUE : FALSE;
+		dev->GetDepthStencilSurface(&oldDS);		// none while the store draws: the frame's may be multisampled
+		dev->SetDepthStencilSurface(NULL);
+		if (SUCCEEDED(dev->SetRenderTarget(0, depthSurf)))
+		{
+			DWORD oldZ = 0, oldZW = 0, oldAB = 0, oldAT = 0, oldCull = 0, oldCW = 0;
+			dev->GetRenderState(D3DRS_ZENABLE,          &oldZ);
+			dev->GetRenderState(D3DRS_ZWRITEENABLE,     &oldZW);
+			dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &oldAB);
+			dev->GetRenderState(D3DRS_ALPHATESTENABLE,  &oldAT);
+			dev->GetRenderState(D3DRS_CULLMODE,         &oldCull);
+			dev->GetRenderState(D3DRS_COLORWRITEENABLE, &oldCW);
+			dev->SetRenderState(D3DRS_ZENABLE,          FALSE);
+			dev->SetRenderState(D3DRS_ZWRITEENABLE,     FALSE);
+			dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+			dev->SetRenderState(D3DRS_ALPHATESTENABLE,  FALSE);
+			dev->SetRenderState(D3DRS_CULLMODE,         D3DCULL_NONE);
+			dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE |
+														D3DCOLORWRITEENABLE_ALPHA);
+			CameraClass &cam = const_cast<CameraClass &>(*camera);
+			float zn = 1.0f, zf = 1000.0f;
+			cam.Get_Clip_Planes(zn, zf);
+			// Ronin @feature 19/10/2026 DX9: the whole target, texel for texel with the depth
+			const float hx = 1.0f / (float)sd.Width;
+			const float hy = 1.0f / (float)sd.Height;
+			struct QuadVertex { float x, y, z; float u, v; } q[4];
+			q[0].x = -1.0f - hx; q[0].y =  1.0f + hy; q[0].u = 0.0f; q[0].v = 0.0f;
+			q[1].x =  1.0f - hx; q[1].y =  1.0f + hy; q[1].u = 1.0f; q[1].v = 0.0f;
+			q[2].x = -1.0f - hx; q[2].y = -1.0f + hy; q[2].u = 0.0f; q[2].v = 1.0f;
+			q[3].x =  1.0f - hx; q[3].y = -1.0f + hy; q[3].u = 1.0f; q[3].v = 1.0f;
+			for (int i = 0; i < 4; ++i)
+				q[i].z = 0.0f;
+			DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::storeLastFrame");
+			dev->SetVertexShader(s_quadVS);		// after the layout bind - BindLayoutFVF clears the VS
+			dev->SetPixelShader(s_depthStorePS);
+			const float dcfg[4] = { 0.0f, zn, zf, 0.0f };		// w = 0: no auto-reactive flag
+			dev->SetPixelShaderConstantF(0, dcfg, 1);
+			dev->SetTexture(2, depthTex);
+			setResolveSampler(dev, 2);
+			dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
+			dev->SetTexture(2, NULL);
+			dev->SetVertexShader(NULL);
+			dev->SetPixelShader(NULL);
+			dev->SetRenderState(D3DRS_ZENABLE,          oldZ);
+			dev->SetRenderState(D3DRS_ZWRITEENABLE,     oldZW);
+			dev->SetRenderState(D3DRS_ALPHABLENDENABLE, oldAB);
+			dev->SetRenderState(D3DRS_ALPHATESTENABLE,  oldAT);
+			dev->SetRenderState(D3DRS_CULLMODE,         oldCull);
+			dev->SetRenderState(D3DRS_COLORWRITEENABLE, oldCW);
+			// Ronin @feature 19/10/2026 DX9: the camera, D3D convention as postRender builds it; no jitter without TAA
+			Matrix4x4 projMtx;
+			cam.Get_D3D_Projection_Matrix(&projMtx);
+			const Matrix4x4 viewMtx(cam.Get_View_Matrix());
+			const D3DMATRIX dv = To_D3DMATRIX(viewMtx);
+			const D3DMATRIX dp = To_D3DMATRIX(projMtx);
+			D3DXMATRIX dxView(dv), dxProj(dp);
+			D3DXMatrixMultiply(&s_reflViewProj, &dxView, &dxProj);
+			s_reflView[0] = (float)vp.X / (float)sd.Width;
+			s_reflView[1] = (float)vp.Y / (float)sd.Height;
+			s_reflView[2] = (float)vp.Width / (float)sd.Width;
+			s_reflView[3] = (float)vp.Height / (float)sd.Height;
+			s_reflFar   = zf;
+			s_reflFrame = s_frameNo;
+		}
+		dev->SetRenderTarget(0, oldRT);
+		dev->SetDepthStencilSurface(oldDS);
+		if (haveOldVp)
+			dev->SetViewport(&oldVp);
+		ShaderClass::Invalidate();
+		DX8Wrapper::Invalidate_Cached_Render_States();
+		DX8Wrapper::Invalidate_Texture_State(2, 1);
+	}
+	if (oldDS != NULL)
+		oldDS->Release();
+	if (oldRT != NULL)
+		oldRT->Release();
+	if (colourSurf != NULL)
+		colourSurf->Release();
+	if (depthSurf != NULL)
+		depthSurf->Release();
+}
+
 // Ronin @feature 17/10/2026 DX9: HDR WITHOUT TAA (MSAA off) - the scene still goes to the float target; postRender brings it back
 // through drawFinish. TAA's own passes key off s_redirected, which stays FALSE: none of them runs.
 static Bool s_hdrAlone = FALSE;
@@ -1955,6 +2252,16 @@ static void endHdrAlone(void)
 	Int fbW = 0, fbH = 0, bits = 0;
 	bool windowed = false;
 	WW3D::Get_Render_Target_Resolution(fbW, fbH, bits, windowed);
+	// Ronin @feature 19/10/2026 DX9: screen-space reflections without TAA read this float scene next frame, before its tone curve.
+	if (s_lastFrameWanted && depthSuspended && s_viewportOK)
+	{
+		IDirect3DSurface9 *sceneSurf = NULL;
+		if (SUCCEEDED(sceneTex->GetSurfaceLevel(0, &sceneSurf)) && sceneSurf != NULL)
+		{
+			storeLastFrame(dev, sceneSurf, DX8Wrapper::Peek_Scene_Depth_Texture(), s_camera, s_viewport);
+			sceneSurf->Release();
+		}
+	}
 	if (fbW > 0 && fbH > 0 && s_viewportOK)
 		drawFinish(dev, sceneTex, s_viewport, (UnsignedInt)fbW, (UnsignedInt)fbH, TRUE);
 	if (depthSuspended)
@@ -1968,7 +2275,10 @@ Bool W3DTaa::preRender(const CameraClass &camera)
 	s_waterMaskReady = FALSE;	// Ronin @bugfix 03/10/2026 DX9: set below, once this frame's target is cleared
 	s_waterMaskDrawn = FALSE;
 	if (!s_active)
+	{
+		s_camera = &camera;		// Ronin @feature 19/10/2026 DX9: for storeLastFrame (screen-space reflections without TAA)
 		return beginHdrAlone();		// Ronin @feature 17/10/2026 DX9: HDR without TAA
+	}
 	s_camera = &camera;
 	s_meshDrawCount = 0;
 	s_meshSeen      = 0;
@@ -2019,7 +2329,10 @@ Bool W3DTaa::preRender(const CameraClass &camera)
 // Ronin @feature 17/10/2026 DX9: THE FINISH PASS (finishWanted): the frame copied, then drawFinish over the camera's viewport.
 void W3DTaa::finishScene(const CameraClass &camera)
 {
-	if (!finishWanted())
+	// Ronin @feature 19/10/2026 DX9: or for screen-space reflections without TAA - they read last frame from storeLastFrame.
+	const Bool finish = finishWanted();
+	const Bool store  = (s_lastFrameWanted && !s_active) ? TRUE : FALSE;
+	if (!finish && !store)
 		return;
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
 	if (dev == NULL || W3DShaderManager::isRenderingToTexture())
@@ -2031,7 +2344,8 @@ void W3DTaa::finishScene(const CameraClass &camera)
 	if (FAILED(dev->GetRenderTarget(0, &rt)) || rt == NULL)
 		return;
 	D3DSURFACE_DESC rd;
-	Bool ready = (SUCCEEDED(rt->GetDesc(&rd)) && rd.Width > 0 && rd.Height > 0) ? TRUE : FALSE;
+	const Bool descOK = (SUCCEEDED(rt->GetDesc(&rd)) && rd.Width > 0 && rd.Height > 0) ? TRUE : FALSE;
+	Bool ready = (descOK && finish) ? TRUE : FALSE;		// Ronin @feature 19/10/2026 DX9: the finish pass's own copy
 	if (ready && (s_finishCopy == NULL || s_finishW != rd.Width || s_finishH != rd.Height || s_finishFormat != rd.Format))
 	{
 		REF_PTR_RELEASE(s_finishCopy);
@@ -2060,9 +2374,11 @@ void W3DTaa::finishScene(const CameraClass &camera)
 		if (copySurf != NULL)
 			copySurf->Release();
 	}
-	rt->Release();
-	if (!ready)
+	if (!descOK)
+	{
+		rt->Release();
 		return;
+	}
 
 	Vector2 vpMin, vpMax;
 	camera.Get_Viewport(vpMin, vpMax);
@@ -2073,9 +2389,16 @@ void W3DTaa::finishScene(const CameraClass &camera)
 	vp.Height = (DWORD)((vpMax.Y - vpMin.Y) * (float)rd.Height + 0.5f);
 	vp.MinZ   = 0.0f;
 	vp.MaxZ   = 1.0f;
-	if (vp.Width == 0 || vp.Height == 0 || vp.X + vp.Width > rd.Width || vp.Y + vp.Height > rd.Height)
-		return;
-	drawFinish(dev, s_finishCopy->Peek_D3D_Texture(), vp, rd.Width, rd.Height, FALSE);
+	const Bool vpOK = (vp.Width > 0 && vp.Height > 0 && vp.X + vp.Width <= rd.Width && vp.Y + vp.Height <= rd.Height) ? TRUE : FALSE;
+	// Ronin @feature 19/10/2026 DX9: the frame as the scene left it, before the night look draws over it - as TAA's history.
+	if (store && vpOK && DX8Wrapper::Suspend_Scene_Depth())
+	{
+		storeLastFrame(dev, rt, DX8Wrapper::Peek_Scene_Depth_Texture(), &camera, vp);
+		DX8Wrapper::Resume_Scene_Depth();
+	}
+	rt->Release();
+	if (ready && vpOK)
+		drawFinish(dev, s_finishCopy->Peek_D3D_Texture(), vp, rd.Width, rd.Height, FALSE);
 }
 
 void W3DTaa::postRender(void)
@@ -2088,6 +2411,7 @@ void W3DTaa::postRender(void)
 	if (!s_redirected)
 		return;
 	s_redirected = FALSE;
+	s_depthStoredNow = FALSE;		// Ronin @feature 18/10/2026 DX9: screen-space reflections: set where the depth store draws
 
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
 	IDirect3DTexture9 *sceneTex = W3DShaderManager::endRenderToTexture();
@@ -2571,7 +2895,7 @@ void W3DTaa::postRender(void)
 				const float c6[4] = { (float)s_debugMode, s_zNear, s_zFar, readLow ? 1.0f : 0.0f };
 				static const float flashOff[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 				dev->SetPixelShaderConstantF(8, flashOff, 1);	// Ronin @bugfix 09/10/2026 DX9: c8.w = 0: the flash never enters the history
-				const float c7[4] = { 0.0f, (s_lastVelOK && s_velTex != NULL) ? 1.0f : 0.0f, 0.0f, s_clamp };	// x = 0: no CAS into the history
+				const float c7[4] = { 0.0f, (s_lastVelOK && s_velTex != NULL) ? 1.0f : 0.0f, (float)s_reflMark, s_clamp };	// x = 0: no CAS into the history
 				dev->SetPixelShaderConstantF(6, c6, 1);
 				dev->SetPixelShaderConstantF(7, c7, 1);
 				// Ronin @feature 12/10/2026 DX9: HDR stage 1b: c9 = the tone curve - x = `hdr white`, y = 1: stage 0 and the copy before
@@ -2671,6 +2995,7 @@ void W3DTaa::postRender(void)
 				dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
 				dev->SetTexture(7, NULL);
 				dev->SetPixelShader(s_resolvePS);
+				s_depthStoredNow = TRUE;		// Ronin @feature 18/10/2026 DX9: next frame's screen-space reflections may read it
 			}
 			dSurf->Release();
 		}
@@ -2741,12 +3066,19 @@ void W3DTaa::postRender(void)
 	if (wroteHistory)
 	{
 		s_historyValid = TRUE;
+		// Ronin @feature 18/10/2026 DX9: what the screen-space reflections read of it: when, its camera, where its 3D view sits.
+		s_histFrame[s_historyIndex]    = s_frameNo;
+		s_histWhole[s_historyIndex]    = (s_depthStoredNow && s_curViewProjValid) ? TRUE : FALSE;
+		s_histViewProj[s_historyIndex] = s_curViewProjClean;
+		for (Int k = 0; k < 4; ++k)
+			s_histView[s_historyIndex][k] = c5[k];
 		s_historyIndex ^= 1;		// what we just wrote becomes next frame's "previous"
 
 		// Ronin @feature 24/09/2026 DX9: this frame's velocity becomes next frame's "where movers were".
 		TextureClass *t = s_velPrevTex;
 		s_velPrevTex = s_velTex;
 		s_velTex     = t;
+		s_olderVelOK = s_prevVelOK;		// Ronin @feature 19/10/2026 DX9: the frame before, for the reflections' mover mark
 		s_prevVelOK  = s_lastVelOK;
 	}
 

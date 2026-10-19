@@ -151,11 +151,13 @@ public:
 	static void  setReflect(float v);
 	static float getReflect(void);
 	// Ronin @feature 18/10/2026 DX9: reflections - one looking down takes the ground it meets (`reflectground` 0..1, 0 = the sky as
-	// before); their strength by the view's angle (`fresnel`, 0 = off).
+	// before); their strength by the view's angle (`fresnel`, 0 = off); `ssr`: screen-space reflections from last frame.
 	static void  setReflectGround(float v);
 	static float getReflectGround(void);
 	static void  setFresnel(float v);
 	static float getFresnel(void);
+	static void  setSsr(Bool on);
+	static Bool  getSsr(void);
 	// Ronin @feature 12/10/2026 DX9: HDR stage 1b. W3DTreeBuffer says its shade record (Trees_ps COLOR1) is this frame's: the sun
 	// lift then gives a canopy its own sun, not the ground's behind it.
 	static void  noteTreeShade(void);

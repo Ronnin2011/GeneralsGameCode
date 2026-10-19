@@ -17,7 +17,9 @@ sampler2D g_PrevDepth: register(s4);     // last frame's LINEAR depth, packed RG
 sampler2D g_VelPrev  : register(s6);     // LAST frame's mesh velocity; its alpha = a mover covered this pixel
 sampler2D g_Opaque   : register(s7);     // this frame BEFORE particles (W3DTaa::noteOpaqueDone) - auto-reactive
 sampler2D g_Velocity : register(s5);     // mesh velocity, 12-bit packed by TaaVelMesh_ps; alpha = kind (W3DTaa.cpp)
-sampler2D g_LightMask: register(s8);     // where a local light changed this pixel since last frame (LocalLight_ps COLOR1)
+// Ronin @feature 19/10/2026 DX9: the change mask. g = where a local light changed this pixel since last frame (LocalLight_ps
+// COLOR1), r = where a screen-space reflection did (ReflectiveRigid_ps), b = and a unit moved there, a = lamp light.
+sampler2D g_LightMask: register(s8);
 // Ronin @bugfix 09/10/2026 DX9: the history's LOW BITS (COLOR1 of the pass that wrote it), bound when c6.w = 1. The history is 8-bit;
 // at weight 0.9 it never shed an error under 5/255 on a still pixel, so every faint ghost stayed until the camera moved.
 sampler2D g_HistoryLo: register(s9);
@@ -30,7 +32,7 @@ float4   g_TaaParams : register(c0);     // x = history weight (0 = ignore histo
 float4x4 g_Reproject : register(c1);     // c1..c4: current clip -> previous clip. Transposed, like every matrix here.
 float4   g_Viewport  : register(c5);     // xy = 3D viewport min, zw = its size, both 0..1 of the texture
 float4   g_TaaDebug  : register(c6);     // x = debug view, yz = clip planes (the depth views must linearise)
-float4   g_TaaSharpen: register(c7);     // x = CAS strength (screen copy only), y = this frame's velocity is bound, w = clamp strength
+float4   g_TaaSharpen: register(c7);     // x = CAS (screen copy only), y = this frame's velocity is bound, z = `taa reflmark`, w = clamp
 float4   g_TaaExtra  : register(c10);    // x = last frame's velocity bound, y = `taa disocc` mode, z = `taa reactive`, w = light mask bound
 float4   g_TaaVel    : register(c11);    // x = 1: an effect that just left resets the pixel, y = 1 / (`autofull` - `autoreact`), z = `taa disoccv` px, w = `taa autoreact` (0 = off or no snapshot)
 // Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask (W3DTaa renderMoverMask) - sun depth of every mesh that moved this
@@ -386,7 +388,12 @@ float4 resolve(float2 uv, out float3 lowBits)
 
     // Ronin @bugfix 09/10/2026 DX9: LOCAL LIGHTS (c10.w). A light that changed since last frame changes still pixels that carry no
     // velocity and no depth change. Clamped only, the moving-shadow mask's treatment - so its footprint no longer shows.
-    float lightR = (g_TaaExtra.w > 0.5f) ? tex2Dlod(g_LightMask, float4(uv, 0.0f, 0.0f)).r : 0.0f;
+    float4 lightMask = (g_TaaExtra.w > 0.5f) ? tex2Dlod(g_LightMask, float4(uv, 0.0f, 0.0f)) : float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float  lightR    = lightMask.g;	// Ronin @feature 19/10/2026 DX9: green now - red is the reflections'
+    // Ronin @feature 19/10/2026 DX9: a pane's screen-space reflection changed (ReflectiveRigid_ps): clamped as a light's change, and
+    // with `taa reflmark 2` its sample count restarts where a unit moved there (blue, below).
+    float  reflR     = lightMask.r;
+    float  reflMover = lightMask.b;
 
     // DEBUG 13: the mesh velocity target. Dim = nothing, GREEN = velocity, YELLOW = velocity + reactive, MAGENTA =
     // reactive only, CYAN = stopped this frame, ORANGE = auto-reactive (an effect drew over the scene, now or last frame).
@@ -397,7 +404,9 @@ float4 resolve(float2 uv, out float3 lowBits)
         if (da < 0.1f)
         {
             float3 c13 = lerp(lerp(scene * 0.25f, float3(1.0f, 0.5f, 0.0f), autoR), float3(1.0f, 0.0f, 0.0f), effectLeft);	// RED: an effect just left
-            return float4(lerp(c13, float3(1.0f, 1.0f, 1.0f), lightR), 0.0f);	// WHITE: a local light changed
+            c13 = lerp(c13, float3(1.0f, 1.0f, 1.0f), lightR);		// WHITE: a local light changed
+            c13 = lerp(c13, float3(1.0f, 0.4f, 0.7f), reflR);		// Ronin @feature 19/10/2026 DX9: PINK: a reflection changed
+            return float4(lerp(c13, float3(0.6f, 0.2f, 1.0f), reflMover), 0.0f);	// Ronin @feature 19/10/2026 DX9: PURPLE: a unit's
         }
         if (da < 0.25f)
             return float4(0.0f, 1.0f, 1.0f, 0.0f);
@@ -473,7 +482,7 @@ float4 resolve(float2 uv, out float3 lowBits)
     // so a turret, wheels or a unit turning all carry residual error, and through a 0.9 history that compounds roughly
     // x9 into a smear. Motion vectors get the history approximately right and the clamp bounds the rest - the standard
     // pairing. A static pole never gets a velocity, so this does not bring its flicker back. `taa clamp 0` for an A/B.
-    float clampNeed = saturate(max(max(speedPx * 0.5f, velTaken), max(reactive, lightR)));
+    float clampNeed = saturate(max(max(speedPx * 0.5f, velTaken), max(reactive, max(lightR, reflR))));
     // Ronin @bugfix 27/09/2026 DX9: applied after the depth block, which adds the moving-shadow band (`taa shadowmask 1`).
 
     // ---- history weight: a per-pixel sample counter ---------------------------------------------------------------
@@ -633,6 +642,10 @@ float4 resolve(float2 uv, out float3 lowBits)
     if (effectLeft > 0.0f)
         history = lerp(history, toneCurve(tex2Dlod(g_Opaque, float4(uv, 0.0f, 0.0f)).rgb), effectLeft);
     float invalid  = saturate(max(max(depthBad, motion), disocc));
+    // Ronin @feature 19/10/2026 DX9: `taa reflmark 2` - where a unit moved through a reflection the pane starts over, as a
+    // disocclusion does: the clamp kept its ghost while it was still next to the pixel it left. Fire, lights: clamped only.
+    if (g_TaaSharpen.z > 1.5f)
+        invalid = max(invalid, reflMover);
     // Ronin @bugfix 27/09/2026 DX9: DEBUG 14 - the moving-shadow mask. BLUE = in a moving mesh's shadow now, RED = clamped (in or
     // near one now or last frame), YELLOW = also weight-capped (`taa maskcap`). Returned from pass 1, like 13.
     if (g_TaaDebug.x > 13.5f && g_TaaDebug.x < 14.5f)

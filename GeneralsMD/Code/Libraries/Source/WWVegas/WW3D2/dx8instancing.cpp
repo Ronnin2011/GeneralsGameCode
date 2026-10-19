@@ -600,6 +600,12 @@ static float                  s_skyReflectMode       = 0.0f;
 // Ronin @feature 18/10/2026 DX9: reflections of the ground. See Set_Reflection_Ground. NULL / 0 until it is called: as before.
 static IDirect3DTexture9*     s_reflGround           = nullptr;
 static float                  s_reflGroundC[16]      = { 0 };
+// Ronin @feature 18/10/2026 DX9: screen-space reflections. See Set_Screen_Reflection. NULL / 0 until it is called: off.
+static IDirect3DTexture9*     s_ssrColour            = nullptr;
+static IDirect3DTexture9*     s_ssrDepth             = nullptr;
+static float                  s_ssrC[24]             = { 0 };
+static IDirect3DTexture9*     s_ssrOlder             = nullptr;	// the frame before last, for TAA's change mark
+static float                  s_ssrOlderC[24]        = { 0 };
 
 void DX8InstanceManagerClass::Set_Shadow_Map(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
                                              float texelOffset, float depthBias,
@@ -630,6 +636,9 @@ void DX8InstanceManagerClass::Set_Shadow_Map_Far(IDirect3DBaseTexture9* tex, con
 // Ronin @feature 10/10/2026 DX9: lighting part 3 - set by W3DLocalLights, called round Flush_Single_Rigid's draws.
 DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_SunShadeBegin = nullptr;
 DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_SunShadeEnd = nullptr;
+// Ronin @feature 18/10/2026 DX9: the reflections' change mask - W3DTaa's, set by W3DLocalLights, round Draw_Reflective_Rigid's draw.
+DX8InstanceManagerClass::ReflectMaskBeginFunc DX8InstanceManagerClass::s_ReflectMaskBegin = nullptr;
+DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_ReflectMaskEnd = nullptr;
 
 void DX8InstanceManagerClass::Set_Shadow_Shade(const float* rgbw)
 {
@@ -662,6 +671,25 @@ void DX8InstanceManagerClass::Set_Reflection_Ground(IDirect3DTexture9* groundMap
 		memcpy(s_reflGroundC, c12to15, sizeof(s_reflGroundC));
 	else
 		memset(s_reflGroundC, 0, sizeof(s_reflGroundC));
+}
+
+// Ronin @feature 18/10/2026 DX9: screen-space reflections - pushed down by W3DLocalLights every frame: TAA's last frame (borrowed
+// for the frame) and c16..c21 - its view-projection, where its 3D view sits, the march's settings; the frame before, for the mask.
+void DX8InstanceManagerClass::Set_Screen_Reflection(IDirect3DTexture9* prevColour, IDirect3DTexture9* prevDepth, const float* c16to21,
+                                                    IDirect3DTexture9* olderColour, const float* c69to74)
+{
+	s_ssrColour = prevColour;
+	s_ssrDepth  = prevDepth;
+	if (c16to21 != nullptr && prevColour != nullptr && prevDepth != nullptr)
+		memcpy(s_ssrC, c16to21, sizeof(s_ssrC));
+	else
+		memset(s_ssrC, 0, sizeof(s_ssrC));
+	// Ronin @feature 18/10/2026 DX9: c69..c74 even without the older picture: they carry the mark's settings (c74.y = 0: none).
+	s_ssrOlder = (prevColour != nullptr) ? olderColour : nullptr;
+	if (c69to74 != nullptr && prevColour != nullptr)
+		memcpy(s_ssrOlderC, c69to74, sizeof(s_ssrOlderC));
+	else
+		memset(s_ssrOlderC, 0, sizeof(s_ssrOlderC));
 }
 
 // Ronin @diagnostic 26/06/2026 DX9 P2: how many category flushes per frame (=> avg batch size).
@@ -950,12 +978,40 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	}
 
 	// Ronin @feature 18/10/2026 DX9: reflections of the ground - c12..c15 (Set_Reflection_Ground; none without the map), the map on s7.
+	// Screen-space reflections - c16..c21 (Set_Screen_Reflection), last frame on s8, its depth on s9; not in the water's mirror.
+	bool reflMark = false;	// Ronin @feature 18/10/2026 DX9: the reflections' change mask is bound round this draw (s_ReflectMaskBegin)
 	{
 		float reflPsC12[16];
 		memcpy(reflPsC12, s_reflGroundC, sizeof(reflPsC12));
 		if (s_reflGround == nullptr)
 			reflPsC12[4] = 0.0f;
 		dev->SetPixelShaderConstantF(12, reflPsC12, 4);
+		const bool ssrOn = (s_ssrColour != nullptr) && (s_ssrDepth != nullptr) && !ShaderClass::Is_Backface_Culling_Inverted();
+		float reflPsC16[24];
+		memcpy(reflPsC16, s_ssrC, sizeof(reflPsC16));
+		if (!ssrOn)
+			reflPsC16[20] = 0.0f;
+		dev->SetPixelShaderConstantF(16, reflPsC16, 6);
+		// Ronin @feature 18/10/2026 DX9: the reflections' change mask (COLOR1): the frame before last on s10, its c69..c74 (no other
+		// shader reads them); c74.x = 1 only while the mask is bound.
+		reflMark = ssrOn && s_ReflectMaskBegin != nullptr && s_ReflectMaskEnd != nullptr && s_ReflectMaskBegin();
+		float reflPsC69[24];
+		memcpy(reflPsC69, s_ssrOlderC, sizeof(reflPsC69));
+		reflPsC69[20] = reflMark ? 1.0f : 0.0f;
+		dev->SetPixelShaderConstantF(69, reflPsC69, 6);
+		dev->SetTexture(8, ssrOn ? s_ssrColour : nullptr);
+		dev->SetTexture(9, ssrOn ? s_ssrDepth : nullptr);
+		dev->SetTexture(10, reflMark ? s_ssrOlder : nullptr);
+		if (ssrOn) {
+			for (DWORD st = 8; st <= 10; ++st) {
+				const DWORD filter = (st == 9) ? D3DTEXF_POINT : D3DTEXF_LINEAR;	// the depth is packed: never blended
+				dev->SetSamplerState(st, D3DSAMP_MINFILTER, filter);
+				dev->SetSamplerState(st, D3DSAMP_MAGFILTER, filter);
+				dev->SetSamplerState(st, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+				dev->SetSamplerState(st, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+				dev->SetSamplerState(st, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+			}
+		}
 		dev->SetTexture(7, s_reflGround);
 		if (s_reflGround != nullptr) {
 			dev->SetSamplerState(7, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
@@ -981,6 +1037,8 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	}
 
 	renderer->Render_Instanced(0);
+	if (reflMark)
+		s_ReflectMaskEnd();		// Ronin @feature 18/10/2026 DX9: the change mask comes off target 1 before anything else draws
 	++m_reflectiveDraws; // Ronin @diagnostic §16: [INST] refl= — draws actually issued, not attempts
 	Debug_Statistics::Record_Instanced_Draw(                 // see the note in Flush_Single_Rigid
 		(int)(renderer->Get_Index_Count() / 3),
@@ -1018,6 +1076,9 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	DX8Wrapper::Invalidate_Texture_State(6, 1);
 	dev->SetTexture(7, nullptr);	// Ronin @feature 18/10/2026 DX9: the reflections' ground map, likewise
 	DX8Wrapper::Invalidate_Texture_State(7, 1);
+	dev->SetTexture(8, nullptr);	// Ronin @feature 18/10/2026 DX9: the reflections' last frame - stages the wrapper does not track
+	dev->SetTexture(9, nullptr);
+	dev->SetTexture(10, nullptr);	// Ronin @feature 18/10/2026 DX9: the reflections' change mask: the frame before last, likewise
 	if (normalMapTex != nullptr) {
 		normalMapTex->Release_Ref();
 	}

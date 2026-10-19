@@ -105,6 +105,16 @@ public:
 	// Ronin @feature 18/10/2026 DX9: reflections of the ground. The lit ground map for ReflectiveRigid_ps (s7) and its c12..c15
 	// (16 floats; NULL = all 0). A reference is held: pass NULL before the device goes.
 	static void Set_Reflection_Ground(IDirect3DTexture9* groundMap, const float* c12to15);
+	// Ronin @feature 18/10/2026 DX9: screen-space reflections. TAA's last frame for ReflectiveRigid_ps (picture s8, depth s9, c16..c21)
+	// and the frame before (s10, c69..c74), 24 floats each, NULLs = off. Borrowed, never held: a default-pool reference blocks a reset.
+	static void Set_Screen_Reflection(IDirect3DTexture9* prevColour, IDirect3DTexture9* prevDepth, const float* c16to21,
+	                                  IDirect3DTexture9* olderColour, const float* c69to74);
+	// Ronin @feature 18/10/2026 DX9: the reflections' change mask. Round each draw with screen-space reflections W3DTaa binds it as
+	// target 1 (begin returns true when it did); ReflectiveRigid_ps marks there where the reflection changed (COLOR1).
+	typedef bool (*ReflectMaskBeginFunc)(void);
+	static void Set_Reflect_Mask_Hooks(ReflectMaskBeginFunc begin, SunShadeHookFunc end) { s_ReflectMaskBegin = begin; s_ReflectMaskEnd = end; }
+	static ReflectMaskBeginFunc s_ReflectMaskBegin;
+	static SunShadeHookFunc     s_ReflectMaskEnd;
 
 
 	/**

@@ -1597,6 +1597,9 @@ static const float			FX_POWER_FULL   = 200.0f;	// colour x size^2 summed: streng
 static Int						s_reflect       = 2;		// `lights reflect`
 static float				s_reflectGround = 0.5f;	// `lights reflectground`: half ground, half sky - his pick 18/10
 static float				s_fresnel       = 2.0f;	// `lights fresnel`: 2 by his word 18/10 (1 did not read)
+static Bool					s_ssr           = TRUE;	// `lights ssr`: the screen-space reflections
+static const float			SSR_RUN         = 300.0f;	// a reflection's ray runs this far through last frame's depth
+static const float			SSR_THICK       = 10.0f;	// ... and meets a surface it ends this far behind, at most
 static const float			GROUND_RAY_MAX  = 400.0f;	// a reflection looking down meets the ground within this far
 
 void W3DLocalLights::beginSunShade(void)
@@ -1759,6 +1762,8 @@ void  W3DLocalLights::setReflectGround(float v)	{ s_reflectGround = (v < 0.0f) ?
 float W3DLocalLights::getReflectGround(void)		{ return s_reflectGround; }
 void  W3DLocalLights::setFresnel(float v)	{ s_fresnel = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
 float W3DLocalLights::getFresnel(void)		{ return s_fresnel; }
+void  W3DLocalLights::setSsr(Bool on)		{ s_ssr = on; }
+Bool  W3DLocalLights::getSsr(void)		{ return s_ssr; }
 
 // Ronin @feature 12/10/2026 DX9: THE LIGHTS' INI. Every `lights` knob by its name, in the panel's order: one table for the panel
 // (set, print) and for DX9Lights.ini, a modder's file. A knob added here is tunable and kept, with nothing else to touch.
@@ -1794,6 +1799,7 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("reflect", setReflect, getReflect),
 	LIGHT_REAL("reflectground", setReflectGround, getReflectGround),
 	LIGHT_REAL("fresnel", setFresnel, getFresnel),
+	LIGHT_SWITCH("ssr", setSsr, getSsr),
 	LIGHT_REAL("bounce", setBounce, getBounce),
 	{ "sunmorning", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(1, v); }, []() -> float { return W3DLocalLights::getSunTime(1); } },
 	{ "sunafternoon", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(2, v); }, []() -> float { return W3DLocalLights::getSunTime(2); } },
@@ -1972,6 +1978,23 @@ void W3DLocalLights::beginFrame(void)
 			c[12] = lo; c[13] = GROUND_RAY_MAX;
 		}
 		DX8InstanceManagerClass::Set_Reflection_Ground(s_enabled ? ground : NULL, c);
+	}
+	// Ronin @feature 18/10/2026 DX9: screen-space reflections - TAA's last frame and c16..c21 for ReflectiveRigid_ps, the frame before
+	// and c69..c74 for the change mask. Off with the lights, `lights ssr 0` or `reflect 0`: the sky and ground ones stay.
+	{
+		IDirect3DTexture9 *prevColour = NULL, *prevDepth = NULL, *olderColour = NULL;
+		float c[6 * 4] = { 0.0f };
+		float cOlder[6 * 4] = { 0.0f };
+		W3DTaa::setLastFrameWanted((s_enabled && s_ssr && s_reflect > 0) ? TRUE : FALSE);	// Ronin @feature 19/10/2026 DX9: TAA or not
+		if (s_enabled && s_ssr && s_reflect > 0 && W3DTaa::getLastFrame(&prevColour, &prevDepth, c, &olderColour, cOlder))
+		{
+			c[22] = SSR_RUN;
+			c[23] = SSR_THICK;
+			DX8InstanceManagerClass::Set_Screen_Reflection(prevColour, prevDepth, c, olderColour, cOlder);
+		}
+		else
+			DX8InstanceManagerClass::Set_Screen_Reflection(NULL, NULL, NULL, NULL, NULL);
+		DX8InstanceManagerClass::Set_Reflect_Mask_Hooks(&W3DTaa::beginReflectMask, &W3DTaa::endReflectMask);
 	}
 	publishMapShadow();		// Ronin @feature 10/10/2026 DX9: every frame, whether or not the light pass runs
 	s_shown = s_stats;
@@ -3198,6 +3221,13 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		// Ronin @diagnostic 15/10/2026 DX9: `lights view 6` - drawn once, over the frame, as grey round its middle.
 		if (s_view == 6)
 			dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+		// Ronin @feature 18/10/2026 DX9: nothing into the reflections' change mask: the second half (dest x src) wiped it.
+		DWORD maskWrites = 0;
+		if (masked)
+		{
+			dev->GetRenderState(D3DRS_COLORWRITEENABLE1, &maskWrites);
+			dev->SetRenderState(D3DRS_COLORWRITEENABLE1, 0);
+		}
 		for (Int half = 0; half < ((s_view == 6) ? 1 : 2); ++half)
 		{
 			const float c0[4] = { shared[0], shared[1], 7.0f, (s_view == 6) ? 0.0f : ((half == 0) ? 1.0f : -1.0f) };
@@ -3206,6 +3236,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			dev->SetRenderState(D3DRS_DESTBLEND, (half == 0) ? D3DBLEND_ONE : D3DBLEND_SRCCOLOR);
 			dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, bq, sizeof(BounceVertex));
 		}
+		if (masked)
+			dev->SetRenderState(D3DRS_COLORWRITEENABLE1, maskWrites);
 		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
 		dev->SetRenderState(D3DRS_SRCBLEND,  D3DBLEND_ONE);
 		dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
@@ -3384,6 +3416,8 @@ void W3DLocalLights::shutdown(void)
 {
 	DX8InstanceManagerClass::Set_Sky_Reflection(NULL, 0.0f);	// Ronin @feature 12/10/2026 DX9: the mesh renderer holds the cube too
 	DX8InstanceManagerClass::Set_Reflection_Ground(NULL, NULL);	// Ronin @feature 18/10/2026 DX9: ... and the ground map
+	DX8InstanceManagerClass::Set_Screen_Reflection(NULL, NULL, NULL, NULL, NULL);	// Ronin @feature 18/10/2026 DX9: ... and last frame's
+	DX8InstanceManagerClass::Set_Reflect_Mask_Hooks(NULL, NULL);
 	W3DSkyCube::shutdown();
 	// Ronin @feature 09/10/2026 DX9: the beams: every swapped texture gets its own surface back, and meshes stop asking.
 	MeshClass::Set_Light_Fixture_Note_Func(NULL);

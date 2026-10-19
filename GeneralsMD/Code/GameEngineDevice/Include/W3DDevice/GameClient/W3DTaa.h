@@ -28,6 +28,8 @@
 
 #include "Lib/BaseType.h"
 
+struct IDirect3DTexture9;
+
 class CameraClass;
 class MeshClass;
 class Matrix3D;
@@ -187,6 +189,18 @@ public:
 	// Ronin @bugfix 09/10/2026 DX9: 1 / the map's own light on open ground, per channel: frame x this ~ the surface's colour, which the
 	// flash is added to.
 	static void  getMapLightFactor(float out[3]);
+	// Ronin @feature 18/10/2026 DX9: screen-space reflections - last frame's picture and depth (borrowed for this frame), c16..c21,
+	// and the frame before with c69..c74 for the reflections' change mask; FALSE: no whole last frame.
+	static Bool  getLastFrame(IDirect3DTexture9 **colour, IDirect3DTexture9 **depth, float c16to21[24], IDirect3DTexture9 **older,
+							  float c69to74[24]);
+	// Ronin @feature 19/10/2026 DX9: ... and without TAA the frame keeps them itself (finishScene) while this is set, each frame.
+	static void  setLastFrameWanted(Bool on);
+	// Ronin @feature 18/10/2026 DX9: the reflections' change mask. Round a reflective draw (Set_Reflect_Mask_Hooks) begin binds the
+	// light mask's red as target 1 and returns TRUE, then end after the draw. `taa reflmark 0..2`.
+	static Bool  beginReflectMask(void);
+	static void  endReflectMask(void);
+	static void  setReflMark(Int mode);
+	static Int   getReflMark(void);
 
 	// Samples in the sequence before it repeats. 8 is the usual choice: long enough to look supersampled, short enough
 	// that a stopped camera settles quickly.
