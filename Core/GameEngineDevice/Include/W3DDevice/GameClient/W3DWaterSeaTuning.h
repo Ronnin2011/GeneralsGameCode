@@ -92,7 +92,7 @@ struct WaterSeaTuning
 	Bool breakers;		///< the shore foam's wash and incoming front keep the swell's time: a front lands with each crest
 	// Ronin @feature 29/09/2026 DX9: phase 3 - true refraction, the frame under the water bent by the normals.
 	Real bend;			///< how far the normals bend it, screen uv
-	// Ronin @feature 29/09/2026 DX9: phase 3b - shadows on the surface.
+	// Ronin @feature 29/09/2026 DX9: shadows on the surface.
 	Real shadow;		///< how much a shadow darkens the water body, 0 = no shadows (the sun's glitter always goes)
 };
 

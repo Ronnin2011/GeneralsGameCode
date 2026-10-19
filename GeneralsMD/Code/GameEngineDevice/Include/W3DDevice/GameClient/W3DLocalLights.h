@@ -43,7 +43,7 @@ public:
 	static void  setSearchLight(Bool on);
 	static Bool  getSearchLight(void);
 
-	// Ronin @feature 09/10/2026 DX9: lighting part 2, the beams. MeshClass::Render asks this about every mesh once: 0 = no light fixture,
+	// Ronin @feature 09/10/2026 DX9: the light fixtures' beams. MeshClass::Render asks this about every mesh once: 0 = no light fixture,
 	// 1 = one, draw it, 2 = one whose beam a spot light replaces this frame: do not draw it. Lighting_Work.md 4.2.
 	static int  noteFixtureMesh(MeshClass *mesh);
 	// Ronin @feature 11/10/2026 DX9: lamp shadow maps. MeshClass::Render calls this for every mesh it draws; kept for the frame
@@ -131,8 +131,8 @@ public:
 	static Bool  getPointMaps(void);
 	static void  setPointSides(Bool on);	// TRUE = a big point light low over the ground (a blast) gets four level maps as well
 	static Bool  getPointSides(void);
-	// Ronin @feature 10/10/2026 DX9: lighting part 3, step 1. Called round the mesh shader's draws (DX8InstanceManagerClass hooks): binds a
-	// second target that takes the sun's shade (RigidInstance_ps COLOR1), in the main pass only.
+	// Ronin @feature 10/10/2026 DX9: the sun's shade, for the lamps. Called round the mesh shader's draws (DX8InstanceManagerClass
+	// hooks): binds a second target that takes the sun's shade (RigidInstance_ps COLOR1), in the main pass only.
 	static void  beginSunShade(void);
 	static void  endSunShade(void);
 	static void  setSunFill(float v);		// how much of the sun's shade a lamp undoes on a mesh; 0 = none (as before)
@@ -161,7 +161,7 @@ public:
 	// Ronin @feature 12/10/2026 DX9: HDR stage 1b. W3DTreeBuffer says its shade record (Trees_ps COLOR1) is this frame's: the sun
 	// lift then gives a canopy its own sun, not the ground's behind it.
 	static void  noteTreeShade(void);
-	// Ronin @feature 15/10/2026 DX9: global light 3a - the ground as a light: how much of what the ground sends up a face takes
+	// Ronin @feature 15/10/2026 DX9: the ground as a light: how much of what the ground sends up a face takes
 	// (1 = by the ambient's measure, 0 = off).
 	static void  setBounce(float v);
 	static float getBounce(void);

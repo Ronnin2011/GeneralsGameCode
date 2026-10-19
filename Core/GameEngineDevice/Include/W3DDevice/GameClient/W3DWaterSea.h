@@ -15,7 +15,7 @@
 #include "Common/MapObject.h"		// Ronin @bugfix 29/09/2026 DX9: MAP_XY_FACTOR, the height texel size
 #include "GameClient/Water.h"		// Ronin @feature 29/09/2026 DX9: TheWaterTransparency, the map's shore settings
 #include "W3DDevice/GameClient/W3DWaterSeaTuning.h"
-#include "W3DDevice/GameClient/W3DShadowMapState.h"	// Ronin @feature 29/09/2026 DX9: phase 3b - TheTerrainShadowPass
+#include "W3DDevice/GameClient/W3DShadowMapState.h"	// Ronin @feature 29/09/2026 DX9: shadows on the water - TheTerrainShadowPass
 
 enum { WATERSEA_STAGES = 7 };	///< s0 caust, s1 reflection, s2 water, s3 edge, s4 normals (+ foam in alpha), s5 heights, s6 frame copy
 
@@ -290,7 +290,7 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 	const float mirrorSoft[4] = { g.mirrorSoft * in.mirrorInvW, g.mirrorSoft * in.mirrorInvH, (g.mirrorSoft > 0.0f) ? 1.0f : 0.0f, 0.0f };
 	dev->SetPixelShaderConstantF(62, mirrorSoft, 1);
 
-	// Ronin @feature 29/09/2026 DX9: phase 3b - the terrain's shadow map, as W3DTreeBuffer binds it: off in the depth pass (the
+	// Ronin @feature 29/09/2026 DX9: shadows on the water - the terrain's shadow map, as W3DTreeBuffer binds it: off in the depth pass (the
 	// map is the render target there). s7 through the wrapper (it caches stages 0-7), s8 raw. LINEAR = hardware PCF.
 	const TerrainShadowPassState &sp = TheTerrainShadowPass;
 	const Bool shadowOn = (sp.shadowTex != nullptr && !sp.inDepthPass && t.shadow > 0.0f) ? TRUE : FALSE;
@@ -459,7 +459,7 @@ inline void WaterSea_Unbind()
 	for (Int s = 0; s < WATERSEA_STAGES; s++)
 		DX8Wrapper::Set_DX8_Texture(s, nullptr);
 	DX8Wrapper::_Get_D3D_Device8()->SetTexture(D3DVERTEXTEXTURESAMPLER0, nullptr);	// Ronin @feature 29/09/2026 DX9: phase 2
-	DX8Wrapper::Set_DX8_Texture(7, nullptr);										// Ronin @feature 29/09/2026 DX9: phase 3b
+	DX8Wrapper::Set_DX8_Texture(7, nullptr);										// Ronin @feature 29/09/2026 DX9: shadows on the water
 	DX8Wrapper::_Get_D3D_Device8()->SetTexture(8, nullptr);
 	DX8Wrapper::_Get_D3D_Device8()->SetTexture(9, nullptr);	// Ronin @bugfix 03/10/2026 DX9: the shroud
 	// Ronin @feature 03/10/2026 DX9: phase 5 - the wakes: next frame it is a render target again

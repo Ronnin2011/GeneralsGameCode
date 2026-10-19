@@ -38,7 +38,7 @@ static char                   s_key[160]  = "";						// what the cube was built 
 static char                   s_set[48]   = "";						// the north picture's name
 static Bool                   s_byTime    = FALSE;					// the map names no sky: picked by its time of day
 static Bool                   s_wanted    = FALSE;					// `sky rebuild`
-// Ronin @feature 15/10/2026 DX9: global light 3 - the lit terrain colour map (buildGroundMap).
+// Ronin @feature 15/10/2026 DX9: the lit terrain colour map (buildGroundMap).
 static const Int              GROUND_MAP  = 128;
 static IDirect3DTexture9     *s_groundMap = NULL;
 static float                  s_groundUV[4]  = { 0.0f, 0.0f, 0.0f, 0.0f };
@@ -300,7 +300,7 @@ static void build(const WaterTransparencySetting *water)
 		delete [] faces[f].px;
 }
 
-// Ronin @feature 15/10/2026 DX9: GLOBAL LIGHT 3 - THE LIT TERRAIN COLOUR MAP. What the ground sends up, per texel of a 128 x 128 grid
+// Ronin @feature 15/10/2026 DX9: THE LIT TERRAIN COLOUR MAP. What the ground sends up, per texel of a 128 x 128 grid
 // over the map: its colour x the light on level ground (as groundColour), blurred twice over 5 texels. Halved into 8 bits.
 // Ronin @feature 18/10/2026 DX9: for reflections of the ground, alpha = its height over the map's lowest, blurred the same way.
 static void buildGroundMap(void)
@@ -423,7 +423,7 @@ void W3DSkyCube::update(void)
 	s_wanted = FALSE;
 	strcpy(s_key, key);
 	build(water);
-	buildGroundMap();		// Ronin @feature 15/10/2026 DX9: global light 3, with the cube
+	buildGroundMap();		// Ronin @feature 15/10/2026 DX9: the lit terrain colour map, with the cube
 }
 
 void W3DSkyCube::rebuild(void)	{ s_wanted = TRUE; }

@@ -19,7 +19,7 @@
 #include "WW3D2/hlod.h"				// Ronin @bugfix 11/10/2026 DX9: a lamp the animation has sunk out of sight (lampSunk)
 #include "WW3D2/hanim.h"
 #include "WW3D2/shader.h"
-#include "WW3D2/dx8instancing.h"	// Ronin @feature 10/10/2026 DX9: part 3: the hooks round the mesh shader's draws
+#include "WW3D2/dx8instancing.h"	// Ronin @feature 10/10/2026 DX9: the hooks round the mesh shader's draws
 #include "W3DDevice/GameClient/W3DShadowMapState.h"
 #include "Common/GlobalData.h"
 #include "GameLogic/TerrainLogic.h"	// Ronin @feature 11/10/2026 DX9: how high a point light is over the ground
@@ -600,7 +600,7 @@ static void readGlows(MeshModelClass *mdl, FixtureModel *slot, GlowPolys &gp)
 		if (radius > GLOW_MAX_RADIUS || radius < 0.05f)
 		{
 			s_glowRejected = TRUE;
-			// Ronin @feature 09/10/2026 DX9: step 3: a painted pool. Kept by its size; one that no lamp covers gets a light (renderPass).
+			// Ronin @feature 09/10/2026 DX9: a painted pool of light. Kept by its size; one that no lamp covers gets a light (renderPass).
 			if (radius > GLOW_MAX_RADIUS && GLOW_TABLE[kind[r]].hide && slot->poolCount < MAX_POOLS_A_MESH)
 			{
 				FixtureGlow &fp = s_fixPools[s_fixPoolCount++];
@@ -1662,7 +1662,7 @@ float W3DLocalLights::getSunFill(void)		{ return s_sunFill; }
 void  W3DLocalLights::setSunErase(float v)	{ s_sunErase = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
 float W3DLocalLights::getSunErase(void)		{ return s_sunErase; }
 
-// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2 - what a sun shadow leaves on THIS map: its light without the sun over its light
+// Ronin @feature 10/10/2026 DX9: what a sun shadow leaves on THIS map: its light without the sun over its light
 // with it, on flat ground, per channel (it was 0.45 everywhere). For TerrainShadow_ps (c21) and RigidInstance_ps (c24).
 static float				s_mapShadow     = 1.0f;	// `lights mapshadow`
 
@@ -1959,7 +1959,7 @@ void W3DLocalLights::beginFrame(void)
 		loadIni(NULL);
 	}
 	W3DSkyCube::update();		// Ronin @feature 12/10/2026 DX9: the map's sky cube: built again when the map, its time or its sky changed
-	// Ronin @feature 12/10/2026 DX9: step 5: the reflective meshes mirror it (`lights reflect`). With the lights off, the art's picture.
+	// Ronin @feature 12/10/2026 DX9: the sky cube: the reflective meshes mirror it (`lights reflect`). With the lights off, the art's picture.
 	DX8InstanceManagerClass::Set_Sky_Reflection(W3DSkyCube::peek(), s_enabled ? (float)s_reflect : 0.0f);
 	// Ronin @feature 18/10/2026 DX9: reflections of the ground - the ground map and c12..c15 for ReflectiveRigid_ps: uv, the knobs,
 	// the level light and the height. All 0 with the lights off: the reflection as before.
@@ -2063,11 +2063,11 @@ void W3DLocalLights::beginFrame(void)
 	s_coronasOn = (s_glowsOn && s_coronas > 0.0f) ? TRUE : FALSE;
 	s_poolsOn = (s_coronasOn && !s_keepPools && s_poolFill > 0.0f) ? TRUE : FALSE;	// the painted pools are hidden and want filling
 	s_collect = (s_beamsOn || s_glowsOn || s_poolsOn) ? TRUE : FALSE;
-	// Ronin @feature 09/10/2026 DX9: step 3: with the lamps' glows drawn by the shader, their textures go clear - and with them the pools
+	// Ronin @feature 09/10/2026 DX9: with the lamps' glows drawn by the shader, their textures go clear - and with them the pools
 	// of light painted on ground and walls, which the real lights now make.
 	swapBeamTextures(dev, s_beamsOn, (s_coronasOn && !s_keepPools) ? TRUE : FALSE);
 	MeshClass::Set_Light_Fixture_Note_Func(&W3DLocalLights::noteFixtureMesh);
-	// Ronin @feature 10/10/2026 DX9: part 3: the sun's shade is recorded from here to the light pass. The hooks are set every frame.
+	// Ronin @feature 10/10/2026 DX9: the sun's shade is recorded from here to the light pass. The hooks are set every frame.
 	endSunShade();
 	s_shadeOpen    = active;
 	s_shadeFrame   = active;
@@ -2347,7 +2347,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	if (!s_active || s_passDone || scene == NULL)
 		return;
 	s_passDone = TRUE;
-	s_shadeOpen = FALSE;		// Ronin @feature 10/10/2026 DX9: part 3: what is drawn from here on is not under the lights
+	s_shadeOpen = FALSE;		// Ronin @feature 10/10/2026 DX9: the sun's shade: what is drawn from here on is not under the lights
 	s_casterOpen = FALSE;
 	s_stats.casters = s_casterCount;
 	endSunShade();
@@ -2707,7 +2707,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			++s_stats.glows;
 		}
 
-		// Ronin @feature 09/10/2026 DX9: step 3 - a painted pool that no beam lands on and no lamp stands by (351 of the art's 1155) would go
+		// Ronin @feature 09/10/2026 DX9: a painted pool that no beam lands on and no lamp stands by (351 of the art's 1155) would go
 		// dark with its texture: a flat light of its own size and colour stands in. `lights poolfill`.
 		for (Int fp = 0; fp < s_framePoolCount; ++fp)
 		{
@@ -3018,7 +3018,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		}
 	}
 	drawSunLift(dev, rd);		// Ronin @feature 12/10/2026 DX9: HDR stage 1b: with or without a light on screen
-	// Ronin @feature 15/10/2026 DX9: global light 3a - the ground as a light (`lights bounce`) wants the pass with no lamp on screen too.
+	// Ronin @feature 15/10/2026 DX9: the ground as a light (`lights bounce`) wants the pass with no lamp on screen too.
 	float bounceUV[4], bounceAmb[3];
 	IDirect3DTexture9 *bounceMap = (s_bounce > 0.0f && (s_view == 0 || s_view == 6)) ? W3DSkyCube::groundMap(bounceUV, bounceAmb) : NULL;
 	if (count == 0 && s_view != 5 && bounceMap == NULL)		// Ronin @diagnostic 12/10/2026 DX9: view 5 (the sky cube) draws with no light on screen too
@@ -3108,9 +3108,9 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	s_stats.sceneLight[0] = factor[0];
 	s_stats.sceneLight[1] = factor[1];
 	s_stats.sceneLight[2] = factor[2];
-	// Ronin @feature 10/10/2026 DX9: part 3: the sun's shade, if the mesh shader recorded it this frame at this size.
+	// Ronin @feature 10/10/2026 DX9: the sun's shade, if the mesh shader recorded it this frame at this size.
 	const Bool meshShade = (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height) ? TRUE : FALSE;
-	// Ronin @feature 10/10/2026 DX9: step 1b: the terrain's shade. Its shadow pass renders this frame's term into a screen texture and
+	// Ronin @feature 10/10/2026 DX9: the terrain's shade. Its shadow pass renders this frame's term into a screen texture and
 	// multiplies that into the frame (HeightMap.cpp renderTerrainShadowPass), so it is exact. Never under MSAA: not written then.
 	IDirect3DBaseTexture9 *groundShade = NULL;
 	if (s_sunFill > 0.0f && rd.MultiSampleType == D3DMULTISAMPLE_NONE && TheTerrainShadowPass.enabled &&
@@ -3197,7 +3197,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	dev->SetVertexShader(s_quadVS);		// AFTER the layout bind - BindLayoutFVF clears the VS
 	dev->SetPixelShader(s_lightPS);
 
-	// Ronin @feature 15/10/2026 DX9: GLOBAL LIGHT 3a - THE GROUND AS A LIGHT (docs/Lighting_Work.md 4.4c). One quad over the frame,
+	// Ronin @feature 15/10/2026 DX9: THE GROUND AS A LIGHT (docs/Lighting_Work.md 4.4c). One quad over the frame,
 	// twice: once adding, once darkening. Before the lamps, which add to it; its own constants go back for them.
 	if (bounceMap != NULL)
 	{

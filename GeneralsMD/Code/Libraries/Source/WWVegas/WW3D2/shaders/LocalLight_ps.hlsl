@@ -289,7 +289,7 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
         o.color = float4(texCUBElod(g_SkyCube, float4(cos(rise) * cos(turn), cos(rise) * sin(turn), sin(rise), 0.0f)).rgb, 0.0f);
         return o;
     }
-    // Ronin @feature 15/10/2026 DX9: GLOBAL LIGHT 3a - THE GROUND AS A LIGHT, one quad, twice (c0.w +1: dest x max(k, 0) + dest;
+    // Ronin @feature 15/10/2026 DX9: THE GROUND AS A LIGHT, one quad, twice (c0.w +1: dest x max(k, 0) + dest;
     // -1: dest x (1 + min(k, 0))). k = the surface's share of (what the ground under it sends up - the flat ambient) x (1 - n.z) / 2.
     if (view == 7)
     {
@@ -387,7 +387,7 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
             // Ronin @feature 09/10/2026 DX9: the frame is surface colour x the map's light: undo that light, light the surface, and stop at
             // the surface's own colour x overbright (the old vertex path stopped at 1).
             float3 frame   = tex2Dlod(g_Frame, float4(uv, 0.0f, 0.0f)).rgb;
-            // Ronin @feature 10/10/2026 DX9: lighting part 3 - the frame is darker where the sun's shadow fell; the mesh's own draw recorded by
+            // Ronin @feature 10/10/2026 DX9: the frame is darker where the sun's shadow fell; the mesh's own draw recorded by
             // how much, so the lamp lights the surface as it is, not as the shadow left it.
             float4 shadeM  = tex2Dlod(g_SunShade, float4(uv, 0.0f, 0.0f));
             float3 shadeG  = tex2Dlod(g_GroundShade, float4(uv, 0.0f, 0.0f)).rgb;

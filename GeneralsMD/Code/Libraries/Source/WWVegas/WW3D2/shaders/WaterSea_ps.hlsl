@@ -38,7 +38,7 @@ float4 g_SwellCfg   : register(c33);	// x: seconds, y: on, z: a lake's shore slo
 										// w: the map's MinOpacity - Ronin @bugfix 01/10/2026 DX9
 float4 g_SeaFoam    : register(c34);	// x: open-water lace strength, y: 1 / its depth, z: tiles per world unit, w: 1 = the profile's `opacity`, 0 = the map's own
 float4 g_Refraction : register(c35);	// Ronin @feature 29/09/2026 DX9: phase 3 - xy: 1 / frame copy size, z: bend, w: on
-// Ronin @feature 29/09/2026 DX9: phase 3b - the terrain's shadow map (TheTerrainShadowPass). Above c35: PS constants are
+// Ronin @feature 29/09/2026 DX9: shadows on the water - the terrain's shadow map (TheTerrainShadowPass). Above c35: PS constants are
 // device state, and the other receivers hold c12-c28.
 float4x4 g_LightViewProj    : register(c36);	// c36-c39, TRANSPOSED
 float4x4 g_LightViewProjFar : register(c40);	// c40-c43, TRANSPOSED
@@ -58,12 +58,12 @@ float4 g_WakeCfg            : register(c55);	// x: foam (`wakefoam`), y: its slo
 // Ronin @feature 08/10/2026 DX9: `mirrorsoft` (W3DWaterSea.h). c62: WaterWake_ps holds c56-c61.
 float4 g_MirrorSoft         : register(c62);	// xy: the extra taps' offset in mirror uv, z: 1 = on
 
-sampler2D s_ShadowNear : register(s7);	// Ronin @feature 29/09/2026 DX9: phase 3b - depth textures, hardware compare
+sampler2D s_ShadowNear : register(s7);	// Ronin @feature 29/09/2026 DX9: the shadow maps, depth textures, hardware compare
 sampler2D s_ShadowFar  : register(s8);
 sampler2D s_Shroud     : register(s9);	// Ronin @bugfix 03/10/2026 DX9: the fog of war (W3DShroud's texture)
 sampler2D s_Wake       : register(s10);	// Ronin @feature 03/10/2026 DX9: phase 5 - the wakes: xy slope, z foam, w height
 
-// Ronin @feature 29/09/2026 DX9: phase 3b - 2x2 taps half a texel out, each a hardware 2x2 compare: a 3x3-texel footprint.
+// Ronin @feature 29/09/2026 DX9: shadows on the water - 2x2 taps half a texel out, each a hardware 2x2 compare: a 3x3-texel footprint.
 float shadowPcf4(sampler2D smp, float2 uv, float depth, float texelUV)
 {
 	const float h = 0.5f * texelUV;
@@ -217,7 +217,7 @@ PSOutput main(PSInput input)
 	const float  NdotH  = saturate(dot(n, H));
 	const float3 sun    = pow(NdotH, g_SunDir.w) * g_SunColor.rgb + pow(NdotH, g_Sheen.w) * g_Sheen.rgb;
 
-	// Ronin @feature 29/09/2026 DX9: phase 3b - shadows on the surface: in shadow the sun's glitter and sheen go and the body
+	// Ronin @feature 29/09/2026 DX9: shadows on the surface: in shadow the sun's glitter and sheen go and the body
 	// darkens by `shadow`. Both cascades are sampled (fxc cannot branch around tex2Dproj); outside the map = lit.
 	float lit = 1.0f;
 	if (g_ShadowCfg.x > 0.5f)
