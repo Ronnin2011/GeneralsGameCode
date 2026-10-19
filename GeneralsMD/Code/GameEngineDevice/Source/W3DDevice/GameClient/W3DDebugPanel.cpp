@@ -336,44 +336,57 @@ namespace
 	// Ronin @feature 04/10/2026 DX9: the WaterSea look knobs live in one table, TheWaterProfileKnobs /
 	// TheWaterGlobalKnobs (W3DWaterSeaTuning.h): the water ini reads the same one.
 
-	// Ronin @feature 03/10/2026 DX9: one column of the `water` table - a group's title and its `name=value` cells.
-	enum { WATER_COLUMN_ROWS = 10 };	// SWELL holds 9
-	struct WaterColumn
+	// Ronin @feature 03/10/2026 DX9: one column of a panel table (`water`, `lights`) - a group's title and its `name=value` cells.
+	enum { PANEL_COLUMN_ROWS = 12 };	// water's SWELL holds 9, lights' SUN 10
+	struct PanelColumn
 	{
 		const char *title;
-		AsciiString cell[WATER_COLUMN_ROWS];
+		AsciiString cell[PANEL_COLUMN_ROWS];
 		Int         count;
 	};
 
-	void waterCell(WaterColumn &col, const char *name, Real value)
+	void waterCell(PanelColumn &col, const char *name, Real value)
 	{
-		if (col.count < WATER_COLUMN_ROWS)
+		if (col.count < PANEL_COLUMN_ROWS)
 			col.cell[col.count++].format("%s=%.3g", name, value);
 	}
 
 	// Ronin @feature 03/10/2026 DX9: a knob's cell by its command name, so the table only shows names `water` takes.
-	void waterKnobCell(WaterColumn &col, const WaterSeaTuning &t, const char *name)
+	void waterKnobCell(PanelColumn &col, const WaterSeaTuning &t, const char *name)
 	{
 		const WaterKnobInfo *k = WaterSea_FindKnob(TheWaterProfileKnobs, TheWaterProfileKnobCount, name);
 		if (k != nullptr)
 			waterCell(col, name, WaterSea_GetKnob(&t, *k));
 	}
 
+	// Ronin @feature 19/10/2026 DX9: how wide each column must be - at least `width` already holds, so tables printed one under
+	// another can share their widths and line up.
+	void columnWidths(const PanelColumn *cols, Int colCount, Int *width)
+	{
+		for (Int c = 0; c < colCount && c < 8; c++)
+		{
+			Int w = (Int)strlen(cols[c].title);
+			for (Int r = 0; r < cols[c].count; r++)
+				if ((Int)cols[c].cell[r].getLength() > w)
+					w = (Int)cols[c].cell[r].getLength();
+			if (w + 2 > width[c])
+				width[c] = w + 2;
+		}
+	}
+
 	// Ronin @feature 03/10/2026 DX9: the columns side by side, each as wide as its widest cell; headers in their own colour.
-	void printWaterTable(const WaterColumn *cols, Int colCount)
+	// Ronin @feature 19/10/2026 DX9: `shared` = widths from columnWidths over several tables, so they line up.
+	void printColumns(const PanelColumn *cols, Int colCount, const Int *shared = nullptr)
 	{
 		Int width[8] = {};
 		Int rows = 0;
 		for (Int c = 0; c < colCount && c < 8; c++)
 		{
-			width[c] = (Int)strlen(cols[c].title);
-			for (Int r = 0; r < cols[c].count; r++)
-				if ((Int)cols[c].cell[r].getLength() > width[c])
-					width[c] = (Int)cols[c].cell[r].getLength();
-			width[c] += 2;
+			width[c] = (shared != nullptr) ? shared[c] : 0;
 			if (cols[c].count > rows)
 				rows = cols[c].count;
 		}
+		columnWidths(cols, colCount, width);
 		for (Int r = -1; r < rows; r++)	// -1 = the header row
 		{
 			AsciiString line;
@@ -506,7 +519,7 @@ namespace
 		state.format("profile %s  (`water profile sea|lake|river` picks the one these edit)", kindNames[g.edit]);
 		printAscii(state, FALSE, GameMakeColor(255, 220, 120, 255));
 
-		WaterColumn cols[6] = {};
+		PanelColumn cols[6] = {};
 		cols[0].title = "REFLECTION";
 		waterKnobCell(cols[0], t, "refl");
 		waterCell(cols[0], "fresnel", t.fresnel ? 1.0f : 0.0f);
@@ -557,7 +570,7 @@ namespace
 		waterKnobCell(cols[5], t, "swellcell");
 		waterKnobCell(cols[5], t, "swellsharp");
 		waterKnobCell(cols[5], t, "swelltint");
-		printWaterTable(cols, 6);
+		printColumns(cols, 6);
 	}
 
 	// Ronin @feature 28/09/2026 DX9: [PERF] run mean. `perf reset` starts it over, so a runtime switch gets its own mean
@@ -758,6 +771,29 @@ namespace
 
 	// Ronin @feature 09/10/2026 DX9: `lights` - local lights drawn in screen space (W3DLocalLights). 0 hands them back to
 	// the old per-vertex terrain and per-object paths, for an A/B at one spot. The knobs are kept by `lights save` (DX9Lights.ini).
+	// Ronin @feature 19/10/2026 DX9: a `lights` knob's cell by its name, printed as `lights` takes it; placed[] marks the knobs shown.
+	enum { LIGHT_KNOBS_MAX = 128 };
+	void lightCell(PanelColumn &col, const char *name, Bool *placed)
+	{
+		for (Int k = 0; k < W3DLocalLights::knobCount() && k < LIGHT_KNOBS_MAX; ++k)
+		{
+			const W3DLocalLights::Knob *knob = W3DLocalLights::knobAt(k);
+			if (stricmp(knob->name, name) != 0)
+				continue;
+			placed[k] = TRUE;
+			if (col.count >= PANEL_COLUMN_ROWS)
+				return;
+			AsciiString &cell = col.cell[col.count++];
+			if (knob->whole)
+				cell.format("%s=%d", knob->name, (Int)knob->get());
+			else
+				cell.format("%s=%.2f", knob->name, knob->get());
+			if (stricmp(knob->name, "boost") == 0 && knob->get() <= 0.0f)
+				cell.concat(" (auto)");
+			return;
+		}
+	}
+
 	void cmdLights(Int argc, const AsciiString *argv)
 	{
 		Bool ok = (argc == 1);
@@ -842,20 +878,52 @@ namespace
 			printAscii(AsciiString("  over: ceiling above a surface's own colour - only a light stronger than 1 reaches it; boost: frame-to-surface factor, 0 = from the map's light; view: 1 light alone, 2 facing, 3 rectangles, 4 the lamps' shadow maps, 5 the sky cube, 6 the ground light (grey = none, lighter = added, darker = taken)"), FALSE);
 			return;
 		}
-		AsciiString state, one;
+		AsciiString state;
 		state.format("lights: enabled=%d", W3DLocalLights::isEnabled() ? 1 : 0);
-		for (Int k = 0; k < W3DLocalLights::knobCount(); ++k)
+		printAscii(state, FALSE);
+		// Ronin @feature 19/10/2026 DX9: the knobs in columns by what they light, as `water` prints its own - two tables of four.
+		static const char *const groups[8][PANEL_COLUMN_ROWS] = {
+			{ "LIGHTS", "intensity", "range", "small", "over", "boost", "view", NULL },
+			{ "BEAMS", "beams", "shafts", "rays", "rayturn", "lampwidth", "spill", "spillwide", "beamreach", "hotspot", NULL },
+			{ "GLOWS", "glows", "glowreach", "coronas", "coronasize", "pools", "poolfill", "searchlight", NULL },
+			{ "EFFECTS", "fxlights", "fxstrength", "fxreach", "fxmerge", "fxflares", "fxfire", "pulsemin", "pulsefade", NULL },
+			{ "SUN", "sunfill", "sunerase", "mapshadow", "aosun", "daysun", "dayshade", "sunmorning", "sunafternoon", "sunevening",
+			  "sunnight", NULL },
+			{ "LAMP SHADOWS", "lampmaps", "lampshadows", "lampbias", "lampself", "lampselfnear", "pointmaps", "pointsides", NULL },
+			{ "GLASS & GROUND", "reflect", "reflectground", "fresnel", "ssr", "bounce", NULL },
+			{ "NIGHT", "night", "nighttint", "nightlo", "nighthi", "nightfloor", "nightfull", "nightlift", NULL },
+		};
+		Bool placed[LIGHT_KNOBS_MAX] = {};
+		PanelColumn cols[8] = {};
+		for (Int g = 0; g < 8; ++g)
 		{
+			cols[g].title = groups[g][0];
+			for (Int i = 1; i < PANEL_COLUMN_ROWS && groups[g][i] != NULL; ++i)
+				lightCell(cols[g], groups[g][i], placed);
+		}
+		Int shared[8] = {};		// Ronin @feature 19/10/2026 DX9: one width per column across both tables, so they line up
+		columnWidths(cols, 4, shared);
+		columnWidths(cols + 4, 4, shared);
+		printColumns(cols, 4, shared);
+		printColumns(cols + 4, 4, shared);
+		// Ronin @feature 19/10/2026 DX9: a knob no group names (one added to the table later) still prints, on a line of its own.
+		AsciiString more, one;
+		for (Int k = 0; k < W3DLocalLights::knobCount() && k < LIGHT_KNOBS_MAX; ++k)
+		{
+			if (placed[k])
+				continue;
 			const W3DLocalLights::Knob *knob = W3DLocalLights::knobAt(k);
 			if (knob->whole)
 				one.format("  %s=%d", knob->name, (Int)knob->get());
 			else
 				one.format("  %s=%.2f", knob->name, knob->get());
-			state.concat(one);
-			if (stricmp(knob->name, "boost") == 0 && knob->get() <= 0.0f)
-				state.concat(" (auto)");
+			more.concat(one);
 		}
-		printAscii(state, FALSE);
+		if (!more.isEmpty())
+		{
+			state.format("more:%s", more.str());
+			printAscii(state, FALSE);
+		}
 	}
 
 	// Ronin @diagnostic 15/10/2026 DX9: `glowfx` - global light item 7, measured first: the glowing (additive) particle systems now, and
