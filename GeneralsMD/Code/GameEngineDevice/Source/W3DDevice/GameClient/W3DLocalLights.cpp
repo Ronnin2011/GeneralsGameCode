@@ -2090,6 +2090,9 @@ void W3DLocalLights::beginFrame(void)
 
 void W3DLocalLights::endFrame(void)
 {
+	// Ronin @bugfix 19/10/2026 DX9: last frame's picture is borrowed for this frame only. Handed back here, or the sun's shadow map,
+	// drawn before the next beginFrame, binds it after a device reset freed it (the MSAA switch: heap corruption in d3d9).
+	DX8InstanceManagerClass::Set_Screen_Reflection(NULL, NULL, NULL, NULL, NULL);
 	s_shadeOpen = FALSE;
 	s_casterOpen = FALSE;
 	endSunShade();
