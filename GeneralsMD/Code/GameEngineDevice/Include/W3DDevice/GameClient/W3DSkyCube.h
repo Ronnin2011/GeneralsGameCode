@@ -23,5 +23,8 @@ public:
 	// Ronin @feature 15/10/2026 DX9: global light 3 - the lit terrain colour map (what the ground sends up, halved: x2 to read), its
 	// world-to-uv (x0, y0, 1/width, 1/height) and the ambient a mesh got, to weigh it against. NULL until built.
 	static IDirect3DTexture9 *groundMap(float uv[4], float ambient[3]);
+	// Ronin @feature 18/10/2026 DX9: reflections of the ground - the map's alpha is its height: lo + a x span. light = what the
+	// colour was lit with (level ground), so colour x 2 / light is the ground's own colour.
+	static void groundLevel(float light[3], float *heightLo, float *heightSpan);
 	static void describe(char *out, Int size);	// one line for the panel
 };

@@ -102,6 +102,9 @@ public:
 	// Ronin @feature 12/10/2026 DX9: lighting step 5. The map's sky cube for ReflectiveRigid_ps (s6) and how to use it (c6.x: 0 = the
 	// art's picture, 1 = the cube, 2 = sky in every pane). A reference is held: pass NULL before the device goes.
 	static void Set_Sky_Reflection(IDirect3DCubeTexture9* cube, float mode);
+	// Ronin @feature 18/10/2026 DX9: reflections of the ground. The lit ground map for ReflectiveRigid_ps (s7) and its c12..c15
+	// (16 floats; NULL = all 0). A reference is held: pass NULL before the device goes.
+	static void Set_Reflection_Ground(IDirect3DTexture9* groundMap, const float* c12to15);
 
 
 	/**

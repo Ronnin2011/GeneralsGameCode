@@ -597,6 +597,9 @@ static float                  s_shadowShade[4]       = { 0.45f, 0.45f, 0.45f, 0.
 // Ronin @feature 12/10/2026 DX9: lighting step 5. See Set_Sky_Reflection. NULL / 0 until it is called: the art's picture.
 static IDirect3DCubeTexture9* s_skyCube              = nullptr;
 static float                  s_skyReflectMode       = 0.0f;
+// Ronin @feature 18/10/2026 DX9: reflections of the ground. See Set_Reflection_Ground. NULL / 0 until it is called: as before.
+static IDirect3DTexture9*     s_reflGround           = nullptr;
+static float                  s_reflGroundC[16]      = { 0 };
 
 void DX8InstanceManagerClass::Set_Shadow_Map(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
                                              float texelOffset, float depthBias,
@@ -646,6 +649,20 @@ void DX8InstanceManagerClass::Set_Sky_Reflection(IDirect3DCubeTexture9* cube, fl
 	s_skyReflectMode = mode;
 }
 
+// Ronin @feature 18/10/2026 DX9: reflections of the ground - pushed down by W3DLocalLights each frame, as the cube is: the ground
+// map (held the same way) and c12..c15 - its uv, the knobs, its level light and height.
+void DX8InstanceManagerClass::Set_Reflection_Ground(IDirect3DTexture9* groundMap, const float* c12to15)
+{
+	if (groundMap != nullptr)
+		groundMap->AddRef();
+	if (s_reflGround != nullptr)
+		s_reflGround->Release();
+	s_reflGround = groundMap;
+	if (c12to15 != nullptr)
+		memcpy(s_reflGroundC, c12to15, sizeof(s_reflGroundC));
+	else
+		memset(s_reflGroundC, 0, sizeof(s_reflGroundC));
+}
 
 // Ronin @diagnostic 26/06/2026 DX9 P2: how many category flushes per frame (=> avg batch size).
 // Many tiny flushes => per-category pipeline re-setup is the cost; few big ones => it's per-mesh.
@@ -932,6 +949,23 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 		}
 	}
 
+	// Ronin @feature 18/10/2026 DX9: reflections of the ground - c12..c15 (Set_Reflection_Ground; none without the map), the map on s7.
+	{
+		float reflPsC12[16];
+		memcpy(reflPsC12, s_reflGroundC, sizeof(reflPsC12));
+		if (s_reflGround == nullptr)
+			reflPsC12[4] = 0.0f;
+		dev->SetPixelShaderConstantF(12, reflPsC12, 4);
+		dev->SetTexture(7, s_reflGround);
+		if (s_reflGround != nullptr) {
+			dev->SetSamplerState(7, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(7, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(7, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+			dev->SetSamplerState(7, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+			dev->SetSamplerState(7, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		}
+	}
+
 	// Ronin @feature DX9: reflective pass-0 depth bias. HISTORICAL: pass-0 (programmable) wrote depth
 	// ~1 LSB off the FFP pass-1 overlay, so the two z-fought -> shimmer, and we pushed pass-0 away so the
 	// overlay would land. As of the BLENDED_NRM change, pass-1 is ALSO programmable and shares pass-0's
@@ -982,7 +1016,8 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	// Ronin @feature 12/10/2026 DX9: lighting step 5: the sky cube's stage, cleared and resynced the same way.
 	dev->SetTexture(6, nullptr);
 	DX8Wrapper::Invalidate_Texture_State(6, 1);
-
+	dev->SetTexture(7, nullptr);	// Ronin @feature 18/10/2026 DX9: the reflections' ground map, likewise
+	DX8Wrapper::Invalidate_Texture_State(7, 1);
 	if (normalMapTex != nullptr) {
 		normalMapTex->Release_Ref();
 	}

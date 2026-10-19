@@ -43,6 +43,8 @@ static const Int              GROUND_MAP  = 128;
 static IDirect3DTexture9     *s_groundMap = NULL;
 static float                  s_groundUV[4]  = { 0.0f, 0.0f, 0.0f, 0.0f };
 static float                  s_groundAmb[3] = { 0.0f, 0.0f, 0.0f };
+static float                  s_groundLight[3] = { 1.0f, 1.0f, 1.0f };	// Ronin @feature 18/10/2026 DX9: reflections of the ground (groundLevel)
+static float                  s_groundLo = 0.0f, s_groundSpan = 0.0f;
 
 // Ronin @feature 12/10/2026 DX9: one sky picture as plain pixels. The archives hold them as DXT1; the device unpacks.
 static Bool readFace(IDirect3DDevice9 *dev, const char *name, SkyFace &out)
@@ -300,6 +302,7 @@ static void build(const WaterTransparencySetting *water)
 
 // Ronin @feature 15/10/2026 DX9: GLOBAL LIGHT 3 - THE LIT TERRAIN COLOUR MAP. What the ground sends up, per texel of a 128 x 128 grid
 // over the map: its colour x the light on level ground (as groundColour), blurred twice over 5 texels. Halved into 8 bits.
+// Ronin @feature 18/10/2026 DX9: for reflections of the ground, alpha = its height over the map's lowest, blurred the same way.
 static void buildGroundMap(void)
 {
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
@@ -321,20 +324,25 @@ static void buildGroundMap(void)
 			light[2] += down * TheGlobalData->m_terrainDiffuse[i].blue;
 		}
 	}
-	static float a[GROUND_MAP * GROUND_MAP * 3];
-	static float b[GROUND_MAP * GROUND_MAP * 3];
+	static float a[GROUND_MAP * GROUND_MAP * 4];
+	static float b[GROUND_MAP * GROUND_MAP * 4];
+	float lo = 1.0e9f, hi = -1.0e9f;
 	for (Int y = 0; y < GROUND_MAP; ++y)
 	{
 		for (Int x = 0; x < GROUND_MAP; ++x)
 		{
 			RGBColor c;
 			c.red = c.green = c.blue = 0.0f;
-			TheTerrainVisual->getTerrainColorAt(extent.lo.x + w * ((float)x + 0.5f) / (float)GROUND_MAP,
-												extent.lo.y + h * ((float)y + 0.5f) / (float)GROUND_MAP, &c);
-			float *o = &a[(y * GROUND_MAP + x) * 3];
+			const float wx = extent.lo.x + w * ((float)x + 0.5f) / (float)GROUND_MAP;
+			const float wy = extent.lo.y + h * ((float)y + 0.5f) / (float)GROUND_MAP;
+			TheTerrainVisual->getTerrainColorAt(wx, wy, &c);
+			float *o = &a[(y * GROUND_MAP + x) * 4];
 			o[0] = c.red * light[0];
 			o[1] = c.green * light[1];
 			o[2] = c.blue * light[2];
+			o[3] = TheTerrainLogic->getGroundHeight(wx, wy);
+			lo = (o[3] < lo) ? o[3] : lo;
+			hi = (o[3] > hi) ? o[3] : hi;
 		}
 	}
 	// Twice across and down, 5 texels a time: what a wall sees is the ground round it, not the texel under it.
@@ -347,17 +355,17 @@ static void buildGroundMap(void)
 		{
 			for (Int x = 0; x < GROUND_MAP; ++x)
 			{
-				float s[3] = { 0.0f, 0.0f, 0.0f };
+				float s[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
 				for (Int t = -2; t <= 2; ++t)
 				{
 					Int sx = across ? (x + t) : x, sy = across ? y : (y + t);
 					sx = (sx < 0) ? 0 : ((sx >= GROUND_MAP) ? GROUND_MAP - 1 : sx);
 					sy = (sy < 0) ? 0 : ((sy >= GROUND_MAP) ? GROUND_MAP - 1 : sy);
-					const float *p = &src[(sy * GROUND_MAP + sx) * 3];
-					s[0] += p[0]; s[1] += p[1]; s[2] += p[2];
+					const float *p = &src[(sy * GROUND_MAP + sx) * 4];
+					s[0] += p[0]; s[1] += p[1]; s[2] += p[2]; s[3] += p[3];
 				}
-				float *o = &dst[(y * GROUND_MAP + x) * 3];
-				o[0] = s[0] * 0.2f; o[1] = s[1] * 0.2f; o[2] = s[2] * 0.2f;
+				float *o = &dst[(y * GROUND_MAP + x) * 4];
+				o[0] = s[0] * 0.2f; o[1] = s[1] * 0.2f; o[2] = s[2] * 0.2f; o[3] = s[3] * 0.2f;
 			}
 		}
 	}
@@ -374,14 +382,16 @@ static void buildGroundMap(void)
 		DWORD *row = (DWORD *)((BYTE *)lock.pBits + y * lock.Pitch);
 		for (Int x = 0; x < GROUND_MAP; ++x)
 		{
-			const float *p = &a[(y * GROUND_MAP + x) * 3];
+			const float *p = &a[(y * GROUND_MAP + x) * 4];
 			Int v[3];
 			for (Int k = 0; k < 3; ++k)
 			{
 				const float f = p[k] * 0.5f * 255.0f + 0.5f;
 				v[k] = (f < 0.0f) ? 0 : ((f > 255.0f) ? 255 : (Int)f);
 			}
-			row[x] = 0xFF000000u | ((DWORD)v[0] << 16) | ((DWORD)v[1] << 8) | (DWORD)v[2];
+			const float ha = (hi > lo) ? ((p[3] - lo) / (hi - lo) * 255.0f + 0.5f) : 0.0f;
+			const DWORD va = (ha < 0.0f) ? 0 : ((ha > 255.0f) ? 255 : (DWORD)ha);
+			row[x] = (va << 24) | ((DWORD)v[0] << 16) | ((DWORD)v[1] << 8) | (DWORD)v[2];
 		}
 	}
 	s_groundMap->UnlockRect(0);
@@ -392,6 +402,10 @@ static void buildGroundMap(void)
 	s_groundAmb[0] = TheGlobalData->m_terrainAmbient[0].red;
 	s_groundAmb[1] = TheGlobalData->m_terrainAmbient[0].green;
 	s_groundAmb[2] = TheGlobalData->m_terrainAmbient[0].blue;
+	for (Int k = 0; k < 3; ++k)
+		s_groundLight[k] = light[k];
+	s_groundLo   = lo;
+	s_groundSpan = (hi > lo) ? (hi - lo) : 0.0f;
 }
 
 void W3DSkyCube::update(void)
@@ -434,6 +448,13 @@ IDirect3DTexture9 *W3DSkyCube::groundMap(float uv[4], float ambient[3])
 	for (Int k = 0; k < 3; ++k)
 		ambient[k] = s_groundAmb[k];
 	return s_groundMap;
+}
+void W3DSkyCube::groundLevel(float light[3], float *heightLo, float *heightSpan)
+{
+	for (Int k = 0; k < 3; ++k)
+		light[k] = s_groundLight[k];
+	*heightLo   = s_groundLo;
+	*heightSpan = s_groundSpan;
 }
 
 void W3DSkyCube::describe(char *out, Int size)

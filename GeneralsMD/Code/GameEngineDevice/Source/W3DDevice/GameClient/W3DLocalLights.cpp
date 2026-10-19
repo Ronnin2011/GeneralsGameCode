@@ -1595,6 +1595,9 @@ static const Int			FX_CANDIDATES   = 64;		// the strongest kept while the system
 static const float			FX_SIZE_CAP     = 20.0f;	// a particle counts at most this wide: a lens flare's sprite is not its light
 static const float			FX_POWER_FULL   = 200.0f;	// colour x size^2 summed: strength sqrt(t / (1 + t)), t = power / this
 static Int						s_reflect       = 2;		// `lights reflect`
+static float				s_reflectGround = 0.5f;	// `lights reflectground`: half ground, half sky - his pick 18/10
+static float				s_fresnel       = 2.0f;	// `lights fresnel`: 2 by his word 18/10 (1 did not read)
+static const float			GROUND_RAY_MAX  = 400.0f;	// a reflection looking down meets the ground within this far
 
 void W3DLocalLights::beginSunShade(void)
 {
@@ -1752,6 +1755,10 @@ void  W3DLocalLights::setAoSun(float v)	{ s_aoSun = (v < 0.0f) ? 0.0f : ((v > 3.
 float W3DLocalLights::getAoSun(void)		{ return s_aoSun; }
 void  W3DLocalLights::setReflect(float v)	{ s_reflect = (v < 0.5f) ? 0 : ((v < 1.5f) ? 1 : 2); }
 float W3DLocalLights::getReflect(void)	{ return (float)s_reflect; }
+void  W3DLocalLights::setReflectGround(float v)	{ s_reflectGround = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float W3DLocalLights::getReflectGround(void)		{ return s_reflectGround; }
+void  W3DLocalLights::setFresnel(float v)	{ s_fresnel = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getFresnel(void)		{ return s_fresnel; }
 
 // Ronin @feature 12/10/2026 DX9: THE LIGHTS' INI. Every `lights` knob by its name, in the panel's order: one table for the panel
 // (set, print) and for DX9Lights.ini, a modder's file. A knob added here is tunable and kept, with nothing else to touch.
@@ -1785,6 +1792,8 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("mapshadow", setMapShadow, getMapShadow),
 	LIGHT_REAL("aosun", setAoSun, getAoSun),
 	LIGHT_REAL("reflect", setReflect, getReflect),
+	LIGHT_REAL("reflectground", setReflectGround, getReflectGround),
+	LIGHT_REAL("fresnel", setFresnel, getFresnel),
 	LIGHT_REAL("bounce", setBounce, getBounce),
 	{ "sunmorning", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(1, v); }, []() -> float { return W3DLocalLights::getSunTime(1); } },
 	{ "sunafternoon", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(2, v); }, []() -> float { return W3DLocalLights::getSunTime(2); } },
@@ -1946,6 +1955,24 @@ void W3DLocalLights::beginFrame(void)
 	W3DSkyCube::update();		// Ronin @feature 12/10/2026 DX9: the map's sky cube: built again when the map, its time or its sky changed
 	// Ronin @feature 12/10/2026 DX9: step 5: the reflective meshes mirror it (`lights reflect`). With the lights off, the art's picture.
 	DX8InstanceManagerClass::Set_Sky_Reflection(W3DSkyCube::peek(), s_enabled ? (float)s_reflect : 0.0f);
+	// Ronin @feature 18/10/2026 DX9: reflections of the ground - the ground map and c12..c15 for ReflectiveRigid_ps: uv, the knobs,
+	// the level light and the height. All 0 with the lights off: the reflection as before.
+	{
+		float c[4 * 4] = { 0.0f };
+		float uv[4], amb[3], light[3], lo = 0.0f, span = 0.0f;
+		IDirect3DTexture9 *ground = W3DSkyCube::groundMap(uv, amb);
+		W3DSkyCube::groundLevel(light, &lo, &span);
+		if (s_enabled)
+		{
+			for (Int k = 0; k < 4; ++k)
+				c[k] = uv[k];
+			c[4] = (ground != NULL && s_reflect > 0) ? s_reflectGround : 0.0f;
+			c[5] = s_fresnel;
+			c[8] = light[0]; c[9] = light[1]; c[10] = light[2]; c[11] = span;
+			c[12] = lo; c[13] = GROUND_RAY_MAX;
+		}
+		DX8InstanceManagerClass::Set_Reflection_Ground(s_enabled ? ground : NULL, c);
+	}
 	publishMapShadow();		// Ronin @feature 10/10/2026 DX9: every frame, whether or not the light pass runs
 	s_shown = s_stats;
 	s_stats.live     = 0;
@@ -3356,6 +3383,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 void W3DLocalLights::shutdown(void)
 {
 	DX8InstanceManagerClass::Set_Sky_Reflection(NULL, 0.0f);	// Ronin @feature 12/10/2026 DX9: the mesh renderer holds the cube too
+	DX8InstanceManagerClass::Set_Reflection_Ground(NULL, NULL);	// Ronin @feature 18/10/2026 DX9: ... and the ground map
 	W3DSkyCube::shutdown();
 	// Ronin @feature 09/10/2026 DX9: the beams: every swapped texture gets its own surface back, and meshes stop asking.
 	MeshClass::Set_Light_Fixture_Note_Func(NULL);

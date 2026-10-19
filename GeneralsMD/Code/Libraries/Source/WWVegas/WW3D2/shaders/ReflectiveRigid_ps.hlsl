@@ -9,6 +9,13 @@ float4x4  g_View       : register(c1); // world->view; uploaded transposed (mirr
 // art's one picture. g_SkyMode.x: 0 = the picture as before, 1 = the cube, 2 = the cube with the sky in every pane.
 samplerCUBE g_SkyCube  : register(s6);
 float4    g_SkyMode    : register(c6);
+// Ronin @feature 18/10/2026 DX9: reflections of the ground. The lit ground map (W3DSkyCube: rgb = colour x its level light, halved;
+// a = height) and its constants (Set_Reflection_Ground).
+sampler2D g_GroundMap  : register(s7);
+float4    g_GroundUV   : register(c12);  // xy = the map's corner in the world, zw = 1 / its size
+float4    g_ReflKnobs  : register(c13);  // x = `reflectground`, y = `fresnel`
+float4    g_GroundLit  : register(c14);  // rgb = the level light the map was lit with, w = its height span
+float4    g_GroundZ    : register(c15);  // x = its lowest height, y = how far a reflection may run to the ground
 // Ronin @bugfix 19/09/2026 DX9: this pass used to rely on the FFP shroud overlay reaching it (see the note below). That
 // overlay is depth-compared and blackened alpha meshes at the fog edge, so it no longer runs on programmable meshes — the
 // shroud is sampled here instead, same meaning as in RigidInstance_ps. zw == 0 means the map has no shroud.
@@ -44,7 +51,22 @@ float4 main(PS_INPUT i) : COLOR0
     // the ground, so mode 2 folds the vector up to the sky.
     float3 env = tex2D(g_EnvSampler, envUV).rgb;
     float3 sky = texCUBE(g_SkyCube, float3(R.xy, (g_SkyMode.x > 1.5f) ? abs(R.z) : R.z)).rgb;
-    float3 reflection = ((g_SkyMode.x > 0.5f) ? sky : env) * i.col.rgb;
+    float3 seen = (g_SkyMode.x > 0.5f) ? sky : env;
+    // Ronin @feature 18/10/2026 DX9: reflections of the ground - looking down, the ground it meets: from the pixel's height over the
+    // ground (map alpha) along the reflection, the map's colour there over its level light (its own colour). Faded in at the horizon.
+    [branch]
+    if (g_ReflKnobs.x > 0.0f && R.z < 0.0f)
+    {
+        float  under  = g_GroundZ.x + tex2Dlod(g_GroundMap, float4((i.worldPos.xy - g_GroundUV.xy) * g_GroundUV.zw, 0.0f, 0.0f)).a * g_GroundLit.w;
+        float  run    = min(max(i.worldPos.z - under, 0.0f) / max(-R.z, 0.02f), g_GroundZ.y);
+        float2 hit    = (i.worldPos.xy + R.xy * run - g_GroundUV.xy) * g_GroundUV.zw;
+        float3 ground = tex2Dlod(g_GroundMap, float4(hit, 0.0f, 0.0f)).rgb * 2.0f / max(g_GroundLit.rgb, 0.02f);
+        seen = lerp(seen, saturate(ground), g_ReflKnobs.x * saturate(-R.z * 20.0f));
+    }
+    float3 reflection = seen * i.col.rgb;
+    // Ronin @feature 18/10/2026 DX9: `fresnel` - a reflection stronger where a pane turns from the eye, weaker facing it (the physical
+    // curve hardly moves under a camera looking down).
+    reflection *= max(0.0f, 1.0f + g_ReflKnobs.y * 1.5f * ((1.0f - saturate(dot(N, -V))) - 0.3f));
 
     // Ronin @bugfix 19/09/2026 DX9: shroud in-shader now that the overlay pass no longer reaches programmable meshes.
     if (g_ShroudMap.z > 0.0f)
