@@ -10,8 +10,18 @@ sampler2D g_LampDepth  : register(s4);      // the lamps' shadow maps: D24S8, LI
 sampler2D g_LampDepthWas : register(s6);    // ... and last frame's, for the change mask
 sampler2D g_LampMap    : register(s5);      // `lights view 4` only: the same maps as colour, depth over two bytes, POINT, CLAMP
 sampler2D g_GroundShade : register(s3);     // the same for the terrain, as its own shadow pass composited it; white = none taken
+// Ronin @feature 20/10/2026 DX9: view 8 - the sun's shade from its shadow map, every mode: both cascades (the near one twice when one).
+sampler2D g_SunDepth    : register(s8);      // depth, LINEAR, CLAMP - the sampler compares, as RigidInstance_ps's
+sampler2D g_SunDepthFar : register(s9);
 samplerCUBE g_SkyCube  : register(s7);      // `lights view 5` only: the map's sky cube (W3DSkyCube), looked up by a world direction
 
+// Ronin @feature 20/10/2026 DX9: view 8's constants, c84..c95 - no other shader reads them.
+float4x4 g_SunNear     : register(c84);   // view space -> the near cascade's clip (c84..c87)
+float4x4 g_SunFar      : register(c88);   // view space -> the far cascade's clip (c88..c91)
+float4   g_SunMap      : register(c92);   // x = near depth bias, y = half a texel in uv, z = a near texel's world size, w = cascades
+float4   g_SunMapFar   : register(c93);   // x = far depth bias, y = a far texel's world size
+float4   g_SunToLight  : register(c94);   // xyz = towards the sun, in view space
+float4   g_SunShadeCol : register(c95);   // rgb = what a sun shadow leaves on this map, w = how far to follow it (0 = 0.45)
 float4 g_Camera     : register(c0);         // x = camera near, y = camera far, z = view mode, w = overbright
 float4 g_ViewPlane  : register(c1);         // x = view-plane min X, y = view-plane max Y, z = width, w = height, at depth 1
 float4 g_Viewport   : register(c2);         // xy = 3D viewport min, zw = its size - both 0..1 of the render target
@@ -265,6 +275,59 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
     PS_OUTPUT o;
     o.mask = float4(0.0f, 0.0f, 0.0f, 0.0f);
     const int view = (int)(g_Camera.z + 0.5f);
+    // Ronin @feature 20/10/2026 DX9: view 8 - the sun's shade as RigidInstance_ps records it (3x3 PCF, normal offset, the N.L fade),
+    // from the scene depth, for every pixel in every mode. rgb = the shade, a = 1; the sky a = 0.
+    if (view == 8)
+    {
+        o.color = float4(1.0f, 1.0f, 1.0f, 0.0f);
+        if (tex2Dlod(g_SceneDepth, float4(uv, 0.0f, 0.0f)).r > 0.99999f)
+            return o;
+        float3 P   = viewPosition(uv);
+        float3 Px1 = viewPosition(uv + float2(g_TexelSize.x, 0.0f));
+        float3 Px0 = viewPosition(uv - float2(g_TexelSize.x, 0.0f));
+        float3 Py1 = viewPosition(uv + float2(0.0f, g_TexelSize.y));
+        float3 Py0 = viewPosition(uv - float2(0.0f, g_TexelSize.y));
+        float3 ex  = (abs(Px1.z - P.z) < abs(P.z - Px0.z)) ? (Px1 - P) : (P - Px0);     // the nearer side: no edge across
+        float3 ey  = (abs(Py1.z - P.z) < abs(P.z - Py0.z)) ? (Py1 - P) : (P - Py0);
+        float3 N   = normalize(cross(ex, ey));
+        N = (dot(N, -P) < 0.0f) ? -N : N;
+        float  ndotl  = dot(N, g_SunToLight.xyz);
+        float  geo    = lerp(0.35f, 1.0f, smoothstep(0.0f, 0.35f, ndotl));
+        float4 selClip = mul(float4(P, 1.0f), g_SunNear);
+        float2 selUV   = selClip.xy * float2(0.5f, -0.5f) + 0.5f + g_SunMap.y;
+        float  seamUV  = g_SunMap.y * 2.0f * 4.0f;
+        bool   inNear  = (g_SunMap.w < 1.5f) ||
+                         (selUV.x >= seamUV && selUV.x <= 1.0f - seamUV && selUV.y >= seamUV && selUV.y <= 1.0f - seamUV);
+        float  texelWorld = inNear ? g_SunMap.z : g_SunMapFar.y;
+        float  slope   = sqrt(saturate(1.0f - ndotl * ndotl));
+        float3 S       = P + N * (texelWorld * 2.0f * slope);
+        float4 clipN   = mul(float4(S, 1.0f), g_SunNear);
+        float4 clipF   = mul(float4(S, 1.0f), g_SunFar);
+        float2 uvN     = clipN.xy * float2(0.5f, -0.5f) + 0.5f + g_SunMap.y;
+        float2 uvF     = clipF.xy * float2(0.5f, -0.5f) + 0.5f + g_SunMap.y;
+        float2 sUV     = inNear ? uvN : uvF;
+        o.color.a = 1.0f;
+        if (sUV.x < 0.0f || sUV.x > 1.0f || sUV.y < 0.0f || sUV.y > 1.0f)
+            return o;     // outside the fitted map: lit, as the meshes take it
+        float texelUV = g_SunMap.y * 2.0f;
+        float depthN  = clipN.z - g_SunMap.x;
+        float depthF  = clipF.z - g_SunMapFar.x;
+        float sumN = 0.0f, sumF = 0.0f;
+        [unroll]
+        for (int sy = -1; sy <= 1; ++sy)
+        {
+            [unroll]
+            for (int sx = -1; sx <= 1; ++sx)
+            {
+                float2 ofs = float2(sx, sy) * texelUV;
+                sumN += tex2Dproj(g_SunDepth,    float4(uvN + ofs, depthN, 1.0f)).r;
+                sumF += tex2Dproj(g_SunDepthFar, float4(uvF + ofs, depthF, 1.0f)).r;
+            }
+        }
+        float lit = min((inNear ? sumN : sumF) * (1.0f / 9.0f), geo);
+        o.color.rgb = lerp(lerp(float3(0.45f, 0.45f, 0.45f), g_SunShadeCol.rgb, g_SunShadeCol.w), float3(1.0f, 1.0f, 1.0f), lit);
+        return o;
+    }
     if (view == 3)
     {
         o.color = float4(0.10f, 0.03f, 0.0f, 0.0f);    // the rectangle each light costs

@@ -2355,6 +2355,136 @@ static void drawSunLift(IDirect3DDevice9 *dev, const D3DSURFACE_DESC &rd)
 	DX8Wrapper::Invalidate_Cached_Render_States();
 }
 
+// Ronin @feature 20/10/2026 DX9: THE SUN'S SHADE, in every mode. LocalLight_ps view 8 works it out per pixel from the scene depth and the
+// sun's map, into the meshes' record: MSAA has none, and theirs leaves gaps (glass, trees) where the ground behind was read.
+static Bool shadeFromSunMap(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, const D3DSURFACE_DESC &rd, const CameraClass &camera,
+							const float c0to3[16])
+{
+	const TerrainShadowPassState &sp = TheTerrainShadowPass;
+	if (!sp.active || sp.shadowTex == NULL || depthTex == NULL || s_lightPS == NULL || s_quadVS == NULL)
+		return FALSE;
+	if (s_shadeTex == NULL || s_shadeW != rd.Width || s_shadeH != rd.Height)
+	{
+		REF_PTR_RELEASE(s_shadeTex);
+		s_shadeW = 0;
+		s_shadeH = 0;
+		s_shadeTex = NEW_REF(TextureClass, (rd.Width, rd.Height, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1, TextureClass::POOL_DEFAULT, true));
+		if (s_shadeTex->Peek_D3D_Base_Texture() == NULL)
+		{
+			REF_PTR_RELEASE(s_shadeTex);	// a macro with its own if - keep the braces
+			return FALSE;
+		}
+		s_shadeW = rd.Width;
+		s_shadeH = rd.Height;
+	}
+	// Ronin @feature 20/10/2026 DX9: view space -> each cascade's clip - the map's matrix (world -> clip, transposed) x the camera's
+	const Matrix3D &tm = camera.Get_Transform();
+	const float cam[4][4] = { { tm[0][0], tm[0][1], tm[0][2], tm[0][3] }, { tm[1][0], tm[1][1], tm[1][2], tm[1][3] },
+							  { tm[2][0], tm[2][1], tm[2][2], tm[2][3] }, { 0.0f, 0.0f, 0.0f, 1.0f } };
+	const Bool twoMaps = (sp.cascadeCount > 1.5f && sp.shadowTexFar != NULL) ? TRUE : FALSE;
+	float c84[12 * 4];
+	for (Int m = 0; m < 2; ++m)
+	{
+		const float *lt = (m == 1 && twoMaps) ? sp.lightViewProjFarT : sp.lightViewProjT;
+		for (Int i = 0; i < 4; ++i)
+			for (Int j = 0; j < 4; ++j)
+				c84[m * 16 + i * 4 + j] = lt[i * 4 + 0] * cam[0][j] + lt[i * 4 + 1] * cam[1][j] + lt[i * 4 + 2] * cam[2][j] +
+										   lt[i * 4 + 3] * cam[3][j];
+	}
+	c84[32] = sp.depthBias;
+	c84[33] = sp.texelOffset;
+	c84[34] = sp.texelWorldSize;
+	c84[35] = twoMaps ? 2.0f : 1.0f;
+	c84[36] = twoMaps ? sp.depthBiasFar : sp.depthBias;
+	c84[37] = twoMaps ? sp.texelWorldSizeFar : sp.texelWorldSize;
+	c84[38] = 0.0f;
+	c84[39] = 0.0f;
+	for (Int j = 0; j < 3; ++j)		// towards the sun, the camera's rotation undone
+		c84[40 + j] = -(cam[0][j] * sp.lightTravelDir[0] + cam[1][j] * sp.lightTravelDir[1] + cam[2][j] * sp.lightTravelDir[2]);
+	c84[43] = 0.0f;
+	for (Int k = 0; k < 4; ++k)
+		c84[44 + k] = sp.shadeColour[k];
+
+	IDirect3DSurface9 *surf = s_shadeTex->Get_D3D_Surface_Level();
+	IDirect3DSurface9 *oldRT = NULL, *oldDS = NULL;
+	if (surf == NULL || FAILED(dev->GetRenderTarget(0, &oldRT)) || oldRT == NULL)
+	{
+		if (surf != NULL)
+			surf->Release();
+		return FALSE;
+	}
+	D3DVIEWPORT9 oldVp;
+	const Bool haveOldVp = SUCCEEDED(dev->GetViewport(&oldVp)) ? TRUE : FALSE;
+	dev->GetDepthStencilSurface(&oldDS);
+	dev->SetDepthStencilSurface(NULL);		// the frame's is multisampled; this target is not
+	IDirect3DSurface9 *oldRT1 = NULL;
+	if (SUCCEEDED(dev->GetRenderTarget(1, &oldRT1)) && oldRT1 != NULL)
+		dev->SetRenderTarget(1, NULL);		// Ronin @feature 20/10/2026 DX9: TAA's light mask, bound by now - not this draw's to write
+	const Bool ok = SUCCEEDED(dev->SetRenderTarget(0, surf)) ? TRUE : FALSE;
+	if (ok)
+	{
+		DWORD oldBlend = 0, oldTest = 0, oldWrite = 0;
+		dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &oldBlend);
+		dev->GetRenderState(D3DRS_ALPHATESTENABLE,  &oldTest);
+		dev->GetRenderState(D3DRS_COLORWRITEENABLE, &oldWrite);
+		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+		dev->SetRenderState(D3DRS_ALPHATESTENABLE,  FALSE);
+		dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE |
+													D3DCOLORWRITEENABLE_ALPHA);
+		DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::shadeFromSunMap");
+		dev->SetVertexShader(s_quadVS);		// after the layout bind - BindLayoutFVF clears the VS
+		dev->SetPixelShader(s_lightPS);
+		dev->SetPixelShaderConstantF(0, c0to3, 4);
+		// Ronin @feature 20/10/2026 DX9: TAA's shift this frame, as the lights take it: without it a rebuilt point sits ~0.12 off its surface.
+		float jitterX = 0.0f, jitterY = 0.0f;
+		W3DTaa::getJitterNDC(&jitterX, &jitterY);
+		const float jitter[4] = { -0.5f * jitterX, 0.5f * jitterY, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(15, jitter, 1);
+		dev->SetPixelShaderConstantF(84, c84, 12);
+		dev->SetTexture(0, depthTex);
+		dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+		dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+		dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		dev->SetTexture(8, sp.shadowTex);
+		dev->SetTexture(9, twoMaps ? sp.shadowTexFar : sp.shadowTex);
+		for (DWORD st = 8; st <= 9; ++st)
+		{
+			dev->SetSamplerState(st, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);		// a depth texture: the hardware's compare
+			dev->SetSamplerState(st, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(st, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+			dev->SetSamplerState(st, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+			dev->SetSamplerState(st, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		}
+		const float targetW = (float)rd.Width, targetH = (float)rd.Height;
+		const float l = (-0.5f / targetW) * 2.0f - 1.0f, r = ((targetW - 0.5f) / targetW) * 2.0f - 1.0f;
+		const float t = 1.0f - (-0.5f / targetH) * 2.0f, b = 1.0f - ((targetH - 0.5f) / targetH) * 2.0f;
+		struct ShadeVertex { float x, y, z; float u, v; };
+		const ShadeVertex q[4] = { { l, t, 0.0f, 0.0f, 0.0f }, { r, t, 0.0f, 1.0f, 0.0f }, { l, b, 0.0f, 0.0f, 1.0f }, { r, b, 0.0f, 1.0f, 1.0f } };
+		dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(ShadeVertex));
+		dev->SetTexture(8, NULL);
+		dev->SetTexture(9, NULL);
+		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, oldBlend);
+		dev->SetRenderState(D3DRS_ALPHATESTENABLE,  oldTest);
+		dev->SetRenderState(D3DRS_COLORWRITEENABLE, oldWrite);
+	}
+	dev->SetRenderTarget(0, oldRT);
+	if (oldRT1 != NULL)
+	{
+		dev->SetRenderTarget(1, oldRT1);
+		oldRT1->Release();
+	}
+	dev->SetDepthStencilSurface(oldDS);
+	if (haveOldVp)
+		dev->SetViewport(&oldVp);
+	if (oldDS != NULL)
+		oldDS->Release();
+	oldRT->Release();
+	surf->Release();
+	return ok;
+}
+
 void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 {
 	if (!s_active || s_passDone || scene == NULL)
@@ -3190,11 +3320,21 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	s_stats.sceneLight[1] = factor[1];
 	s_stats.sceneLight[2] = factor[2];
 	// Ronin @feature 10/10/2026 DX9: the sun's shade, if the mesh shader recorded it this frame at this size.
-	const Bool meshShade = (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height) ? TRUE : FALSE;
+	Bool meshShade = (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height) ? TRUE : FALSE;
+	// Ronin @feature 20/10/2026 DX9: the shade from the sun's map, per pixel, in every mode: MSAA has no records, and the meshes' leave
+	// gaps (glass, trees) where the ground behind was read.
+	Bool shadeFromMap = FALSE;
+	if (s_sunFill > 0.0f)
+	{
+		const float c0to3[16] = { zNear, zFar, 8.0f, s_over, planeMin.X, planeMax.Y, planeW, planeH,
+								  vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y, 1.0f / targetW, 1.0f / targetH, 0.0f, 0.0f };
+		shadeFromMap = shadeFromSunMap(dev, depthTex, rd, camera, c0to3);
+		meshShade = shadeFromMap ? TRUE : meshShade;
+	}
 	// Ronin @feature 10/10/2026 DX9: the terrain's shade. Its shadow pass renders this frame's term into a screen texture and
 	// multiplies that into the frame (HeightMap.cpp renderTerrainShadowPass), so it is exact. Never under MSAA: not written then.
 	IDirect3DBaseTexture9 *groundShade = NULL;
-	if (s_sunFill > 0.0f && rd.MultiSampleType == D3DMULTISAMPLE_NONE && TheTerrainShadowPass.enabled &&
+	if (s_sunFill > 0.0f && !shadeFromMap && rd.MultiSampleType == D3DMULTISAMPLE_NONE && TheTerrainShadowPass.enabled &&
 		TheTerrainShadowPass.accumSurf != NULL && TheTerrainShadowPass.accumCur != NULL)
 	{
 		D3DSURFACE_DESC gd;
@@ -3203,7 +3343,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			groundShade = TheTerrainShadowPass.accumCur;
 	}
 	const float shadeUse = (meshShade || groundShade != NULL) ? s_sunFill : 0.0f;
-	s_stats.sunShade = (shadeUse > 0.0f) ? ((meshShade ? 1 : 0) + ((groundShade != NULL) ? 2 : 0)) : 0;
+	s_stats.sunShade = (shadeUse > 0.0f) ? ((meshShade ? (shadeFromMap ? 4 : 1) : 0) + ((groundShade != NULL) ? 2 : 0)) : 0;	// 4 = from the map
 	// Ronin @feature 15/10/2026 DX9: the shade's floor, as the shadow shaders make it, as one luminance (c4.w): where a pixel is in the sun.
 	float floorLum = 0.45f;
 	{
