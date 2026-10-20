@@ -83,6 +83,8 @@ static const float TAA_REFLMARK_LEAST = 0.02f;
 static const float TAA_REFLMARK_GAIN  = 20.0f;
 static DWORD       s_reflMarkWrite  = 0;		// target 1's write mask before beginReflectMask
 static Bool        s_reflMarkBound  = FALSE;
+static DWORD       s_lightMaskWrite = 0;		// Ronin @bugfix 19/10/2026 DX9: target 1's write mask before beginLightMask
+static Bool        s_lightMaskSet   = FALSE;
 // Ronin @feature 19/10/2026 DX9: screen-space reflections WITHOUT TAA - last frame kept by the frame itself (storeLastFrame): its
 // picture, its linear depth packed as TaaDepthStore_ps packs it, the s_frameNo it was kept in (0 = none), its camera and 3D view.
 static Bool         s_lastFrameWanted = FALSE;	// W3DLocalLights, every frame: the screen-space reflections are on
@@ -1485,15 +1487,25 @@ Bool W3DTaa::beginLightMask(void)
 	const Bool ok = SUCCEEDED(dev->SetRenderTarget(1, surf)) ? TRUE : FALSE;
 	surf->Release();
 	if (ok)		// Ronin @feature 19/10/2026 DX9: the lights' change in green, lamp light in alpha: red is the reflections'
+	{
+		dev->GetRenderState(D3DRS_COLORWRITEENABLE1, &s_lightMaskWrite);
 		dev->SetRenderState(D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_ALPHA);
+	}
+	s_lightMaskSet = ok;
 	return ok;
 }
 
 void W3DTaa::endLightMask(void)
 {
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
-	if (dev != NULL)
-		dev->SetRenderTarget(1, NULL);
+	if (dev == NULL)
+		return;
+	dev->SetRenderTarget(1, NULL);
+	// Ronin @bugfix 19/10/2026 DX9: the write mask back: the sun's and the trees' shade records bind target 1 and keep whatever it is
+	// (green + alpha left their red and blue unwritten - magenta meshes at night without TAA).
+	if (s_lightMaskSet)
+		dev->SetRenderState(D3DRS_COLORWRITEENABLE1, s_lightMaskWrite);
+	s_lightMaskSet = FALSE;
 }
 
 // Ronin @feature 18/10/2026 DX9: the reflections' change mask - the light mask's red for ReflectiveRigid_ps COLOR1, where a pane's

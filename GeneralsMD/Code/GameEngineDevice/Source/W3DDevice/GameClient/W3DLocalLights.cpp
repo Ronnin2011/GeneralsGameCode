@@ -1643,7 +1643,12 @@ void W3DLocalLights::beginSunShade(void)
 		s_shadeWritten = TRUE;
 	}
 	if (SUCCEEDED(dev->SetRenderTarget(1, surf)))
+	{
 		s_shadeBound = TRUE;
+		// Ronin @bugfix 19/10/2026 DX9: all four channels - target 1 keeps the last pass's write mask, and the lights' is green + alpha.
+		dev->SetRenderState(D3DRS_COLORWRITEENABLE1, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE |
+												 D3DCOLORWRITEENABLE_ALPHA);
+	}
 	surf->Release();
 }
 
