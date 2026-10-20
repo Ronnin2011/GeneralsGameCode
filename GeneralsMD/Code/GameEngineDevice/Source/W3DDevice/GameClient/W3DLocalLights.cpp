@@ -1586,6 +1586,8 @@ static float				s_fxReach       = 1.0f;	// `lights fxreach`
 static Bool					s_fxMerge       = TRUE;	// `lights fxmerge`
 static Bool					s_fxFlares      = FALSE;	// `lights fxflares`
 static float				s_fxFire        = 40.0f;	// `lights fxfire`
+static float				s_fxSmooth      = 0.7f;	// `lights fxsmooth`: the share of last frame's light an effect light keeps, at 30 fps
+static UnsignedInt			s_fxClock       = 0;		// timeGetTime of the last pass that eased them (0 = none yet)
 static Bool					s_searchLight   = TRUE;	// `lights searchlight`: the police car's 2003 light is its beacons' light
 static const Int			SEARCH_LIGHTS   = 32;
 static const float			SEARCH_BEACONS  = 6.0f;	// a lamp glow this near it is one of its beacons (2.1 and 2.8 on the car)
@@ -1821,6 +1823,7 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("pulsefade", setPulseFade, getPulseFade),
 	LIGHT_SWITCH("searchlight", setSearchLight, getSearchLight),
 	LIGHT_REAL("fxfire", setFxFire, getFxFire),
+	LIGHT_REAL("fxsmooth", setFxSmooth, getFxSmooth),
 	// Ronin @feature 15/10/2026 DX9: the night look and the dark lift live in W3DTaa; listed here so DX9Lights.ini keeps them.
 	{ "night", TRUE, TRUE, [](float v) { W3DTaa::setNight((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DTaa::getNight() ? 1.0f : 0.0f; } },
 	{ "nighttint", FALSE, TRUE, [](float v) { W3DTaa::setNightTint(v); }, []() -> float { return W3DTaa::getNightTint(); } },
@@ -2225,6 +2228,8 @@ void  W3DLocalLights::setFxFlares(Bool on)	{ s_fxFlares = on; }
 Bool  W3DLocalLights::getFxFlares(void)		{ return s_fxFlares; }
 void  W3DLocalLights::setFxFire(float v)	{ s_fxFire = (v < 0.0f) ? 0.0f : ((v > 200.0f) ? 200.0f : v); }
 float W3DLocalLights::getFxFire(void)		{ return s_fxFire; }
+void  W3DLocalLights::setFxSmooth(float v)	{ s_fxSmooth = (v < 0.0f) ? 0.0f : ((v > 0.95f) ? 0.95f : v); }
+float W3DLocalLights::getFxSmooth(void)		{ return s_fxSmooth; }
 void  W3DLocalLights::setSearchLight(Bool on)	{ s_searchLight = on; }
 Bool  W3DLocalLights::getSearchLight(void)	{ return s_searchLight; }
 float W3DLocalLights::getBounce(void)		{ return s_bounce; }
@@ -2776,6 +2781,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 
 		// Ronin @feature 15/10/2026 DX9: GLOBAL LIGHT ITEM 7 - GLOWING EFFECTS LIGHT THEIR SURROUNDINGS in their own colour. Each additive
 		// particle system with particles on screen is one point light at their centre, reaching past their spread; the strongest kept.
+		float fxEase = 1.0f;	// Ronin @feature 19/10/2026 DX9: 1 = an effect light takes what its particles say at once
 		if (s_fxLights > 0 && s_fxStrength > 0.0f && TheParticleSystemManager != NULL)
 		{
 			struct FxGlow { const ParticleSystem *sys; Vector3 at; float col[3]; float power; float spread; Bool fire; };
@@ -2959,6 +2965,13 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 				mm.fire = (mm.fire || g.fire) ? TRUE : FALSE;
 			}
 			const Int fxKeep = (mergedCount < s_fxLights) ? mergedCount : s_fxLights;
+			// Ronin @feature 19/10/2026 DX9: `lights fxsmooth` - how far this pass moves each effect light to what its particles say: by the
+			// time since the last pass, so the same at 20 fps as at 60.
+			const UnsignedInt fxNow = timeGetTime();
+			float fxDt = (s_fxClock != 0) ? (float)(fxNow - s_fxClock) * 0.001f : (1.0f / 30.0f);
+			fxDt = (fxDt < 0.0f) ? 0.0f : ((fxDt > 0.25f) ? 0.25f : fxDt);
+			s_fxClock = fxNow;
+			fxEase = (s_fxSmooth > 0.0f) ? (1.0f - powf(s_fxSmooth, fxDt * 30.0f)) : 1.0f;
 			for (Int f = 0; f < fxKeep && count < MAX_LIGHTS_DRAWN; ++f)
 			{
 				const FxGlow &g = merged[f];
@@ -2991,13 +3004,49 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 				LightMemo was = now;
 				was.diffuse[0] = was.diffuse[1] = was.diffuse[2] = 0.0f;
 				was.ambient[0] = was.ambient[1] = was.ambient[2] = 0.0f;
+				// Ronin @feature 19/10/2026 DX9: last frame's light this one continues - its own system, or with `fxsmooth` the nearest
+				// effect light within half their reach: when the systems regroup, the light that was there.
+				Int match = -1;
+				float matchD = 0.0f;
 				for (Int m = 0; m < lastCount; ++m)
 				{
-					if (last[m].key == now.key && last[m].sub == now.sub)
+					if (last[m].sub != now.sub || last[m].seen)
+						continue;
+					if (last[m].key == now.key)
 					{
-						was = last[m];
-						last[m].seen = TRUE;
+						match = m;
 						break;
+					}
+					const float d = (last[m].world - now.world).Length();
+					const float halfReach = 0.5f * ((last[m].outer > now.outer) ? last[m].outer : now.outer);
+					if (s_fxSmooth > 0.0f && d < halfReach && (match < 0 || d < matchD))
+					{
+						match = m;
+						matchD = d;
+					}
+				}
+				if (match >= 0)
+				{
+					was = last[match];
+					last[match].seen = TRUE;
+					// Ronin @feature 19/10/2026 DX9: strength, reach and place ease from it (`fxsmooth`) instead of jumping.
+					for (Int ch = 0; ch < 3; ++ch)
+					{
+						now.diffuse[ch] = was.diffuse[ch] + (now.diffuse[ch] - was.diffuse[ch]) * fxEase;
+						now.ambient[ch] = was.ambient[ch] + (now.ambient[ch] - was.ambient[ch]) * fxEase;
+					}
+					now.world = was.world + (now.world - was.world) * fxEase;
+					now.outer = was.outer + (now.outer - was.outer) * fxEase;
+					now.inner = now.outer * 0.15f;
+					now.boundCentre = now.world;
+					now.boundRadius = now.outer;
+				}
+				else
+				{
+					for (Int ch = 0; ch < 3; ++ch)		// Ronin @feature 19/10/2026 DX9: a new one fades in
+					{
+						now.diffuse[ch] *= fxEase;
+						now.ambient[ch] *= fxEase;
 					}
 				}
 				if (!makeDraw(draws[count], now, was, cameraTM, vm))
@@ -3016,6 +3065,30 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		{
 			if (last[m].seen)
 				continue;
+			// Ronin @feature 19/10/2026 DX9: an effect light no system holds now fades out (`fxsmooth`), kept in the memo while it does.
+			if (last[m].sub == 3000 && fxEase < 1.0f && s_memoCount < MAX_LIGHTS_DRAWN)
+			{
+				LightMemo fading = last[m];
+				float peak = 0.0f;
+				for (Int ch = 0; ch < 3; ++ch)
+				{
+					fading.diffuse[ch] *= 1.0f - fxEase;
+					fading.ambient[ch] *= 1.0f - fxEase;
+					peak = (fading.diffuse[ch] > peak) ? fading.diffuse[ch] : peak;
+				}
+				fading.seen = FALSE;
+				if (peak > 0.01f)
+				{
+					if (!makeDraw(draws[count], fading, last[m], cameraTM, vm))
+						continue;
+					s_stats.coverage += ((draws[count].x1 - draws[count].x0) * (draws[count].y1 - draws[count].y0)) / (targetW * targetH);
+					s_memo[s_memoCount++] = fading;
+					++count;
+					++lightCount;
+					++s_stats.fx;
+					continue;
+				}
+			}
 			LightMemo gone = last[m];
 			gone.diffuse[0] = gone.diffuse[1] = gone.diffuse[2] = 0.0f;
 			gone.ambient[0] = gone.ambient[1] = gone.ambient[2] = 0.0f;

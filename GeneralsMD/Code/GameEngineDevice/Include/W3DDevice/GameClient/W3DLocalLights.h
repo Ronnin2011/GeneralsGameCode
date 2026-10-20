@@ -186,6 +186,10 @@ public:
 	static void  setFxFlares(Bool on);		// lens flares make effect lights too (they are a camera's glare: off by default)
 	static void  setFxFire(float v);		// a fire reaches at least its size + this x its brightness share (fire casts light round it)
 	static float getFxFire(void);
+	// Ronin @feature 19/10/2026 DX9: how much of last frame's light an effect light keeps (at 30 fps) - it eases into a new strength,
+	// reach and place instead of jumping; 0 = none.
+	static void  setFxSmooth(float v);
+	static float getFxSmooth(void);
 	static Bool  getFxFlares(void);
 
 	// Ronin @diagnostic 09/10/2026 DX9: last frame's numbers, for the panel's [LIGHT] row.
