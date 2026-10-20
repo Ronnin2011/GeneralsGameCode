@@ -38,6 +38,9 @@ float4 g_CascadeParams : register(c20);  // x = far bias, y = far texel world si
 // Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. What a shadow leaves on this map: its light without the sun over its light
 // with it (W3DLocalLights). w = how far to follow it; 0 = 0.45 on every map, as before.
 float4 g_ShadeColour : register(c21);
+// Ronin @bugfix 20/10/2026 DX9: the map's terrain light now (HeightMap.cpp): x = its ambient, y = 1 / the sun's own diffuse
+// (luminances). y = 0: not set, the fixed floor as before.
+float4 g_SunLevel : register(c22);
 
 struct PS_INPUT
 {
@@ -96,12 +99,12 @@ float4 main(PS_INPUT input) : COLOR0
     // flat per face and stamped the triangulation onto the hilltops. doTheLight() builds the vertex
     // colour from the averaged per-vertex normal, so its luminance interpolates smoothly. Subtracting
     // the map's ambient floor leaves the sun's N.L contribution, which is what the fade wants.
-    // AMBIENT_LEVEL is the only thing to tune: raise it until slopes facing away from the sun fade,
-    // lower it if ground that IS lit starts fading. BACKFACE_SHADOW = 1.0 disables the fade entirely.
+    // Ronin @bugfix 20/10/2026 DX9: that floor and the sun's share are the map's own now (c22): a fixed 0.35 was above the whole
+    // night light, so all ground faded to ~0.6 at night. BACKFACE_SHADOW = 1.0 disables the fade entirely.
     const float BACKFACE_SHADOW = 0.35f;
-    const float AMBIENT_LEVEL   = 0.35f;
     float lum    = dot(input.color.rgb, float3(0.299f, 0.587f, 0.114f));
-    float sunLit = saturate((lum - AMBIENT_LEVEL) / max(1.0f - AMBIENT_LEVEL, 0.05f));
+    float sunLit = (g_SunLevel.y > 0.0f) ? saturate((lum - g_SunLevel.x) * g_SunLevel.y)
+                                         : saturate((lum - 0.35f) / 0.65f);
     float geo    = lerp(BACKFACE_SHADOW, 1.0f, smoothstep(0.0f, 0.35f, sunLit));
 
     // CASCADE SELECT from the UN-OFFSET position: the normal offset below is scaled by that cascade's

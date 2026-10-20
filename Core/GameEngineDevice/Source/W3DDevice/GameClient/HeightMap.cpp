@@ -2596,6 +2596,16 @@ void HeightMapRenderObjClass::renderTerrainShadowPass(CameraClass *pCamera)
 	dev->SetPixelShaderConstantF(4, psC4, 1);
 	// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2 - c21: what a shadow leaves on this map (rgb), how far to follow it (w).
 	dev->SetPixelShaderConstantF(21, sm.shadeColour, 1);
+	// Ronin @bugfix 20/10/2026 DX9: c22 - the map's terrain light now, as doTheLight builds the vertex colour: x = its ambient
+	// (luminance), y = 1 / the sun's own diffuse. TerrainShadow_ps measures the sun's share of a vertex against them.
+	{
+		const RGBColor &amb = TheGlobalData->m_terrainAmbient[0];
+		const RGBColor &sun = TheGlobalData->m_terrainDiffuse[0];
+		const Real ambLum = 0.299f * amb.red + 0.587f * amb.green + 0.114f * amb.blue;
+		const Real sunLum = 0.299f * sun.red + 0.587f * sun.green + 0.114f * sun.blue;
+		const float psC22[4] = { ambLum, 1.0f / ((sunLum > 0.05f) ? sunLum : 0.05f), 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(22, psC22, 1);
+	}
 
 	// Ronin @bugfix 05/09/2026 DX9: §29j.13h. RENDER TARGET size, not the viewport — VPOS is in
 	// render-target space and the two differ by the command bar. Doc §9.14.
