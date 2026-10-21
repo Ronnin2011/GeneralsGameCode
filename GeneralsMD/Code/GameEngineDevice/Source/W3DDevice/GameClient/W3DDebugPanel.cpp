@@ -927,7 +927,7 @@ namespace
 		state.format("lights: enabled=%d", W3DLocalLights::isEnabled() ? 1 : 0);
 		printAscii(state, FALSE);
 		// Ronin @feature 19/10/2026 DX9: the knobs in columns by what they light, as `water` prints its own - two tables of four.
-		static const char *const groups[8][PANEL_COLUMN_ROWS] = {
+		static const char *const groups[9][PANEL_COLUMN_ROWS] = {
 			{ "LIGHTS", "intensity", "range", "small", "over", "boost", "view", NULL },
 			{ "BEAMS", "beams", "shafts", "rays", "rayturn", "lampwidth", "spill", "spillwide", "beamreach", "hotspot", NULL },
 			{ "GLOWS", "glows", "glowreach", "coronas", "coronasize", "pools", "poolfill", "searchlight", NULL },
@@ -938,10 +938,12 @@ namespace
 			{ "GLASS & GROUND", "reflect", "reflectground", "fresnel", "ssr", "bounce", NULL },
 			{ "COLOUR", "night", "nighttint", "nightlo", "nighthi", "nightfloor", "nightfull", "nightlift", "grade", "gradewarm", "gradesat",
 			  "grademids", NULL },		// Ronin @feature 21/10/2026 DX9: the final pass's colour - the night look, the dark lift, the grade
+			// Ronin @feature 21/10/2026 DX9: HDR's look - the sun's lift by the time of day, its warmth, the curve's white (on / off: Options.ini)
+			{ "HDR", "hdrmorning", "hdrafternoon", "hdrevening", "hdrnight", "hdrwarm", "hdrwhite", NULL },
 		};
 		Bool placed[LIGHT_KNOBS_MAX] = {};
-		PanelColumn cols[8] = {};
-		for (Int g = 0; g < 8; ++g)
+		PanelColumn cols[9] = {};
+		for (Int g = 0; g < 9; ++g)
 		{
 			cols[g].title = groups[g][0];
 			for (Int i = 1; i < PANEL_COLUMN_ROWS && groups[g][i] != NULL; ++i)
@@ -949,9 +951,9 @@ namespace
 		}
 		Int shared[8] = {};		// Ronin @feature 19/10/2026 DX9: one width per column across both tables, so they line up
 		columnWidths(cols, 4, shared);
-		columnWidths(cols + 4, 4, shared);
+		columnWidths(cols + 4, 5, shared);		// Ronin @feature 21/10/2026 DX9: HDR a fifth column, beside COLOUR
 		printColumns(cols, 4, shared);
-		printColumns(cols + 4, 4, shared);
+		printColumns(cols + 4, 5, shared);
 		// Ronin @feature 19/10/2026 DX9: a knob no group names (one added to the table later) still prints, on a line of its own.
 		AsciiString more, one;
 		for (Int k = 0; k < W3DLocalLights::knobCount() && k < LIGHT_KNOBS_MAX; ++k)
@@ -3503,7 +3505,7 @@ void W3DDebugPanel::update(void)
 		registerCommand("lights", "lights [0|1] | save|load|defaults | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|aosun|reflect|reflectground|fresnel|ssr|bounce|fxlights|fxstrength|fxreach|fxmerge|fxflares|fxfire|fxsmooth|pulsemin|pulsefade|searchlight|night*|daysun|dayshade|sun*|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths; save keeps the knobs in DX9Lights.ini", cmdLights);
 		registerCommand("glowfx", "glowfx - the glowing (additive) particle systems now: how many, how many on screen, the strongest by colour x alpha x size^2", cmdGlowFx);
 		registerCommand("night", "night [0|1] | night tint|lo|hi|floor|full|lift <v> - the night look and the dark lift: dim colour into one tint from the map's light, lamps keep theirs (at night; not saved)", cmdNight);
-		registerCommand("hdr", "hdr [0|1] | hdr sun <1..4> | hdr warm <0..1> | hdr white <1..2> - HDR stage 1: a float scene, the sun lifted above 1, a tone curve (needs MSAA off; not saved)", cmdHdr);
+		registerCommand("hdr", "hdr [0|1] | hdr sun <1..4> | hdr warm <0..1> | hdr white <1..2> - HDR stage 1: a float scene, the sun lifted above 1, a tone curve (needs MSAA off; on / off: Options.ini DX9HDR; the rest: DX9Lights.ini)", cmdHdr);
 		registerCommand("grade", "grade [0|1] | grade warm|sat|mids <v> - the daytime colour: warm tint, saturation, darker mid-tones (by day; off by default; DX9Lights.ini: grade, gradewarm, gradesat, grademids)", cmdGrade);
 		registerCommand("campitch", "campitch [degrees | default] - the camera's tilt (a middle click resets it)", cmdCamPitch);
 		registerCommand("sky", "sky | sky rebuild - the map's sky cube: its source, its ground, the ambient's six colours (`lights view 5` shows it)", cmdSky);

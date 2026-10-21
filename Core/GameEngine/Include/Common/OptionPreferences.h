@@ -133,6 +133,8 @@ public:
 	Real getTAAMipBias(Real dflt) const;
 	// Ronin @feature 04/10/2026 DX9: DX9WaterReflections = yes|no, or `dflt` when absent.
 	Bool getWaterReflections(Bool dflt) const;
+	// Ronin @feature 21/10/2026 DX9: DX9HDR = yes|no, or `dflt` when absent.
+	Bool getHDR(Bool dflt) const;
 
 	Int getParticleCap();
 

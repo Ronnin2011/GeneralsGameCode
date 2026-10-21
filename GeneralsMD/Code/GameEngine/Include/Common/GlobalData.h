@@ -194,6 +194,8 @@ public:
 	Real m_taaMipBias;
 	// Ronin @feature 04/10/2026 DX9: the WaterType 2 mirror; Options.ini key DX9WaterReflections = yes|no. On by default.
 	Bool m_waterReflections;
+	// Ronin @feature 21/10/2026 DX9: HDR (W3DTaa: a float scene, the sun lifted above 1, a tone curve); Options.ini key DX9HDR = yes|no. Off by default.
+	Bool m_hdr;
 	Int  m_textureReductionFactor;	//how much to cut texture resolution: 2 is half, 3 is quarter, etc.
 	Bool m_enableBehindBuildingMarkers;
 	Real m_waterPositionX;

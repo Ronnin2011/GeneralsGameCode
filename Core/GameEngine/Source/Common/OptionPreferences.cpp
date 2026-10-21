@@ -805,6 +805,15 @@ Bool OptionPreferences::getWaterReflections(Bool dflt) const
 	return (stricmp(it->second.str(), "yes") == 0 || atoi(it->second.str()) != 0) ? TRUE : FALSE;
 }
 
+// Ronin @feature 21/10/2026 DX9: DX9HDR = yes|no (1|0 too). Absent returns `dflt`.
+Bool OptionPreferences::getHDR(Bool dflt) const
+{
+	OptionPreferences::const_iterator it = find("DX9HDR");
+	if (it == end())
+		return dflt;
+	return (stricmp(it->second.str(), "yes") == 0 || atoi(it->second.str()) != 0) ? TRUE : FALSE;
+}
+
 // Ronin @feature 26/09/2026 DX9: DX9TAASharpness = 0..1, the CAS strength. Absent returns `dflt`.
 Real OptionPreferences::getTAASharpness(Real dflt) const
 {

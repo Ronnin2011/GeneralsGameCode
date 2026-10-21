@@ -1951,6 +1951,14 @@ static const W3DLocalLights::Knob s_knobs[] =
 	{ "gradewarm", FALSE, TRUE, [](float v) { W3DTaa::setGradeWarm(v); }, []() -> float { return W3DTaa::getGradeWarm(); } },
 	{ "gradesat", FALSE, TRUE, [](float v) { W3DTaa::setGradeSat(v); }, []() -> float { return W3DTaa::getGradeSat(); } },
 	{ "grademids", FALSE, TRUE, [](float v) { W3DTaa::setGradeMids(v); }, []() -> float { return W3DTaa::getGradeMids(); } },
+	// Ronin @feature 21/10/2026 DX9: HDR's look (W3DTaa, `hdr`) - the sun's lift by the time of day, its warmth, the curve's white. Its on /
+	// off is the player's: Options.ini DX9HDR.
+	{ "hdrmorning", FALSE, TRUE, [](float v) { W3DTaa::setSunGainAt(0, v); }, []() -> float { return W3DTaa::getSunGainAt(0); } },
+	{ "hdrafternoon", FALSE, TRUE, [](float v) { W3DTaa::setSunGainAt(1, v); }, []() -> float { return W3DTaa::getSunGainAt(1); } },
+	{ "hdrevening", FALSE, TRUE, [](float v) { W3DTaa::setSunGainAt(2, v); }, []() -> float { return W3DTaa::getSunGainAt(2); } },
+	{ "hdrnight", FALSE, TRUE, [](float v) { W3DTaa::setSunGainAt(3, v); }, []() -> float { return W3DTaa::getSunGainAt(3); } },
+	{ "hdrwarm", FALSE, TRUE, [](float v) { W3DTaa::setSunWarm(v); }, []() -> float { return W3DTaa::getSunWarm(); } },
+	{ "hdrwhite", FALSE, TRUE, [](float v) { W3DTaa::setWhite(v); }, []() -> float { return W3DTaa::getWhite(); } },
 	LIGHT_SWITCH("lampmaps", setLampMaps, getLampMaps),
 	LIGHT_REAL("lampshadows", setLampShadows, getLampShadows),
 	LIGHT_REAL("lampbias", setLampBias, getLampBias),
