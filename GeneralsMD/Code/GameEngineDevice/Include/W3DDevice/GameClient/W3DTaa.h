@@ -94,6 +94,7 @@ public:
 	// gain of this time of day, tinted by `warm`), and `white`: the scene value the resolve's tone curve shows as white.
 	static void  setSunGain(float v);
 	static float getSunGain(void);
+	static const CameraClass *getSceneCamera(void);	// Ronin @feature 21/10/2026 DX9: the 3D view's camera this frame (preRender)
 	static void  setSunGainAt(Int slot, float v);	// Ronin @feature 21/10/2026 DX9: by slot, 0 morning .. 3 night (DX9Lights.ini)
 	static float getSunGainAt(Int slot);
 	static void  setSunWarm(float v);

@@ -401,6 +401,8 @@ float W3DTaa::getSunGain(void)		{ return s_sunGain[sunGainSlot()]; }
 // Ronin @feature 21/10/2026 DX9: one time of day's gain by its slot (0 morning .. 3 night), for DX9Lights.ini.
 void  W3DTaa::setSunGainAt(Int slot, float v)	{ if (slot >= 0 && slot < 4) s_sunGain[slot] = (v < 1.0f) ? 1.0f : ((v > 4.0f) ? 4.0f : v); }
 float W3DTaa::getSunGainAt(Int slot)			{ return (slot >= 0 && slot < 4) ? s_sunGain[slot] : 1.0f; }
+// Ronin @feature 21/10/2026 DX9: the camera preRender took for this frame's 3D view - SSAO's `aosun` runs the shade pass with it.
+const CameraClass *W3DTaa::getSceneCamera(void)	{ return s_camera; }
 void  W3DTaa::setSunWarm(float v)	{ s_sunWarm = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
 float W3DTaa::getSunWarm(void)		{ return s_sunWarm; }
 void  W3DTaa::setWhite(float v)		{ s_white = (v < 1.0f) ? 1.0f : ((v > 2.0f) ? 2.0f : v); }

@@ -1680,6 +1680,8 @@ static void gpuFrameEnd(void)
 static TextureClass			*s_shadeTex     = NULL;
 static UnsignedInt			s_shadeW        = 0;
 static UnsignedInt			s_shadeH        = 0;
+static UnsignedInt			s_shadeMapFrame = 0;		// Ronin @feature 21/10/2026 DX9: the s_fixFrame the shade pass last filled it in
+static Bool runShadePass(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, const D3DSURFACE_DESC &rd, const CameraClass &camera);
 static Bool					s_shadeOpen     = FALSE;	// between beginFrame and the light pass
 static Bool					s_shadeBound    = FALSE;
 static Bool					s_shadeWritten  = FALSE;	// bound at least once this frame
@@ -1836,10 +1838,37 @@ void W3DLocalLights::bindSunShadeForAO(void)
 	IDirect3DBaseTexture9 *mesh = NULL;
 	IDirect3DBaseTexture9 *ground = NULL;
 	IDirect3DSurface9 *rt = NULL;
-	if (s_aoSun > 0.0f && s_shadeFrame && TheTerrainShadowPass.enabled && SUCCEEDED(dev->GetRenderTarget(0, &rt)) && rt != NULL)
+	D3DSURFACE_DESC rd;
+	if (s_aoSun > 0.0f && s_shadeFrame && TheTerrainShadowPass.enabled && SUCCEEDED(dev->GetRenderTarget(0, &rt)) && rt != NULL &&
+		SUCCEEDED(rt->GetDesc(&rd)))
 	{
-		D3DSURFACE_DESC rd;
-		if (SUCCEEDED(rt->GetDesc(&rd)) && rd.MultiSampleType == D3DMULTISAMPLE_NONE)		// neither record is written under MSAA
+		// Ronin @feature 21/10/2026 DX9: the shade pass's record, as the lights read it: every pixel's own shade (glass, trees and
+		// infantry too), under MSAA as well. Run here while SSAO has the scene depth out; its stage 0 is put back after.
+		const CameraClass *cam = W3DTaa::getSceneCamera();
+		IDirect3DTexture9 *depthTex = DX8Wrapper::Peek_Scene_Depth_Texture();
+		D3DSURFACE_DESC dd;
+		Bool fromMap = FALSE;
+		if (cam != NULL && depthTex != NULL && SUCCEEDED(depthTex->GetLevelDesc(0, &dd)) && dd.Width == rd.Width && dd.Height == rd.Height)
+		{
+			IDirect3DBaseTexture9 *keepTex = NULL;
+			dev->GetTexture(0, &keepTex);
+			static const D3DSAMPLERSTATETYPE KEEP_SAMP[5] = { D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER, D3DSAMP_ADDRESSU,
+															  D3DSAMP_ADDRESSV };
+			DWORD keepSamp[5];
+			for (Int k = 0; k < 5; ++k)
+				dev->GetSamplerState(0, KEEP_SAMP[k], &keepSamp[k]);
+			fromMap = runShadePass(dev, depthTex, rd, *cam);
+			dev->SetTexture(0, keepTex);
+			if (keepTex != NULL)
+				keepTex->Release();
+			for (Int k = 0; k < 5; ++k)
+				dev->SetSamplerState(0, KEEP_SAMP[k], keepSamp[k]);
+		}
+		else
+			fromMap = (s_shadeMapFrame == s_fixFrame && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height) ? TRUE : FALSE;
+		if (fromMap)
+			mesh = s_shadeTex->Peek_D3D_Texture();
+		else if (rd.MultiSampleType == D3DMULTISAMPLE_NONE)		// neither old record is written under MSAA
 		{
 			if (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height)
 				mesh = s_shadeTex->Peek_D3D_Texture();
@@ -2643,6 +2672,23 @@ static Bool shadeFromSunMap(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, 
 	return ok;
 }
 
+// Ronin @feature 21/10/2026 DX9: the shade pass from the camera's own view numbers - for the light pass, and for SSAO's `aosun`.
+static Bool runShadePass(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, const D3DSURFACE_DESC &rd, const CameraClass &camera)
+{
+	float zNear = 1.0f;
+	float zFar  = 1000.0f;
+	camera.Get_Clip_Planes(zNear, zFar);
+	Vector2 planeMin, planeMax, vpMin, vpMax;
+	camera.Get_View_Plane(planeMin, planeMax);
+	camera.Get_Viewport(vpMin, vpMax);
+	const float c0to3[16] = { zNear, zFar, 8.0f, s_over, planeMin.X, planeMax.Y, planeMax.X - planeMin.X, planeMax.Y - planeMin.Y,
+							  vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y, 1.0f / (float)rd.Width, 1.0f / (float)rd.Height,
+							  0.0f, 0.0f };
+	const Bool ok = shadeFromSunMap(dev, depthTex, rd, camera, c0to3);
+	s_shadeMapFrame = ok ? s_fixFrame : 0;
+	return ok;
+}
+
 void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 {
 	if (!s_active || s_passDone || scene == NULL)
@@ -3426,9 +3472,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	Bool shadeFromMap = FALSE;
 	if (depthOK && (s_sunFill > 0.0f || liftWanted))
 	{
-		const float c0to3[16] = { zNear, zFar, 8.0f, s_over, planeMin.X, planeMax.Y, planeW, planeH,
-								  vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y, 1.0f / targetW, 1.0f / targetH, 0.0f, 0.0f };
-		shadeFromMap = shadeFromSunMap(dev, depthTex, rd, camera, c0to3);
+		shadeFromMap = runShadePass(dev, depthTex, rd, camera);
 		meshShade = shadeFromMap ? TRUE : meshShade;
 	}
 	drawSunLift(dev, rd, shadeFromMap);		// Ronin @feature 12/10/2026 DX9: HDR stage 1b: with or without a light on screen
