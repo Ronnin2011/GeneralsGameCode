@@ -220,8 +220,12 @@ public:
 		Int   lampSkins;		// ... and skinned meshes there was no room to deform
 		Int   beamMeshes;		// beam-only meshes left undrawn (every pass counts)
 		Int   beamModels;		// beam models read so far
+		float gpuScene;			// Ronin @diagnostic 20/10/2026 DX9: GPU ms - the 3D scene up to the light pass; -1 = not measured
+		float gpuShade;			// ... the sun's-shade pass
+		float gpuLights;		// ... the light pass, the shade pass included
 	};
 	static void getStats(Stats *out);
+	static void releaseQueries(void);		// Ronin @diagnostic 20/10/2026 DX9: the GPU timer's, before a device reset
 };
 
 #endif

@@ -72,6 +72,18 @@ static D3DFORMAT				s_copyFormat    = D3DFMT_UNKNOWN;
 static W3DLocalLights::Stats	s_stats;	// this frame, being counted
 static W3DLocalLights::Stats	s_shown;	// last frame, complete
 
+// Ronin @diagnostic 20/10/2026 DX9: GPU TIME of the 3D scene up to the light pass, the sun's-shade pass and the light pass, from
+// timestamps read LIGHT_GPU_RING frames later so nothing waits (W3DTaa's pattern). ms, eased; -1 = not measured. [LIGHT2] row.
+enum { LIGHT_GPU_RING = 4, LIGHT_GPU_MARKS = 5 };	// 0 beginFrame, 1 light pass start, 2 shade pass start, 3 its end, 4 light pass end
+struct LightGpuFrame { IDirect3DQuery9 *disjoint; IDirect3DQuery9 *freq; IDirect3DQuery9 *t[LIGHT_GPU_MARKS]; Bool marked[LIGHT_GPU_MARKS];
+					   Bool issued; };
+static LightGpuFrame			s_gpu[LIGHT_GPU_RING];
+static Int						s_gpuSlot       = 0;
+static Bool						s_gpuOK         = FALSE;
+static Bool						s_gpuTried      = FALSE;	// made once; again after releaseQueries (a device reset)
+static Bool						s_gpuOpen       = FALSE;	// between beginFrame and endFrame
+static float					s_gpuMs[3]      = { -1.0f, -1.0f, -1.0f };	// scene, shade, lights
+
 struct LightDraw
 {
 	float c[40];			// c5..c10: the light now (position, diffuse, ambient) and as it was last frame; c11, c12: the two axes; c13: shafts
@@ -1557,8 +1569,110 @@ Bool W3DLocalLights::wantsDepthPrepass(void)	{ return s_enabled ? TRUE : FALSE; 
 
 void W3DLocalLights::getStats(Stats *out)
 {
-	if (out != NULL)
-		*out = s_shown;
+	if (out == NULL)
+		return;
+	*out = s_shown;
+	out->gpuScene  = s_gpuMs[0];
+	out->gpuShade  = s_gpuMs[1];
+	out->gpuLights = s_gpuMs[2];
+}
+
+// Ronin @diagnostic 20/10/2026 DX9: a device reset fails while any query lives: W3DTaa::releaseResources calls this with its own.
+void W3DLocalLights::releaseQueries(void)
+{
+	for (Int i = 0; i < LIGHT_GPU_RING; ++i)
+	{
+		LightGpuFrame &f = s_gpu[i];
+		if (f.disjoint != NULL) { f.disjoint->Release(); f.disjoint = NULL; }
+		if (f.freq != NULL)     { f.freq->Release();     f.freq = NULL; }
+		for (Int m = 0; m < LIGHT_GPU_MARKS; ++m)
+		{
+			if (f.t[m] != NULL) { f.t[m]->Release(); f.t[m] = NULL; }
+			f.marked[m] = FALSE;
+		}
+		f.issued = FALSE;
+	}
+	s_gpuOK    = FALSE;
+	s_gpuTried = FALSE;
+	s_gpuOpen  = FALSE;
+}
+
+static void gpuMark(Int m)
+{
+	if (!s_gpuOK || !s_gpuOpen)
+		return;
+	s_gpu[s_gpuSlot].t[m]->Issue(D3DISSUE_END);
+	s_gpu[s_gpuSlot].marked[m] = TRUE;
+}
+
+static void gpuEase(Int k, Bool have, UINT64 from, UINT64 to, double msPerTick)
+{
+	if (!have || to < from)
+	{
+		s_gpuMs[k] = -1.0f;
+		return;
+	}
+	const float ms = (float)((double)(to - from) * msPerTick);
+	s_gpuMs[k] = (s_gpuMs[k] < 0.0f) ? ms : (s_gpuMs[k] * 0.9f + ms * 0.1f);
+}
+
+// Ronin @diagnostic 20/10/2026 DX9: reads this slot's frame of LIGHT_GPU_RING frames ago, if the GPU finished it; opens it at mark 0.
+static void gpuFrameBegin(IDirect3DDevice9 *dev)
+{
+	if (!s_gpuTried && dev != NULL)
+	{
+		Bool ok = TRUE;
+		for (Int i = 0; i < LIGHT_GPU_RING && ok; ++i)
+		{
+			LightGpuFrame &f = s_gpu[i];
+			ok = SUCCEEDED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMPDISJOINT, &f.disjoint)) &&
+				 SUCCEEDED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMPFREQ, &f.freq));
+			for (Int m = 0; m < LIGHT_GPU_MARKS && ok; ++m)
+				ok = SUCCEEDED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.t[m]));
+		}
+		if (!ok)
+			W3DLocalLights::releaseQueries();		// no timestamps on this card: the row shows n/a
+		s_gpuOK    = ok;
+		s_gpuTried = TRUE;
+	}
+	if (!s_gpuOK)
+		return;
+	LightGpuFrame &f = s_gpu[s_gpuSlot];
+	if (f.issued)
+	{
+		BOOL   disjoint = TRUE;
+		UINT64 freq = 0, t[LIGHT_GPU_MARKS] = { 0, 0, 0, 0, 0 };
+		Bool   ready = (f.disjoint->GetData(&disjoint, sizeof(disjoint), 0) == S_OK) &&
+					   (f.freq->GetData(&freq, sizeof(freq), 0) == S_OK);
+		for (Int m = 0; m < LIGHT_GPU_MARKS && ready; ++m)
+			if (f.marked[m])
+				ready = (f.t[m]->GetData(&t[m], sizeof(UINT64), 0) == S_OK);
+		if (ready && !disjoint && freq > 0)
+		{
+			const double msPerTick = 1000.0 / (double)freq;
+			gpuEase(0, f.marked[0] && f.marked[1], t[0], t[1], msPerTick);
+			gpuEase(1, f.marked[2] && f.marked[3], t[2], t[3], msPerTick);
+			gpuEase(2, f.marked[1] && f.marked[4], t[1], t[4], msPerTick);
+		}
+		f.issued = FALSE;
+	}
+	for (Int m = 0; m < LIGHT_GPU_MARKS; ++m)
+		f.marked[m] = FALSE;
+	f.disjoint->Issue(D3DISSUE_BEGIN);
+	s_gpuOpen = TRUE;
+	gpuMark(0);
+}
+
+static void gpuFrameEnd(void)
+{
+	if (!s_gpuOK || !s_gpuOpen)
+		return;
+	LightGpuFrame &f = s_gpu[s_gpuSlot];
+	f.freq->Issue(D3DISSUE_END);
+	f.disjoint->Issue(D3DISSUE_END);
+	f.issued  = TRUE;
+	s_gpuOpen = FALSE;
+	s_gpuSlot = (s_gpuSlot + 1) % LIGHT_GPU_RING;
 }
 
 // Ronin @feature 10/10/2026 DX9: LIGHTING PART 3, STEP 1 - the sun's shade as the mesh shader applied it, kept per pixel (RigidInstance_ps
@@ -1966,6 +2080,9 @@ void W3DLocalLights::beginFrame(void)
 			s_knobDefaults[k] = s_knobs[k].get();
 		loadIni(NULL);
 	}
+	gpuFrameEnd();		// Ronin @diagnostic 20/10/2026 DX9: a frame left open (no endFrame) is closed before the next one opens
+	if (s_enabled)
+		gpuFrameBegin(DX8Wrapper::_Get_D3D_Device8());
 	W3DSkyCube::update();		// Ronin @feature 12/10/2026 DX9: the map's sky cube: built again when the map, its time or its sky changed
 	// Ronin @feature 12/10/2026 DX9: the sky cube: the reflective meshes mirror it (`lights reflect`). With the lights off, the art's picture.
 	DX8InstanceManagerClass::Set_Sky_Reflection(W3DSkyCube::peek(), s_enabled ? (float)s_reflect : 0.0f);
@@ -2101,6 +2218,7 @@ void W3DLocalLights::endFrame(void)
 	// Ronin @bugfix 19/10/2026 DX9: last frame's picture is borrowed for this frame only. Handed back here, or the sun's shadow map,
 	// drawn before the next beginFrame, binds it after a device reset freed it (the MSAA switch: heap corruption in d3d9).
 	DX8InstanceManagerClass::Set_Screen_Reflection(NULL, NULL, NULL, NULL, NULL);
+	gpuFrameEnd();
 	s_shadeOpen = FALSE;
 	s_casterOpen = FALSE;
 	endSunShade();
@@ -2462,7 +2580,9 @@ static Bool shadeFromSunMap(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, 
 		const float t = 1.0f - (-0.5f / targetH) * 2.0f, b = 1.0f - ((targetH - 0.5f) / targetH) * 2.0f;
 		struct ShadeVertex { float x, y, z; float u, v; };
 		const ShadeVertex q[4] = { { l, t, 0.0f, 0.0f, 0.0f }, { r, t, 0.0f, 1.0f, 0.0f }, { l, b, 0.0f, 0.0f, 1.0f }, { r, b, 0.0f, 1.0f, 1.0f } };
+		gpuMark(2);
 		dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(ShadeVertex));
+		gpuMark(3);
 		dev->SetTexture(8, NULL);
 		dev->SetTexture(9, NULL);
 		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, oldBlend);
@@ -2490,6 +2610,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	if (!s_active || s_passDone || scene == NULL)
 		return;
 	s_passDone = TRUE;
+	// Ronin @diagnostic 20/10/2026 DX9: the pass's GPU time: marks 1 and 4 round everything below, early returns included.
+	struct GpuPassMarks { GpuPassMarks() { gpuMark(1); } ~GpuPassMarks() { gpuMark(4); } } gpuPassMarks;
 	s_shadeOpen = FALSE;		// Ronin @feature 10/10/2026 DX9: the sun's shade: what is drawn from here on is not under the lights
 	s_casterOpen = FALSE;
 	s_stats.casters = s_casterCount;

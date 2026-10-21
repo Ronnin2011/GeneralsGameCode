@@ -1947,6 +1947,7 @@ void W3DTaa::releaseResources(void)
 	s_gpuRemake = (s_gpuRemake || s_gpuOK) ? TRUE : FALSE;
 	gpuRelease();
 	releaseOpaque();		// Ronin @feature 12/10/2026 DX9: a raw default-pool texture: a reset fails while it lives
+	W3DLocalLights::releaseQueries();	// Ronin @diagnostic 20/10/2026 DX9: the lights' GPU timer, likewise
 }
 
 void W3DTaa::shutdown(void)

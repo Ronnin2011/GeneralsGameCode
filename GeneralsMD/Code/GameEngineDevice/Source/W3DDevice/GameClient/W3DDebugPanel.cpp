@@ -3318,6 +3318,13 @@ namespace
 			text.format(L"[LIGHT2] beams=%d (meshes skipped %d, models %d)  casters=%d  lampmaps=%d (%d point lights, %d with sides; %d draws, %.1fk tris)",
 				ls.beams, ls.beamMeshes, ls.beamModels, ls.casters, ls.lampMaps, ls.lampPoints, ls.lampSides, ls.lampDraws,
 				(float)ls.lampTris / 1000.0f);
+			// Ronin @diagnostic 20/10/2026 DX9: GPU ms - scene = the 3D frame up to the lights, shade = the sun's-shade pass, lights = the pass
+			UnicodeString gpu;
+			if (ls.gpuScene < 0.0f && ls.gpuLights < 0.0f)
+				gpu = L"  gpu=n/a";
+			else
+				gpu.format(L"  gpu: scene=%.2fms shade=%.2fms lights=%.2fms", ls.gpuScene, ls.gpuShade, ls.gpuLights);
+			text.concat(gpu);
 			putRow(W3DDebugPanel::ROW_LIGHT2, text, GameMakeColor(255, 190, 110, 255));
 		}
 	}
