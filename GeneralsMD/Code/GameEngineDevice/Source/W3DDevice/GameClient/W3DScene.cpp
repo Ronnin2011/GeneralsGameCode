@@ -659,6 +659,10 @@ void RTS3DScene::renderSpecificDrawables(RenderInfoClass &rinfo, Int numDrawable
 	}
 }
 
+// Ronin @feature 21/10/2026 DX9: an unpowered (disabled) object keeps DISABLED_LIGHT_LEFT of every light instead of losing 0.5 of each:
+// the subtraction went below 0 at night and the building drew black whatever its texture. 0.2 keeps 2003's sunlit faces by day.
+static const Real DISABLED_LIGHT_LEFT = 0.2f;
+
 //============================================================================
 // RTS3DScene::renderOneObject
 //=============================================================================
@@ -775,12 +779,22 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 				Vector3::Add(sumTint, *tintColor, &sumTint);
 			if (selectionColor)
 				Vector3::Add(sumTint, *selectionColor, &sumTint);
+			// Ronin @feature 21/10/2026 DX9: the disabled tint (grey and darkening; its fade in and out too - the status clears at once)
+			// scales the lights instead, -0.5 to DISABLED_LIGHT_LEFT; frenzy and subdual add their colour as in 2003.
+			Real keep = 1.0f;
+			if (tintColor != nullptr && tintColor->X < 0.0f && tintColor->X == tintColor->Y && tintColor->Y == tintColor->Z)
+			{
+				keep = 1.0f + (1.0f - DISABLED_LIGHT_LEFT) * (tintColor->X / 0.5f);
+				keep = (keep < 0.0f) ? 0.0f : keep;
+				Vector3::Subtract(sumTint, *tintColor, &sumTint);		// what is left to add: the selection's flash
+			}
 
 			for (Int globalLightIndex = 0; globalLightIndex < m_numGlobalLights; globalLightIndex++)
 			{
 				sceneLights[globalLightIndex]->Get_Diffuse( &temp );
 				restore = temp;
 
+				temp *= keep;
 				Vector3::Add(temp, sumTint, &temp);
 
 				sceneLights[globalLightIndex]->Set_Diffuse( temp );
@@ -790,6 +804,7 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 			}
 
 			temp = lightEnv.Get_Equivalent_Ambient();
+			temp *= keep;
 			Vector3::Add(sumTint, temp, &temp );
 
 			lightEnv.Set_Output_Ambient( temp );
