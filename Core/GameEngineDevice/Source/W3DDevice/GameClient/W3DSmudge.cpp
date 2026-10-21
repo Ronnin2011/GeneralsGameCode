@@ -544,6 +544,27 @@ void W3DSmudgeManager::render(RenderInfoClass& rinfo)
 		HRESULT hr = pDev->GetRenderTarget(0, &backbufferSurf);
 		if (SUCCEEDED(hr) && backbufferSurf)
 		{
+			// Ronin @bugfix 21/10/2026 DX9: the copy in the target's own format - made once at startup, it stayed 8-bit under HDR's float
+			// scene and clipped it at 1: a dimmer patch round every heat haze. Made again when the format or size changes.
+			D3DSURFACE_DESC rtDesc, copyDesc;
+			if (SUCCEEDED(backbufferSurf->GetDesc(&rtDesc)) && SUCCEEDED(m_resolveTexture->GetLevelDesc(0, &copyDesc)) &&
+				(rtDesc.Format != copyDesc.Format || rtDesc.Width != copyDesc.Width || rtDesc.Height != copyDesc.Height))
+			{
+				IDirect3DTexture8* tex = nullptr;
+				IDirect3DSurface8* surf = nullptr;
+				if (SUCCEEDED(pDev->CreateTexture(rtDesc.Width, rtDesc.Height, 1, D3DUSAGE_RENDERTARGET, rtDesc.Format, D3DPOOL_DEFAULT,
+												  &tex, nullptr)) && tex != nullptr && SUCCEEDED(tex->GetSurfaceLevel(0, &surf)) && surf != nullptr)
+				{
+					m_resolveSurface->Release();
+					m_resolveTexture->Release();
+					m_resolveTexture = tex;
+					m_resolveSurface = surf;
+				}
+				else if (tex != nullptr)
+				{
+					tex->Release();
+				}
+			}
 			hr = pDev->StretchRect(backbufferSurf, nullptr, m_resolveSurface, nullptr, D3DTEXF_NONE);
 			backbufferSurf->Release();
 			if (FAILED(hr))
