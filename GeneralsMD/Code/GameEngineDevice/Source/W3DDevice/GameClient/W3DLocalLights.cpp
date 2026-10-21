@@ -1946,6 +1946,11 @@ static const W3DLocalLights::Knob s_knobs[] =
 	{ "nightfloor", FALSE, TRUE, [](float v) { W3DTaa::setNightFloor(v); }, []() -> float { return W3DTaa::getNightFloor(); } },
 	{ "nightfull", FALSE, TRUE, [](float v) { W3DTaa::setNightFull(v); }, []() -> float { return W3DTaa::getNightFull(); } },
 	{ "nightlift", FALSE, TRUE, [](float v) { W3DTaa::setNightLift(v); }, []() -> float { return W3DTaa::getNightLift(); } },
+	// Ronin @feature 21/10/2026 DX9: the daytime grade (W3DTaa) - final-pass colour as the night look is, so DX9Lights.ini keeps it too.
+	{ "grade", TRUE, TRUE, [](float v) { W3DTaa::setGrade((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DTaa::getGrade() ? 1.0f : 0.0f; } },
+	{ "gradewarm", FALSE, TRUE, [](float v) { W3DTaa::setGradeWarm(v); }, []() -> float { return W3DTaa::getGradeWarm(); } },
+	{ "gradesat", FALSE, TRUE, [](float v) { W3DTaa::setGradeSat(v); }, []() -> float { return W3DTaa::getGradeSat(); } },
+	{ "grademids", FALSE, TRUE, [](float v) { W3DTaa::setGradeMids(v); }, []() -> float { return W3DTaa::getGradeMids(); } },
 	LIGHT_SWITCH("lampmaps", setLampMaps, getLampMaps),
 	LIGHT_REAL("lampshadows", setLampShadows, getLampShadows),
 	LIGHT_REAL("lampbias", setLampBias, getLampBias),

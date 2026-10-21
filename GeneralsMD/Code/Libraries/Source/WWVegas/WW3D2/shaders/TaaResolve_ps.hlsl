@@ -77,6 +77,23 @@ float3 nightLook(float3 c, float2 uv)
     return saturate(lerp(l * g_Night.rgb, c, keep));
 }
 
+// Ronin @feature 21/10/2026 DX9: THE GRADE (`grade`, by day; screen copy only): a warm tint with each pixel's luminance kept, then
+// saturation, then the mid-tones' power. c20 = (on, saturation, power), c21 = the tint.
+float4   g_Grade     : register(c20);
+float4   g_GradeTint : register(c21);
+float3 grade(float3 c)
+{
+    const float3 LUMA = float3(0.2126f, 0.7152f, 0.0722f);
+    float  l0 = dot(c, LUMA);
+    float3 t  = c * g_GradeTint.rgb;
+    float  l1 = dot(t, LUMA);
+    c = (l1 > 0.000001f) ? t * (l0 / l1) : c;
+    float  l  = dot(c, LUMA);
+    c = l + (c - l) * g_Grade.y;
+    l = dot(c, LUMA);
+    return saturate((l > 0.0005f) ? c * pow(max(l, 0.0005f), g_Grade.z - 1.0f) : c);
+}
+
 // Ronin @feature 21/09/2026 DX9: Catmull-Rom history fetch, 9 taps.
 //
 // WHY NOT BILINEAR: the history is re-fetched at a subpixel position every frame and fed straight back in. Bilinear
@@ -224,6 +241,8 @@ float4 resolve(float2 uv, out float3 lowBits)
             shown = darkLift(shown);
         if (g_Night.w > 0.0f)
             shown = nightLook(shown, uv);
+        if (g_Grade.x > 0.0f)
+            shown = grade(shown);		// Ronin @feature 21/10/2026 DX9: by day; before the flash, which keeps its colour
         // Ronin @bugfix 09/10/2026 DX9: SELECTION FLASH, after the resolve. Lit like a local light: the surface colour (frame over the
         // map's light) x the flash, never past the surface's own colour. The history never sees it, so nothing lags.
         if (g_FlashPrm.w > 0.0f)

@@ -382,7 +382,7 @@ namespace
 	// TheWaterGlobalKnobs (W3DWaterSeaTuning.h): the water ini reads the same one.
 
 	// Ronin @feature 03/10/2026 DX9: one column of a panel table (`water`, `lights`) - a group's title and its `name=value` cells.
-	enum { PANEL_COLUMN_ROWS = 12 };	// water's SWELL holds 9, lights' SUN 10
+	enum { PANEL_COLUMN_ROWS = 13 };	// water's SWELL holds 9, lights' SUN 10, COLOUR 11 (Ronin 21/10/2026: 12 -> 13 for the grade)
 	struct PanelColumn
 	{
 		const char *title;
@@ -936,7 +936,8 @@ namespace
 			  "sunnight", NULL },
 			{ "LAMP SHADOWS", "lampmaps", "lampshadows", "lampbias", "lampself", "lampselfnear", "pointmaps", "pointsides", NULL },
 			{ "GLASS & GROUND", "reflect", "reflectground", "fresnel", "ssr", "bounce", NULL },
-			{ "NIGHT", "night", "nighttint", "nightlo", "nighthi", "nightfloor", "nightfull", "nightlift", NULL },
+			{ "COLOUR", "night", "nighttint", "nightlo", "nighthi", "nightfloor", "nightfull", "nightlift", "grade", "gradewarm", "gradesat",
+			  "grademids", NULL },		// Ronin @feature 21/10/2026 DX9: the final pass's colour - the night look, the dark lift, the grade
 		};
 		Bool placed[LIGHT_KNOBS_MAX] = {};
 		PanelColumn cols[8] = {};
@@ -1111,6 +1112,30 @@ namespace
 		char line[512];
 		W3DTaa::describeScene(line, (Int)sizeof(line));
 		printAscii(AsciiString(line), FALSE);
+	}
+
+	// Ronin @feature 21/10/2026 DX9: `grade` - the daytime colour in the final pass (W3DTaa): warm tint, saturation, darker mid-tones,
+	// from the "Zero Hour: Enhanced" shots measured. Never at night - the night look owns it.
+	void cmdGrade(Int argc, const AsciiString *argv)
+	{
+		if (argc == 2)
+			W3DTaa::setGrade((atoi(argv[1].str()) != 0) ? TRUE : FALSE);
+		else if (argc == 3 && stricmp(argv[1].str(), "warm") == 0)
+			W3DTaa::setGradeWarm((float)atof(argv[2].str()));
+		else if (argc == 3 && stricmp(argv[1].str(), "sat") == 0)
+			W3DTaa::setGradeSat((float)atof(argv[2].str()));
+		else if (argc == 3 && stricmp(argv[1].str(), "mids") == 0)
+			W3DTaa::setGradeMids((float)atof(argv[2].str()));
+		else if (argc != 1)
+		{
+			printAscii(AsciiString("usage: grade [0|1] | grade warm <0..2> | grade sat <0..2.5> | grade mids <0.5..2>   (by day; `lights save` keeps it in DX9Lights.ini)"), TRUE);
+			printAscii(AsciiString("  warm: 0 = none, 1 = the measured tint (blue to 72%, green to 88%, brightness kept);  sat: 1 = none;  mids: 1 = none, above 1 darker mid-tones"), FALSE);
+			return;
+		}
+		AsciiString line;
+		line.format("grade=%d  warm=%.2f  sat=%.2f  mids=%.2f  (by day only: the night look owns the night)", W3DTaa::getGrade() ? 1 : 0,
+					W3DTaa::getGradeWarm(), W3DTaa::getGradeSat(), W3DTaa::getGradeMids());
+		printAscii(line, FALSE);
 	}
 
 	// Ronin @feature 12/10/2026 DX9: `sky` - the map's sky cube (W3DSkyCube): which sky it was made from, its ground, the six
@@ -3479,6 +3504,7 @@ void W3DDebugPanel::update(void)
 		registerCommand("glowfx", "glowfx - the glowing (additive) particle systems now: how many, how many on screen, the strongest by colour x alpha x size^2", cmdGlowFx);
 		registerCommand("night", "night [0|1] | night tint|lo|hi|floor|full|lift <v> - the night look and the dark lift: dim colour into one tint from the map's light, lamps keep theirs (at night; not saved)", cmdNight);
 		registerCommand("hdr", "hdr [0|1] | hdr sun <1..4> | hdr warm <0..1> | hdr white <1..2> - HDR stage 1: a float scene, the sun lifted above 1, a tone curve (needs MSAA off; not saved)", cmdHdr);
+		registerCommand("grade", "grade [0|1] | grade warm|sat|mids <v> - the daytime colour: warm tint, saturation, darker mid-tones (by day; off by default; DX9Lights.ini: grade, gradewarm, gradesat, grademids)", cmdGrade);
 		registerCommand("campitch", "campitch [degrees | default] - the camera's tilt (a middle click resets it)", cmdCamPitch);
 		registerCommand("sky", "sky | sky rebuild - the map's sky cube: its source, its ground, the ambient's six colours (`lights view 5` shows it)", cmdSky);
 		registerCommand("timesetting", "timesetting [1..4] - time of day: 1 morning, 2 afternoon, 3 evening, 4 night (not saved; not in LAN/online)", cmdTimeSetting);

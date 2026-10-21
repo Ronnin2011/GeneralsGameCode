@@ -99,6 +99,16 @@ public:
 	static void  setWhite(float v);
 	static float getWhite(void);
 	static Bool  getSunLift(float rgb[3]);	// FALSE: no float scene this frame, or no gain - nothing to draw
+	// Ronin @feature 21/10/2026 DX9: THE GRADE - the daytime colour in the final pass, never at night: warm 0 = none, 1 = the measured
+	// tint; sat 1 = none; mids = the mid-tones' power, 1 = none. Off by default.
+	static void  setGrade(Bool on);
+	static Bool  getGrade(void);
+	static void  setGradeWarm(float v);
+	static float getGradeWarm(void);
+	static void  setGradeSat(float v);
+	static float getGradeSat(void);
+	static void  setGradeMids(float v);
+	static float getGradeMids(void);
 	// Ronin @feature 15/10/2026 DX9: THE NIGHT LOOK (TAA's pass 2 or finishScene): dim colour goes to one tint (the map light's cast),
 	// bright keeps its own. tint 0..1; lo / hi: the luminance where a pixel starts / ends keeping its colour; floor: the least it keeps.
 	static void  setNight(Bool on);

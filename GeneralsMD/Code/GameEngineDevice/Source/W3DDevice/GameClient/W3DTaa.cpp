@@ -488,9 +488,42 @@ static UnsignedInt   s_lightMaskFrame = 0;		// the s_frameNo the light mask was 
 static TextureClass *s_finishCopy     = NULL;	// the frame at its own size and format: StretchRect resolves MSAA into it
 static UnsignedInt   s_finishW = 0, s_finishH = 0;
 static D3DFORMAT     s_finishFormat   = D3DFMT_UNKNOWN;
+// Ronin @feature 21/10/2026 DX9: THE GRADE (`grade`) - the daytime colour, from the "Zero Hour: Enhanced" shots measured: a warm tint
+// (luminance kept), more saturation, darker mid-tones. Off by default (DX9Lights.ini sets it); never at night - the night look's.
+static Bool  s_gradeOn   = FALSE;
+static float s_gradeWarm = 1.0f;		// `grade warm`: 0 = none, 1 = their tint, 1 : 0.88 : 0.72
+static float s_gradeSat  = 1.2f;		// `grade sat`: 1 = none; 1.2 his pick 21/10 (the measured 1.6 was too much)
+static float s_gradeMids = 1.34f;		// `grade mids`: the mid-tones' power, 1 = none, above 1 darker (their mid grey 0.2, ours 0.3)
+static Bool gradeNow(void)
+{
+	return (s_gradeOn && TheGlobalData != NULL && TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+}
+
+// Ronin @feature 21/10/2026 DX9: the grade into a screen copy of the resolve shader: c20 = (on, saturation, mid-tones' power), c21 = the
+// warm tint. Every screen copy sets it, so none reads a stale one.
+static void bindGrade(IDirect3DDevice9 *dev)
+{
+	const float c20[8] = { gradeNow() ? 1.0f : 0.0f, s_gradeSat, s_gradeMids, 0.0f,
+						   1.0f, 1.0f - 0.12f * s_gradeWarm, 1.0f - 0.28f * s_gradeWarm, 0.0f };
+	dev->SetPixelShaderConstantF(20, c20, 2);
+}
+
+void  W3DTaa::setGrade(Bool on)			{ s_gradeOn = on; }
+Bool  W3DTaa::getGrade(void)			{ return s_gradeOn; }
+void  W3DTaa::setGradeWarm(float v)		{ s_gradeWarm = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float W3DTaa::getGradeWarm(void)		{ return s_gradeWarm; }
+void  W3DTaa::setGradeSat(float v)		{ s_gradeSat = (v < 0.0f) ? 0.0f : ((v > 2.5f) ? 2.5f : v); }
+float W3DTaa::getGradeSat(void)			{ return s_gradeSat; }
+void  W3DTaa::setGradeMids(float v)		{ s_gradeMids = (v < 0.5f) ? 0.5f : ((v > 2.0f) ? 2.0f : v); }
+float W3DTaa::getGradeMids(void)		{ return s_gradeMids; }
+
 static Bool finishWanted(void)
 {
-	if (s_active || !s_nightOn || TheGlobalData == NULL || TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT)
+	if (s_active)
+		return FALSE;
+	if (gradeNow())
+		return TRUE;		// Ronin @feature 21/10/2026 DX9: the grade is drawn by the finish pass
+	if (!s_nightOn || TheGlobalData == NULL || TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT)
 		return FALSE;
 	if (s_nightLift < 0.999f)
 		return TRUE;
@@ -2088,6 +2121,7 @@ static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DV
 	const Bool night = (s_nightOn && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
 	const float nightLiftC[4] = { s_nightLift, night ? 1.0f : 0.0f, 0.0f, 0.0f };
 	dev->SetPixelShaderConstantF(19, nightLiftC, 1);
+	bindGrade(dev);		// Ronin @feature 21/10/2026 DX9: the daytime grade
 	dev->SetTexture(0, src);
 	setResolveSampler(dev, 0);
 	dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
@@ -3071,6 +3105,7 @@ void W3DTaa::postRender(void)
 		dev->SetTexture(0, wroteHistory ? s_history[s_historyIndex]->Peek_D3D_Texture()
 										: (IDirect3DBaseTexture9 *)sceneTex);
 		setResolveSampler(dev, 0);
+		bindGrade(dev);		// Ronin @feature 21/10/2026 DX9: the daytime grade, on the screen copy only - never the history
 		dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
 		dev->SetTexture(10, NULL);
 		dev->SetTexture(8, NULL);	// Ronin @feature 15/10/2026 DX9: the night look's light mask
