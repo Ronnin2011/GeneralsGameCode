@@ -123,6 +123,14 @@ namespace
 	DisplayString *s_out[OUTPUT_LINES]      = {};
 	Color          s_outColor[OUTPUT_LINES] = {};
 	Int            s_outCount               = 0;
+	// Ronin @feature 21/10/2026 DX9: SCROLLBACK - the output keeps its last OUTPUT_BACK lines and shows OUTPUT_LINES of them. PgUp / PgDn
+	// in the command box or the wheel over the panel move the view; new output brings it back to the newest.
+	enum { OUTPUT_BACK = 512 };
+	UnicodeString  s_backText[OUTPUT_BACK];
+	Color          s_backColor[OUTPUT_BACK] = {};
+	Int            s_backStart  = 0;		// the oldest line's slot
+	Int            s_backCount  = 0;
+	Int            s_backScroll = 0;		// how many lines the view's last line sits above the newest
 
 	AsciiString    s_history[HISTORY_SIZE];
 	Int            s_historyCount = 0;
@@ -223,33 +231,65 @@ namespace
 		return s_rows[r].text != nullptr && s_rows[r].stamp == s_frame;
 	}
 
-	// Ronin @feature 03/10/2026 DX9: `color` 0 = the default grey (the `water` table colours its headers).
-	void printLine(const UnicodeString &text, Bool isError, Color color = 0)
+	// Ronin @feature 21/10/2026 DX9: the scrollback's window into the shown lines; scrolled up, the last one says what waits below.
+	void showOutput()
 	{
 		if (TheDisplayStringManager == nullptr)
 			return;
-		if (s_outCount == OUTPUT_LINES)
+		const Int maxScroll = (s_backCount > OUTPUT_LINES) ? (s_backCount - OUTPUT_LINES) : 0;
+		s_backScroll = (s_backScroll < 0) ? 0 : ((s_backScroll > maxScroll) ? maxScroll : s_backScroll);
+		const Int n     = (s_backCount < OUTPUT_LINES) ? s_backCount : OUTPUT_LINES;
+		const Int first = s_backCount - s_backScroll - n;
+		for (Int i = 0; i < n; ++i)
 		{
-			// Scroll: the oldest string object is reused for the new line.
-			DisplayString *oldest = s_out[0];
-			for (Int i = 0; i < OUTPUT_LINES - 1; ++i)
+			if (s_out[i] == nullptr)
 			{
-				s_out[i]      = s_out[i + 1];
-				s_outColor[i] = s_outColor[i + 1];
+				s_out[i] = TheDisplayStringManager->newDisplayString();
+				if (s_out[i] == nullptr)
+				{
+					s_outCount = i;
+					return;
+				}
+				s_out[i]->setFont(panelFont());
 			}
-			s_out[OUTPUT_LINES - 1] = oldest;
-			--s_outCount;
+			const Int slot = (s_backStart + first + i) % OUTPUT_BACK;
+			s_out[i]->setText(s_backText[slot]);
+			s_outColor[i] = s_backColor[slot];
 		}
-		if (s_out[s_outCount] == nullptr)
+		s_outCount = n;
+		if (s_backScroll > 0 && n > 0)
 		{
-			s_out[s_outCount] = TheDisplayStringManager->newDisplayString();
-			if (s_out[s_outCount] == nullptr)
-				return;
-			s_out[s_outCount]->setFont(panelFont());
+			UnicodeString more;
+			more.format(L"  ... %d newer line%s below - PgDn or the mouse wheel", s_backScroll, (s_backScroll == 1) ? L"" : L"s");
+			s_out[n - 1]->setText(more);
+			s_outColor[n - 1] = GameMakeColor(255, 220, 120, 255);
 		}
-		s_out[s_outCount]->setText(text);
-		s_outColor[s_outCount] = isError ? GameMakeColor(255, 120, 80, 255) : (color != 0) ? color : GameMakeColor(220, 220, 220, 255);
-		++s_outCount;
+	}
+
+	void scrollOutput(Int lines)
+	{
+		s_backScroll += lines;
+		showOutput();
+	}
+
+	// Ronin @feature 03/10/2026 DX9: `color` 0 = the default grey (the `water` table colours its headers).
+	void printLine(const UnicodeString &text, Bool isError, Color color = 0)
+	{
+		Int slot;
+		if (s_backCount < OUTPUT_BACK)
+		{
+			slot = (s_backStart + s_backCount) % OUTPUT_BACK;
+			++s_backCount;
+		}
+		else
+		{
+			slot = s_backStart;		// full: the oldest line goes
+			s_backStart = (s_backStart + 1) % OUTPUT_BACK;
+		}
+		s_backText[slot]  = text;
+		s_backColor[slot] = isError ? GameMakeColor(255, 120, 80, 255) : (color != 0) ? color : GameMakeColor(220, 220, 220, 255);
+		s_backScroll = 0;
+		showOutput();
 	}
 
 	// Ronin @bugfix 27/09/2026 DX9: the panel sizes to its widest line, so one long line pushed it past the screen edge and
@@ -305,11 +345,16 @@ namespace
 			line.format("%s - %s", s_commands[i].name, s_commands[i].help);
 			printAscii(line, FALSE);
 		}
+		if (argc < 2)		// Ronin @feature 21/10/2026 DX9: the list is longer than the panel shows
+			printAscii(AsciiString("(PgUp / PgDn in the command box, or the mouse wheel over the panel, scroll this output)"), FALSE, GameMakeColor(255, 220, 120, 255));
 	}
 
 	void cmdClear(Int argc, const AsciiString *argv)
 	{
-		s_outCount = 0;
+		s_outCount   = 0;
+		s_backStart  = 0;		// Ronin @feature 21/10/2026 DX9: and the scrollback
+		s_backCount  = 0;
+		s_backScroll = 0;
 	}
 
 	// Ronin @feature 14/09/2026 DX9: same as Ctrl+Shift+Z. update() hides the panel next frame and hands the keys back.
@@ -2762,6 +2807,11 @@ namespace
 	{
 		if (msg == GWM_CHAR || msg == GWM_MOUSE_POS)
 			return MSG_IGNORED;
+		if (msg == GWM_WHEEL_UP || msg == GWM_WHEEL_DOWN)		// Ronin @feature 21/10/2026 DX9: the output's scrollback
+		{
+			scrollOutput((msg == GWM_WHEEL_UP) ? 3 : -3);
+			return MSG_HANDLED;
+		}
 
 		// Ronin @feature 16/09/2026 DX9: picker labels. A press that moved is a drag of the panel, not a click.
 		const Int mouseX = (Int)(mData1 & 0xFFFF);
@@ -2840,6 +2890,12 @@ namespace
 				case KEY_DOWN:
 					if (down)
 						recallHistory(window, (mData1 == KEY_UP) ? -1 : 1);
+					return MSG_HANDLED;
+
+				case KEY_PGUP:		// Ronin @feature 21/10/2026 DX9: the output's scrollback, a page less two lines at a time
+				case KEY_PGDN:
+					if (down)
+						scrollOutput((mData1 == KEY_PGUP) ? (OUTPUT_LINES - 2) : -(OUTPUT_LINES - 2));
 					return MSG_HANDLED;
 
 				case KEY_TAB:
