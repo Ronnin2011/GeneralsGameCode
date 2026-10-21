@@ -3050,6 +3050,17 @@ void Object::friend_bindToDrawable( Drawable *draw )
 			}
 		}
 		m_drawable->clearAndSetModelConditionFlags(clr, set);
+
+		// Ronin @bugfix 21/10/2026 DX9: an object disabled before it had a drawable (a brownout reaches it as it joins its team, in
+		// its constructor) never got the tint - set it as setDisabledUntil would. Spawned and script-made buildings in low power.
+		DisabledMaskType tinted = getDisabledFlags();
+		DisabledMaskType exceptions;
+		exceptions.set(DISABLED_HELD);
+		exceptions.set(DISABLED_SCRIPT_DISABLED);
+		exceptions.set(DISABLED_UNMANNED);
+		tinted.clearAndSet(exceptions, DISABLEDMASK_NONE);
+		if (tinted.count() > 0)
+			m_drawable->setTintStatus( TINT_STATUS_DISABLED );
 	}
 
 	for (BehaviorModule** b = m_behaviors; *b; ++b)
