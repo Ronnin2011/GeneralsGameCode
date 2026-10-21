@@ -2359,11 +2359,19 @@ float W3DLocalLights::getBounce(void)		{ return s_bounce; }
 
 // Ronin @feature 12/10/2026 DX9: HDR STAGE 1B - THE SUN LIFT. With a float frame the sun may be brighter than 1: one quad adds the
 // frame times (gain - 1) times the sun's share of each pixel, from the two shade records. Before the lamps' copy of the frame.
-static void drawSunLift(IDirect3DDevice9 *dev, const D3DSURFACE_DESC &rd)
+static Bool sunLiftWanted(const D3DSURFACE_DESC &rd)
 {
 	float lift[3];
-	if (s_view == 1 || s_view == 2 || s_quadVS == NULL || s_lightPS == NULL || rd.Format != D3DFMT_A16B16G16R16F ||
-		rd.MultiSampleType != D3DMULTISAMPLE_NONE || !s_shadeFrame || !TheTerrainShadowPass.enabled || !W3DTaa::getSunLift(lift))
+	return (s_view != 1 && s_view != 2 && s_quadVS != NULL && s_lightPS != NULL && rd.Format == D3DFMT_A16B16G16R16F &&
+			rd.MultiSampleType == D3DMULTISAMPLE_NONE && s_shadeFrame && TheTerrainShadowPass.enabled && W3DTaa::getSunLift(lift)) ? TRUE : FALSE;
+}
+
+// Ronin @feature 21/10/2026 DX9: `fromMap` - the shade pass ran this frame: its record holds every pixel's shade (infantry, glass and
+// trees too, which kept none of their own), so it stands in for the meshes', the ground's and the trees' records.
+static void drawSunLift(IDirect3DDevice9 *dev, const D3DSURFACE_DESC &rd, Bool fromMap)
+{
+	float lift[3];
+	if (!sunLiftWanted(rd) || !W3DTaa::getSunLift(lift))
 		return;
 	IDirect3DSurface9 *rt1 = NULL;
 	if (SUCCEEDED(dev->GetRenderTarget(1, &rt1)) && rt1 != NULL)
@@ -2373,21 +2381,26 @@ static void drawSunLift(IDirect3DDevice9 *dev, const D3DSURFACE_DESC &rd)
 	}
 	IDirect3DBaseTexture9 *mesh = NULL;
 	IDirect3DBaseTexture9 *ground = NULL;
-	if (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height)
+	IDirect3DBaseTexture9 *trees = NULL;
+	if (fromMap && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height)
 		mesh = s_shadeTex->Peek_D3D_Texture();
-	D3DSURFACE_DESC gd;
-	if (TheTerrainShadowPass.accumSurf != NULL && TheTerrainShadowPass.accumCur != NULL &&
-		SUCCEEDED(((IDirect3DTexture9 *)TheTerrainShadowPass.accumCur)->GetLevelDesc(0, &gd)) && gd.Width == rd.Width &&
-		gd.Height == rd.Height)
-		ground = TheTerrainShadowPass.accumCur;
+	else
+	{
+		if (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height)
+			mesh = s_shadeTex->Peek_D3D_Texture();
+		D3DSURFACE_DESC gd;
+		if (TheTerrainShadowPass.accumSurf != NULL && TheTerrainShadowPass.accumCur != NULL &&
+			SUCCEEDED(((IDirect3DTexture9 *)TheTerrainShadowPass.accumCur)->GetLevelDesc(0, &gd)) && gd.Width == rd.Width &&
+			gd.Height == rd.Height)
+			ground = TheTerrainShadowPass.accumCur;
+		// Ronin @feature 12/10/2026 DX9: the trees' own record, if they drew into it this frame; else a canopy takes the ground's behind it.
+		if (s_treeShadeFrame && TheTerrainShadowPass.treeAccumCur != NULL &&
+			SUCCEEDED(((IDirect3DTexture9 *)TheTerrainShadowPass.treeAccumCur)->GetLevelDesc(0, &gd)) && gd.Width == rd.Width &&
+			gd.Height == rd.Height)
+			trees = TheTerrainShadowPass.treeAccumCur;
+	}
 	if (mesh == NULL && ground == NULL)
 		return;
-	// Ronin @feature 12/10/2026 DX9: the trees' own record, if they drew into it this frame; else a canopy takes the ground's behind it.
-	IDirect3DBaseTexture9 *trees = NULL;
-	if (s_treeShadeFrame && TheTerrainShadowPass.treeAccumCur != NULL &&
-		SUCCEEDED(((IDirect3DTexture9 *)TheTerrainShadowPass.treeAccumCur)->GetLevelDesc(0, &gd)) && gd.Width == rd.Width &&
-		gd.Height == rd.Height)
-		trees = TheTerrainShadowPass.treeAccumCur;
 
 	// Ronin @feature 12/10/2026 DX9: everything touched is read raw and written back raw, as the light pass does.
 	DWORD zEnable, zWrite, alphaBlend, alphaTest, stencil, cull, colorWrite, srcBlend, destBlend;
@@ -2557,6 +2570,9 @@ static Bool shadeFromSunMap(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, 
 		DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::shadeFromSunMap");
 		dev->SetVertexShader(s_quadVS);		// after the layout bind - BindLayoutFVF clears the VS
 		dev->SetPixelShader(s_lightPS);
+		// Ronin @feature 21/10/2026 DX9: c0..c3 and c15 put back after - this runs before the light pass keeps what it restores.
+		float keep0[4 * 4], keep15[4];
+		const Bool kept = (SUCCEEDED(dev->GetPixelShaderConstantF(0, keep0, 4)) && SUCCEEDED(dev->GetPixelShaderConstantF(15, keep15, 1))) ? TRUE : FALSE;
 		dev->SetPixelShaderConstantF(0, c0to3, 4);
 		// Ronin @feature 20/10/2026 DX9: TAA's shift this frame, as the lights take it: without it a rebuilt point sits ~0.12 off its surface.
 		float jitterX = 0.0f, jitterY = 0.0f;
@@ -2590,6 +2606,15 @@ static Bool shadeFromSunMap(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, 
 		gpuMark(3);
 		dev->SetTexture(8, NULL);
 		dev->SetTexture(9, NULL);
+		dev->SetTexture(0, NULL);		// Ronin @feature 21/10/2026 DX9: the scene depth - the depth buffer again once resumed
+		DX8Wrapper::Invalidate_Texture_State(0, 1);
+		dev->SetVertexShader(NULL);
+		dev->SetPixelShader(NULL);
+		if (kept)
+		{
+			dev->SetPixelShaderConstantF(0, keep0, 4);
+			dev->SetPixelShaderConstantF(15, keep15, 1);
+		}
 		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, oldBlend);
 		dev->SetRenderState(D3DRS_ALPHATESTENABLE,  oldTest);
 		dev->SetRenderState(D3DRS_COLORWRITEENABLE, oldWrite);
@@ -3355,11 +3380,12 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			++count;
 		}
 	}
-	drawSunLift(dev, rd);		// Ronin @feature 12/10/2026 DX9: HDR stage 1b: with or without a light on screen
 	// Ronin @feature 15/10/2026 DX9: the ground as a light (`lights bounce`) wants the pass with no lamp on screen too.
 	float bounceUV[4], bounceAmb[3];
 	IDirect3DTexture9 *bounceMap = (s_bounce > 0.0f && (s_view == 0 || s_view == 6)) ? W3DSkyCube::groundMap(bounceUV, bounceAmb) : NULL;
-	if (count == 0 && s_view != 5 && bounceMap == NULL)		// Ronin @diagnostic 12/10/2026 DX9: view 5 (the sky cube) draws with no light on screen too
+	// Ronin @feature 21/10/2026 DX9: HDR's sun lift (stage 1b) draws with or without a light on screen - after the shade pass below.
+	const Bool liftWanted = sunLiftWanted(rd);
+	if (count == 0 && s_view != 5 && bounceMap == NULL && !liftWanted)		// Ronin @diagnostic 12/10/2026 DX9: view 5 (the sky cube) draws with no light on screen too
 	{
 		rt->Release();
 		return;
@@ -3384,9 +3410,29 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	// frame is copied once - every light reads the frame as it stood before any of them.
 	IDirect3DTexture9 *depthTex = DX8Wrapper::Peek_Scene_Depth_Texture();
 	D3DSURFACE_DESC dd;
+	const Bool depthOK = (depthTex != NULL && SUCCEEDED(depthTex->GetLevelDesc(0, &dd)) && dd.Width == rd.Width &&
+						  dd.Height == rd.Height) ? TRUE : FALSE;
+	// Ronin @feature 21/10/2026 DX9: the sun's shade from its map first: the lights read it, and so does HDR's lift, which goes into the
+	// frame before the copy. In every mode - MSAA has no records, and the meshes' leave gaps (glass, trees) where the ground behind was read.
+	Bool meshShade = (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height) ? TRUE : FALSE;
+	Bool shadeFromMap = FALSE;
+	if (depthOK && (s_sunFill > 0.0f || liftWanted))
+	{
+		const float c0to3[16] = { zNear, zFar, 8.0f, s_over, planeMin.X, planeMax.Y, planeW, planeH,
+								  vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y, 1.0f / targetW, 1.0f / targetH, 0.0f, 0.0f };
+		shadeFromMap = shadeFromSunMap(dev, depthTex, rd, camera, c0to3);
+		meshShade = shadeFromMap ? TRUE : meshShade;
+	}
+	drawSunLift(dev, rd, shadeFromMap);		// Ronin @feature 12/10/2026 DX9: HDR stage 1b: with or without a light on screen
+	if (count == 0 && s_view != 5 && bounceMap == NULL)		// Ronin @feature 21/10/2026 DX9: the lift was all this frame wanted
+	{
+		DX8Wrapper::Invalidate_Cached_Render_States();
+		DX8Wrapper::Resume_Scene_Depth();
+		rt->Release();
+		return;
+	}
 	IDirect3DSurface9 *copySurf = NULL;
-	Bool ready = (depthTex != NULL && SUCCEEDED(depthTex->GetLevelDesc(0, &dd)) && dd.Width == rd.Width &&
-				  dd.Height == rd.Height && ensureCopy(rd.Width, rd.Height, rd.Format)) ? TRUE : FALSE;
+	Bool ready = (depthOK && ensureCopy(rd.Width, rd.Height, rd.Format)) ? TRUE : FALSE;
 	if (ready)
 	{
 		copySurf = s_copy->Get_D3D_Surface_Level();
@@ -3446,18 +3492,6 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	s_stats.sceneLight[0] = factor[0];
 	s_stats.sceneLight[1] = factor[1];
 	s_stats.sceneLight[2] = factor[2];
-	// Ronin @feature 10/10/2026 DX9: the sun's shade, if the mesh shader recorded it this frame at this size.
-	Bool meshShade = (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height) ? TRUE : FALSE;
-	// Ronin @feature 20/10/2026 DX9: the shade from the sun's map, per pixel, in every mode: MSAA has no records, and the meshes' leave
-	// gaps (glass, trees) where the ground behind was read.
-	Bool shadeFromMap = FALSE;
-	if (s_sunFill > 0.0f)
-	{
-		const float c0to3[16] = { zNear, zFar, 8.0f, s_over, planeMin.X, planeMax.Y, planeW, planeH,
-								  vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y, 1.0f / targetW, 1.0f / targetH, 0.0f, 0.0f };
-		shadeFromMap = shadeFromSunMap(dev, depthTex, rd, camera, c0to3);
-		meshShade = shadeFromMap ? TRUE : meshShade;
-	}
 	// Ronin @feature 10/10/2026 DX9: the terrain's shade. Its shadow pass renders this frame's term into a screen texture and
 	// multiplies that into the frame (HeightMap.cpp renderTerrainShadowPass), so it is exact. Never under MSAA: not written then.
 	IDirect3DBaseTexture9 *groundShade = NULL;
