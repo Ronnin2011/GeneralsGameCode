@@ -32,6 +32,8 @@
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DSsao.h"
 #include "W3DDevice/GameClient/W3DTaa.h"
+#include "W3DDevice/GameClient/W3DShaderManager.h"	// Ronin @feature 22/10/2026 DX9: the sun shafts: the ground's cloud drift
+#include "WW3D2/assetmgr.h"
 #include <d3dx9math.h>				// Ronin @feature 11/10/2026 DX9: the lamp shadow maps' matrices, as W3DTaa.cpp
 #include "Common/FileSystem.h"		// Ronin @feature 12/10/2026 DX9: DX9Lights.ini
 #include "Common/File.h"
@@ -1538,7 +1540,7 @@ void W3DLocalLights::setOver(float v)		{ s_over = (v < 1.0f) ? 1.0f : ((v > 8.0f
 float W3DLocalLights::getOver(void)			{ return s_over; }
 void W3DLocalLights::setBoost(float v)		{ s_boost = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
 float W3DLocalLights::getBoost(void)		{ return s_boost; }
-void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v > 6) ? 6 : v); }
+void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v == 9) ? 9 : ((v > 6) ? 6 : v)); }	// Ronin @diagnostic 22/10/2026 DX9: 9 = the sun shafts' march
 Int  W3DLocalLights::getView(void)			{ return s_view; }
 Bool W3DLocalLights::ownsDynamicLights(void)	{ return s_active; }
 void W3DLocalLights::setRange(float v)		{ s_range = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
@@ -1915,6 +1917,19 @@ float W3DLocalLights::getFresnel(void)		{ return s_fresnel; }
 void  W3DLocalLights::setSsr(Bool on)		{ s_ssr = on; }
 Bool  W3DLocalLights::getSsr(void)		{ return s_ssr; }
 
+// Ronin @feature 22/10/2026 DX9: SUN SHAFTS through the cloud gaps - `lights sunshafts` (strength per 100 units of lit air; 0 = off),
+// `shaftgaps` (the cloud shadow's brightness that lets the sun through), `shaftlayer` (how high the lit air reaches).
+static float					s_sunShafts     = 0.0f;
+static float					s_shaftGaps     = 0.965f;
+static float					s_shaftLayer    = 150.0f;
+static TextureClass				*s_cloudTex     = NULL;		// the ground's cloud shadow texture, for the gaps
+void  W3DLocalLights::setSunShafts(float v)	{ s_sunShafts = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getSunShafts(void)		{ return s_sunShafts; }
+void  W3DLocalLights::setShaftGaps(float v)	{ s_shaftGaps = (v < 0.5f) ? 0.5f : ((v > 1.0f) ? 1.0f : v); }
+float W3DLocalLights::getShaftGaps(void)		{ return s_shaftGaps; }
+void  W3DLocalLights::setShaftLayer(float v)	{ s_shaftLayer = (v < 20.0f) ? 20.0f : ((v > 400.0f) ? 400.0f : v); }
+float W3DLocalLights::getShaftLayer(void)	{ return s_shaftLayer; }
+
 // Ronin @feature 12/10/2026 DX9: THE LIGHTS' INI. Every `lights` knob by its name, in the panel's order: one table for the panel
 // (set, print) and for DX9Lights.ini, a modder's file. A knob added here is tunable and kept, with nothing else to touch.
 #define LIGHT_REAL(text, setter, getter)   { text, FALSE, TRUE, [](float v) { W3DLocalLights::setter(v); }, []() -> float { return W3DLocalLights::getter(); } }
@@ -1951,6 +1966,9 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("fresnel", setFresnel, getFresnel),
 	LIGHT_SWITCH("ssr", setSsr, getSsr),
 	LIGHT_REAL("bounce", setBounce, getBounce),
+	LIGHT_REAL("sunshafts", setSunShafts, getSunShafts),
+	LIGHT_REAL("shaftgaps", setShaftGaps, getShaftGaps),
+	LIGHT_REAL("shaftlayer", setShaftLayer, getShaftLayer),
 	{ "sunmorning", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(1, v); }, []() -> float { return W3DLocalLights::getSunTime(1); } },
 	{ "sunafternoon", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(2, v); }, []() -> float { return W3DLocalLights::getSunTime(2); } },
 	{ "sunevening", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(3, v); }, []() -> float { return W3DLocalLights::getSunTime(3); } },
@@ -2528,6 +2546,39 @@ static void drawSunLift(IDirect3DDevice9 *dev, const D3DSURFACE_DESC &rd, Bool f
 	DX8Wrapper::Invalidate_Cached_Render_States();
 }
 
+// Ronin @feature 20/10/2026 DX9: view space -> each cascade's clip - the map's matrix (world -> clip, transposed) x the camera's -
+// then the maps' bias and texel, towards the sun, the shade's colour (c84..c95). TRUE when there are two maps.
+static Bool sunMapConstants(const CameraClass &camera, float c84[12 * 4])
+{
+	const TerrainShadowPassState &sp = TheTerrainShadowPass;
+	const Matrix3D &tm = camera.Get_Transform();
+	const float cam[4][4] = { { tm[0][0], tm[0][1], tm[0][2], tm[0][3] }, { tm[1][0], tm[1][1], tm[1][2], tm[1][3] },
+							  { tm[2][0], tm[2][1], tm[2][2], tm[2][3] }, { 0.0f, 0.0f, 0.0f, 1.0f } };
+	const Bool twoMaps = (sp.cascadeCount > 1.5f && sp.shadowTexFar != NULL) ? TRUE : FALSE;
+	for (Int m = 0; m < 2; ++m)
+	{
+		const float *lt = (m == 1 && twoMaps) ? sp.lightViewProjFarT : sp.lightViewProjT;
+		for (Int i = 0; i < 4; ++i)
+			for (Int j = 0; j < 4; ++j)
+				c84[m * 16 + i * 4 + j] = lt[i * 4 + 0] * cam[0][j] + lt[i * 4 + 1] * cam[1][j] + lt[i * 4 + 2] * cam[2][j] +
+										   lt[i * 4 + 3] * cam[3][j];
+	}
+	c84[32] = sp.depthBias;
+	c84[33] = sp.texelOffset;
+	c84[34] = sp.texelWorldSize;
+	c84[35] = twoMaps ? 2.0f : 1.0f;
+	c84[36] = twoMaps ? sp.depthBiasFar : sp.depthBias;
+	c84[37] = twoMaps ? sp.texelWorldSizeFar : sp.texelWorldSize;
+	c84[38] = 0.0f;
+	c84[39] = 0.0f;
+	for (Int j = 0; j < 3; ++j)		// towards the sun, the camera's rotation undone
+		c84[40 + j] = -(cam[0][j] * sp.lightTravelDir[0] + cam[1][j] * sp.lightTravelDir[1] + cam[2][j] * sp.lightTravelDir[2]);
+	c84[43] = 0.0f;
+	for (Int k = 0; k < 4; ++k)
+		c84[44 + k] = sp.shadeColour[k];
+	return twoMaps;
+}
+
 // Ronin @feature 20/10/2026 DX9: THE SUN'S SHADE, in every mode. LocalLight_ps view 8 works it out per pixel from the scene depth and the
 // sun's map, into the meshes' record: MSAA has none, and theirs leaves gaps (glass, trees) where the ground behind was read.
 static Bool shadeFromSunMap(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, const D3DSURFACE_DESC &rd, const CameraClass &camera,
@@ -2550,33 +2601,8 @@ static Bool shadeFromSunMap(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, 
 		s_shadeW = rd.Width;
 		s_shadeH = rd.Height;
 	}
-	// Ronin @feature 20/10/2026 DX9: view space -> each cascade's clip - the map's matrix (world -> clip, transposed) x the camera's
-	const Matrix3D &tm = camera.Get_Transform();
-	const float cam[4][4] = { { tm[0][0], tm[0][1], tm[0][2], tm[0][3] }, { tm[1][0], tm[1][1], tm[1][2], tm[1][3] },
-							  { tm[2][0], tm[2][1], tm[2][2], tm[2][3] }, { 0.0f, 0.0f, 0.0f, 1.0f } };
-	const Bool twoMaps = (sp.cascadeCount > 1.5f && sp.shadowTexFar != NULL) ? TRUE : FALSE;
 	float c84[12 * 4];
-	for (Int m = 0; m < 2; ++m)
-	{
-		const float *lt = (m == 1 && twoMaps) ? sp.lightViewProjFarT : sp.lightViewProjT;
-		for (Int i = 0; i < 4; ++i)
-			for (Int j = 0; j < 4; ++j)
-				c84[m * 16 + i * 4 + j] = lt[i * 4 + 0] * cam[0][j] + lt[i * 4 + 1] * cam[1][j] + lt[i * 4 + 2] * cam[2][j] +
-										   lt[i * 4 + 3] * cam[3][j];
-	}
-	c84[32] = sp.depthBias;
-	c84[33] = sp.texelOffset;
-	c84[34] = sp.texelWorldSize;
-	c84[35] = twoMaps ? 2.0f : 1.0f;
-	c84[36] = twoMaps ? sp.depthBiasFar : sp.depthBias;
-	c84[37] = twoMaps ? sp.texelWorldSizeFar : sp.texelWorldSize;
-	c84[38] = 0.0f;
-	c84[39] = 0.0f;
-	for (Int j = 0; j < 3; ++j)		// towards the sun, the camera's rotation undone
-		c84[40 + j] = -(cam[0][j] * sp.lightTravelDir[0] + cam[1][j] * sp.lightTravelDir[1] + cam[2][j] * sp.lightTravelDir[2]);
-	c84[43] = 0.0f;
-	for (Int k = 0; k < 4; ++k)
-		c84[44 + k] = sp.shadeColour[k];
+	const Bool twoMaps = sunMapConstants(camera, c84);
 
 	IDirect3DSurface9 *surf = s_shadeTex->Get_D3D_Surface_Level();
 	IDirect3DSurface9 *oldRT = NULL, *oldDS = NULL;
@@ -2687,6 +2713,263 @@ static Bool runShadePass(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, con
 	const Bool ok = shadeFromSunMap(dev, depthTex, rd, camera, c0to3);
 	s_shadeMapFrame = ok ? s_fixFrame : 0;
 	return ok;
+}
+
+// Ronin @feature 22/10/2026 DX9: SUN SHAFTS (LocalLight_ps views 9 and 10): each view ray's air up to `shaftlayer` above its surface, lit
+// where the sun gets through a gap in the cloud shadows and past the casters. View 9 shows the lit share alone; view 10 adds the beams.
+static TextureClass *cloudTexture(void)
+{
+	if (s_cloudTex == NULL)
+		s_cloudTex = WW3DAssetManager::Get_Instance()->Get_Texture("TSCloudMed.tga");		// the ground's own (TerrainTex.cpp)
+	if (s_cloudTex != NULL && !s_cloudTex->Is_Initialized())
+		s_cloudTex->Init();
+	return (s_cloudTex != NULL && !s_cloudTex->Is_Missing_Texture() && s_cloudTex->Peek_D3D_Texture() != NULL) ? s_cloudTex : NULL;
+}
+
+static Bool sunShaftsWanted(void)
+{
+	// Ronin @feature 22/10/2026 DX9: by day, under the cloud shadows - no clouds, no gaps to shine through.
+	return (s_sunShafts > 0.0f && s_view == 0 && TheTerrainShadowPass.active && TheTerrainShadowPass.shadowTex != NULL &&
+			TheGlobalData != NULL && TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT && TheGlobalData->m_useCloudMap &&
+			cloudTexture() != NULL) ? TRUE : FALSE;
+}
+
+// Ronin @feature 22/10/2026 DX9: the beams' two half-size buffers (16-bit float: the lit air, the depth). A device reset fails while
+// they live: W3DTaa::releaseResources lets them go, and the next shafts frame makes them again.
+static IDirect3DTexture9			*s_shaftBuf[2]  = { NULL, NULL };
+static UnsignedInt				s_shaftBufW     = 0;
+static UnsignedInt				s_shaftBufH     = 0;
+
+void W3DLocalLights::releaseShaftBuffers(void)
+{
+	for (Int i = 0; i < 2; ++i)
+	{
+		if (s_shaftBuf[i] != NULL)
+		{
+			s_shaftBuf[i]->Release();
+			s_shaftBuf[i] = NULL;
+		}
+	}
+	s_shaftBufW = 0;
+	s_shaftBufH = 0;
+}
+
+static Bool ensureShaftBuffers(IDirect3DDevice9 *dev, UnsignedInt w, UnsignedInt h)
+{
+	if (s_shaftBuf[0] != NULL && s_shaftBuf[1] != NULL && s_shaftBufW == w && s_shaftBufH == h)
+		return TRUE;
+	W3DLocalLights::releaseShaftBuffers();
+	for (Int i = 0; i < 2; ++i)
+	{
+		if (FAILED(dev->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &s_shaftBuf[i], NULL)))
+		{
+			s_shaftBuf[i] = NULL;
+			W3DLocalLights::releaseShaftBuffers();
+			return FALSE;
+		}
+	}
+	s_shaftBufW = w;
+	s_shaftBufH = h;
+	return TRUE;
+}
+
+// Ronin @feature 22/10/2026 DX9: a quad over a whole target, half a pixel over, so its UVs land on texel centres.
+static void shaftQuad(IDirect3DDevice9 *dev, UnsignedInt width, UnsignedInt height)
+{
+	const float w = (float)width, h = (float)height;
+	const float l = (-0.5f / w) * 2.0f - 1.0f, r = ((w - 0.5f) / w) * 2.0f - 1.0f;
+	const float t = 1.0f - (-0.5f / h) * 2.0f, b = 1.0f - ((h - 0.5f) / h) * 2.0f;
+	struct ShaftVertex { float x, y, z; float u, v; };
+	const ShaftVertex q[4] = { { l, t, 0.0f, 0.0f, 0.0f }, { r, t, 0.0f, 1.0f, 0.0f }, { l, b, 0.0f, 0.0f, 1.0f }, { r, b, 0.0f, 1.0f, 1.0f } };
+	dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(ShaftVertex));
+}
+
+static void drawSunShafts(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, const D3DSURFACE_DESC &rd, const CameraClass &camera, Int view)
+{
+	const TerrainShadowPassState &sp = TheTerrainShadowPass;
+	if (!sp.active || sp.shadowTex == NULL || depthTex == NULL || s_lightPS == NULL || s_quadVS == NULL || TheGlobalData == NULL)
+		return;
+	float zNear = 1.0f;
+	float zFar  = 1000.0f;
+	camera.Get_Clip_Planes(zNear, zFar);
+	Vector2 planeMin, planeMax, vpMin, vpMax;
+	camera.Get_View_Plane(planeMin, planeMax);
+	camera.Get_Viewport(vpMin, vpMax);
+	float c0to3[16] = { zNear, zFar, (float)view, s_over, planeMin.X, planeMax.Y, planeMax.X - planeMin.X, planeMax.Y - planeMin.Y,
+						vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y, 1.0f / (float)rd.Width, 1.0f / (float)rd.Height,
+						0.0f, 0.0f };
+	float jitterX = 0.0f, jitterY = 0.0f;
+	W3DTaa::getJitterNDC(&jitterX, &jitterY);
+	// Ronin @feature 22/10/2026 DX9: the step starts move on each frame only for TAA to average; without it they stay put.
+	const float c15[4] = { -0.5f * jitterX, 0.5f * jitterY, 0.0f, W3DTaa::isActive() ? (float)(s_fixFrame & 63) : 0.0f };
+	Vector3 worldZ;
+	Matrix3D::Inverse_Rotate_Vector(camera.Get_Transform(), Vector3(0.0f, 0.0f, 1.0f), &worldZ);
+	const float c32[4] = { worldZ.X, worldZ.Y, worldZ.Z, s_shaftLayer };
+	// Ronin @feature 22/10/2026 DX9: the map's sun on objects and the strength; the gaps: the cut, clouds on, the cloud map's mip (one
+	// down - the full size shows its compression blocks); its scale and drift, the ground's; view space -> world; the sun's travel.
+	const GlobalData::TerrainLighting &sun = TheGlobalData->m_terrainObjectsLighting[TheGlobalData->m_timeOfDay][0];
+	TextureClass *clouds = cloudTexture();
+	const Bool cloudsOn = (clouds != NULL && TheGlobalData->m_useCloudMap) ? TRUE : FALSE;
+	float cloudScale = 0.0f, cloudX = 0.0f, cloudY = 0.0f;
+	W3DShaderManager::getCloudMapState(&cloudScale, &cloudX, &cloudY);
+	const Matrix3D &tm = camera.Get_Transform();
+	const float c34[7 * 4] = { sun.diffuse.red, sun.diffuse.green, sun.diffuse.blue, s_sunShafts,
+							   s_shaftGaps, cloudsOn ? 1.0f : 0.0f, 1.0f, 0.0f,
+							   cloudScale, cloudX, cloudY, 0.0f,
+							   tm[0][0], tm[0][1], tm[0][2], tm[0][3],
+							   tm[1][0], tm[1][1], tm[1][2], tm[1][3],
+							   tm[2][0], tm[2][1], tm[2][2], tm[2][3],
+							   sp.lightTravelDir[0], sp.lightTravelDir[1], sp.lightTravelDir[2], 0.0f };
+	float c84[12 * 4];
+	const Bool twoMaps = sunMapConstants(camera, c84);
+
+	DWORD zEnable, zWrite, alphaBlend, alphaTest, stencil, cull, colorWrite, srcBlend, destBlend;
+	dev->GetRenderState(D3DRS_ZENABLE,          &zEnable);
+	dev->GetRenderState(D3DRS_ZWRITEENABLE,     &zWrite);
+	dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &alphaBlend);
+	dev->GetRenderState(D3DRS_ALPHATESTENABLE,  &alphaTest);
+	dev->GetRenderState(D3DRS_STENCILENABLE,    &stencil);
+	dev->GetRenderState(D3DRS_CULLMODE,         &cull);
+	dev->GetRenderState(D3DRS_COLORWRITEENABLE, &colorWrite);
+	dev->GetRenderState(D3DRS_SRCBLEND,         &srcBlend);
+	dev->GetRenderState(D3DRS_DESTBLEND,        &destBlend);
+	D3DVIEWPORT9 oldVP;
+	const Bool haveVP = SUCCEEDED(dev->GetViewport(&oldVP));
+	float keep0[4 * 4], keep15[4], keep32[4], keep34[8 * 4];
+	const Bool kept = (SUCCEEDED(dev->GetPixelShaderConstantF(0, keep0, 4)) && SUCCEEDED(dev->GetPixelShaderConstantF(15, keep15, 1)) &&
+					   SUCCEEDED(dev->GetPixelShaderConstantF(32, keep32, 1)) && SUCCEEDED(dev->GetPixelShaderConstantF(34, keep34, 8))) ? TRUE : FALSE;
+	dev->SetRenderState(D3DRS_ZENABLE, FALSE);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE, FALSE);
+	dev->SetRenderState(D3DRS_SRCBLEND,  D3DBLEND_ONE);
+	dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_ONE);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+	dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+	dev->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE);
+	D3DVIEWPORT9 fullVP;
+	fullVP.X = 0; fullVP.Y = 0; fullVP.Width = rd.Width; fullVP.Height = rd.Height; fullVP.MinZ = 0.0f; fullVP.MaxZ = 1.0f;
+
+	dev->SetPixelShaderConstantF(0, c0to3, 4);
+	dev->SetPixelShaderConstantF(15, c15, 1);
+	dev->SetPixelShaderConstantF(32, c32, 1);
+	dev->SetPixelShaderConstantF(34, c34, 7);
+	dev->SetPixelShaderConstantF(84, c84, 12);
+	dev->SetTexture(10, cloudsOn ? clouds->Peek_D3D_Texture() : NULL);
+	dev->SetSamplerState(10, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(10, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(10, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(10, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+	dev->SetSamplerState(10, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+	dev->SetTexture(0, depthTex);
+	dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+	dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+	dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+	dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+	dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	dev->SetTexture(9, twoMaps ? sp.shadowTexFar : sp.shadowTex);
+	dev->SetSamplerState(9, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);		// a depth texture: the hardware's compare
+	dev->SetSamplerState(9, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(9, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+	dev->SetSamplerState(9, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+	dev->SetSamplerState(9, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	dev->SetSamplerState(11, D3DSAMP_MINFILTER, D3DTEXF_POINT);
+	dev->SetSamplerState(11, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
+	dev->SetSamplerState(11, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+	dev->SetSamplerState(11, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+	dev->SetSamplerState(11, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::drawSunShafts");
+	dev->SetVertexShader(s_quadVS);		// after the layout bind - BindLayoutFVF clears the VS
+	dev->SetPixelShader(s_lightPS);
+	if (view == 10)
+	{
+		// Ronin @feature 22/10/2026 DX9: march (view 10) and blur (view 11) at half size, the frame's targets and depth put aside; then
+		// the beams added to the frame at full size (view 12).
+		const UnsignedInt hw = (rd.Width + 1) / 2, hh = (rd.Height + 1) / 2;
+		IDirect3DSurface9 *frameRT = NULL, *frameRT1 = NULL, *frameDS = NULL;
+		if (ensureShaftBuffers(dev, hw, hh) && SUCCEEDED(dev->GetRenderTarget(0, &frameRT)) && frameRT != NULL)
+		{
+			if (SUCCEEDED(dev->GetRenderTarget(1, &frameRT1)) && frameRT1 != NULL)
+				dev->SetRenderTarget(1, NULL);
+			dev->GetDepthStencilSurface(&frameDS);
+			dev->SetDepthStencilSurface(NULL);		// the frame's may be multisampled, and is larger
+			const float c41[4] = { 1.0f / (float)hw, 1.0f / (float)hh, 1.0f / (float)rd.Width, 1.0f / (float)rd.Height };
+			dev->SetPixelShaderConstantF(41, c41, 1);
+			dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+			dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE |
+														D3DCOLORWRITEENABLE_ALPHA);
+			D3DVIEWPORT9 halfVP;
+			halfVP.X = 0; halfVP.Y = 0; halfVP.Width = hw; halfVP.Height = hh; halfVP.MinZ = 0.0f; halfVP.MaxZ = 1.0f;
+			Bool ok = TRUE;
+			for (Int pass = 0; pass < 2 && ok; ++pass)
+			{
+				IDirect3DSurface9 *surf = NULL;
+				ok = (SUCCEEDED(s_shaftBuf[pass]->GetSurfaceLevel(0, &surf)) && surf != NULL && SUCCEEDED(dev->SetRenderTarget(0, surf))) ? TRUE : FALSE;
+				if (surf != NULL)
+					surf->Release();
+				if (!ok)
+					break;
+				dev->SetViewport(&halfVP);
+				c0to3[2] = (pass == 0) ? 10.0f : 11.0f;
+				dev->SetPixelShaderConstantF(0, c0to3, 1);
+				dev->SetTexture(11, (pass == 0) ? NULL : s_shaftBuf[0]);
+				shaftQuad(dev, hw, hh);
+			}
+			dev->SetTexture(11, NULL);
+			dev->SetRenderTarget(0, frameRT);
+			if (frameRT1 != NULL)
+			{
+				dev->SetRenderTarget(1, frameRT1);
+				frameRT1->Release();
+			}
+			dev->SetDepthStencilSurface(frameDS);
+			if (frameDS != NULL)
+				frameDS->Release();
+			frameRT->Release();
+			if (ok)
+			{
+				dev->SetViewport(&fullVP);
+				dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);		// the beams' light, added to the frame
+				dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+				c0to3[2] = 12.0f;
+				dev->SetPixelShaderConstantF(0, c0to3, 1);
+				dev->SetTexture(11, s_shaftBuf[1]);
+				shaftQuad(dev, rd.Width, rd.Height);
+				dev->SetTexture(11, NULL);
+			}
+		}
+	}
+	else
+	{
+		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);		// view 9 replaces the frame
+		dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+		dev->SetViewport(&fullVP);
+		shaftQuad(dev, rd.Width, rd.Height);
+	}
+
+	dev->SetTexture(10, NULL);
+	dev->SetTexture(9, NULL);
+	dev->SetTexture(0, NULL);
+	DX8Wrapper::Invalidate_Texture_State(0, 1);
+	dev->SetVertexShader(NULL);
+	dev->SetPixelShader(NULL);
+	if (kept)
+	{
+		dev->SetPixelShaderConstantF(0, keep0, 4);
+		dev->SetPixelShaderConstantF(15, keep15, 1);
+		dev->SetPixelShaderConstantF(32, keep32, 1);
+		dev->SetPixelShaderConstantF(34, keep34, 8);
+	}
+	if (haveVP)
+		dev->SetViewport(&oldVP);
+	dev->SetRenderState(D3DRS_ZENABLE,          zEnable);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE,     zWrite);
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, alphaBlend);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE,  alphaTest);
+	dev->SetRenderState(D3DRS_STENCILENABLE,    stencil);
+	dev->SetRenderState(D3DRS_CULLMODE,         cull);
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, colorWrite);
+	dev->SetRenderState(D3DRS_SRCBLEND,         srcBlend);
+	dev->SetRenderState(D3DRS_DESTBLEND,        destBlend);
 }
 
 void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
@@ -3439,7 +3722,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	IDirect3DTexture9 *bounceMap = (s_bounce > 0.0f && (s_view == 0 || s_view == 6)) ? W3DSkyCube::groundMap(bounceUV, bounceAmb) : NULL;
 	// Ronin @feature 21/10/2026 DX9: HDR's sun lift (stage 1b) draws with or without a light on screen - after the shade pass below.
 	const Bool liftWanted = sunLiftWanted(rd);
-	if (count == 0 && s_view != 5 && bounceMap == NULL && !liftWanted)		// Ronin @diagnostic 12/10/2026 DX9: view 5 (the sky cube) draws with no light on screen too
+	const Bool shaftsWanted = sunShaftsWanted();		// Ronin @feature 22/10/2026 DX9: the sun shafts draw with no light on screen too
+	if (count == 0 && s_view != 5 && s_view != 9 && bounceMap == NULL && !liftWanted && !shaftsWanted)		// Ronin @diagnostic 12/10/2026 DX9: view 5 (the sky cube) draws with no light on screen too
 	{
 		rt->Release();
 		return;
@@ -3476,8 +3760,19 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		meshShade = shadeFromMap ? TRUE : meshShade;
 	}
 	drawSunLift(dev, rd, shadeFromMap);		// Ronin @feature 12/10/2026 DX9: HDR stage 1b: with or without a light on screen
+	if (s_view == 9)		// Ronin @diagnostic 22/10/2026 DX9: the sun shafts' march alone, no light after it
+	{
+		if (depthOK)
+			drawSunShafts(dev, depthTex, rd, camera, 9);
+		DX8Wrapper::Invalidate_Cached_Render_States();
+		DX8Wrapper::Resume_Scene_Depth();
+		rt->Release();
+		return;
+	}
 	if (count == 0 && s_view != 5 && bounceMap == NULL)		// Ronin @feature 21/10/2026 DX9: the lift was all this frame wanted
 	{
+		if (depthOK && shaftsWanted)
+			drawSunShafts(dev, depthTex, rd, camera, 10);		// Ronin @feature 22/10/2026 DX9: ... or the sun shafts
 		DX8Wrapper::Invalidate_Cached_Render_States();
 		DX8Wrapper::Resume_Scene_Depth();
 		rt->Release();
@@ -3741,6 +4036,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	s_stats.drawn = lightCount;
 	if (masked)
 		W3DTaa::endLightMask();
+	if (shaftsWanted)
+		drawSunShafts(dev, depthTex, rd, camera, 10);		// Ronin @feature 22/10/2026 DX9: after the lights - the air is in front of what they lit
 
 	// Ronin @feature 11/10/2026 DX9: the lights are in: the frame's depth goes back before the maps' view, which writes it.
 	dev->SetTexture(0, NULL);
@@ -3864,6 +4161,8 @@ void W3DLocalLights::shutdown(void)
 	REF_PTR_RELEASE(s_shadeTex);
 	s_shadeW = 0;
 	s_shadeH = 0;
+	REF_PTR_RELEASE(s_cloudTex);		// Ronin @feature 22/10/2026 DX9: the sun shafts' cloud gaps
+	releaseShaftBuffers();
 	s_beamsOn = FALSE;
 	s_collect = FALSE;
 	for (Int i = 0; i < s_beamTexCount; ++i)

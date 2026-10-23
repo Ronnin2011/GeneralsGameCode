@@ -41,6 +41,16 @@ float4 g_PrevAxis   : register(c12);        // the same, last frame, in THIS fra
 float4 g_Shaft      : register(c13);        // the beam in the air: x = its strength now, y = last frame's (0 = none); z = this lamp's own turn of its rays, 0..1; w = how wide the beam leaves the lamp
 float4 g_Jitter     : register(c15);        // xy = how far TAA shifted this frame on screen, in viewport widths and heights (0 without TAA); z = `lights rays`
                                             // Ronin @feature 16/10/2026 DX9: w = a local light's strength in the sun, by the time of day (`daysun`)
+float4 g_ShaftSun   : register(c34);        // Ronin @feature 22/10/2026 DX9: sun shafts - rgb = the map's sun on objects, w = strength per 100 units of lit air
+float4 g_ShaftGap   : register(c35);        // x = how bright the cloud shadow must be to let the sun through, y = 1 clouds on, z = the cloud map's mip
+float4 g_ShaftCloud : register(c36);        // x = the cloud map's scale (per world unit), yz = its drift - the ground's own (W3DShaderManager::getCloudMapState)
+float4 g_CamX       : register(c37);        // view space -> world: x, y, z rows with the camera's position in w
+float4 g_CamY       : register(c38);
+float4 g_CamZ       : register(c39);
+float4 g_ShaftTravel : register(c40);       // xyz = the way the sun's light travels, in the world
+sampler2D g_CloudMap : register(s10);       // the ground's cloud shadow texture (TSCloudMed), WRAP, LINEAR
+float4 g_ShaftTexel : register(c41);        // Ronin @feature 22/10/2026 DX9: xy = 1 / the beams' half-size buffer, zw = 1 / the frame
+sampler2D g_ShaftBuf : register(s11);       // ... that buffer: r = the lit air in hundreds of units, g = the depth; POINT, CLAMP
 float4 g_DayShade   : register(c33);        // x = its strength in a sun shadow, by the time of day (`dayshade`)
 float4x4 g_LampClip : register(c16);        // a beam's shadow map: view space to its tile - atlas uv x w, depth, w
 float4 g_LampTile   : register(c20);        // ... the tile in atlas uv: xy = min, zw = max; all 0 = this light has no map
@@ -76,6 +86,7 @@ float3 viewPosition(float2 uv)
 }
 
 static const int SHAFT_STEPS  = 6;
+static const int SUN_SHAFT_STEPS = 16;		// Ronin @diagnostic 22/10/2026 DX9: view 9's march through the sun's far map
 
 // Ronin @bugfix 09/10/2026 DX9: every falloff ends through this - no slope and no curvature where the light runs out. A ramp
 // that stops dead reads as a dark band round the pool, and the sharpening deepens it.
@@ -326,6 +337,112 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
         }
         float lit = min((inNear ? sumN : sumF) * (1.0f / 9.0f), geo);
         o.color.rgb = lerp(lerp(float3(0.45f, 0.45f, 0.45f), g_SunShadeCol.rgb, g_SunShadeCol.w), float3(1.0f, 1.0f, 1.0f), lit);
+        return o;
+    }
+    // Ronin @feature 22/10/2026 DX9: views 9 and 10 - SUN SHAFTS: the air on each view ray from the surface up to g_WorldZ.w above it,
+    // lit where the sun gets through a cloud gap and past the casters (the far map). 9 shows the lit share; 10 marches at half size.
+    if (view == 9 || view == 10)
+    {
+        o.color = (view == 9) ? float4(0.03f, 0.06f, 0.14f, 0.0f) : float4(0.0f, 60000.0f, 0.0f, 1.0f);
+        float2 at = uv;
+        float  start;
+        if (view == 10)
+        {
+            // Ronin @feature 22/10/2026 DX9: a half-size texel stands for the full-size pixel at its top left; its steps start by a 4x4
+            // ordered pattern, all of which view 11's 4x4 blur holds - no grain. Under TAA the whole pattern moves on each frame.
+            float2 idx   = floor(uv / g_ShaftTexel.xy);
+            float2 lo    = fmod(idx, 2.0f);
+            float2 hi    = fmod(floor(idx * 0.5f), 2.0f);
+            float  order = 4.0f * (2.0f * lo.x + 3.0f * lo.y - 4.0f * lo.x * lo.y) + (2.0f * hi.x + 3.0f * hi.y - 4.0f * hi.x * hi.y);
+            at    = (2.0f * idx + 0.5f) * g_ShaftTexel.zw;
+            start = frac((order + 0.5f) * (1.0f / 16.0f) + g_Jitter.w * 0.618034f);
+        }
+        else
+        {
+            float2 pix = uv / g_TexelSize.xy + g_Jitter.w * 5.588238f;
+            start = frac(52.9829189f * frac(dot(pix, float2(0.06711056f, 0.00583715f))));     // interleaved gradient noise
+        }
+        if (tex2Dlod(g_SceneDepth, float4(at, 0.0f, 0.0f)).r > 0.99999f)
+            return o;
+        float3 P     = viewPosition(at);
+        float  rise  = dot(-P, g_WorldZ.xyz);                         // how far the camera stands above the surface
+        float  tEnd  = (rise > 0.001f) ? saturate(g_WorldZ.w / rise) : 1.0f;
+        float  ground = dot(g_CamZ.xyz, P) + g_CamZ.w;               // the surface's height in the world
+        float  lit   = 0.0f;
+        [unroll]
+        for (int i = 0; i < SUN_SHAFT_STEPS; ++i)
+        {
+            float  t     = (i + start) * (1.0f / SUN_SHAFT_STEPS) * tEnd;
+            float3 X     = P * (1.0f - t);
+            float4 clip  = mul(float4(X, 1.0f), g_SunFar);
+            float2 suv   = clip.xy * float2(0.5f, -0.5f) + 0.5f + g_SunMap.y;
+            float  inMap = (suv.x > 0.0f && suv.x < 1.0f && suv.y > 0.0f && suv.y < 1.0f) ? 1.0f : 0.0f;
+            float  sun   = lerp(1.0f, tex2Dproj(g_SunDepthFar, float4(suv, clip.z - g_SunMapFar.x, 1.0f)).r, inMap);
+            // Ronin @feature 22/10/2026 DX9: the sun's ray through this air, followed down to the ground: the cloud shadow there says
+            // whether a gap let it through - so a beam lands where the ground's cloud shadow is lightest.
+            float3 W     = float3(dot(g_CamX.xyz, X) + g_CamX.w, dot(g_CamY.xyz, X) + g_CamY.w, dot(g_CamZ.xyz, X) + g_CamZ.w);
+            float2 foot  = W.xy + g_ShaftTravel.xy * ((W.z - ground) / max(-g_ShaftTravel.z, 0.05f));
+            float  cloud = dot(tex2Dlod(g_CloudMap, float4(foot * g_ShaftCloud.x + g_ShaftCloud.yz, 0.0f, g_ShaftGap.z)).rgb,
+                               float3(0.299f, 0.587f, 0.114f));
+            float  gap   = smoothstep(g_ShaftGap.x, g_ShaftGap.x + 0.027f, cloud);		// only above the cut, as previewed (11% open at 0.965)
+            lit += sun * lerp(1.0f, gap, g_ShaftGap.y);
+        }
+        lit *= 1.0f / SUN_SHAFT_STEPS;
+        if (view == 9)
+        {
+            o.color = float4(lit, lit, lit, 0.0f);
+            return o;
+        }
+        o.color = float4(lit * tEnd * length(P) * 0.01f, -P.z, 0.0f, 1.0f);     // the lit air in hundreds of units, and the depth
+        return o;
+    }
+    // Ronin @feature 22/10/2026 DX9: view 11 - the half-size march blurred 4x4 (every step start of the pattern), only across one depth.
+    if (view == 11)
+    {
+        float2 c    = tex2Dlod(g_ShaftBuf, float4(uv, 0.0f, 0.0f)).rg;
+        float  sum  = 0.0f;
+        float  wsum = 0.0f;
+        [unroll]
+        for (int by = -2; by <= 1; ++by)
+        {
+            [unroll]
+            for (int bx = -2; bx <= 1; ++bx)
+            {
+                float2 s = tex2Dlod(g_ShaftBuf, float4(uv + float2(bx, by) * g_ShaftTexel.xy, 0.0f, 0.0f)).rg;
+                float  w = exp(-abs(s.y - c.y) / (0.02f * c.y));
+                sum  += s.x * w;
+                wsum += w;
+            }
+        }
+        o.color = float4(sum / max(wsum, 0.0001f), c.y, 0.0f, 1.0f);
+        return o;
+    }
+    // Ronin @feature 22/10/2026 DX9: view 12 - the blurred beams at full size from the four nearest texels, those at this pixel's depth
+    // first, added as the sun's light by the lit air x the strength.
+    if (view == 12)
+    {
+        o.color = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        if (tex2Dlod(g_SceneDepth, float4(uv, 0.0f, 0.0f)).r > 0.99999f)
+            return o;
+        float  e    = -viewPosition(uv).z;
+        float2 h    = (uv / g_ShaftTexel.zw + 0.5f) * 0.5f;          // the blur centres texel j on full-size pixel 2j - 1
+        float2 j0   = floor(h);
+        float2 f    = h - j0;
+        float  sum  = 0.0f;
+        float  wsum = 0.0f;
+        [unroll]
+        for (int ny = 0; ny <= 1; ++ny)
+        {
+            [unroll]
+            for (int nx = 0; nx <= 1; ++nx)
+            {
+                float2 s = tex2Dlod(g_ShaftBuf, float4((j0 + float2(nx, ny) + 0.5f) * g_ShaftTexel.xy, 0.0f, 0.0f)).rg;
+                float  w = ((nx == 0) ? 1.0f - f.x : f.x) * ((ny == 0) ? 1.0f - f.y : f.y) * (exp(-abs(s.y - e) / (0.02f * e)) + 0.001f);
+                sum  += s.x * w;
+                wsum += w;
+            }
+        }
+        o.color.rgb = g_ShaftSun.rgb * (1.0f - exp(-g_ShaftSun.w * sum / max(wsum, 0.000001f)));
         return o;
     }
     if (view == 3)

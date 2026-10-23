@@ -165,6 +165,14 @@ public:
 	// (1 = by the ambient's measure, 0 = off).
 	static void  setBounce(float v);
 	static float getBounce(void);
+	// Ronin @feature 22/10/2026 DX9: sun shafts - beams through the gaps in the cloud shadows: their strength per 100 units of lit
+	// air (0 = off); how bright the cloud shadow must be to let the sun through (lower = wider gaps); how high the lit air reaches.
+	static void  setSunShafts(float v);
+	static float getSunShafts(void);
+	static void  setShaftGaps(float v);
+	static float getShaftGaps(void);
+	static void  setShaftLayer(float v);
+	static float getShaftLayer(void);
 	// Ronin @feature 15/10/2026 DX9: how far each time of day is "day" for the local lights, 0..1: the sun up full, dusk half, the
 	// moon none. 1 = `daysun` / `dayshade` in full; 0 = the lights at full strength and `sunerase` in full.
 	static void  setSunTime(Int timeOfDay, float v);		// 1 morning, 2 afternoon, 3 evening, 4 night
@@ -226,6 +234,7 @@ public:
 	};
 	static void getStats(Stats *out);
 	static void releaseQueries(void);		// Ronin @diagnostic 20/10/2026 DX9: the GPU timer's, before a device reset
+	static void releaseShaftBuffers(void);	// Ronin @feature 22/10/2026 DX9: the sun shafts' half-size buffers, likewise
 };
 
 #endif

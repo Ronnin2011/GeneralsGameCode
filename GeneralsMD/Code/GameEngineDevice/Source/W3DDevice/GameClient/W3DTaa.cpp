@@ -1987,6 +1987,7 @@ void W3DTaa::releaseResources(void)
 	gpuRelease();
 	releaseOpaque();		// Ronin @feature 12/10/2026 DX9: a raw default-pool texture: a reset fails while it lives
 	W3DLocalLights::releaseQueries();	// Ronin @diagnostic 20/10/2026 DX9: the lights' GPU timer, likewise
+	W3DLocalLights::releaseShaftBuffers();	// Ronin @feature 22/10/2026 DX9: the sun shafts' raw default-pool buffers
 }
 
 void W3DTaa::shutdown(void)
