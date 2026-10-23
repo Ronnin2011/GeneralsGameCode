@@ -52,7 +52,8 @@ static Bool						s_shadersTried  = FALSE;
 static IDirect3DVertexShader9	*s_lampVS        = NULL;
 static IDirect3DPixelShader9	*s_lampPS        = NULL;
 
-static Bool						s_enabled       = TRUE;
+static Bool						s_enabled       = TRUE;		// Ronin @feature 23/10/2026 DX9: the master (Options.ini DX9Lighting)
+static Bool						s_effects       = TRUE;		// ... the lamps under it (DX9LightEffects); off = the game's own lights
 static float					s_intensity     = 1.0f;
 static float					s_over          = 1.5f;
 static float					s_boost         = 0.0f;
@@ -1534,6 +1535,8 @@ float W3DLocalLights::getHotspot(void)	{ return s_hotspot; }
 
 void W3DLocalLights::setEnabled(Bool on)	{ s_enabled = on; }
 Bool W3DLocalLights::isEnabled(void)		{ return s_enabled; }
+void W3DLocalLights::setEffects(Bool on)	{ s_effects = on; }
+Bool W3DLocalLights::isEffects(void)		{ return s_effects; }
 void W3DLocalLights::setIntensity(float v)	{ s_intensity = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
 float W3DLocalLights::getIntensity(void)	{ return s_intensity; }
 void W3DLocalLights::setOver(float v)		{ s_over = (v < 1.0f) ? 1.0f : ((v > 8.0f) ? 8.0f : v); }
@@ -1542,7 +1545,7 @@ void W3DLocalLights::setBoost(float v)		{ s_boost = (v < 0.0f) ? 0.0f : ((v > 8.
 float W3DLocalLights::getBoost(void)		{ return s_boost; }
 void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v == 9) ? 9 : ((v > 6) ? 6 : v)); }	// Ronin @diagnostic 22/10/2026 DX9: 9 = the sun shafts' march
 Int  W3DLocalLights::getView(void)			{ return s_view; }
-Bool W3DLocalLights::ownsDynamicLights(void)	{ return s_active; }
+Bool W3DLocalLights::ownsDynamicLights(void)	{ return (s_active && s_effects) ? TRUE : FALSE; }	// Ronin @feature 23/10/2026 DX9: lamps off = the game's
 void W3DLocalLights::setRange(float v)		{ s_range = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
 float W3DLocalLights::getRange(void)		{ return s_range; }
 void W3DLocalLights::setSmall(Bool on)		{ s_small = on; }
@@ -1552,7 +1555,7 @@ static float s_pulseMin  = 18.0f;		// value for the testers, 17/10
 static Int   s_pulseFade = 11;
 void W3DLocalLights::minimumPulse(Real innerRadius, Real *attenuationWidth, UnsignedInt *decayFrames)
 {
-	if (!s_active || attenuationWidth == NULL || decayFrames == NULL)
+	if (!s_active || !s_effects || attenuationWidth == NULL || decayFrames == NULL)
 		return;
 	if (s_pulseMin > 0.0f && innerRadius + *attenuationWidth < s_pulseMin)
 		*attenuationWidth = s_pulseMin - innerRadius;
@@ -1564,7 +1567,7 @@ float W3DLocalLights::getPulseMin(void)	{ return s_pulseMin; }
 void  W3DLocalLights::setPulseFade(float v)	{ s_pulseFade = (v < 0.5f) ? 0 : ((v > 30.0f) ? 30 : (Int)(v + 0.5f)); }
 float W3DLocalLights::getPulseFade(void)	{ return (float)s_pulseFade; }
 
-Bool W3DLocalLights::wantsSmallLights(void)	{ return (s_active && s_small) ? TRUE : FALSE; }
+Bool W3DLocalLights::wantsSmallLights(void)	{ return (s_active && s_effects && s_small) ? TRUE : FALSE; }
 // Ronin @feature 17/10/2026 DX9: under MSAA the scene depth comes only from the view prepass - asked for while the lights are on.
 Bool W3DLocalLights::wantsDepthPrepass(void)	{ return s_enabled ? TRUE : FALSE; }
 
@@ -1823,7 +1826,7 @@ static void publishMapShadow(void)
 		if (v > 1.0f) v = 1.0f;
 		out[c] = v;
 	}
-	out[3] = s_mapShadow;
+	out[3] = s_enabled ? s_mapShadow : 0.0f;		// Ronin @feature 23/10/2026 DX9: under the master; off = 0.45 on every map, as before
 	DX8InstanceManagerClass::Set_Shadow_Shade(out);
 }
 
@@ -1942,6 +1945,8 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("over", setOver, getOver),
 	LIGHT_REAL("boost", setBoost, getBoost),
 	{ "view", TRUE, FALSE, [](float v) { W3DLocalLights::setView((Int)v); }, []() -> float { return (float)W3DLocalLights::getView(); } },
+	// Ronin @feature 23/10/2026 DX9: the lamps' switch - a player's (Options.ini DX9LightEffects), so never in DX9Lights.ini.
+	{ "locallighting", TRUE, FALSE, [](float v) { W3DLocalLights::setEffects((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DLocalLights::isEffects() ? 1.0f : 0.0f; } },
 	LIGHT_REAL("beams", setBeams, getBeams),
 	LIGHT_REAL("shafts", setShafts, getShafts),
 	LIGHT_REAL("rays", setRays, getRays),
@@ -2109,6 +2114,7 @@ Bool W3DLocalLights::saveIni(void)
 	fprintf(file, "; Written by `lights save` in the debug panel; read when the game starts and by `lights load`.\n");
 	fprintf(file, "; The names are the panel's `lights` knobs. A missing line keeps the built-in value;\n");
 	fprintf(file, "; delete the file to return to the built-in look.\n");
+	fprintf(file, "; On / off is not here: Options.ini DX9Lighting = yes | no (all of it, HDR too), DX9LightEffects = yes | no (the lamps).\n");
 	fprintf(file, "\n[Lights]\n");
 	for (Int k = 0; k < s_knobCount; ++k)
 	{
@@ -2142,6 +2148,13 @@ void W3DLocalLights::beginFrame(void)
 		for (Int k = 0; k < s_knobCount; ++k)
 			s_knobDefaults[k] = s_knobs[k].get();
 		loadIni(NULL);
+		// Ronin @feature 23/10/2026 DX9: on / off is the player's: Options.ini DX9Lighting (all of it) and DX9LightEffects (the lamps).
+		// `lights 0|1` and `lights locallighting 0|1` still flip them for a session.
+		if (TheGlobalData != NULL)
+		{
+			s_enabled = TheGlobalData->m_lighting;
+			s_effects = TheGlobalData->m_lightEffects;
+		}
 	}
 	gpuFrameEnd();		// Ronin @diagnostic 20/10/2026 DX9: a frame left open (no endFrame) is closed before the next one opens
 	if (s_enabled)
@@ -2246,8 +2259,8 @@ void W3DLocalLights::beginFrame(void)
 		s_sunNow = s_sunTime[(tod >= 1 && tod <= 4) ? (tod - 1) : 3];
 	}
 	// Ronin @bugfix 15/10/2026 DX9: on at every time of day: the swap keeps the art's old pools and cones hidden.
-	s_beamsOn = (active && s_beams > 0.0f) ? TRUE : FALSE;
-	s_glowsOn = (active && s_glows > 0.0f) ? TRUE : FALSE;
+	s_beamsOn = (active && s_effects && s_beams > 0.0f) ? TRUE : FALSE;		// Ronin @feature 23/10/2026 DX9: lamps off = the art's own
+	s_glowsOn = (active && s_effects && s_glows > 0.0f) ? TRUE : FALSE;
 	s_coronasOn = (s_glowsOn && s_coronas > 0.0f) ? TRUE : FALSE;
 	s_poolsOn = (s_coronasOn && !s_keepPools && s_poolFill > 0.0f) ? TRUE : FALSE;	// the painted pools are hidden and want filling
 	s_collect = (s_beamsOn || s_glowsOn || s_poolsOn) ? TRUE : FALSE;
@@ -2265,7 +2278,7 @@ void W3DLocalLights::beginFrame(void)
 	DX8InstanceManagerClass::Set_Sun_Shade_Hooks(&W3DLocalLights::beginSunShade, &W3DLocalLights::endSunShade);
 	// Ronin @feature 11/10/2026 DX9: the lamp shadow maps: the frame's casters are listed from here to the light pass.
 	s_casterCount  = 0;
-	s_casterOpen   = (active && s_lampMapsOn && (s_beamsOn || s_pointMaps)) ? TRUE : FALSE;	// point lights want casters without any beam
+	s_casterOpen   = (active && s_effects && s_lampMapsOn && (s_beamsOn || s_pointMaps)) ? TRUE : FALSE;	// point lights want casters without any beam
 	// Ronin @feature 11/10/2026 DX9: stage C: what last frame's maps were, before this frame's take the list.
 	s_lampPrevCount = s_lampDrawn ? s_lampMapCount : 0;
 	for (Int pm = 0; pm < s_lampPrevCount; ++pm)
@@ -3027,7 +3040,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	static LightDraw draws[MAX_LIGHTS_DRAWN];
 	Int count = 0;
 	Int lightCount = 0;
-	if (planeW > 0.0f && planeH > 0.0f && vx1 > vx0 && vy1 > vy0)
+	if (s_effects && planeW > 0.0f && planeH > 0.0f && vx1 > vx0 && vy1 > vy0)		// Ronin @feature 23/10/2026 DX9: the lamps' switch
 	{
 		const Matrix3D &cameraTM = camera.Get_Transform();
 		const ViewMap vm = { zNear, zFar, planeMin.X, planeMax.Y, planeW, planeH, vx0, vy0, vx1, vy1 };
@@ -3757,7 +3770,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	// frame before the copy. In every mode - MSAA has no records, and the meshes' leave gaps (glass, trees) where the ground behind was read.
 	Bool meshShade = (s_shadeWritten && s_shadeTex != NULL && s_shadeW == rd.Width && s_shadeH == rd.Height) ? TRUE : FALSE;
 	Bool shadeFromMap = FALSE;
-	if (depthOK && (s_sunFill > 0.0f || liftWanted))
+	if (depthOK && ((s_effects && s_sunFill > 0.0f) || liftWanted))
 	{
 		shadeFromMap = runShadePass(dev, depthTex, rd, camera);
 		meshShade = shadeFromMap ? TRUE : meshShade;

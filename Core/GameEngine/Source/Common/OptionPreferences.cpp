@@ -805,6 +805,24 @@ Bool OptionPreferences::getWaterReflections(Bool dflt) const
 	return (stricmp(it->second.str(), "yes") == 0 || atoi(it->second.str()) != 0) ? TRUE : FALSE;
 }
 
+// Ronin @feature 23/10/2026 DX9: DX9Lighting = yes|no (1|0 too) - all the new lighting, HDR included. Absent returns `dflt`.
+Bool OptionPreferences::getLighting(Bool dflt) const
+{
+	OptionPreferences::const_iterator it = find("DX9Lighting");
+	if (it == end())
+		return dflt;
+	return (stricmp(it->second.str(), "yes") == 0 || atoi(it->second.str()) != 0) ? TRUE : FALSE;
+}
+
+// Ronin @feature 23/10/2026 DX9: DX9LightEffects = yes|no (1|0 too) - the lamps: lights, beams, glows, effects. Absent returns `dflt`.
+Bool OptionPreferences::getLightEffects(Bool dflt) const
+{
+	OptionPreferences::const_iterator it = find("DX9LightEffects");
+	if (it == end())
+		return dflt;
+	return (stricmp(it->second.str(), "yes") == 0 || atoi(it->second.str()) != 0) ? TRUE : FALSE;
+}
+
 // Ronin @feature 21/10/2026 DX9: DX9HDR = yes|no (1|0 too). Absent returns `dflt`.
 Bool OptionPreferences::getHDR(Bool dflt) const
 {

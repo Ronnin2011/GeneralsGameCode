@@ -895,7 +895,7 @@ namespace
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: lights [0|1] | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..6|9> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | aosun <0..3> | reflect <0..2> | reflectground <0..1> | fresnel <0..4> | ssr <0|1> | bounce <0..2> | sunshafts <0..4> | shaftgaps <0.5..1> | shaftlayer <20..400> | vibrance <0..2> | localcontrast <0..2> | fxlights <0..64> | fxstrength <0..4> | fxreach <0.25..4> | fxsmooth <0..0.95> | night... (as `night`) | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
+			printAscii(AsciiString("usage: lights [0|1] | locallighting <0|1> | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..6|9> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | aosun <0..3> | reflect <0..2> | reflectground <0..1> | fresnel <0..4> | ssr <0|1> | bounce <0..2> | sunshafts <0..4> | shaftgaps <0.5..1> | shaftlayer <20..400> | vibrance <0..2> | localcontrast <0..2> | fxlights <0..64> | fxstrength <0..4> | fxreach <0.25..4> | fxsmooth <0..0.95> | night... (as `night`) | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
 			printAscii(AsciiString("  beams: headlights and lamp cones as spot lights, their strength; 0 = the art's own beams, no lights; shafts: the beam in the air, drawn by the shader - its strength beside the light's, 0 = none; rays: soft rays from the lamp in that beam, 0 = the smooth cone; rayturn: 1 = they turn with the world as the camera goes round a beam, 0 = they stay with the view; lampwidth: how wide the beam leaves its lamp, in the art's own width there, 0 = from a point"), FALSE);
 			printAscii(AsciiString("  spill: the dim light around a beam's cone, its strength beside the cone's, 0 = a hard cone; spillwide: how wide it reaches, in cone widths"), FALSE);
 			printAscii(AsciiString("  glows: the lamp glows (street lamps, warning and runway lights) as point lights, their strength, 0 = none; glowreach: their reach"), FALSE);
@@ -919,6 +919,7 @@ namespace
 			printAscii(AsciiString("  pointmaps: 1 = a firing flash or a blast (the game's own point lights) is shadowed by what is under it - one map each, straight down; 0 = they light the ground under a unit through its hull"), FALSE);
 			printAscii(AsciiString("  pointsides: 1 = a big point light low over the ground (a blast) is shadowed sideways too - four more maps, level: what stands round it shadows the ground behind; 0 = only what is under it"), FALSE);
 			printAscii(AsciiString("  view 4: the maps, a tile a lamp, from the top right - bright = near the lamp, dark = far, blue = nothing in its light"), FALSE);
+			printAscii(AsciiString("  lights 0|1: ALL the new lighting, HDR included (Options.ini DX9Lighting); locallighting 0|1: the lamps under it - lights, beams, glows, effects, lamp shadows (DX9LightEffects); 0 = the game's own"), FALSE);
 			printAscii(AsciiString("  intensity: every light's strength; range: every light's reach; small: keep the pulses dropped as too small for the vertex grid"), FALSE);
 			printAscii(AsciiString("  over: ceiling above a surface's own colour - only a light stronger than 1 reaches it; boost: frame-to-surface factor, 0 = from the map's light; view: 1 light alone, 2 facing, 3 rectangles, 4 the lamps' shadow maps, 5 the sky cube, 6 the ground light (grey = none, lighter = added, darker = taken)"), FALSE);
 			return;
@@ -926,15 +927,16 @@ namespace
 		AsciiString state;
 		state.format("lights: enabled=%d", W3DLocalLights::isEnabled() ? 1 : 0);
 		printAscii(state, FALSE);
-		// Ronin @feature 19/10/2026 DX9: the knobs in columns by what they light, as `water` prints its own - two tables of four.
-		static const char *const groups[9][PANEL_COLUMN_ROWS] = {
-			{ "LIGHTS", "intensity", "range", "small", "over", "boost", "view", NULL },
+		// Ronin @feature 19/10/2026 DX9: the knobs in columns by what they light, as `water` prints its own.
+		// Ronin @feature 23/10/2026 DX9: the lamps' columns first (`locallighting`), then what only the master (`lights`) holds.
+		static const char *const groups[10][PANEL_COLUMN_ROWS] = {
+			{ "LIGHTS", "locallighting", "intensity", "range", "small", "over", "boost", "view", NULL },
 			{ "BEAMS", "beams", "shafts", "rays", "rayturn", "lampwidth", "spill", "spillwide", "beamreach", "hotspot", NULL },
 			{ "GLOWS", "glows", "glowreach", "coronas", "coronasize", "pools", "poolfill", "searchlight", NULL },
 			{ "EFFECTS", "fxlights", "fxstrength", "fxreach", "fxmerge", "fxflares", "fxfire", "fxsmooth", "pulsemin", "pulsefade", NULL },
-			{ "SUN", "sunfill", "sunerase", "mapshadow", "aosun", "daysun", "dayshade", "sunmorning", "sunafternoon", "sunevening",
-			  "sunnight", NULL },
 			{ "LAMP SHADOWS", "lampmaps", "lampshadows", "lampbias", "lampself", "lampselfnear", "pointmaps", "pointsides", NULL },
+			{ "LAMPS & SUN", "sunfill", "sunerase", "daysun", "dayshade", "sunmorning", "sunafternoon", "sunevening", "sunnight", NULL },
+			{ "SUN", "mapshadow", "aosun", "sunshafts", "shaftgaps", "shaftlayer", NULL },
 			{ "GLASS & GROUND", "reflect", "reflectground", "fresnel", "ssr", "bounce", NULL },
 			{ "COLOUR", "night", "nighttint", "nightlo", "nighthi", "nightfloor", "nightfull", "nightlift", "grade", "gradewarm", "gradesat",
 			  "grademids", "vibrance", "localcontrast", NULL },		// Ronin @feature 21/10/2026 DX9: the final pass's colour - the night look, the dark lift, the grade
@@ -942,18 +944,18 @@ namespace
 			{ "HDR", "hdrmorning", "hdrafternoon", "hdrevening", "hdrnight", "hdrwarm", "hdrwhite", NULL },
 		};
 		Bool placed[LIGHT_KNOBS_MAX] = {};
-		PanelColumn cols[9] = {};
-		for (Int g = 0; g < 9; ++g)
+		PanelColumn cols[10] = {};
+		for (Int g = 0; g < 10; ++g)
 		{
 			cols[g].title = groups[g][0];
 			for (Int i = 1; i < PANEL_COLUMN_ROWS && groups[g][i] != NULL; ++i)
 				lightCell(cols[g], groups[g][i], placed);
 		}
 		Int shared[8] = {};		// Ronin @feature 19/10/2026 DX9: one width per column across both tables, so they line up
-		columnWidths(cols, 4, shared);
-		columnWidths(cols + 4, 5, shared);		// Ronin @feature 21/10/2026 DX9: HDR a fifth column, beside COLOUR
-		printColumns(cols, 4, shared);
-		printColumns(cols + 4, 5, shared);
+		columnWidths(cols, 5, shared);		// Ronin @bugfix 23/10/2026 DX9: five and five - six wrapped past the panel's width
+		columnWidths(cols + 5, 5, shared);
+		printColumns(cols, 5, shared);
+		printColumns(cols + 5, 5, shared);
 		// Ronin @feature 19/10/2026 DX9: a knob no group names (one added to the table later) still prints, on a line of its own.
 		AsciiString more, one;
 		for (Int k = 0; k < W3DLocalLights::knobCount() && k < LIGHT_KNOBS_MAX; ++k)

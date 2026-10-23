@@ -72,8 +72,10 @@ public:
 	static Bool        saveIni(void);
 	static void        resetDefaults(void);		// the built-in values; the file is untouched
 
-	static void  setEnabled(Bool on);
+	static void  setEnabled(Bool on);		// Ronin @feature 23/10/2026 DX9: `lights 0|1`, the master: all the new lighting, HDR too
 	static Bool  isEnabled(void);
+	static void  setEffects(Bool on);		// ... `lights locallighting 0|1`: the lamps - lights, beams, glows, effects, lamp shadows
+	static Bool  isEffects(void);
 	static void  setIntensity(float v);		// multiplies every light's colour
 	static float getIntensity(void);
 	static void  setOver(float v);			// how far above the surface's own colour a light may push a pixel; 1 = the old limit

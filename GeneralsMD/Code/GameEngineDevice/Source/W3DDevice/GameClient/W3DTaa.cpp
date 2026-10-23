@@ -380,11 +380,12 @@ static void keepSceneFormat(void)
 	if (tex == NULL || FAILED(tex->GetLevelDesc(0, &d)))
 		return;
 	Bool isFloat = (d.Format == D3DFMT_A16B16G16R16F) ? TRUE : FALSE;
-	if (isFloat != s_floatScene && !(s_floatScene && s_floatRefused))
+	const Bool wantFloat = (s_floatScene && W3DLocalLights::isEnabled()) ? TRUE : FALSE;	// Ronin @feature 23/10/2026 DX9: HDR needs the master
+	if (isFloat != wantFloat && !(wantFloat && s_floatRefused))
 	{
-		if (W3DShaderManager::remakeRenderTexture(s_floatScene ? D3DFMT_A16B16G16R16F : D3DFMT_UNKNOWN))
-			isFloat = s_floatScene;
-		else if (s_floatScene)
+		if (W3DShaderManager::remakeRenderTexture(wantFloat ? D3DFMT_A16B16G16R16F : D3DFMT_UNKNOWN))
+			isFloat = wantFloat;
+		else if (wantFloat)
 			s_floatRefused = TRUE;
 	}
 	s_floatReady = (isFloat && DX8Wrapper::Get_Anti_Aliasing_Level() == 0) ? TRUE : FALSE;	// preRender makes it s_floatNow
@@ -468,7 +469,7 @@ static void nightConstants(float c[8], float levelOut[3], Bool lampMask)
 		for (Int k = 0; k < 3; ++k)
 			tint[k] /= tl;
 	}
-	const Bool on = (s_nightOn && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+	const Bool on = (s_nightOn && W3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
 	// Ronin @feature 15/10/2026 DX9: the strength follows how coloured the map's light is: the look counters a saturated light.
 	const float hi = (e[0] > e[1]) ? ((e[0] > e[2]) ? e[0] : e[2]) : ((e[1] > e[2]) ? e[1] : e[2]);
 	const float lo = (e[0] < e[1]) ? ((e[0] < e[2]) ? e[0] : e[2]) : ((e[1] < e[2]) ? e[1] : e[2]);
@@ -501,7 +502,7 @@ static float s_gradeSat  = 1.2f;		// `grade sat`: 1 = none; 1.2 his pick 21/10 (
 static float s_gradeMids = 1.34f;		// `grade mids`: the mid-tones' power, 1 = none, above 1 darker (their mid grey 0.2, ours 0.3)
 static Bool gradeNow(void)
 {
-	return (s_gradeOn && TheGlobalData != NULL && TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+	return (s_gradeOn && W3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
 }
 
 // Ronin @feature 21/10/2026 DX9: the grade into a screen copy of the resolve shader: c20 = (on, saturation, mid-tones' power), c21 = the
@@ -523,12 +524,12 @@ void  W3DTaa::setGradeMids(float v)		{ s_gradeMids = (v < 0.5f) ? 0.5f : ((v > 2
 float W3DTaa::getGradeMids(void)		{ return s_gradeMids; }
 
 // Ronin @feature 22/10/2026 DX9: VIBRANCE and LOCAL CONTRAST (`vibrance`, `localcontrast`) - his pick 22/10 from the preview on his frame:
-// 0.8 and 0.4 (0.6 overwhelmed, 23/10), on by default; by day only (the night look's); 0 turns each off.
+// 0.8 and 0.4 (0.6 overwhelmed, 23/10), on by default; by day only (the night look's); 0 turns each off, and so does `lights 0`.
 static float s_vibrance      = 0.8f;
 static float s_localContrast = 0.4f;
 static Bool vividNow(void)
 {
-	return ((s_vibrance > 0.0f || s_localContrast > 0.0f) && TheGlobalData != NULL &&
+	return ((s_vibrance > 0.0f || s_localContrast > 0.0f) && W3DLocalLights::isEnabled() && TheGlobalData != NULL &&
 			TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
 }
 void  W3DTaa::setVibrance(float v)		{ s_vibrance = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
@@ -545,7 +546,7 @@ static Bool finishWanted(void)
 		return TRUE;		// Ronin @feature 21/10/2026 DX9: the grade is drawn by the finish pass
 	if (vividNow())
 		return TRUE;		// Ronin @feature 22/10/2026 DX9: so are vibrance and local contrast
-	if (!s_nightOn || TheGlobalData == NULL || TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT)
+	if (!s_nightOn || !W3DLocalLights::isEnabled() || TheGlobalData == NULL || TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT)
 		return FALSE;
 	if (s_nightLift < 0.999f)
 		return TRUE;
@@ -2285,7 +2286,7 @@ static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DV
 	float nightC[8], nightLevel[3];
 	nightConstants(nightC, nightLevel, nightMask);
 	dev->SetPixelShaderConstantF(17, nightC, 2);
-	const Bool night = (s_nightOn && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+	const Bool night = (s_nightOn && W3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
 	const float nightLiftC[4] = { s_nightLift, night ? 1.0f : 0.0f, 0.0f, 0.0f };
 	dev->SetPixelShaderConstantF(19, nightLiftC, 1);
 	bindGrade(dev);		// Ronin @feature 21/10/2026 DX9: the daytime grade
@@ -3260,7 +3261,7 @@ void W3DTaa::postRender(void)
 		nightConstants(nightC, nightLevel, nightMask);
 		dev->SetPixelShaderConstantF(17, nightC, 2);
 		// Ronin @feature 15/10/2026 DX9: the dark lift (`night lift`), c19: at night, with the look switched on.
-		const float nightLiftC[4] = { s_nightLift, (s_nightOn && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? 1.0f : 0.0f,
+		const float nightLiftC[4] = { s_nightLift, (s_nightOn && W3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? 1.0f : 0.0f,
 									  0.0f, 0.0f };
 		dev->SetPixelShaderConstantF(19, nightLiftC, 1);
 		// Ronin @bugfix 09/10/2026 DX9: the selection flash, added here - after the resolve, never in the history. c8 = 1 / the map's light

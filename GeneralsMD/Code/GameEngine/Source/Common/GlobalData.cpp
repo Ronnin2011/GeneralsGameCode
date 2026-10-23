@@ -687,6 +687,9 @@ GlobalData::GlobalData()
 	m_taaMipBias = -1.0f;
 	// Ronin @feature 04/10/2026 DX9: the water's reflections on unless Options.ini says DX9WaterReflections = no.
 	m_waterReflections = TRUE;
+	// Ronin @feature 23/10/2026 DX9: the new lighting and its lamps on unless Options.ini says DX9Lighting = no / DX9LightEffects = no.
+	m_lighting = TRUE;
+	m_lightEffects = TRUE;
 	// Ronin @feature 21/10/2026 DX9: HDR off unless Options.ini says DX9HDR = yes.
 	m_hdr = FALSE;
 	m_textureReductionFactor = -1;
@@ -1274,6 +1277,9 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_taaMipBias = optionPref.getTAAMipBias(TheGlobalData->m_taaMipBias);
 	// Ronin @feature 04/10/2026 DX9: water reflections. Same rule.
 	TheWritableGlobalData->m_waterReflections = optionPref.getWaterReflections(TheGlobalData->m_waterReflections);
+	// Ronin @feature 23/10/2026 DX9: the new lighting and its lamps. Same rule.
+	TheWritableGlobalData->m_lighting = optionPref.getLighting(TheGlobalData->m_lighting);
+	TheWritableGlobalData->m_lightEffects = optionPref.getLightEffects(TheGlobalData->m_lightEffects);
 	// Ronin @feature 21/10/2026 DX9: HDR. Same rule.
 	TheWritableGlobalData->m_hdr = optionPref.getHDR(TheGlobalData->m_hdr);
 
