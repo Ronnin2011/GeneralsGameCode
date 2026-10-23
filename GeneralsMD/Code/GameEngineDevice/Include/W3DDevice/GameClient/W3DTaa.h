@@ -112,6 +112,11 @@ public:
 	static float getGradeSat(void);
 	static void  setGradeMids(float v);
 	static float getGradeMids(void);
+	// Ronin @feature 22/10/2026 DX9: vibrance (dull colours raised most) and local contrast, by day in the final pass; 0 = off.
+	static void  setVibrance(float v);
+	static float getVibrance(void);
+	static void  setLocalContrast(float v);
+	static float getLocalContrast(void);
 	// Ronin @feature 15/10/2026 DX9: THE NIGHT LOOK (TAA's pass 2 or finishScene): dim colour goes to one tint (the map light's cast),
 	// bright keeps its own. tint 0..1; lo / hi: the luminance where a pixel starts / ends keeping its colour; floor: the least it keeps.
 	static void  setNight(Bool on);

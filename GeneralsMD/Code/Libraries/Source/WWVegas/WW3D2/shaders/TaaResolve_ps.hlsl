@@ -94,6 +94,29 @@ float3 grade(float3 c)
     return saturate((l > 0.0005f) ? c * pow(max(l, 0.0005f), g_Grade.z - 1.0f) : c);
 }
 
+// Ronin @feature 22/10/2026 DX9: VIBRANCE and LOCAL CONTRAST (by day; screen copy only): the duller a colour the more it is raised, then
+// each pixel against its surroundings - s11, the frame's luminance blurred at quarter size. c22 = (on, vibrance, local contrast).
+float4    g_Vivid    : register(c22);
+sampler2D g_Surround : register(s11);
+float3 vivid(float3 c, float2 uv)
+{
+    const float3 LUMA = float3(0.2126f, 0.7152f, 0.0722f);
+    float mx = max(c.r, max(c.g, c.b));
+    float mn = min(c.r, min(c.g, c.b));
+    float s  = (mx > 0.000001f) ? (mx - mn) / mx : 0.0f;
+    float l  = dot(c, LUMA);
+    c = l + (c - l) * (1.0f + g_Vivid.y * (1.0f - s));
+    if (g_Vivid.z > 0.0f && l > 0.0001f)
+    {
+        float lb = tex2Dlod(g_Surround, float4((uv - g_Viewport.xy) / max(g_Viewport.zw, 0.0001f), 0.0f, 0.0f)).r;
+        // Ronin @bugfix 23/10/2026 DX9: darkening fades out below 0.3 - at full strength it took the darkest tenth from 16 to 4 of 255.
+        float d  = l - lb;
+        float k  = g_Vivid.z * ((d < 0.0f) ? smoothstep(0.0f, 0.3f, l) : 1.0f);
+        c *= max(l + k * d, 0.0f) / l;
+    }
+    return saturate(c);
+}
+
 // Ronin @feature 21/09/2026 DX9: Catmull-Rom history fetch, 9 taps.
 //
 // WHY NOT BILINEAR: the history is re-fetched at a subpixel position every frame and fed straight back in. Bilinear
@@ -211,6 +234,34 @@ float luminance(float3 c)
     return dot(c, float3(0.2127f, 0.7152f, 0.0722f));
 }
 
+// Ronin @feature 22/10/2026 DX9: LOCAL CONTRAST's surroundings (W3DTaa buildSurround; c0.x below 0): -1 = the source's luminance as shown,
+// 4x4 texels each, from the 3D view in it (c24); -2 / -3 = a Gaussian across / down, sigma 5 texels x c0.w. c0.yz = a source texel.
+float4 g_SurroundSrc : register(c24);
+float4 surround(float2 uv)
+{
+    if (g_TaaParams.x > -1.5f)
+    {
+        float2 px = g_TaaParams.yz;
+        float2 at = g_SurroundSrc.xy + uv * g_SurroundSrc.zw;
+        float2 lo = g_SurroundSrc.xy + 0.5f * px;
+        float2 hi = g_SurroundSrc.xy + g_SurroundSrc.zw - 0.5f * px;
+        float  l  = luminance(toneCurve(tex2Dlod(g_Scene, float4(clamp(at + float2(-1.0f, -1.0f) * px, lo, hi), 0.0f, 0.0f)).rgb)) +
+                    luminance(toneCurve(tex2Dlod(g_Scene, float4(clamp(at + float2( 1.0f, -1.0f) * px, lo, hi), 0.0f, 0.0f)).rgb)) +
+                    luminance(toneCurve(tex2Dlod(g_Scene, float4(clamp(at + float2(-1.0f,  1.0f) * px, lo, hi), 0.0f, 0.0f)).rgb)) +
+                    luminance(toneCurve(tex2Dlod(g_Scene, float4(clamp(at + float2( 1.0f,  1.0f) * px, lo, hi), 0.0f, 0.0f)).rgb));
+        l *= 0.25f;
+        return float4(l, l, l, 1.0f);
+    }
+    static const float OFS[8] = { 1.4850f, 3.4651f, 5.4452f, 7.4256f, 9.4061f, 11.3870f, 13.3682f, 15.3498f };
+    static const float WTS[8] = { 0.152007f, 0.124701f, 0.087314f, 0.052179f, 0.026613f, 0.011585f, 0.004304f, 0.001364f };
+    float2 dir = ((g_TaaParams.x > -2.5f) ? float2(g_TaaParams.y, 0.0f) : float2(0.0f, g_TaaParams.z)) * g_TaaParams.w;
+    float  sum = 0.079864f * tex2Dlod(g_Scene, float4(uv, 0.0f, 0.0f)).r;
+    [unroll]
+    for (int k = 0; k < 8; ++k)
+        sum += WTS[k] * (tex2Dlod(g_Scene, float4(uv + dir * OFS[k], 0.0f, 0.0f)).r + tex2Dlod(g_Scene, float4(uv - dir * OFS[k], 0.0f, 0.0f)).r);
+    return float4(sum, sum, sum, 1.0f);
+}
+
 float4 resolve(float2 uv, out float3 lowBits)
 {
     lowBits = float3(0.5f, 0.5f, 0.5f);		// no remainder, on every early return
@@ -241,6 +292,8 @@ float4 resolve(float2 uv, out float3 lowBits)
             shown = darkLift(shown);
         if (g_Night.w > 0.0f)
             shown = nightLook(shown, uv);
+        if (g_Vivid.x > 0.0f)
+            shown = vivid(shown, uv);		// Ronin @feature 22/10/2026 DX9: by day; then the grade, if a modder turns it on
         if (g_Grade.x > 0.0f)
             shown = grade(shown);		// Ronin @feature 21/10/2026 DX9: by day; before the flash, which keeps its colour
         // Ronin @bugfix 09/10/2026 DX9: SELECTION FLASH, after the resolve. Lit like a local light: the surface colour (frame over the
@@ -730,6 +783,12 @@ struct PS_OUTPUT
 PS_OUTPUT main(float2 uv : TEXCOORD0)
 {
     PS_OUTPUT o;
+    if (g_TaaParams.x < 0.0f)		// Ronin @feature 22/10/2026 DX9: local contrast's surroundings, not a frame
+    {
+        o.color = surround(uv);
+        o.low   = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        return o;
+    }
     float3 lowBits;
     o.color = resolve(uv, lowBits);
     o.low   = float4(lowBits, 0.0f);

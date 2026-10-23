@@ -522,12 +522,29 @@ float W3DTaa::getGradeSat(void)			{ return s_gradeSat; }
 void  W3DTaa::setGradeMids(float v)		{ s_gradeMids = (v < 0.5f) ? 0.5f : ((v > 2.0f) ? 2.0f : v); }
 float W3DTaa::getGradeMids(void)		{ return s_gradeMids; }
 
+// Ronin @feature 22/10/2026 DX9: VIBRANCE and LOCAL CONTRAST (`vibrance`, `localcontrast`) - his pick 22/10 from the preview on his frame:
+// 0.8 and 0.4 (0.6 overwhelmed, 23/10), on by default; by day only (the night look's); 0 turns each off.
+static float s_vibrance      = 0.8f;
+static float s_localContrast = 0.4f;
+static Bool vividNow(void)
+{
+	return ((s_vibrance > 0.0f || s_localContrast > 0.0f) && TheGlobalData != NULL &&
+			TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+}
+void  W3DTaa::setVibrance(float v)		{ s_vibrance = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float W3DTaa::getVibrance(void)			{ return s_vibrance; }
+void  W3DTaa::setLocalContrast(float v)	{ s_localContrast = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float W3DTaa::getLocalContrast(void)	{ return s_localContrast; }
+static void releaseSurround(void);		// local contrast's surroundings, beside drawFinish
+
 static Bool finishWanted(void)
 {
 	if (s_active)
 		return FALSE;
 	if (gradeNow())
 		return TRUE;		// Ronin @feature 21/10/2026 DX9: the grade is drawn by the finish pass
+	if (vividNow())
+		return TRUE;		// Ronin @feature 22/10/2026 DX9: so are vibrance and local contrast
 	if (!s_nightOn || TheGlobalData == NULL || TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT)
 		return FALSE;
 	if (s_nightLift < 0.999f)
@@ -1993,6 +2010,7 @@ void W3DTaa::releaseResources(void)
 void W3DTaa::shutdown(void)
 {
 	s_camera = NULL;
+	releaseSurround();		// Ronin @feature 22/10/2026 DX9: local contrast's surroundings
 	if (s_resolvePS != NULL) { s_resolvePS->Release(); s_resolvePS = NULL; }
 	if (s_quadVS    != NULL) { s_quadVS->Release();    s_quadVS    = NULL; }
 	if (s_depthStorePS != NULL) { s_depthStorePS->Release(); s_depthStorePS = NULL; }
@@ -2064,11 +2082,153 @@ void W3DTaa::shutdown(void)
 	s_waterMaskDrawn = FALSE;
 }
 
+// Ronin @feature 22/10/2026 DX9: LOCAL CONTRAST's surroundings - the source's luminance as shown, at quarter size, blurred across and down
+// (sigma 5 texels at 900 rows, scaled with the view) by the resolve shader at c0.x below 0. Default-pool TextureClass: the reset remakes it.
+static TextureClass *s_surround[2]   = { NULL, NULL };
+static UnsignedInt   s_surroundW     = 0;
+static UnsignedInt   s_surroundH     = 0;
+static Bool          s_surroundReady = FALSE;		// built for the screen copy about to draw
+
+static void releaseSurround(void)
+{
+	REF_PTR_RELEASE(s_surround[0]);
+	REF_PTR_RELEASE(s_surround[1]);
+	s_surroundW = 0;
+	s_surroundH = 0;
+	s_surroundReady = FALSE;
+}
+
+static void surroundQuad(IDirect3DDevice9 *dev, UnsignedInt width, UnsignedInt height)
+{
+	const float w = (float)width, h = (float)height;
+	const float l = (-0.5f / w) * 2.0f - 1.0f, r = ((w - 0.5f) / w) * 2.0f - 1.0f;		// half a pixel: the UVs land on texel centres
+	const float t = 1.0f - (-0.5f / h) * 2.0f, b = 1.0f - ((h - 0.5f) / h) * 2.0f;
+	struct SurroundVertex { float x, y, z; float u, v; };
+	const SurroundVertex q[4] = { { l, t, 0.0f, 0.0f, 0.0f }, { r, t, 0.0f, 1.0f, 0.0f }, { l, b, 0.0f, 0.0f, 1.0f }, { r, b, 0.0f, 1.0f, 1.0f } };
+	dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(SurroundVertex));
+}
+
+// Ronin @feature 22/10/2026 DX9: `src` (texW x texH) with its 3D view at `rect` (0..1 of it); the frame's targets, depth and states put back.
+static Bool buildSurround(IDirect3DDevice9 *dev, IDirect3DBaseTexture9 *src, UnsignedInt texW, UnsignedInt texH, const float rect[4],
+						  Bool floatScene)
+{
+	s_surroundReady = FALSE;
+	if (!vividNow() || s_localContrast <= 0.0f || dev == NULL || src == NULL || s_resolvePS == NULL || s_quadVS == NULL || texW == 0 ||
+		texH == 0)
+		return FALSE;
+	const UnsignedInt vpW = (UnsignedInt)(rect[2] * (float)texW + 0.5f);
+	const UnsignedInt vpH = (UnsignedInt)(rect[3] * (float)texH + 0.5f);
+	const UnsignedInt w = (vpW + 3) / 4, h = (vpH + 3) / 4;
+	if (w == 0 || h == 0)
+		return FALSE;
+	if (s_surround[0] == NULL || s_surround[1] == NULL || s_surroundW != w || s_surroundH != h)
+	{
+		releaseSurround();
+		for (Int i = 0; i < 2; ++i)
+		{
+			s_surround[i] = NEW_REF(TextureClass, (w, h, WW3D_FORMAT_A8R8G8B8, MIP_LEVELS_1, TextureClass::POOL_DEFAULT, true));
+			if (s_surround[i]->Peek_D3D_Base_Texture() == NULL)
+			{
+				releaseSurround();
+				return FALSE;
+			}
+		}
+		s_surroundW = w;
+		s_surroundH = h;
+	}
+	IDirect3DSurface9 *oldRT = NULL, *oldRT1 = NULL, *oldDS = NULL;
+	if (FAILED(dev->GetRenderTarget(0, &oldRT)) || oldRT == NULL)
+		return FALSE;
+	if (SUCCEEDED(dev->GetRenderTarget(1, &oldRT1)) && oldRT1 != NULL)
+		dev->SetRenderTarget(1, NULL);
+	dev->GetDepthStencilSurface(&oldDS);
+	dev->SetDepthStencilSurface(NULL);		// the frame's may be multisampled, and is larger
+	D3DVIEWPORT9 oldVp;
+	const Bool haveOldVp = SUCCEEDED(dev->GetViewport(&oldVp)) ? TRUE : FALSE;
+	DWORD oldZ = 0, oldZW = 0, oldAB = 0, oldAT = 0, oldCull = 0, oldCW = 0;
+	dev->GetRenderState(D3DRS_ZENABLE,          &oldZ);
+	dev->GetRenderState(D3DRS_ZWRITEENABLE,     &oldZW);
+	dev->GetRenderState(D3DRS_ALPHABLENDENABLE, &oldAB);
+	dev->GetRenderState(D3DRS_ALPHATESTENABLE,  &oldAT);
+	dev->GetRenderState(D3DRS_CULLMODE,         &oldCull);
+	dev->GetRenderState(D3DRS_COLORWRITEENABLE, &oldCW);
+	dev->SetRenderState(D3DRS_ZENABLE,          FALSE);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE,     FALSE);
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE,  FALSE);
+	dev->SetRenderState(D3DRS_CULLMODE,         D3DCULL_NONE);
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE |
+												D3DCOLORWRITEENABLE_ALPHA);
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::buildSurround");
+	dev->SetVertexShader(s_quadVS);		// after the layout bind - BindLayoutFVF clears the VS
+	dev->SetPixelShader(s_resolvePS);
+	const float c9[4] = { s_white, floatScene ? 1.0f : 0.0f, 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(9, c9, 1);
+	dev->SetPixelShaderConstantF(24, rect, 1);
+	const float step = (float)vpH / 900.0f;
+	Bool ok = TRUE;
+	for (Int pass = 0; pass < 3 && ok; ++pass)
+	{
+		IDirect3DSurface9 *surf = s_surround[(pass == 1) ? 1 : 0]->Get_D3D_Surface_Level();
+		ok = (surf != NULL && SUCCEEDED(dev->SetRenderTarget(0, surf))) ? TRUE : FALSE;
+		if (surf != NULL)
+			surf->Release();
+		if (!ok)
+			break;
+		D3DVIEWPORT9 svp;
+		svp.X = 0; svp.Y = 0; svp.Width = w; svp.Height = h; svp.MinZ = 0.0f; svp.MaxZ = 1.0f;
+		dev->SetViewport(&svp);
+		const float c0[4] = { -1.0f - (float)pass, (pass == 0) ? 1.0f / (float)texW : 1.0f / (float)w,
+							  (pass == 0) ? 1.0f / (float)texH : 1.0f / (float)h, step };
+		dev->SetPixelShaderConstantF(0, c0, 1);
+		dev->SetTexture(0, (pass == 0) ? src : s_surround[(pass == 1) ? 0 : 1]->Peek_D3D_Base_Texture());
+		setResolveSampler(dev, 0, TRUE);
+		surroundQuad(dev, w, h);
+	}
+	dev->SetTexture(0, NULL);
+	dev->SetRenderTarget(0, oldRT);
+	if (oldRT1 != NULL)
+	{
+		dev->SetRenderTarget(1, oldRT1);
+		oldRT1->Release();
+	}
+	dev->SetDepthStencilSurface(oldDS);
+	if (oldDS != NULL)
+		oldDS->Release();
+	oldRT->Release();
+	if (haveOldVp)
+		dev->SetViewport(&oldVp);
+	dev->SetRenderState(D3DRS_ZENABLE,          oldZ);
+	dev->SetRenderState(D3DRS_ZWRITEENABLE,     oldZW);
+	dev->SetRenderState(D3DRS_ALPHABLENDENABLE, oldAB);
+	dev->SetRenderState(D3DRS_ALPHATESTENABLE,  oldAT);
+	dev->SetRenderState(D3DRS_CULLMODE,         oldCull);
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE, oldCW);
+	s_surroundReady = ok;
+	return ok;
+}
+
+// Ronin @feature 22/10/2026 DX9: vibrance and local contrast into a screen copy: c22 and s11. Every screen copy sets it.
+static void bindVivid(IDirect3DDevice9 *dev)
+{
+	const float c22[4] = { vividNow() ? 1.0f : 0.0f, s_vibrance, s_surroundReady ? s_localContrast : 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(22, c22, 1);
+	if (s_surroundReady)
+	{
+		dev->SetTexture(11, s_surround[0]->Peek_D3D_Base_Texture());
+		setResolveSampler(dev, 11, TRUE);
+	}
+}
+
 // Ronin @feature 17/10/2026 DX9: the screen copy without TAA - `src` over `vp` through the resolve shader at weight 0: the tone curve
 // for the float scene, then at night the dark lift and the night look. No history, CAS or flash (the scene drew its own).
 static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DVIEWPORT9 &vp, UnsignedInt texW, UnsignedInt texH,
 					   Bool floatScene)
 {
+	// Ronin @feature 22/10/2026 DX9: local contrast's surroundings, from this source, before anything below is set.
+	const float surroundRect[4] = { (float)vp.X / (float)texW, (float)vp.Y / (float)texH, (float)vp.Width / (float)texW,
+								   (float)vp.Height / (float)texH };
+	buildSurround(dev, src, texW, texH, surroundRect, floatScene);
 	D3DVIEWPORT9 oldVp;
 	const Bool haveOldVp = SUCCEEDED(dev->GetViewport(&oldVp)) ? TRUE : FALSE;
 	dev->SetViewport(&vp);
@@ -2129,10 +2289,12 @@ static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DV
 	const float nightLiftC[4] = { s_nightLift, night ? 1.0f : 0.0f, 0.0f, 0.0f };
 	dev->SetPixelShaderConstantF(19, nightLiftC, 1);
 	bindGrade(dev);		// Ronin @feature 21/10/2026 DX9: the daytime grade
+	bindVivid(dev);
 	dev->SetTexture(0, src);
 	setResolveSampler(dev, 0);
 	dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
 
+	dev->SetTexture(11, NULL);
 	dev->SetTexture(8, NULL);
 	dev->SetTexture(0, NULL);
 	dev->SetVertexShader(NULL);
@@ -2942,6 +3104,8 @@ void W3DTaa::postRender(void)
 				const float c0[4] = { weight, 1.0f / (float)fbW, 1.0f / (float)fbH,
 									  canReproject ? 1.0f : 0.0f };
 				dev->SetPixelShaderConstantF(0, c0, 1);
+				static const float vividOff[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+				dev->SetPixelShaderConstantF(22, vividOff, 1);		// Ronin @feature 22/10/2026 DX9: the history never takes vibrance
 
 				// Debug views draw in this pass so they show what the RESOLVE sees, not a re-derived picture.
 				// yz carry the clip planes: raw D3D depth sits above 0.99 for almost the whole scene, so the depth
@@ -3063,6 +3227,9 @@ void W3DTaa::postRender(void)
 	// Weight 0 makes the shader a straight copy of stage 0. If pass 1 could not run we fall back to copying the raw
 	// scene, so a missing history target costs quality, never a broken frame.
 	{
+		// Ronin @feature 22/10/2026 DX9: local contrast's surroundings, from what this copy shows, before its constants are set.
+		buildSurround(dev, wroteHistory ? (IDirect3DBaseTexture9 *)s_history[s_historyIndex]->Peek_D3D_Texture() : (IDirect3DBaseTexture9 *)sceneTex,
+					  (UnsignedInt)fbW, (UnsignedInt)fbH, c5, (s_floatNow && !wroteHistory) ? TRUE : FALSE);
 		// RGB only for the screen copy. Alpha had to be writable for the history above, but the frame buffer's alpha
 		// belongs to the soft water edge (Windowednew §31) and nothing here should be writing it.
 		dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
@@ -3113,7 +3280,9 @@ void W3DTaa::postRender(void)
 										: (IDirect3DBaseTexture9 *)sceneTex);
 		setResolveSampler(dev, 0);
 		bindGrade(dev);		// Ronin @feature 21/10/2026 DX9: the daytime grade, on the screen copy only - never the history
+		bindVivid(dev);
 		dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
+		dev->SetTexture(11, NULL);
 		dev->SetTexture(10, NULL);
 		dev->SetTexture(8, NULL);	// Ronin @feature 15/10/2026 DX9: the night look's light mask
 	}

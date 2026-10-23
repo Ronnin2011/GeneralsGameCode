@@ -382,7 +382,7 @@ namespace
 	// TheWaterGlobalKnobs (W3DWaterSeaTuning.h): the water ini reads the same one.
 
 	// Ronin @feature 03/10/2026 DX9: one column of a panel table (`water`, `lights`) - a group's title and its `name=value` cells.
-	enum { PANEL_COLUMN_ROWS = 13 };	// water's SWELL holds 9, lights' SUN 10, COLOUR 11 (Ronin 21/10/2026: 12 -> 13 for the grade)
+	enum { PANEL_COLUMN_ROWS = 15 };	// water's SWELL holds 9, lights' COLOUR 14 (Ronin 22/10/2026: 13 -> 15 for vibrance and local contrast)
 	struct PanelColumn
 	{
 		const char *title;
@@ -895,7 +895,7 @@ namespace
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: lights [0|1] | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..6|9> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | aosun <0..3> | reflect <0..2> | reflectground <0..1> | fresnel <0..4> | ssr <0|1> | bounce <0..2> | sunshafts <0..4> | shaftgaps <0.5..1> | shaftlayer <20..400> | fxlights <0..64> | fxstrength <0..4> | fxreach <0.25..4> | fxsmooth <0..0.95> | night... (as `night`) | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
+			printAscii(AsciiString("usage: lights [0|1] | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..6|9> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | aosun <0..3> | reflect <0..2> | reflectground <0..1> | fresnel <0..4> | ssr <0|1> | bounce <0..2> | sunshafts <0..4> | shaftgaps <0.5..1> | shaftlayer <20..400> | vibrance <0..2> | localcontrast <0..2> | fxlights <0..64> | fxstrength <0..4> | fxreach <0.25..4> | fxsmooth <0..0.95> | night... (as `night`) | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
 			printAscii(AsciiString("  beams: headlights and lamp cones as spot lights, their strength; 0 = the art's own beams, no lights; shafts: the beam in the air, drawn by the shader - its strength beside the light's, 0 = none; rays: soft rays from the lamp in that beam, 0 = the smooth cone; rayturn: 1 = they turn with the world as the camera goes round a beam, 0 = they stay with the view; lampwidth: how wide the beam leaves its lamp, in the art's own width there, 0 = from a point"), FALSE);
 			printAscii(AsciiString("  spill: the dim light around a beam's cone, its strength beside the cone's, 0 = a hard cone; spillwide: how wide it reaches, in cone widths"), FALSE);
 			printAscii(AsciiString("  glows: the lamp glows (street lamps, warning and runway lights) as point lights, their strength, 0 = none; glowreach: their reach"), FALSE);
@@ -937,7 +937,7 @@ namespace
 			{ "LAMP SHADOWS", "lampmaps", "lampshadows", "lampbias", "lampself", "lampselfnear", "pointmaps", "pointsides", NULL },
 			{ "GLASS & GROUND", "reflect", "reflectground", "fresnel", "ssr", "bounce", NULL },
 			{ "COLOUR", "night", "nighttint", "nightlo", "nighthi", "nightfloor", "nightfull", "nightlift", "grade", "gradewarm", "gradesat",
-			  "grademids", NULL },		// Ronin @feature 21/10/2026 DX9: the final pass's colour - the night look, the dark lift, the grade
+			  "grademids", "vibrance", "localcontrast", NULL },		// Ronin @feature 21/10/2026 DX9: the final pass's colour - the night look, the dark lift, the grade
 			// Ronin @feature 21/10/2026 DX9: HDR's look - the sun's lift by the time of day, its warmth, the curve's white (on / off: Options.ini)
 			{ "HDR", "hdrmorning", "hdrafternoon", "hdrevening", "hdrnight", "hdrwarm", "hdrwhite", NULL },
 		};
