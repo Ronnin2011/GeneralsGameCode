@@ -48,9 +48,12 @@ float4   g_Tone      : register(c9);     // x = `hdr white` (1..2), y = 1: stage
 float3 toneCurve(float3 c)
 {
     float  knee = 2.0f - g_Tone.x;
-    float3 t    = saturate((c - knee) / max(g_Tone.x - knee, 0.0001f));
-    float3 bent = knee + (1.0f - knee) * (1.0f - (1.0f - t) * (1.0f - t));
-    return (g_Tone.y > 0.5f) ? ((c > knee) ? bent : c) : c;
+    // Ronin @bugfix 23/10/2026 DX9: the brightest channel bent and the others scaled with it, so a colour keeps its hue and saturation;
+    // bent one by one, a sunlit orange went yellow (hue 28 -> 45 deg) and paler.
+    float  m    = max(c.r, max(c.g, c.b));
+    float  t    = saturate((m - knee) / max(g_Tone.x - knee, 0.0001f));
+    float  bent = knee + (1.0f - knee) * (1.0f - (1.0f - t) * (1.0f - t));
+    return (g_Tone.y > 0.5f && m > knee) ? c * (bent / m) : c;
 }
 
 // Ronin @feature 15/10/2026 DX9: THE NIGHT LOOK. Night vision has no colour in the dim: a pixel keeps its own colour as far as
