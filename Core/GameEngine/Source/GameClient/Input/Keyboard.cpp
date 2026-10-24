@@ -227,7 +227,9 @@ Bool Keyboard::checkKeyRepeat()
 
 			const UnsignedInt now = timeGetTime();
 			const UnsignedInt keyDownTime = m_keyStatus[ key ].keyDownTimeMsec;
-			const UnsignedInt elapsedMsec = now - keyDownTime;
+			// Ronin @bugfix 24/10/2026 DX9: signed - the press carries DirectInput's clock, up to 14 ms ahead of timeGetTime; unsigned, a
+			// check just after the press read ~4 billion ms and repeated at once (short taps took 2-3 letters at a high frame rate).
+			const Int elapsedMsec = (Int)(now - keyDownTime);
 
 			if( elapsedMsec > Keyboard::KEY_REPEAT_DELAY_MSEC )
 			{
