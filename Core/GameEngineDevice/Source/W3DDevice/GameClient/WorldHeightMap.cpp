@@ -30,6 +30,7 @@
 
 #include "windows.h"
 #include "stdlib.h"
+#include <limits.h>
 #include "Common/STLTypedefs.h"
 
 #include "Common/DataChunk.h"
@@ -59,6 +60,7 @@
 #include "WW3D2/ddsfile.h"
 
 #include "Common/file.h"
+#include "Utility/stringex.h"
 
 // @feature Ronin 05/04/2026 Support HD terrain replacements without changing logical terrain coverage.
 #include <algorithm>
@@ -238,6 +240,7 @@ public:
 /* ********* MapObject class ****************************/
 /*static*/ MapObject *MapObject::TheMapObjectListPtr = nullptr;
 /*static*/ Dict MapObject::TheWorldDict;
+static Int s_nextTreeID = 1;
 
 MapObject::MapObject(Coord3D loc, AsciiString name, Real angle, Int flags, const Dict* props,
 										 const ThingTemplate *thingTemplate )
@@ -252,6 +255,7 @@ MapObject::MapObject(Coord3D loc, AsciiString name, Real angle, Int flags, const
 	m_renderObj = nullptr;
 	m_shadowObj = nullptr;
 	m_runtimeFlags = 0;
+	m_treeID = (DrawableID)s_nextTreeID++;
 	// Note - do NOT set TheKey_objectSelectable on creation - allow it to follow the .ini value unless specified by user action.  jba. [3/20/2003]
 	if (props)
 	{
@@ -770,6 +774,27 @@ WorldHeightMap::WorldHeightMap(ChunkInputStream *pStrm, Bool logicalDataOnly):
 	++s_instanceCount;
 }
 
+Bool WorldHeightMap::isTerrainFlat(const IRegion2D& bounds) const
+{
+	DEBUG_ASSERTCRASH(getLogicalBounds().contains(bounds), ("WorldHeightMap::isTerrainFlat must use a region contained by the logical map bounds."));
+
+	const Int width = bounds.width();
+	const Int height = bounds.height();
+	if (width <= 0 || height <= 0)
+		return true;
+
+	const UnsignedByte* firstRow = m_data + (bounds.lo.y + m_borderSize) * m_width + bounds.lo.x + m_borderSize;
+	const UnsignedByte referenceHeight = firstRow[0];
+	for (Int j = 0; j < height; j++)
+	{
+		const UnsignedByte* row = firstRow + j * m_width;
+		if (memcchr(row, referenceHeight, width) != nullptr)
+			return false;
+	}
+
+	return true;
+}
+
 /** Optimized version of method to get triangle flip state of a terrain cell.  Use this
 *	instead of getAlphaUVData() whenever possible.
 */
@@ -1060,6 +1085,44 @@ Bool WorldHeightMap::ParseObjectsDataChunk(DataChunkInput &file, DataChunkInfo *
 	return (file.parse(userData));
 }
 
+Bool WorldHeightMap::isValidTotalMapSize(Int width, Int height, Int borderSize)
+{
+	if (width <= 0 || width > MAX_MAP_DIMENSION)
+		return false;
+	if (height <= 0 || height > MAX_MAP_DIMENSION)
+		return false;
+
+	if (borderSize < 0 ||
+		borderSize > (width - 1) / 2 ||
+		borderSize > (height - 1) / 2)
+		return false;
+
+	if (width * height > MAX_MAP_AREA)
+		return false;
+
+	return true;
+}
+
+Bool WorldHeightMap::isValidPlayableMapSize(Int width, Int height, Int borderSize)
+{
+	if (width <= 0 || height <= 0 || borderSize < 0)
+		return false;
+
+	if (borderSize > (INT_MAX - width) / 2 ||
+		borderSize > (INT_MAX - height) / 2)
+		return false;
+
+	return isValidTotalMapSize(
+		width + 2 * borderSize,
+		height + 2 * borderSize,
+		borderSize);
+}
+
+static Bool isValidHeightDataSize(DataChunkInput &file, Int dataSize, Int width, Int height)
+{
+	return dataSize > 0 && dataSize == width * height && (UnsignedInt)dataSize <= file.getChunkDataSizeLeft();
+}
+
 /**
 * WorldHeightMap::ParseHeightMapData - read a height map chunk.
 * Format is the newer CHUNKY format.
@@ -1090,6 +1153,10 @@ Bool WorldHeightMap::ParseHeightMapData(DataChunkInput &file, DataChunkInfo *inf
 		m_borderSize = 0;
 	}
 
+	if (!isValidTotalMapSize(m_width, m_height, m_borderSize)) {
+		throw ERROR_CORRUPT_FILE_FORMAT;
+	}
+
 	if (info->version >= K_HEIGHT_MAP_VERSION_4) {
 		Int numBorders = file.readInt();
 		m_boundaries.resize(numBorders);
@@ -1104,10 +1171,11 @@ Bool WorldHeightMap::ParseHeightMapData(DataChunkInput &file, DataChunkInfo *inf
 	}
 
 	m_dataSize = file.readInt();
-	m_data = MSGNEW("WorldHeightMap_ParseHeightMapData") UnsignedByte[m_dataSize];
-	if (m_dataSize <= 0 || (m_dataSize != (m_width*m_height))) {
+	if (!isValidHeightDataSize(file, m_dataSize, m_width, m_height)) {
 		throw ERROR_CORRUPT_FILE_FORMAT	;
 	}
+
+	m_data = MSGNEW("WorldHeightMap_ParseHeightMapData") UnsignedByte[m_dataSize];
 
 	Int numBytesX = (m_width+7)/8;	//how many bytes to fit all bitflags
 	Int numBytesY = m_height;
@@ -1164,6 +1232,10 @@ Bool WorldHeightMap::ParseSizeOnly(DataChunkInput &file, DataChunkInfo *info, vo
 		m_borderSize = 0;
 	}
 
+	if (!isValidTotalMapSize(m_width, m_height, m_borderSize)) {
+		throw ERROR_CORRUPT_FILE_FORMAT;
+	}
+
 	if (info->version >= K_HEIGHT_MAP_VERSION_4) {
 		Int numBorders = file.readInt();
 		m_boundaries.resize(numBorders);
@@ -1178,10 +1250,11 @@ Bool WorldHeightMap::ParseSizeOnly(DataChunkInput &file, DataChunkInfo *info, vo
 	}
 
 	m_dataSize = file.readInt();
-	m_data = MSGNEW("WorldHeightMap_ParseSizeOnly") UnsignedByte[m_dataSize];
-	if (m_dataSize <= 0 || (m_dataSize != (m_width*m_height))) {
+	if (!isValidHeightDataSize(file, m_dataSize, m_width, m_height)) {
 		throw ERROR_CORRUPT_FILE_FORMAT	;
 	}
+
+	m_data = MSGNEW("WorldHeightMap_ParseSizeOnly") UnsignedByte[m_dataSize];
 	file.readArrayOfBytes((char *)m_data, m_dataSize);
 	// Resize me.
 	if (info->version == K_HEIGHT_MAP_VERSION_1) {
@@ -1353,6 +1426,7 @@ Bool WorldHeightMap::ParseBlendTileData(DataChunkInput &file, DataChunkInfo *inf
 					m_cellCliffState[j*m_flipStateWidth + i] = data[j*byteWidth + i];
 				}
 			}
+			delete[] data;
 		} else {
 			file.readArrayOfBytes((char*)m_cellCliffState, m_height*m_flipStateWidth);
 		}

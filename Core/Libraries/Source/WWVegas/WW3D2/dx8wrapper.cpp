@@ -113,6 +113,7 @@ const char* DXGetErrorString9A(HRESULT hr)
 #include "dx8texman.h"
 #include "WWLib/bound.h"
 #include "DbgHelpGuard.h"
+#include <Utility/bit_adapter.h>
 
 #include "shdlib.h"
 
@@ -662,7 +663,7 @@ void Log_DX8_ErrorCode(unsigned res)
 	// Ronin @build 24/10/2025 DX9: D3DXGetErrorStringA removed, use DXGetErrorString9A
 	const char* errorString = DXGetErrorString9A(res);
 	if (errorString) {
-		WWDEBUG_SAY((errorString));
+		WWDEBUG_SAY(("%s", errorString));
 	}
 
 	WWASSERT(0);
@@ -760,7 +761,11 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 		if (D3D8Lib == nullptr) return false;	// Return false at this point if init failed
 
 		Direct3DCreate8Ptr = (Direct3DCreate8Type) GetProcAddress(D3D8Lib, "Direct3DCreate9");
-		if (Direct3DCreate8Ptr == nullptr) return false;
+		if (Direct3DCreate8Ptr == nullptr)
+		{
+			Shutdown();
+			return false;
+		}
 
 		/*
 		** Create the D3D interface object
@@ -776,6 +781,7 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 		if (D3DInterface == nullptr) {
 			WWDEBUG_SAY(("ERROR: Direct3DCreate9 returned NULL! D3D_SDK_VERSION=%d", D3D_SDK_VERSION));
 			WWDEBUG_SAY(("Check: 1) Is DirectX 9 runtime installed? 2) Graphics driver issue?"));
+			Shutdown();
 			return(false);
 		}
 		IsInitted = true;
@@ -805,16 +811,12 @@ void DX8Wrapper::Shutdown()
 
 	}
 
-	if (CurrentCaps)
+	for (size_t i = 0; i < ARRAY_SIZE(Textures); ++i)
 	{
-		int max=CurrentCaps->Get_Max_Textures_Per_Pass();
-		for (int i = 0; i < max; i++)
+		if (Textures[i])
 		{
-			if (Textures[i])
-			{
-				Textures[i]->Release();
-				Textures[i] = nullptr;
-			}
+			Textures[i]->Release();
+			Textures[i] = nullptr;
 		}
 	}
 
@@ -879,7 +881,6 @@ void DX8Wrapper::Init_Decl_Cache(IDirect3DDevice9* device)
 	WWDEBUG_SAY(("Vertex declaration cache initialized"));
 }
 
-inline DWORD F2DW(float f) { return *((unsigned*)&f); }
 void DX8Wrapper::Set_Default_Global_Render_States()
 {
 	DX8_THREAD_ASSERT();
@@ -5527,7 +5528,7 @@ void DX8Wrapper::Get_DX8_Render_State_Value_Name(StringClass& name, D3DRENDERSTA
 	// 	case D3DRS_PATCHSEGMENTS:
 	case D3DRS_POINTSIZE_MAX:
 	case D3DRS_TWEENFACTOR:
-		name.Format("%f",*(float*)&value);
+		name.Format("%f",std::bit_cast<float>(value));
 		break;
 
 	case D3DRS_DEPTHBIAS:
@@ -5639,7 +5640,7 @@ void DX8Wrapper::Get_DX8_Texture_Stage_State_Value_Name(StringClass& name, D3DTE
 	case D3DTSS_BUMPENVMAT11:
 	case D3DTSS_BUMPENVLSCALE:
 	case D3DTSS_BUMPENVLOFFSET:
-		name.Format("%f",*(float*)&value);
+		name.Format("%f",std::bit_cast<float>(value));
 		break;
 
 	case D3DTSS_TEXCOORDINDEX:

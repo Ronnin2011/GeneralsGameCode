@@ -58,6 +58,7 @@ Common keywords: `@bugfix`, `@feature`, `@performance`, `@refactor`, `@tweak`, `
 - Types: `bugfix:`, `feat:`, `fix:`, `refactor:`, `perf:`, `build:`
 - Zero Hour changes take precedence over Generals
 - Changes must be identical between both games when applicable
+- Do not write `#<number>` in commit messages, pull request descriptions or comments unless you mean to link that exact issue or pull request. GitHub cross-links it permanently, even from forks. Number local items as `F7` or `item 7` instead
 
 ### Code Style
 - Maintain consistency with surrounding legacy code isn't that important.
@@ -98,7 +99,6 @@ Core/
 ├── GameEngine/Include/Common/     # Shared interfaces
 ├── GameEngine/Include/GameLogic/  # Game simulation
 ├── GameEngine/Include/GameClient/ # Rendering/UI
-├── Libraries/Include/rts/         # RTS-specific utilities
 └── Libraries/Source/WWVegas/      # Graphics framework
 ```
 

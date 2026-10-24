@@ -689,7 +689,6 @@ Bool FirewallHelperClass::detectionBeginUpdate() {
 		if (!found) {
 			Int m = m_numManglers++;
 			memcpy(&mangler_addresses[m][0], &host_info->h_addr_list[0][0], 4);
-			ntohl((UnsignedInt)mangler_addresses[m]);
 			DEBUG_LOG(("Found mangler address at %d.%d.%d.%d", mangler_addresses[m][0], mangler_addresses[m][1], mangler_addresses[m][2], mangler_addresses[m][3]));
 		}
 
@@ -1481,6 +1480,8 @@ Bool FirewallHelperClass::openSpareSocket(UnsignedShort port) {
 
 	if (m_spareSockets[i].udp->Bind((UnsignedInt)0, port) != 0) {
 		DEBUG_CRASH(("FirewallHelperClass::openSpareSocket - Failed to init spare socket"));
+		delete m_spareSockets[i].udp;
+		m_spareSockets[i].udp = nullptr;
 		return FALSE;
 	}
 

@@ -36,6 +36,7 @@
 #include "Common/FileSystem.h"
 #include "Common/FramePacer.h"
 #include "Common/GameState.h"
+#include "Common/GameUtility.h"
 #include "Common/LatchRestore.h"
 #include "Common/MessageStream.h"
 #include "Common/PerfTimer.h"
@@ -386,6 +387,7 @@ m_fade(FADE_NONE),
 m_freezeByScript(FALSE),
 m_frameObjectCountChanged(0),
 m_closeWindowTimer(0),
+m_letterBoxActive(FALSE),
 m_curFadeFrame(0),
 m_curFadeValue(0.0f),
 m_endGameTimer(0),
@@ -4564,6 +4566,7 @@ void ScriptEngine::reset()
 	m_numFlags = 1;
 	m_endGameTimer = -1;
 	m_closeWindowTimer = -1;
+	m_letterBoxActive = FALSE;
 
 	m_callingTeam = nullptr;
 	m_callingObject = nullptr;
@@ -6403,7 +6406,7 @@ void ScriptEngine::addObjectToCache(Object* pNewObject)
 				AsciiString newNameForDead;
 				newNameForDead.format("Reassigning dead object's name '%s' to object (%d) of type '%s'", objName.str(), pNewObject->getID(), pNewObject->getTemplate()->getName().str());
 				AppendDebugMessage(newNameForDead, FALSE);
-				DEBUG_LOG((newNameForDead.str()));
+				DEBUG_LOG(("%s", newNameForDead.str()));
 				it->second = pNewObject;
 				return;
 			} else {
@@ -7741,6 +7744,22 @@ void ScriptEngine::doUnfreezeTime()
 }
 
 //-------------------------------------------------------------------------------------------------
+/** Report the scripted letterbox opening or closing. */
+//-------------------------------------------------------------------------------------------------
+void ScriptEngine::friend_notifyLetterBoxActive(Bool active)
+{
+	m_letterBoxActive = active;
+}
+
+//-------------------------------------------------------------------------------------------------
+/** Is the letterbox active right now? */
+//-------------------------------------------------------------------------------------------------
+Bool ScriptEngine::isLetterBoxActive() const
+{
+	return m_letterBoxActive;
+}
+
+//-------------------------------------------------------------------------------------------------
 /** For Debug and Internal builds, returns whether to continue (!pause), for release, returns false */
 //-------------------------------------------------------------------------------------------------
 Bool ScriptEngine::isTimeFrozenDebug()
@@ -8148,6 +8167,7 @@ void ScriptEngine::setGlobalDifficulty( GameDifficulty difficulty )
 	* 3: Added m_objectsShouldReceiveDifficultyBonus (JKMCD)
 	* 4: current music track info
 	* 5: add ChooseVictimAlwaysUsesNormal
+	* 6: TheSuperHackers @tweak Serialize m_letterBoxActive
 	*/
 // ------------------------------------------------------------------------------------------------
 void ScriptEngine::xfer( Xfer *xfer )
@@ -8155,7 +8175,11 @@ void ScriptEngine::xfer( Xfer *xfer )
 	Int i;
 
 	// version
+#if RETAIL_COMPATIBLE_XFER_SAVE
 	const XferVersion currentVersion = 5;
+#else
+	const XferVersion currentVersion = 6;
+#endif
 	XferVersion version = currentVersion;
 	xfer->xferVersion( &version, currentVersion );
 
@@ -8614,6 +8638,18 @@ void ScriptEngine::xfer( Xfer *xfer )
 		m_ChooseVictimAlwaysUsesNormal = false;
 	}
 
+	if (version >= 6)
+	{
+		xfer->xferBool(&m_letterBoxActive);
+	}
+	else
+	{
+		if (xfer->getXferMode() == XFER_LOAD)
+		{
+			m_letterBoxActive = FALSE;
+		}
+	}
+
 	if( xfer->getXferMode() == XFER_LOAD ) {
 		// We are doing a load.  If there is no fade active, do a black fade in to start.
 		if (m_fade == FADE_NONE) {
@@ -8645,6 +8681,8 @@ void ScriptEngine::loadPostProcess()
 		event.setPlayerIndex(ThePlayerList->getLocalPlayer()->getPlayerIndex());
 		TheAudio->addAudioEvent(&event);
 	}
+
+	rts::enableLetterBox(isLetterBoxActive());
 
 }
 

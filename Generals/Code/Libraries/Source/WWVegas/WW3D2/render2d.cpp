@@ -32,12 +32,12 @@
  * Functions:                                                                                  *
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
-// Ronin @build 18/10/2025 Include DX8-to-DX9 compatibility layer first
 #include <d3d9.h>  // Native DX9
 
 #include "render2d.h"
 #include "WWLib/mutex.h"
 #include "ww3d.h"
+#include "Renderer.h"
 #include "font3d.h"
 #include "WWMath/rect.h"
 #include "texture.h"
@@ -202,8 +202,8 @@ Vector2 Render2DClass::Convert_Vert( const Vector2 & v )
 	out.Y = (out.Y - 1.0f) * (Get_Screen_Resolution().Height() * -0.5f);
 
 	// Round to nearest pixel
-	out.X = WWMath::Floor( out.X + 0.5f );
-	out.Y = WWMath::Floor( out.Y + 0.5f );
+	out.X = WWMath::Floorf( out.X + 0.5f );
+	out.Y = WWMath::Floorf( out.Y + 0.5f );
 
 	// Bias
 	if ( WW3D::Is_Screen_UV_Biased() ) {
@@ -544,14 +544,14 @@ void Render2DClass::Render()
 	//
 	//	Configure the viewport for entire screen
 	//
-	D3DVIEWPORT8 vp = { 0 };
-	vp.X			= (DWORD)ScreenResolution.Left;
-	vp.Y			= (DWORD)ScreenResolution.Top;
-	vp.Width		= (DWORD)ScreenResolution.Width ();
-	vp.Height	= (DWORD)ScreenResolution.Height ();
-	vp.MinZ		= 0.0f;
-	vp.MaxZ		= 1.0f
-	DX8Wrapper::Set_Viewport(&vp);
+	RenderViewport vp;
+	vp.x			= (unsigned int)ScreenResolution.Left;
+	vp.y			= (unsigned int)ScreenResolution.Top;
+	vp.width		= (unsigned int)ScreenResolution.Width ();
+	vp.height	= (unsigned int)ScreenResolution.Height ();
+	vp.min_z		= 0;
+	vp.max_z		= 1;
+	Renderer::Set_Viewport(vp);
 
 
 	DX8Wrapper::Set_Texture(0,Texture);

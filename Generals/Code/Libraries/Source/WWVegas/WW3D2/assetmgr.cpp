@@ -797,7 +797,7 @@ RenderObjClass * WW3DAssetManager::Create_Render_Obj(const char * name)
 		char filename [MAX_PATH];
 		const char *mesh_name = ::strchr (name, '.');
 		if (mesh_name != nullptr) {
-			::lstrcpyn (filename, name, ((int)mesh_name) - ((int)name) + 1);
+			::lstrcpyn (filename, name, (int)(mesh_name - name) + 1);
 			::lstrcat (filename, ".w3d");
 		} else {
 			snprintf( filename, ARRAY_SIZE(filename), "%s.w3d", name);
@@ -1491,6 +1491,17 @@ void	WW3DAssetManager::Release_All_FontChars()
 	while ( FontCharsList.Count() ) {
 		FontCharsList[0]->Release_Ref();
 		FontCharsList.Delete( 0 );
+	}
+}
+
+
+/***********************************************************************************************
+ * WW3DAssetManager::Free_All_FontChars_Glyph_Caches -- Discards all cached glyphs              *
+ *=============================================================================================*/
+void	WW3DAssetManager::Free_All_FontChars_Glyph_Caches()
+{
+	for ( int i = 0; i < FontCharsList.Count(); i++ ) {
+		FontCharsList[i]->Free_Glyph_Cache();
 	}
 }
 

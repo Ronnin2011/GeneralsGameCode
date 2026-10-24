@@ -57,6 +57,7 @@
 #include "Common/Xfer.h"
 
 #include "GameClient/ShellHooks.h"
+#include "GameClient/View.h"
 
 #include "GameLogic/AI.h"
 #include "GameLogic/Object.h"
@@ -139,6 +140,7 @@ const char *ShakeIntensities[] = {
 	"Cine_Extreme",
 	"Cine_Insane"
 };
+static_assert(ARRAY_SIZE(ShakeIntensities) == View::SHAKE_COUNT, "Incorrect array size");
 
 enum { K_SCRIPT_LIST_DATA_VERSION_1 = 1,
 			K_SCRIPT_GROUP_DATA_VERSION_1 = 1,
@@ -958,13 +960,19 @@ void Script::crc( Xfer *xfer )
 // ------------------------------------------------------------------------------------------------
 /** Xfer method
 	* Version Info:
-	* 1: Initial version */
+	* 1: Initial version
+	* 2: TheSuperHackers @bugfix bobtista 13/08/2026 Save the next evaluation frame of delayed scripts
+	*/
 // ------------------------------------------------------------------------------------------------
 void Script::xfer( Xfer *xfer )
 {
 
 	// version
+#if RETAIL_COMPATIBLE_XFER_SAVE
 	XferVersion currentVersion = 1;
+#else
+	XferVersion currentVersion = 2;
+#endif
 	XferVersion version = currentVersion;
 	xfer->xferVersion( &version, currentVersion );
 
@@ -972,6 +980,11 @@ void Script::xfer( Xfer *xfer )
 	Bool active = isActive();
 	xfer->xferBool( &active );
 	setActive( active );
+
+	if( version >= 2 )
+	{
+		xfer->xferUnsignedInt( &m_frameToEvaluateAt );
+	}
 
 }
 

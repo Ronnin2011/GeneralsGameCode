@@ -48,6 +48,7 @@
 #include "WW3D2/camera.h"
 #include "WW3D2/scene.h"
 #include "WW3D2/dx8wrapper.h"
+#include "WW3D2/Renderer.h"
 #include "WW3D2/light.h"
 #include "d3dx9math.h"
 #include "WWLib/simplevec.h"
@@ -127,9 +128,6 @@ typedef VertexFormatXYZNDUV2 MaterMeshVertexFormat;
 #define WATER_MESH_FVF	DX8_FVF_XYZDUV2
 typedef VertexFormatXYZDUV2 MaterMeshVertexFormat;
 #endif
-
-// Converts a FLOAT to a DWORD for use in SetRenderState() calls
-static inline DWORD F2DW( FLOAT f ) { return *((DWORD*)&f); }
 
 #define DRAW_WATER_WAKES
 /// @todo: Fix clipping of objects that intersect the mirror surface
@@ -1768,49 +1766,51 @@ void WaterRenderObjClass::renderMirror(CameraClass *cam)
 	DX8Wrapper::Set_Render_Target_With_Z((TextureClass*)m_pReflectionTexture, m_pReflectionDepth);
 
 	// Clear the backbuffer
-	WW3D::Begin_Render(false,true,Vector3(0.0f,0.0f,0.0f));	//clearing only z-buffer since background always filled with clouds
+	if (WW3D::Begin_Render(false,true,Vector3(0.0f,0.0f,0.0f)) == WW3D_ERROR_OK)	//clearing only z-buffer since background always filled with clouds
+	{
+		cam->Set_Transform( reflectedTransform );
 
-	cam->Set_Transform( reflectedTransform );
+		//Force reflected image to be drawn into full texture size - not a viewport inside texture.
+		Vector2 vMin,vMax,vOldMax,vOldMin;
+		cam->Get_Viewport(vOldMin,vOldMax);
+		vMax.X=vMax.Y=1.0f;
+		vMin.X=vMin.Y=0.0f;
+		cam->Set_Viewport(vMin,vMax);
 
-	//Force reflected image to be drawn into full texture size - not a viewport inside texture.
-	Vector2 vMin,vMax,vOldMax,vOldMin;
- 	cam->Get_Viewport(vOldMin,vOldMax);
- 	vMax.X=vMax.Y=1.0f;
-	vMin.X=vMin.Y=0.0f;
- 	cam->Set_Viewport(vMin,vMax);
+		// Ronin @bugfix 29/09/2026 DX9: clip the mirror at the water. Nothing did, so the seabed seen from below covered the sky and
+		// everything above it. Kept side above the plane; CameraClass::Apply bends the near plane onto it. `water mirrorclip 0` = old.
+		const Vector4 waterPlane(0.0f, 0.0f, 1.0f, -m_level);
+		cam->Set_Oblique_Near_Plane(TheWaterSeaGlobal.mirrorClip ? &waterPlane : nullptr);
+		// Ronin @bugfix 29/09/2026 DX9: `water mirrorfar` (x4): the view's far plane is fitted to what it shows, and the mirror
+		// camera sits further from all it reflects (Water_Work.md §6).
+		float mirrorNear = 0.0f, mirrorFar = 0.0f;
+		cam->Get_Clip_Planes(mirrorNear, mirrorFar);
+		cam->Set_Clip_Planes(mirrorNear, mirrorFar * TheWaterSeaGlobal.mirrorFar);
 
-	// Ronin @bugfix 29/09/2026 DX9: clip the mirror at the water. Nothing did, so the seabed seen from below covered the sky and
-	// everything above it. Kept side above the plane; CameraClass::Apply bends the near plane onto it. `water mirrorclip 0` = old.
-	const Vector4 waterPlane(0.0f, 0.0f, 1.0f, -m_level);
-	cam->Set_Oblique_Near_Plane(TheWaterSeaGlobal.mirrorClip ? &waterPlane : nullptr);
-	// Ronin @bugfix 29/09/2026 DX9: `water mirrorfar` (x4): the view's far plane is fitted to what it shows, and the mirror
-	// camera sits further from all it reflects (Water_Work.md §6).
-	float mirrorNear = 0.0f, mirrorFar = 0.0f;
-	cam->Get_Clip_Planes(mirrorNear, mirrorFar);
-	cam->Set_Clip_Planes(mirrorNear, mirrorFar * TheWaterSeaGlobal.mirrorFar);
+		cam->Apply();	//force an update of all the camera dependent parameters like frustum clip planes
 
-	cam->Apply();	//force an update of all the camera dependent parameters like frustum clip planes
+		//flip the winding order of polygons to draw the reflected back sides.
+		ShaderClass::Invert_Backface_Culling(true);
 
-	//flip the winding order of polygons to draw the reflected back sides.
-	ShaderClass::Invert_Backface_Culling(true);
+		// Render the scene
+		renderSky();
+		if (m_tod == TIME_OF_DAY_NIGHT)
+			renderSkyBody(&reflectedTransform);
 
-	// Render the scene
-	renderSky();
-	if (m_tod == TIME_OF_DAY_NIGHT)
-		renderSkyBody(&reflectedTransform);
+		WW3D::Render(m_parentScene,cam);
 
-	WW3D::Render(m_parentScene,cam);
+		cam->Set_Transform(OldCameraMatrix);	//restore original non-reflected matrix
+		cam->Set_Viewport(vOldMin,vOldMax);
 
-	cam->Set_Transform(OldCameraMatrix);	//restore original non-reflected matrix
- 	cam->Set_Viewport(vOldMin,vOldMax);
-	cam->Set_Oblique_Near_Plane(nullptr);	// Ronin @bugfix 29/09/2026 DX9: the main view keeps its own near plane
-	cam->Set_Clip_Planes(mirrorNear, mirrorFar);	// and its own far plane
+		cam->Set_Oblique_Near_Plane(nullptr);	// Ronin @bugfix 29/09/2026 DX9: the main view keeps its own near plane
+		cam->Set_Clip_Planes(mirrorNear, mirrorFar);	// and its own far plane
 
-	cam->Apply();	//force an update of all the camera dependent parameters like frustum clip planes
+		cam->Apply();	//force an update of all the camera dependent parameters like frustum clip planes
 
-	ShaderClass::Invert_Backface_Culling(false);
+		ShaderClass::Invert_Backface_Culling(false);
 
-	WW3D::End_Render(false);
+		WW3D::End_Render(false);
+	}
 
 	// Change the rendertarget back to the main backbuffer
 	DX8Wrapper::Set_Render_Target((IDirect3DSurface8 *)nullptr);
@@ -2037,7 +2037,7 @@ void WaterRenderObjClass::Render(RenderInfoClass & rinfo)
 					rinfo.Camera.Apply();	//force an update of all the camera dependent parameters like frustum clip planes
 
 					//clear the z-buffer to remove changes made by objects inside mirror
-					DX8Wrapper::Clear(false,true,Vector3(0.1f,0.1f,0.1f));
+					Renderer::Clear(false,true,Vector3(0.1f,0.1f,0.1f));
 				}
 			#endif
 
@@ -3097,10 +3097,17 @@ void WaterRenderObjClass::drawRiverWater(PolygonTrigger *pTrig)
 	static Bool doWobble = true;
 
 	if (m_disableRiver) return;
-	m_drawingRiver = true;
 
 	//allocate 2 triangles per side with 3 indices per triangle
-	DynamicIBAccessClass ib_access(BUFFER_TYPE_DYNAMIC_DX8,(rectangleCount+1)*2*3);
+	const Int indexCount = (rectangleCount+1)*2*3;
+	// TheSuperHackers @bugfix arcticdolphin 12/10/2026 Skip rivers that do not fit the 16 bit dynamic buffers.
+	DEBUG_ASSERTCRASH(indexCount <= DynamicIBAccessClass::MAX_INDEX_COUNT, ("River has too many points to draw"));
+	if (indexCount > DynamicIBAccessClass::MAX_INDEX_COUNT)
+		return;
+
+	m_drawingRiver = true;
+
+	DynamicIBAccessClass ib_access(BUFFER_TYPE_DYNAMIC_DX8,indexCount);
 	{
 		DynamicIBAccessClass::WriteLockClass lockib(&ib_access);
  		UnsignedShort *curIb = lockib.Get_Index_Array();
@@ -5002,7 +5009,7 @@ void WaterRenderObjClass::drawTrapezoidWater(Vector3 points[4])
 	//If video card supports it and it's enabled, feather the water edge using destination alpha
 	// Ronin @feature 29/09/2026 DX9: phase 1 - not when the WaterSea shader has depth: its own alpha is the soft shore.
 	if (!(reflect && WaterSea_DepthActive(m_heightTexture != nullptr)) &&
-		DX8Wrapper::getBackBufferFormat() == WW3D_FORMAT_A8R8G8B8 && TheGlobalData->m_showSoftWaterEdge && TheWaterTransparency->m_transparentWaterDepth !=0)
+		Renderer::Get_Back_Buffer_Format() == WW3D_FORMAT_A8R8G8B8 && TheGlobalData->m_showSoftWaterEdge && TheWaterTransparency->m_transparentWaterDepth !=0)
 	{		DX8Wrapper::Set_DX8_Render_State(D3DRS_SRCBLEND, D3DBLEND_DESTALPHA );
 			if (!TheWaterTransparency->m_additiveBlend)
 				DX8Wrapper::Set_DX8_Render_State(D3DRS_DESTBLEND, D3DBLEND_INVDESTALPHA );

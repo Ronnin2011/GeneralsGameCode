@@ -890,12 +890,16 @@ void AIUpdateInterface::chooseGoodLocomotorFromCurrentSet()
 }
 
 //----------------------------------------------------------------------------------------------------------
+// TheSuperHackers @bugfix WebbontheWeb 07/10/2026 The function can now return the crate object.
 Object* AIUpdateInterface::checkForCrateToPickup()
 {
 	if (m_crateCreated != INVALID_ID)
 	{
+#if RETAIL_COMPATIBLE_CRC
 		m_crateCreated = INVALID_ID; // we have processed it, so clear it.
+#endif
 		Object* crate = TheGameLogic->findObjectByID(m_crateCreated);
+		m_crateCreated = INVALID_ID; // we have processed it, so clear it.
 		if (crate)
 		{
 			for (BehaviorModule** m = crate->getBehaviorModules(); *m; ++m)
@@ -1296,8 +1300,8 @@ Bool AIUpdateInterface::blockedBy(Object *other)
 
 	// If we are near our final goal, don't get stuck.
 	if (goalCell.x>0 && goalCell.y>0) {
-		Real dx = fabs(goalPos.x-pos.x);
-		Real dy = fabs(goalPos.y-pos.y);
+		Real dx = WWMath::Fabs(goalPos.x-pos.x);
+		Real dy = WWMath::Fabs(goalPos.y-pos.y);
 		if (dx<PATHFIND_CELL_SIZE_F && dy<PATHFIND_CELL_SIZE_F) {
 			return FALSE; // If we're approaching our goal, ignore obstacles.
 		}
@@ -1412,7 +1416,7 @@ Bool AIUpdateInterface::needToRotate()
 		deltaAngle = ThePartitionManager->getRelativeAngle2D( getObject(), &info.posOnPath );
 	}
 
-	if (fabs(deltaAngle)>PI/30)
+	if (WWMath::Fabs(deltaAngle)>PI/30)
 	{
 		return TRUE;
 	}
@@ -1679,10 +1683,10 @@ Bool AIUpdateInterface::computePath( PathfindServicesInterface *pathServices, Co
 	m_retryPath = false;
 	Region3D extent;
 	TheTerrainLogic->getMaximumPathfindExtent(&extent);
-	if (!extent.isInRegion(destination->asCoord2D())) {
+	if (!extent.containsWithin(destination->asCoord2D())) {
 		// We're going off the map.
 		Coord3D pos = *getObject()->getPosition();
-		if (!extent.isInRegion(pos.asCoord2D()))	{
+		if (!extent.containsWithin(pos.asCoord2D()))	{
 			// We're starting off the map.  Since we're off the map, we can't pathfind so just build a path.
 			return computeQuickPath(destination);
 		}
@@ -2272,7 +2276,7 @@ UpdateSleepTime AIUpdateInterface::doLocomotor()
 							}
 							else
 							{
-								Real dist = sqrtf(dSqr);
+								Real dist = WWMath::Sqrtf(dSqr);
 								if (dist<1) dist = 1;
 								pos.x += 2*PATHFIND_CELL_SIZE_F*dx/(dist*LOGICFRAMES_PER_SECOND);
 								pos.y += 2*PATHFIND_CELL_SIZE_F*dy/(dist*LOGICFRAMES_PER_SECOND);
@@ -2473,7 +2477,7 @@ Real AIUpdateInterface::getLocomotorDistanceToGoal()
 					dest = m_path->getLastNode()->getPosition();
 				}
 				Real distance = ThePartitionManager->getDistanceSquared( me, dest, FROM_CENTER_3D );
-				return sqrt( distance );// Other paths return dots of normalized vectors, so one sqrt ain't so bad
+				return WWMath::Sqrt( distance );// Other paths return dots of normalized vectors, so one sqrt ain't so bad
 			}
 			else
 			{
@@ -2505,7 +2509,7 @@ Real AIUpdateInterface::getLocomotorDistanceToGoal()
 				{
 					if (sqr(dist) > distSqr)
 					{
-						return sqrt(distSqr);
+						return WWMath::Sqrt(distSqr);
 					}
 					else
 					{
@@ -2514,7 +2518,7 @@ Real AIUpdateInterface::getLocomotorDistanceToGoal()
 				}
 
 				if (dist<PATHFIND_CELL_SIZE_F || sqr(dist) < distSqr)
-					return sqrtf(distSqr);
+					return WWMath::Sqrtf(distSqr);
 				else
 					return dist;
 
@@ -4081,7 +4085,7 @@ void AIUpdateInterface::privateGuardPosition( const Coord3D *pos, GuardMode guar
 		// Clip to playable area.
 		Region3D r;
 		TheTerrainLogic->getExtent(&r);
-		if (!r.isInRegion(adjPos.asCoord2D()))
+		if (!r.containsWithin(adjPos.asCoord2D()))
 			adjPos = TheTerrainLogic->findClosestEdgePoint(&adjPos);
 	}
 	m_locationToGuard = adjPos;
@@ -4559,13 +4563,33 @@ Object* AIUpdateInterface::getNextMoodTarget( Bool calledByAI, Bool calledDuring
 		{
 			if( !canAutoAcquireWhileStealthed() )
 			{
-  			const Object *container = obj->getContainedBy();
-  			if( ! (container && container->getContain()->isPassengerAllowedToFire()) )
-  			{
+				//He's stealthed and idle, but if he's garrisoned, then that's a whole different matter....
+				const Object *container = obj->getContainedBy();
+				if( !container )
+				{
+					//Not contained
+					return nullptr;
+				}
+
+#if RTS_GENERALS && RETAIL_COMPATIBLE_CRC
+				// TheSuperHackers @bugfix Caball009 22/09/2026 Return early to prevent a crash.
+				// This is needed when a Tunnel Network with units is transferred to another player and then sold or destroyed.
+				// The units are not properly transferred and are left in an invalid state.
+				if (!container->getContain())
+				{
+					// remove all such units from the tunnel tracker and destroy them
+					TheGameLogic->friend_destroyInTunnelContain(obj);
+
+					return nullptr;
+				}
+#endif
+
+				if( !container->getContain()->isPassengerAllowedToFire() )
+				{
 					// Sorry, stealthed and not allowed to idle fire when stealthed.
 					// Being in a firing container is an exception to this veto.
-  				return nullptr;
-  			}
+					return nullptr;
+				}
 			}
 		}
 	}
@@ -5358,6 +5382,12 @@ void AIUpdateInterface::loadPostProcess()
 			m_pathfindGoalCell.y = -1;
 			TheAI->pathfinder()->updateGoal(getObject(), &goalPos, getObject()->getLayer());
 		}
+	}
+
+	// TheSuperHackers @bugfix bobtista 11/10/2026 The pathfind queue is not saved, so queue the pending request again.
+	if (m_waitingForPath && m_queueForPathFrame == 0)
+	{
+		TheAI->pathfinder()->queueForPath(getObject()->getID());
 	}
 
 }

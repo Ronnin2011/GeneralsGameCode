@@ -14,8 +14,6 @@ set(WW3D2_SRC
     assetstatus.cpp
     assetstatus.h
     Backend/DX8Backend.cpp
-    Backend/DX8Backend.h
-    Backend/RenderBackend.h
     bitmaphandler.cpp
     bitmaphandler.h
     bmp2d.cpp
@@ -95,7 +93,6 @@ set(WW3D2_SRC
     htree.h
     #htreemgr.cpp
     #htreemgr.h
-    IRenderBackend.h
     intersec.cpp
     intersec.h
     intersec.inl
@@ -165,6 +162,7 @@ set(WW3D2_SRC
     #render2d.h
     render2dsentence.cpp
     render2dsentence.h
+    Renderer.h
     renderobjectrecycler.cpp
     renderobjectrecycler.h
     rendobj.cpp
@@ -238,7 +236,6 @@ set(WW3D2_SRC
     ww3d.h
     ww3dformat.cpp
     ww3dformat.h
-    ww3dids.h
     ww3dtrig.h
 )
 

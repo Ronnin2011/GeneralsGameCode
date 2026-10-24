@@ -107,8 +107,6 @@ struct TCheckMovementInfo
 	Bool							allyGoal;
 };
 
-inline Int IABS(Int x) {	if (x>=0) return x; return -x;};
-
 //-----------------------------------------------------------------------------------
 static Int frameToShowObstacles;
 
@@ -187,6 +185,9 @@ void Pathfinder::reset()
 	m_isTunneling = false;
 
 	m_moveAlliesDepth = 0;
+#if !RETAIL_COMPATIBLE_PATHFINDING
+	std::fill(m_moveAlliesObjects, m_moveAlliesObjects + ARRAY_SIZE(m_moveAlliesObjects), INVALID_ID);
+#endif
 
 	// pathfind grid cells have not been classified yet
 	m_isMapReady = false;
@@ -1560,8 +1561,8 @@ Bool Pathfinder::adjustToLandingDestination(Object *obj, Coord3D *dest)
 	TheTerrainLogic->getMaximumPathfindExtent(&extent);
 	// If the object is off the map & the goal is off the map, it is a scripted setup, so just
 	// go to the dest.
-	if (!extent.isInRegion(dest->asCoord2D())) {
-		if (!extent.isInRegion(obj->getPosition()->asCoord2D())) {
+	if (!extent.containsWithin(dest->asCoord2D())) {
+		if (!extent.containsWithin(obj->getPosition()->asCoord2D())) {
 			return true;
 		}
 	}
@@ -2535,7 +2536,7 @@ Int Pathfinder::examineNeighboringCells(PathfindCell *parentCell, PathfindCell *
 				toPos.y = newCellCoord.y * PATHFIND_CELL_SIZE_F ;
 				toPos.z = TheTerrainLogic->getGroundHeight(toPos.x , toPos.y);
 
-				if ( fabs(fromPos.z - toPos.z)<PATHFIND_CELL_SIZE_F) {
+				if ( WWMath::Fabs(fromPos.z - toPos.z)<PATHFIND_CELL_SIZE_F) {
 					newCostSoFar += 7*COST_DIAGONAL;
 				}
 			} else if (newCell->getPinched()) {
@@ -2560,7 +2561,7 @@ Int Pathfinder::examineNeighboringCells(PathfindCell *parentCell, PathfindCell *
 				}	else {
 					dx = newCellCoord.x - goalCell->getXIndex();
 					dy = newCellCoord.y - goalCell->getYIndex();
-					costRemaining = COST_ORTHOGONAL*sqrt(dx*dx + dy*dy);
+					costRemaining = COST_ORTHOGONAL*WWMath::Sqrt((float)(dx*dx + dy*dy));
 					costRemaining -= attackDistance/2;
 					if (costRemaining<0)
 						costRemaining=0;
@@ -2884,7 +2885,7 @@ Path *Pathfinder::internalFindPath( Object *obj, const LocomotorSet& locomotorSe
 		dx = from->x - to->x;
 		dy = from->y - to->y;
 
-		Int count = sqrt(dx*dx+dy*dy)/(PATHFIND_CELL_SIZE_F/2);
+		Int count = WWMath::Sqrt(dx*dx+dy*dy)/(PATHFIND_CELL_SIZE_F/2);
 		if (count<2) count = 2;
 		Int i;
 		color.green = 0;
@@ -3581,7 +3582,7 @@ Path *Pathfinder::findGroundPath( const Coord3D *from,
 		dx = from->x - to->x;
 		dy = from->y - to->y;
 
-		Int count = sqrt(dx*dx+dy*dy)/(PATHFIND_CELL_SIZE_F/2);
+		Int count = WWMath::Sqrt(dx*dx+dy*dy)/(PATHFIND_CELL_SIZE_F/2);
 		if (count<2) count = 2;
 		Int i;
 		color.green = 0;
@@ -4277,7 +4278,7 @@ Path *Pathfinder::internal_findHierarchicalPath( Bool isHuman, const LocomotorSu
 		dx = from->x - to->x;
 		dy = from->y - to->y;
 
-		Int count = sqrt(dx*dx+dy*dy)/(PATHFIND_CELL_SIZE_F/2);
+		Int count = WWMath::Sqrt(dx*dx+dy*dy)/(PATHFIND_CELL_SIZE_F/2);
 		if (count<2) count = 2;
 		Int i;
 		color.green = 0;
@@ -6392,9 +6393,12 @@ if (g_UT_startTiming) return false;
 		}
 	}
 	LatchRestore<Int> recursiveDepth(m_moveAlliesDepth, m_moveAlliesDepth+1);
-	if (m_moveAlliesDepth > 2) {
+	if (m_moveAlliesDepth > MOVE_ALLIES_MAX_DEPTH) {
 		return false;
 	}
+#if !RETAIL_COMPATIBLE_PATHFINDING
+	m_moveAlliesObjects[m_moveAlliesDepth - 1] = obj->getID();
+#endif
 
 	Bool centerInCell;
 	Int radius;
@@ -6462,6 +6466,20 @@ if (g_UT_startTiming) return false;
 				//Black Lotus exploit fix -- moving while hacking.
 				if( otherObj->testStatus( OBJECT_STATUS_IS_USING_ABILITY ) || otherObj->getAI()->isBusy() ) {
 					continue; // Packing or unpacking objects for example
+				}
+#endif
+
+#if !RETAIL_COMPATIBLE_PATHFINDING
+				// TheSuperHackers @bugfix bobtista 13/10/2026 Do not order a unit whose moveAllies call is still walking its path. The order destroys that path.
+				Bool isOuterCaller = false;
+				for (Int k = 0; k < m_moveAlliesDepth - 1; ++k) {
+					if (m_moveAlliesObjects[k] == unitId) {
+						isOuterCaller = true;
+						break;
+					}
+				}
+				if (isOuterCaller) {
+					continue;
 				}
 #endif
 
@@ -7346,7 +7364,7 @@ Path *Pathfinder::findSafePath( const Object *obj, const LocomotorSet& locomotor
 			farthestDistanceSqr = distSqr;
 			if (cellCount > MAX_CELLS) {
 #ifdef INTENSE_DEBUG
-				DEBUG_LOG(("Took intermediate path, dist %f, goal dist %f", sqrt(farthestDistanceSqr), repulsorRadius));
+				DEBUG_LOG(("Took intermediate path, dist %f, goal dist %f", WWMath::Sqrt(farthestDistanceSqr), repulsorRadius));
 #endif
 				ok = true; // Already a big search, just take this one.
 			}

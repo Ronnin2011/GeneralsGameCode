@@ -51,9 +51,6 @@
 #include "mesh.h"
 
 
-inline DWORD F2DW( FLOAT f ) { return *((DWORD*)&f); }
-
-
 // HY 1/26/01
 // Rewritten to use DX 8 texture matrices
 
@@ -105,8 +102,8 @@ void LinearOffsetTextureMapperClass::Apply(int uv_array_index)
 	float offset_v = CurrentUVOffset.Y + UVOffsetDeltaPerMS.Y * del;
 
 	// ensure both coordinates of offset are in [0, 1] range:
-	offset_u = offset_u - WWMath::Floor(offset_u);
-	offset_v = offset_v - WWMath::Floor(offset_v);
+	offset_u = offset_u - WWMath::Floorf(offset_u);
+	offset_v = offset_v - WWMath::Floorf(offset_v);
 
 	// Set up the offset matrix
 	Matrix3D m(true);
@@ -329,8 +326,8 @@ void RotateTextureMapperClass::Apply(int uv_array_index)
 
 	// Set up the rotation matrix
 	float c,s;
-	c=WWMath::Cos(CurrentAngle);
-	s=WWMath::Sin(CurrentAngle);
+	c=WWMath::Cosf_Legacy(CurrentAngle);
+	s=WWMath::Sinf_Legacy(CurrentAngle);
 	Matrix4x4 m(true);
 
 	// subtract center
@@ -395,8 +392,8 @@ void SineLinearOffsetTextureMapperClass::Apply(int uv_array_index)
 	float offset_v=VAFP.X*sin(VAFP.Y*CurrentAngle+VAFP.Z*WWMATH_PI);
 
 	// ensure both coordinates of offset are in [0, 1] range:
-	offset_u = offset_u - WWMath::Floor(offset_u);
-	offset_v = offset_v - WWMath::Floor(offset_v);
+	offset_u = offset_u - WWMath::Floorf(offset_u);
+	offset_v = offset_v - WWMath::Floorf(offset_v);
 
 	// Set up the offset matrix
 	Matrix3D m(true);
@@ -458,8 +455,8 @@ void StepLinearOffsetTextureMapperClass::Apply(int uv_array_index)
 	}
 
 	// ensure both coordinates of offset are in [0, 1] range:
-	CurrentStep.U -= WWMath::Floor(CurrentStep.U);
-	CurrentStep.V -= WWMath::Floor(CurrentStep.V);
+	CurrentStep.U -= WWMath::Floorf(CurrentStep.U);
+	CurrentStep.V -= WWMath::Floorf(CurrentStep.V);
 
 	// Set up the offset matrix
 	Matrix3D m(true);
@@ -536,8 +533,8 @@ void ZigZagLinearOffsetTextureMapperClass::Apply(int uv_array_index)
 	}
 
 	// ensure both coordinates of offset are in [0, 1] range:
-	offset_u = offset_u - WWMath::Floor(offset_u);
-	offset_v = offset_v - WWMath::Floor(offset_v);
+	offset_u = offset_u - WWMath::Floorf(offset_u);
+	offset_v = offset_v - WWMath::Floorf(offset_v);
 
 	// Set up the offset matrix
 	Matrix3D m(true);
@@ -645,7 +642,7 @@ void EdgeMapperClass::Apply(int uv_array_index)
 	LastUsedSyncTime=now;
 
 	VOffset+=delta*VSpeed;
-	VOffset-=WWMath::Floor(VOffset);
+	VOffset-=WWMath::Floorf(VOffset);
 
 	// takes the Z component and
 	// uses it to index the texture
@@ -743,8 +740,8 @@ void ScreenMapperClass::Apply(int uv_array_index)
 	float offset_v = CurrentUVOffset.Y + UVOffsetDeltaPerMS.Y * del;
 
 	// ensure both coordinates of offset are in [0, 1] range:
-	offset_u = offset_u - WWMath::Floor(offset_u);
-	offset_v = offset_v - WWMath::Floor(offset_v);
+	offset_u = offset_u - WWMath::Floorf(offset_u);
+	offset_v = offset_v - WWMath::Floorf(offset_v);
 
 	// multiply by projection matrix
 	// followed by scale and translation

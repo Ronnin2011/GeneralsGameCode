@@ -245,6 +245,7 @@ void LANAPI::OnGameStart()
 			DEBUG_LOG(("After transfer, we didn't really have the map.  Bailing..."));
 			OnPlayerLeave(m_name);
 			removeGame(m_currentGame);
+			delete m_currentGame;
 			m_currentGame = nullptr;
 			m_inLobby = TRUE;
 
@@ -645,7 +646,7 @@ void LANAPI::OnPlayerList( LANPlayer *playerList )
 		GadgetListBoxGetSelected(listboxPlayers, &selectedIndex);
 
 		if (selectedIndex != -1 )
-			selectedIP = (UnsignedInt) GadgetListBoxGetItemData(listboxPlayers, selectedIndex, 0);
+			selectedIP = (UnsignedInt)(uintptr_t)GadgetListBoxGetItemData(listboxPlayers, selectedIndex, 0);
 
 		GadgetListBoxReset(listboxPlayers);
 

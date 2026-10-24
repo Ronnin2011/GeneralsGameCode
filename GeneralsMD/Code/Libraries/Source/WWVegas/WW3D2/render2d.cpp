@@ -45,6 +45,7 @@
 #include "render2d.h"
 #include "WWLib/mutex.h"
 #include "ww3d.h"
+#include "Renderer.h"
 #include "font3d.h"
 #include "WWMath/rect.h"
 #include "texture.h"
@@ -227,8 +228,8 @@ Vector2 Render2DClass::Convert_Vert(const Vector2& v)
 	out.Y = (out.Y - 1.0f) * (Get_Screen_Resolution().Height() * -0.5f);
 
 	// Round to nearest pixel
-	out.X = WWMath::Floor(out.X + 0.5f);
-	out.Y = WWMath::Floor(out.Y + 0.5f);
+	out.X = WWMath::Floorf( out.X + 0.5f );
+	out.Y = WWMath::Floorf( out.Y + 0.5f );
 
 	// Bias
 	if ( WW3D::Is_Screen_UV_Biased() ) {

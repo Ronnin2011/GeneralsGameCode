@@ -430,14 +430,19 @@ void GameLogic::logicMessageDispatcher( GameMessage *msg, void *userData )
 	GameMessage::Type msgType = msg->getType();
 	switch( msgType )
 	{
+		case GameMessage::MSG_CLEAR_GAME_DATA:
+		{
+			onClearGameData(msg, currentlySelectedGroup);
+			break;
+		}
 		case GameMessage::MSG_NEW_GAME:
 		{
 			onNewGame(msg);
 			break;
 		}
-		case GameMessage::MSG_CLEAR_GAME_DATA:
+		case GameMessage::MSG_LOGIC_CRC_PLAYBACK:
 		{
-			onClearGameData(msg, currentlySelectedGroup);
+			onLogicCrcForPlayback(msg);
 			break;
 		}
 		case GameMessage::MSG_META_BEGIN_PATH_BUILD:
@@ -935,6 +940,17 @@ bool GameLogic::onClearGameData(MAYBE_UNUSED GameMessage *msg, AIGroupPtr &curre
 	}
 	currentlySelectedGroup = nullptr;
 	clearGameData();
+
+	return true;
+}
+
+bool GameLogic::onLogicCrcForPlayback(MAYBE_UNUSED GameMessage *msg)
+{
+	const UnsignedInt newCRC = msg->getArgument(0)->integer;
+	//DEBUG_LOG(("Saw CRC of %X from playback. Our CRC is %X. Arg count is %d",
+		//newCRC, getCRC(), msg->getArgumentCount()));
+
+	TheRecorder->handleCRCMessage(newCRC, -1, true);
 
 	return true;
 }
@@ -1521,7 +1537,7 @@ bool GameLogic::onDevSpawnObject(MAYBE_UNUSED GameMessage *msg)
 		Coord3D pos = centre;
 		pos.x += ((Real)(i % side) - (Real)(side - 1) * 0.5f) * spacing;
 		pos.y += ((Real)(i / side) - (Real)(side - 1) * 0.5f) * spacing;
-		if (!extent.isInRegion(pos.asCoord2D()))
+		if (!extent.containsWithin(pos.asCoord2D()))
 			continue;
 		pos.z = TheTerrainLogic->getGroundHeight(pos.x, pos.y);
 
@@ -2187,7 +2203,7 @@ bool GameLogic::onPlaceBeacon(MAYBE_UNUSED GameMessage *msg)
 	Coord3D pos = msg->getArgument( 0 )->location;
 	Region3D r;
 	TheTerrainLogic->getExtent(&r);
-	if (!r.isInRegion(pos.asCoord2D()))
+	if (!r.containsWithin(pos.asCoord2D()))
 		pos = TheTerrainLogic->findClosestEdgePoint(&pos);
 	const ThingTemplate *thing = TheThingFactory->findTemplate( msgPlayer->getPlayerTemplate()->getBeaconTemplate() );
 
@@ -2536,7 +2552,7 @@ bool GameLogic::onLogicCrc(MAYBE_UNUSED GameMessage *msg)
 		//DEBUG_LOG(("Saw CRC of %X from player %d.  Our CRC is %X.  Arg count is %d",
 			//newCRC, msgPlayer->getPlayerIndex(), getCRC(), msg->getArgumentCount()));
 
-		TheRecorder->handleCRCMessage(newCRC, msgPlayer->getPlayerIndex(), (msg->getArgument(1)->boolean));
+		TheRecorder->handleCRCMessage(newCRC, msgPlayer->getPlayerIndex(), false);
 	}
 
 	return true;

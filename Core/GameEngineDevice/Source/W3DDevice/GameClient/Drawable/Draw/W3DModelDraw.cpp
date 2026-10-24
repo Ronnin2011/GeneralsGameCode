@@ -267,7 +267,7 @@ inline Bool isCommonMaintainFrameFlagSet(Int a, Int b)
 // Note: these values are saved in save files, so you MUST NOT REMOVE OR CHANGE
 // existing values!
 //
-static const char *TerrainDecalTextureName[TERRAIN_DECAL_MAX]=
+static const char *TerrainDecalTextureName[]=
 {
 #ifdef ALLOW_DEMORALIZE
 	"DM_RING",//demoralized
@@ -290,6 +290,7 @@ static const char *TerrainDecalTextureName[TERRAIN_DECAL_MAX]=
 #endif
 	"" //dummy entry for TERRAIN_DECAL_SHADOW_TEXTURE
 };
+static_assert(ARRAY_SIZE(TerrainDecalTextureName) == TERRAIN_DECAL_MAX, "Incorrect array size");
 
 const UnsignedInt NO_NEXT_DURATION = 0xffffffff;
 
@@ -1234,7 +1235,7 @@ enum AnimParseType CPP_11(: Int)
 //-------------------------------------------------------------------------------------------------
 static void parseAnimation(INI* ini, void *instance, void * /*store*/, const void* userData)
 {
-	AnimParseType animType = (AnimParseType)(UnsignedInt)userData;
+	AnimParseType animType = (AnimParseType)(uintptr_t)userData;
 
 	AsciiString animName = ini->getNextAsciiString();
 	animName.toLower();
@@ -1448,7 +1449,7 @@ void W3DModelDrawModuleData::parseConditionState(INI* ini, void *instance, void 
 
 	ModelConditionInfo info;
 	W3DModelDrawModuleData* self = (W3DModelDrawModuleData*)instance;
-	ParseCondStateType cst = (ParseCondStateType)(UnsignedInt)userData;
+	ParseCondStateType cst = (ParseCondStateType)(uintptr_t)userData;
 	switch (cst)
 	{
 		case PARSE_DEFAULT:
@@ -2522,7 +2523,6 @@ void W3DModelDraw::handleClientRecoil()
 			if (barrels[i].m_muzzleFlashBone != 0)
 			{
 				Bool hidden = recoils[i].m_state != WeaponRecoilInfo::RECOIL_START;
-				//DEBUG_LOG(("adjust muzzleflash %08lx for Draw %08lx state %s to %d at frame %d",subObjToHide,this,m_curState->m_description.str(),hidden?1:0,TheGameLogic->getFrame()));
 				barrels[i].setMuzzleFlashHidden(m_renderObject, hidden);
 			}
 

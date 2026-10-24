@@ -73,6 +73,7 @@ typedef IDirect3DSurface9 IDirect3DSurface8;
 #define D3DFMT_W11V11U10 D3DFMT_UNKNOWN
 
 #include "WWLib/always.h"
+#include <Utility/bit_adapter.h>
 #include "dllist.h"
 #include "WWMath/matrix4.h"
 #include "statistics.h"
@@ -298,6 +299,9 @@ WWINLINE void DX8_ErrorCode(unsigned res)
 	if (res==D3D_OK) return;
 	Log_DX8_ErrorCode(res);
 }
+
+// Converts a FLOAT to a DWORD for use in SetRenderState() calls
+inline DWORD F2DW(FLOAT f) { return std::bit_cast<DWORD>(f); }
 
 #ifdef WWDEBUG
 #define DX8CALL_HRES(x,res) \
@@ -1074,6 +1078,7 @@ protected:
 
 	friend void DX8_Assert();
 	friend class WW3D;
+	friend class Renderer;
 	friend class DX8IndexBufferClass;
 	friend class DX8VertexBufferClass;
 };
@@ -1298,8 +1303,8 @@ WWINLINE void DX8Wrapper::Set_Fog(bool enable, const Vector3 &color, float start
 	ShaderClass::Invalidate();
 
 	// Set renderstates which are not affected by the shader
-	Set_DX8_Render_State(D3DRS_FOGSTART, *(DWORD *)(&start));
-	Set_DX8_Render_State(D3DRS_FOGEND,   *(DWORD *)(&end));
+	Set_DX8_Render_State(D3DRS_FOGSTART, std::bit_cast<DWORD>(start));
+	Set_DX8_Render_State(D3DRS_FOGEND,   std::bit_cast<DWORD>(end));
 }
 
 

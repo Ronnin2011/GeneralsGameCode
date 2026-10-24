@@ -107,8 +107,7 @@
 #include "dazzle.h"
 #include "meshmdl.h"
 #include "dx8renderer.h"
-#include "Backend/RenderBackend.h"
-#include "IRenderBackend.h"
+#include "Renderer.h"
 #include "render2d.h"
 #include "WWLib/bound.h"
 #include "rddesc.h"
@@ -175,8 +174,6 @@ bool														WW3D::IsSortingEnabled = true;
 float														WW3D::PixelCenterX = 0.0f;
 float														WW3D::PixelCenterY = 0.0f;
 
-
-IRenderBackend *									WW3D::RenderBackend = nullptr;
 
 bool														WW3D::IsInitted = false;
 bool														WW3D::IsRendering = false;
@@ -275,14 +272,9 @@ WW3DErrorType WW3D::Init(void *hwnd, char *defaultpal, bool lite)
     _Hwnd = (HWND)hwnd;
     Lite = lite;
 
-	// TheSuperHackers @refactor bobtista 07/08/2026 The backend object is created
-	// and initialized once here and destroyed in WW3D::Shutdown.
-	WWASSERT(RenderBackend == nullptr);
-	if (RenderBackend == nullptr)
-	{
-		RenderBackend = Create_Render_Backend(_Hwnd, lite);
-	}
-	if (RenderBackend == nullptr)
+	// TheSuperHackers @refactor bobtista 07/08/2026 The renderer is initialized
+	// once here and shut down in WW3D::Shutdown.
+	if (!Renderer::Init(_Hwnd, lite))
 	{
 		return(WW3D_ERROR_INITIALIZATION_FAILED);
 	}
@@ -375,8 +367,7 @@ WW3DErrorType WW3D::Shutdown()
 
 	DX8TextureManagerClass::Shutdown();
 
-	delete RenderBackend;
-	RenderBackend = nullptr;
+	Renderer::Shutdown();
 
 	/*
 	** Clear the default static sort lists
@@ -515,7 +506,7 @@ void *WW3D::Get_Window()
  *=============================================================================================*/
 bool WW3D::Is_Windowed()
 {
-	return DX8Wrapper::Is_Windowed();
+	return Renderer::Is_Windowed();
 }
 
 /***********************************************************************************************
@@ -559,7 +550,7 @@ WW3DErrorType WW3D::Toggle_Windowed ()
  *=============================================================================================*/
 int WW3D::Get_Render_Device()
 {
-	return DX8Wrapper::Get_Render_Device();
+	return Renderer::Get_Render_Device();
 }
 
 
@@ -598,7 +589,7 @@ const RenderDeviceDescClass & WW3D::Get_Render_Device_Desc(int deviceidx)
  *=============================================================================================*/
 int WW3D::Get_Render_Device_Count()
 {
-	return DX8Wrapper::Get_Render_Device_Count();
+	return Renderer::Get_Render_Device_Count();
 }
 
 
@@ -617,7 +608,7 @@ int WW3D::Get_Render_Device_Count()
  *=============================================================================================*/
 const char * WW3D::Get_Render_Device_Name(int device_index)
 {
-	return DX8Wrapper::Get_Render_Device_Name(device_index);
+	return Renderer::Get_Render_Device_Name(device_index);
 }
 
 
@@ -660,7 +651,7 @@ WW3DErrorType WW3D::Set_Device_Resolution(int width,int height,int bits,int wind
  *=============================================================================================*/
 void WW3D::Get_Render_Target_Resolution(int & set_w,int & set_h,int & set_bits,bool & set_windowed)
 {
-	DX8Wrapper::Get_Render_Target_Resolution(set_w,set_h,set_bits,set_windowed);
+	Renderer::Get_Render_Target_Resolution(set_w,set_h,set_bits,set_windowed);
 }
 
 
@@ -679,7 +670,7 @@ void WW3D::Get_Render_Target_Resolution(int & set_w,int & set_h,int & set_bits,b
  *=============================================================================================*/
 void WW3D::Get_Device_Resolution(int & set_w,int & set_h,int & set_bits,bool & set_windowed)
 {
-	DX8Wrapper::Get_Device_Resolution(set_w,set_h,set_bits,set_windowed);
+	Renderer::Get_Device_Resolution(set_w,set_h,set_bits,set_windowed);
 }
 
 
@@ -888,7 +879,7 @@ WW3DErrorType WW3D::Begin_Render(bool clear,bool clearz,const Vector3 & color, f
 
 	// Ronin @bugfix 21/12/2025 DX9: set the viewport EVERY frame, not only when clearing — DX9 does not
 	// auto-initialise it, and with -nocinematic Camera::Apply() never runs. Caused water shader artifacts.
-	RenderBackendViewport vp;
+	RenderViewport vp;
 	int width, height, bits;
 	bool windowed;
 	WW3D::Get_Render_Target_Resolution(width, height, bits, windowed);
@@ -898,15 +889,15 @@ WW3DErrorType WW3D::Begin_Render(bool clear,bool clearz,const Vector3 & color, f
 	vp.height = height;
 	vp.min_z = 0.0f;
 	vp.max_z = 1.0f;
-	Get_Render_Backend()->Set_Viewport(vp);
+	Renderer::Set_Viewport(vp);
 
 	// If we want to clear the screen, do it now
 	if (clear || clearz) {
-		Get_Render_Backend()->Clear(clear, clearz, color, dest_alpha);
+		Renderer::Clear(clear, clearz, color, dest_alpha);
 	}
 
 	// Notify D3D that we are beginning to render the frame
-	Get_Render_Backend()->Begin_Scene();
+	Renderer::Begin_Scene();
 
 	return WW3D_ERROR_OK;
 }
@@ -1008,7 +999,7 @@ WW3DErrorType WW3D::Render(SceneClass * scene,CameraClass * cam,bool clear,bool 
 
 	// Clear the viewport
 	if (clear || clearz) {
-		Get_Render_Backend()->Clear(clear, clearz, color);
+		Renderer::Clear(clear, clearz, color);
 	}
 
 	// set the rendering mode
@@ -1026,7 +1017,7 @@ WW3DErrorType WW3D::Render(SceneClass * scene,CameraClass * cam,bool clear,bool 
 
 	// Set the global ambient light value here.  If the scene is using the LightEnvironment system
 	// this setting will get overridden.
-	Get_Render_Backend()->Set_Ambient(scene->Get_Ambient_Light());
+	Renderer::Set_Ambient(scene->Get_Ambient_Light());
 
 	// render the scene
 
@@ -1078,7 +1069,7 @@ WW3DErrorType WW3D::Render(
 
 	// Install the lighting environment if one is supplied
 	if (rinfo.light_environment != nullptr) {
-		Get_Render_Backend()->Set_Light_Environment(rinfo.light_environment);
+		Renderer::Set_Light_Environment(rinfo.light_environment);
 	}
 
 	// Render the object
@@ -1175,8 +1166,8 @@ WW3DErrorType WW3D::End_Render(bool flip_frame)
     IsRendering = false;
 	
 	{
-		WWPROFILE("IRenderBackend::End_Scene");
-		Get_Render_Backend()->End_Scene(flip_frame);
+		WWPROFILE("Renderer::End_Scene");
+		Renderer::End_Scene(flip_frame);
 	}
 
 		{
@@ -1245,7 +1236,7 @@ WW3DErrorType WW3D::End_Render(bool flip_frame)
  *=============================================================================================*/
 void WW3D::Flip_To_Primary()
 {
-	Get_Render_Backend()->Flip_To_Primary();
+	Renderer::Flip_To_Primary();
 }
 
 
@@ -1334,7 +1325,7 @@ void WW3D::Set_Ext_Swap_Interval(long swap)
  *=============================================================================================*/
 long WW3D::Get_Ext_Swap_Interval()
 {
-	return DX8Wrapper::Get_Swap_Interval();
+	return Renderer::Get_Swap_Interval();
 }
 
 
@@ -1391,12 +1382,12 @@ int WW3D::Get_Collision_Box_Display_Mask()
 void WW3D::Normalize_Coordinates(int x, int y, float &fx, float &fy)
 {
 	// clip the coordinates back into the resolution of the screen
-	x = Bound(x, 0, DX8Wrapper::Get_Device_Resolution_Width());
-	y = Bound(y, 0, DX8Wrapper::Get_Device_Resolution_Height());
+	x = Bound(x, 0, Renderer::Get_Device_Resolution_Width());
+	y = Bound(y, 0, Renderer::Get_Device_Resolution_Height());
 
 	// now that the coordinates are clipped convert them to their normalized values.
-	fx = (float)x / DX8Wrapper::Get_Device_Resolution_Width();
-	fy = (float)y / DX8Wrapper::Get_Device_Resolution_Height();
+	fx = (float)x / Renderer::Get_Device_Resolution_Width();
+	fy = (float)y / Renderer::Get_Device_Resolution_Height();
 }
 
 
@@ -1470,7 +1461,7 @@ void WW3D::Make_Screen_Shot( const char * filename_base , const float gamma, con
 	SurfaceClass::SurfaceDescription surfaceDesc;
 	surface->Get_Description(surfaceDesc);
 
-	SurfaceClass* surfaceCopy = NEW_REF(SurfaceClass, (DX8Wrapper::_Create_DX8_Surface(surfaceDesc.Width, surfaceDesc.Height, surfaceDesc.Format)));
+	SurfaceClass* surfaceCopy = NEW_REF(SurfaceClass, (surfaceDesc.Width, surfaceDesc.Height, surfaceDesc.Format));
 	DX8Wrapper::_Copy_DX8_Rects(surface->Peek_D3D_Surface(), nullptr, 0, surfaceCopy->Peek_D3D_Surface(), nullptr);
 
 	surface->Release_Ref();
@@ -1820,7 +1811,7 @@ void WW3D::Update_Movie_Capture()
 	SurfaceClass::SurfaceDescription surfaceDesc;
 	surface->Get_Description(surfaceDesc);
 
-	SurfaceClass* surfaceCopy = NEW_REF(SurfaceClass, (DX8Wrapper::_Create_DX8_Surface(surfaceDesc.Width, surfaceDesc.Height, surfaceDesc.Format)));
+	SurfaceClass* surfaceCopy = NEW_REF(SurfaceClass, (surfaceDesc.Width, surfaceDesc.Height, surfaceDesc.Format));
 	DX8Wrapper::_Copy_DX8_Rects(surface->Peek_D3D_Surface(), nullptr, 0, surfaceCopy->Peek_D3D_Surface(), nullptr);
 
 	surface->Release_Ref();
@@ -2136,7 +2127,7 @@ void WW3D::Set_Texture_Bitdepth(int bitdepth)
 
 int WW3D::Get_Texture_Bitdepth()
 {
-	return DX8Wrapper::Get_Texture_Bitdepth();
+	return Renderer::Get_Texture_Bitdepth();
 }
 
 void WW3D::Add_To_Static_Sort_List(RenderObjClass *robj, unsigned int sort_level)
@@ -2179,5 +2170,5 @@ void WW3D::Reset_Current_Static_Sort_Lists_To_Default()
 
 void WW3D::Set_Gamma(float gamma,float bright,float contrast,bool calibrate)
 {
-	Get_Render_Backend()->Set_Gamma(gamma,bright,contrast,calibrate);
+	Renderer::Set_Gamma(gamma,bright,contrast,calibrate);
 }
