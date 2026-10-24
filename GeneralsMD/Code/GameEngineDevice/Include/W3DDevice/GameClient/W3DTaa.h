@@ -117,6 +117,10 @@ public:
 	static float getVibrance(void);
 	static void  setLocalContrast(float v);
 	static float getLocalContrast(void);
+	static void  setNightVibrance(float v);		// Ronin @feature 23/10/2026 DX9: the same at night - only on what keeps its colour
+	static float getNightVibrance(void);
+	static void  setNightContrast(float v);
+	static float getNightContrast(void);
 	// Ronin @feature 15/10/2026 DX9: THE NIGHT LOOK (TAA's pass 2 or finishScene): dim colour goes to one tint (the map light's cast),
 	// bright keeps its own. tint 0..1; lo / hi: the luminance where a pixel starts / ends keeping its colour; floor: the least it keeps.
 	static void  setNight(Bool on);

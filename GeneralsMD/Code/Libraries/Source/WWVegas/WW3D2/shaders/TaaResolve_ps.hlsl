@@ -97,8 +97,8 @@ float3 grade(float3 c)
     return saturate((l > 0.0005f) ? c * pow(max(l, 0.0005f), g_Grade.z - 1.0f) : c);
 }
 
-// Ronin @feature 22/10/2026 DX9: VIBRANCE and LOCAL CONTRAST (by day; screen copy only): the duller a colour the more it is raised, then
-// each pixel against its surroundings - s11, the frame's luminance blurred at quarter size. c22 = (on, vibrance, local contrast).
+// Ronin @feature 22/10/2026 DX9: VIBRANCE and LOCAL CONTRAST (screen copy only): the duller a colour the more it is raised, then
+// each pixel against its surroundings - s11, the frame's luminance blurred at quarter size. c22 = (on, vibrance, local contrast, night).
 float4    g_Vivid    : register(c22);
 sampler2D g_Surround : register(s11);
 float3 vivid(float3 c, float2 uv)
@@ -108,10 +108,27 @@ float3 vivid(float3 c, float2 uv)
     float mn = min(c.r, min(c.g, c.b));
     float s  = (mx > 0.000001f) ? (mx - mn) / mx : 0.0f;
     float l  = dot(c, LUMA);
-    c = l + (c - l) * (1.0f + g_Vivid.y * (1.0f - s));
+    const bool night = (g_Vivid.w > 0.5f);
+    // Ronin @feature 23/10/2026 DX9: at night only where the night look lets a pixel keep its colour (bright, or lamp-lit): the moonlit
+    // rest stays in its one tint.
+    float keep = 1.0f;
+    if (night)
+    {
+        keep = smoothstep(g_NightKeep.x, g_NightKeep.y, l);
+        if (g_NightKeep.w > 0.5f)
+            keep = max(keep, tex2Dlod(g_LightMask, float4(uv, 0.0f, 0.0f)).a);
+    }
+    c = l + (c - l) * (1.0f + g_Vivid.y * keep * (1.0f - s));
     if (g_Vivid.z > 0.0f && l > 0.0001f)
     {
         float lb = tex2Dlod(g_Surround, float4((uv - g_Viewport.xy) / max(g_Viewport.zw, 0.0001f), 0.0f, 0.0f)).r;
+        if (night)
+        {
+            // Ronin @feature 23/10/2026 DX9: at night by ratio, the same at any light level; darkening held to 15% (30% took the
+            // darkest tenth from 10 to 7 of 255).
+            c *= clamp(pow(max(l / max(lb, 0.0001f), 0.0001f), g_Vivid.z), 0.85f, 1.5f);
+            return saturate(c);
+        }
         // Ronin @bugfix 23/10/2026 DX9: darkening fades out below 0.3 - at full strength it took the darkest tenth from 16 to 4 of 255.
         float d  = l - lb;
         float k  = g_Vivid.z * ((d < 0.0f) ? smoothstep(0.0f, 0.3f, l) : 1.0f);
@@ -253,6 +270,8 @@ float4 surround(float2 uv)
                     luminance(toneCurve(tex2Dlod(g_Scene, float4(clamp(at + float2(-1.0f,  1.0f) * px, lo, hi), 0.0f, 0.0f)).rgb)) +
                     luminance(toneCurve(tex2Dlod(g_Scene, float4(clamp(at + float2( 1.0f,  1.0f) * px, lo, hi), 0.0f, 0.0f)).rgb));
         l *= 0.25f;
+        if (g_NightLift.y > 0.5f && g_NightLift.x < 0.999f)
+            l = pow(max(l, 0.0005f), g_NightLift.x);		// Ronin @feature 23/10/2026 DX9: at night as shown - after the dark lift
         return float4(l, l, l, 1.0f);
     }
     static const float OFS[8] = { 1.4850f, 3.4651f, 5.4452f, 7.4256f, 9.4061f, 11.3870f, 13.3682f, 15.3498f };

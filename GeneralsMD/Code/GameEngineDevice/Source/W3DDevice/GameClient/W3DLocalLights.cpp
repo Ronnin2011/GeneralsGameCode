@@ -2012,6 +2012,8 @@ static const W3DLocalLights::Knob s_knobs[] =
 	// Ronin @feature 22/10/2026 DX9: vibrance and local contrast (W3DTaa), by day - the final pass's colour, kept in DX9Lights.ini.
 	{ "vibrance", FALSE, TRUE, [](float v) { W3DTaa::setVibrance(v); }, []() -> float { return W3DTaa::getVibrance(); } },
 	{ "localcontrast", FALSE, TRUE, [](float v) { W3DTaa::setLocalContrast(v); }, []() -> float { return W3DTaa::getLocalContrast(); } },
+	{ "nightvibrance", FALSE, TRUE, [](float v) { W3DTaa::setNightVibrance(v); }, []() -> float { return W3DTaa::getNightVibrance(); } },
+	{ "nightcontrast", FALSE, TRUE, [](float v) { W3DTaa::setNightContrast(v); }, []() -> float { return W3DTaa::getNightContrast(); } },
 	// Ronin @feature 21/10/2026 DX9: HDR's look (W3DTaa, `hdr`) - the sun's lift by the time of day, its warmth, the curve's white. Its on /
 	// off is the player's: Options.ini DX9HDR.
 	{ "hdrmorning", FALSE, TRUE, [](float v) { W3DTaa::setSunGainAt(0, v); }, []() -> float { return W3DTaa::getSunGainAt(0); } },

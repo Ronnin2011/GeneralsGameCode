@@ -523,19 +523,27 @@ float W3DTaa::getGradeSat(void)			{ return s_gradeSat; }
 void  W3DTaa::setGradeMids(float v)		{ s_gradeMids = (v < 0.5f) ? 0.5f : ((v > 2.0f) ? 2.0f : v); }
 float W3DTaa::getGradeMids(void)		{ return s_gradeMids; }
 
-// Ronin @feature 22/10/2026 DX9: VIBRANCE and LOCAL CONTRAST (`vibrance`, `localcontrast`) - his pick 22/10 from the preview on his frame:
-// 0.8 and 0.4 (0.6 overwhelmed, 23/10), on by default; by day only (the night look's); 0 turns each off, and so does `lights 0`.
+// Ronin @feature 22/10/2026 DX9: VIBRANCE and LOCAL CONTRAST (`vibrance`, `localcontrast`), on by default; at night their own pair
+// (`nightvibrance`, `nightcontrast`, 23/10). 0 turns each off, and so does `lights 0`.
 static float s_vibrance      = 0.8f;
-static float s_localContrast = 0.4f;
+static float s_localContrast = 0.1f;
+static float s_nightVibrance = 0.8f;
+static float s_nightContrast = 0.4f;
+static Bool vividNight(void)	{ return (TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE; }
+static float vibranceNow(void)	{ return vividNight() ? s_nightVibrance : s_vibrance; }
+static float contrastNow(void)	{ return vividNight() ? s_nightContrast : s_localContrast; }
 static Bool vividNow(void)
 {
-	return ((s_vibrance > 0.0f || s_localContrast > 0.0f) && W3DLocalLights::isEnabled() && TheGlobalData != NULL &&
-			TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+	return ((vibranceNow() > 0.0f || contrastNow() > 0.0f) && W3DLocalLights::isEnabled() && TheGlobalData != NULL) ? TRUE : FALSE;
 }
 void  W3DTaa::setVibrance(float v)		{ s_vibrance = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
 float W3DTaa::getVibrance(void)			{ return s_vibrance; }
 void  W3DTaa::setLocalContrast(float v)	{ s_localContrast = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
 float W3DTaa::getLocalContrast(void)	{ return s_localContrast; }
+void  W3DTaa::setNightVibrance(float v)	{ s_nightVibrance = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float W3DTaa::getNightVibrance(void)	{ return s_nightVibrance; }
+void  W3DTaa::setNightContrast(float v)	{ s_nightContrast = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float W3DTaa::getNightContrast(void)	{ return s_nightContrast; }
 static void releaseSurround(void);		// local contrast's surroundings, beside drawFinish
 
 static Bool finishWanted(void)
@@ -2116,7 +2124,7 @@ static Bool buildSurround(IDirect3DDevice9 *dev, IDirect3DBaseTexture9 *src, Uns
 						  Bool floatScene)
 {
 	s_surroundReady = FALSE;
-	if (!vividNow() || s_localContrast <= 0.0f || dev == NULL || src == NULL || s_resolvePS == NULL || s_quadVS == NULL || texW == 0 ||
+	if (!vividNow() || contrastNow() <= 0.0f || dev == NULL || src == NULL || s_resolvePS == NULL || s_quadVS == NULL || texW == 0 ||
 		texH == 0)
 		return FALSE;
 	const UnsignedInt vpW = (UnsignedInt)(rect[2] * (float)texW + 0.5f);
@@ -2168,6 +2176,9 @@ static Bool buildSurround(IDirect3DDevice9 *dev, IDirect3DBaseTexture9 *src, Uns
 	const float c9[4] = { s_white, floatScene ? 1.0f : 0.0f, 0.0f, 0.0f };
 	dev->SetPixelShaderConstantF(9, c9, 1);
 	dev->SetPixelShaderConstantF(24, rect, 1);
+	// Ronin @feature 23/10/2026 DX9: the dark lift, so the night's surroundings are as shown (c19 is uploaded after this).
+	const float nightLiftC[4] = { s_nightLift, (s_nightOn && W3DLocalLights::isEnabled() && vividNight()) ? 1.0f : 0.0f, 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(19, nightLiftC, 1);
 	const float step = (float)vpH / 900.0f;
 	Bool ok = TRUE;
 	for (Int pass = 0; pass < 3 && ok; ++pass)
@@ -2214,7 +2225,7 @@ static Bool buildSurround(IDirect3DDevice9 *dev, IDirect3DBaseTexture9 *src, Uns
 // Ronin @feature 22/10/2026 DX9: vibrance and local contrast into a screen copy: c22 and s11. Every screen copy sets it.
 static void bindVivid(IDirect3DDevice9 *dev)
 {
-	const float c22[4] = { vividNow() ? 1.0f : 0.0f, s_vibrance, s_surroundReady ? s_localContrast : 0.0f, 0.0f };
+	const float c22[4] = { vividNow() ? 1.0f : 0.0f, vibranceNow(), s_surroundReady ? contrastNow() : 0.0f, vividNight() ? 1.0f : 0.0f };
 	dev->SetPixelShaderConstantF(22, c22, 1);
 	if (s_surroundReady)
 	{
