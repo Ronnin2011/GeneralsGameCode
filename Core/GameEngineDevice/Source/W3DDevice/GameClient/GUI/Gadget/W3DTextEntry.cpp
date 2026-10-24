@@ -75,7 +75,6 @@ static void drawTextEntryText( GameWindow *window, WinInstanceData *instData,
 															 Color compositeColor, Color compositeDropColor,
 															 Int x, Int y, Int width, Int fontHeight )
 {
-	static Byte drawCnt = 0;
 	EntryData *e = (EntryData *)window->winGetUserData();
 //	Int charPos = e->charPos;
 	Int cursorPos;
@@ -198,7 +197,8 @@ static void drawTextEntryText( GameWindow *window, WinInstanceData *instData,
 	if(parent && !BitIsSet(parent->winGetStyle(), GWS_COMBO_BOX))
 		parent = nullptr;
 
-	if( (window == TheWindowManager->winGetFocus() || (parent && parent == TheWindowManager->winGetFocus())) && ((drawCnt++ >> 3) & 0x1) )
+	// Ronin @bugfix 24/10/2026 DX9: blink by the clock, 2003's 8 frames at 30 FPS - it counted draws, so it raced at a high frame rate.
+	if( (window == TheWindowManager->winGetFocus() || (parent && parent == TheWindowManager->winGetFocus())) && ((timeGetTime() / 267) & 0x1) )
 		TheWindowManager->winFillRect( textColor, WIN_DRAW_LINE_WIDTH,
 																	 cursorPos, origin.y + 3,
 																	 cursorPos + 2, origin.y + size.y - 3 );
