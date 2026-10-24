@@ -925,6 +925,8 @@ static void buildWaterMask(void)
 // translucent flush. The first call of the frame is the one: later flushes draw on top of it.
 void W3DTaa::noteOpaqueDone(void)
 {
+	// Ronin @feature 23/10/2026 DX9: the shafts' dust, after the copy below - on every path, TAA or not: to the resolve it is an effect.
+	struct DustAfter { ~DustAfter() { W3DLocalLights::drawShaftDust(); } } dustAfter;
 	if (!s_redirected || s_autoReact <= 0.0f || s_opaqueStamp == s_moverFrame)
 		return;
 	s_opaqueStamp = s_moverFrame;

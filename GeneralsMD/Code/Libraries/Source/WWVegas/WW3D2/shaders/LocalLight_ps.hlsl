@@ -51,6 +51,15 @@ float4 g_ShaftTravel : register(c40);       // xyz = the way the sun's light tra
 sampler2D g_CloudMap : register(s10);       // the ground's cloud shadow texture (TSCloudMed), WRAP, LINEAR
 float4 g_ShaftTexel : register(c41);        // Ronin @feature 22/10/2026 DX9: xy = 1 / the beams' half-size buffer, zw = 1 / the frame
 sampler2D g_ShaftBuf : register(s11);       // ... that buffer: r = the lit air in hundreds of units, g = the depth; POINT, CLAMP
+// Ronin @feature 23/10/2026 DX9: the shafts' dust - c35.w = its strength (`shaftdust`), c36.w = the clock in seconds (its glints).
+
+// Ronin @feature 23/10/2026 DX9: a hash without sine (Hoskins): cells stay distinct thousands of units out.
+float2 hash22(float2 p)
+{
+    float3 p3 = frac(p.xyx * float3(0.1031f, 0.1030f, 0.0973f));
+    p3 += dot(p3, p3.yzx + 33.33f);
+    return frac((p3.xx + p3.yz) * p3.zy);
+}
 float4 g_DayShade   : register(c33);        // x = its strength in a sun shadow, by the time of day (`dayshade`)
 float4x4 g_LampClip : register(c16);        // a beam's shadow map: view space to its tile - atlas uv x w, depth, w
 float4 g_LampTile   : register(c20);        // ... the tile in atlas uv: xy = min, zw = max; all 0 = this light has no map
@@ -443,6 +452,75 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
             }
         }
         o.color.rgb = g_ShaftSun.rgb * (1.0f - exp(-g_ShaftSun.w * sum / max(wsum, 0.000001f)));
+        return o;
+    }
+    // Ronin @feature 23/10/2026 DX9: view 13 - DUST in the shafts: sheets at fixed heights in the world, a third of the lit layer apart, the
+    // three in this pixel's lit air; on each a still scatter of motes (one in seven 4-unit cells), lit ones added.
+    if (view == 13)
+    {
+        o.color = float4(0.0f, 0.0f, 0.0f, 0.0f);
+        if (tex2Dlod(g_SceneDepth, float4(uv, 0.0f, 0.0f)).r > 0.99999f)
+            return o;
+        float3 P       = viewPosition(uv);
+        float  ground  = dot(g_CamZ.xyz, P) + g_CamZ.w;             // the surface's height in the world
+        float  drop    = min(ground - g_CamZ.w, -0.5f);             // how far the ray falls from the camera to it
+        // Ronin @feature 23/10/2026 DX9: sizes are in pixels of a 900-row picture, so a mote looks the same at any resolution.
+        float  pxAt1   = g_ViewPlane.z * g_TexelSize.x / max(g_Viewport.z, 0.0001f) * g_Viewport.w / (900.0f * g_TexelSize.y);
+        float  spacing = max(g_WorldZ.w, 3.0f) / 3.0f;
+        float  first   = ceil(ground / spacing);                    // the lowest sheet at or above the surface
+        float  dustWhite = 0.0f;
+        float  dustWarm  = 0.0f;
+        [unroll]
+        for (int k = 0; k < 3; ++k)
+        {
+            float  sheet = first + k;
+            float  t     = (sheet * spacing - g_CamZ.w) / drop;     // where the ray crosses it: 0 = the camera, 1 = the surface
+            float  ahead = (t > 0.0f && t <= 1.0f) ? 1.0f : 0.0f;
+            float3 Xv    = P * clamp(t, 0.001f, 1.0f);
+            float3 Xw    = float3(dot(g_CamX.xyz, Xv) + g_CamX.w, dot(g_CamY.xyz, Xv) + g_CamY.w, dot(g_CamZ.xyz, Xv) + g_CamZ.w);
+            float2 c0    = floor(Xw.xy * 0.25f - 0.5f);
+            float  bestWhite = 0.0f;
+            float  bestWarm  = 0.0f;
+            [unroll]
+            for (int j = 0; j < 4; ++j)
+            {
+                float2 c  = c0 + float2((j == 1 || j == 3) ? 1.0f : 0.0f, (j >= 2) ? 1.0f : 0.0f);
+                float2 hs = hash22(c + 131.0f * sheet);
+                float2 hn = hash22(c * 1.7f + 53.0f + 7.0f * sheet);
+                float2 mw = (c + 0.15f + 0.7f * float2(hs.y, saturate(hs.x / 0.14f))) * 4.0f;
+                float3 dW = float3(mw - Xw.xy, 0.0f);
+                float3 Mv = Xv + float3(dot(float3(g_CamX.x, g_CamY.x, g_CamZ.x), dW), dot(float3(g_CamX.y, g_CamY.y, g_CamZ.y), dW),
+                                        dot(float3(g_CamX.z, g_CamY.z, g_CamZ.z), dW));
+                float2 s  = (Mv.xy / -Mv.z - Xv.xy / -Xv.z) / pxAt1;    // the mote from this pixel, in pixels: round on screen
+                // Ronin @feature 23/10/2026 DX9: a mote is a tiny facet, its normal random and slowly turning: it flashes where it mirrors the
+                // sun into the eye - other motes as the camera moves - and is a dim speck between.
+                float  nz = hn.x * 2.0f - 1.0f;
+                float  ph = hn.y * 6.2832f + g_ShaftCloud.w * (0.2f + 0.4f * hn.x);
+                float3 n  = float3(sqrt(saturate(1.0f - nz * nz)) * float2(cos(ph), sin(ph)), nz);
+                float  gl = pow(saturate(dot(n, normalize(g_SunToLight.xyz + normalize(-Mv)))), 24.0f);
+                // Ronin @feature 23/10/2026 DX9: a flash is a white-hot core, a tight gold halo and a short four-point star; between flashes
+                // only a third of the motes keep a dim speck.
+                float  d2    = dot(s, s);
+                float  on    = (hs.x < 0.14f) ? 1.0f : 0.0f;
+                float  speck = (frac(hn.x * 13.7f + hn.y * 7.1f) < 0.35f) ? 0.25f : 0.0f;
+                float  ray   = exp(-abs(s.x) / 1.8f) * exp(-s.y * s.y / 0.3f) + exp(-abs(s.y) / 1.8f) * exp(-s.x * s.x / 0.3f);
+                bestWhite = max(bestWhite, on * exp(-d2 * (1.0f / 1.44f)) * (speck + 2.0f * gl));
+                bestWarm  = max(bestWarm, on * gl * (0.6f * exp(-d2 * 0.25f) + 0.8f * ray));
+            }
+            // Ronin @feature 23/10/2026 DX9: lit where the sun reaches the crossing - past the casters, through a cloud gap.
+            float4 clip  = mul(float4(Xv, 1.0f), g_SunFar);
+            float2 suv   = clip.xy * float2(0.5f, -0.5f) + 0.5f + g_SunMap.y;
+            float  inMap = (suv.x > 0.0f && suv.x < 1.0f && suv.y > 0.0f && suv.y < 1.0f) ? 1.0f : 0.0f;
+            float  sun   = lerp(1.0f, tex2Dproj(g_SunDepthFar, float4(suv, clip.z - g_SunMapFar.x, 1.0f)).r, inMap);
+            float2 foot  = Xw.xy + g_ShaftTravel.xy * ((Xw.z - ground) / max(-g_ShaftTravel.z, 0.05f));
+            float  cloud = dot(tex2Dlod(g_CloudMap, float4(foot * g_ShaftCloud.x + g_ShaftCloud.yz, 0.0f, g_ShaftGap.z)).rgb,
+                               float3(0.299f, 0.587f, 0.114f));
+            float  gap   = smoothstep(g_ShaftGap.x, g_ShaftGap.x + 0.027f, cloud);
+            float  lit   = ahead * sun * lerp(1.0f, gap, g_ShaftGap.y);
+            dustWhite += lit * bestWhite;
+            dustWarm  += lit * bestWarm;
+        }
+        o.color.rgb = g_ShaftSun.rgb * (saturate(dustWhite * g_ShaftGap.w) + float3(1.0f, 0.85f, 0.55f) * saturate(dustWarm * g_ShaftGap.w));
         return o;
     }
     if (view == 3)

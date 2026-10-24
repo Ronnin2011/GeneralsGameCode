@@ -175,6 +175,9 @@ public:
 	static float getShaftGaps(void);
 	static void  setShaftLayer(float v);
 	static float getShaftLayer(void);
+	static void  setShaftDust(float v);		// Ronin @feature 23/10/2026 DX9: the dust in the shafts, its strength (0 = none)
+	static float getShaftDust(void);
+	static void  drawShaftDust(void);		// ... drawn by W3DTaa::noteOpaqueDone, after its copy of the frame before the effects
 	// Ronin @feature 15/10/2026 DX9: how far each time of day is "day" for the local lights, 0..1: the sun up full, dusk half, the
 	// moon none. 1 = `daysun` / `dayshade` in full; 0 = the lights at full strength and `sunerase` in full.
 	static void  setSunTime(Int timeOfDay, float v);		// 1 morning, 2 afternoon, 3 evening, 4 night

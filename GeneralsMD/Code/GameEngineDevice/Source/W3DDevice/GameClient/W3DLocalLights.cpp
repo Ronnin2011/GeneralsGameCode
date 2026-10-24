@@ -1926,12 +1926,17 @@ static float					s_sunShafts     = 0.0f;
 static float					s_shaftGaps     = 0.965f;
 static float					s_shaftLayer    = 150.0f;
 static TextureClass				*s_cloudTex     = NULL;		// the ground's cloud shadow texture, for the gaps
+static float					s_shaftDust     = 1.0f;		
+static const CameraClass		*s_dustCamera   = NULL;		// the light pass's camera, this frame only
+static UnsignedInt				s_dustFrame     = 0;
 void  W3DLocalLights::setSunShafts(float v)	{ s_sunShafts = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
 float W3DLocalLights::getSunShafts(void)		{ return s_sunShafts; }
 void  W3DLocalLights::setShaftGaps(float v)	{ s_shaftGaps = (v < 0.5f) ? 0.5f : ((v > 1.0f) ? 1.0f : v); }
 float W3DLocalLights::getShaftGaps(void)		{ return s_shaftGaps; }
 void  W3DLocalLights::setShaftLayer(float v)	{ s_shaftLayer = (v < 20.0f) ? 20.0f : ((v > 400.0f) ? 400.0f : v); }
 float W3DLocalLights::getShaftLayer(void)	{ return s_shaftLayer; }
+void  W3DLocalLights::setShaftDust(float v)	{ s_shaftDust = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float W3DLocalLights::getShaftDust(void)		{ return s_shaftDust; }
 
 // Ronin @feature 12/10/2026 DX9: THE LIGHTS' INI. Every `lights` knob by its name, in the panel's order: one table for the panel
 // (set, print) and for DX9Lights.ini, a modder's file. A knob added here is tunable and kept, with nothing else to touch.
@@ -1974,6 +1979,7 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("sunshafts", setSunShafts, getSunShafts),
 	LIGHT_REAL("shaftgaps", setShaftGaps, getShaftGaps),
 	LIGHT_REAL("shaftlayer", setShaftLayer, getShaftLayer),
+	LIGHT_REAL("shaftdust", setShaftDust, getShaftDust),
 	{ "sunmorning", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(1, v); }, []() -> float { return W3DLocalLights::getSunTime(1); } },
 	{ "sunafternoon", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(2, v); }, []() -> float { return W3DLocalLights::getSunTime(2); } },
 	{ "sunevening", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(3, v); }, []() -> float { return W3DLocalLights::getSunTime(3); } },
@@ -2291,6 +2297,7 @@ void W3DLocalLights::beginFrame(void)
 
 void W3DLocalLights::endFrame(void)
 {
+	s_dustCamera = NULL;		// Ronin @feature 23/10/2026 DX9: the camera was this frame's
 	// Ronin @bugfix 19/10/2026 DX9: last frame's picture is borrowed for this frame only. Handed back here, or the sun's shadow map,
 	// drawn before the next beginFrame, binds it after a device reset freed it (the MSAA switch: heap corruption in d3d9).
 	DX8InstanceManagerClass::Set_Screen_Reflection(NULL, NULL, NULL, NULL, NULL);
@@ -2830,8 +2837,8 @@ static void drawSunShafts(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, co
 	W3DShaderManager::getCloudMapState(&cloudScale, &cloudX, &cloudY);
 	const Matrix3D &tm = camera.Get_Transform();
 	const float c34[7 * 4] = { sun.diffuse.red, sun.diffuse.green, sun.diffuse.blue, s_sunShafts,
-							   s_shaftGaps, cloudsOn ? 1.0f : 0.0f, 1.0f, 0.0f,
-							   cloudScale, cloudX, cloudY, 0.0f,
+							   s_shaftGaps, cloudsOn ? 1.0f : 0.0f, 1.0f, s_shaftDust,
+							   cloudScale, cloudX, cloudY, (float)(timeGetTime() % 3600000u) * 0.001f,
 							   tm[0][0], tm[0][1], tm[0][2], tm[0][3],
 							   tm[1][0], tm[1][1], tm[1][2], tm[1][3],
 							   tm[2][0], tm[2][1], tm[2][2], tm[2][3],
@@ -2956,7 +2963,7 @@ static void drawSunShafts(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, co
 	}
 	else
 	{
-		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);		// view 9 replaces the frame
+		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, (view == 13) ? TRUE : FALSE);		// view 9 replaces the frame; 13's dust is added
 		dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
 		dev->SetViewport(&fullVP);
 		shaftQuad(dev, rd.Width, rd.Height);
@@ -2988,11 +2995,41 @@ static void drawSunShafts(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, co
 	dev->SetRenderState(D3DRS_DESTBLEND,        destBlend);
 }
 
+// Ronin @feature 23/10/2026 DX9: DUST IN THE SHAFTS (`lights shaftdust`), drawn after TAA's copy of the frame before the effects, so its
+// auto-reactive mask treats a mote as it treats a snowflake. Once a frame, with the light pass's camera; full size, added.
+void W3DLocalLights::drawShaftDust(void)
+{
+	if (s_shaftDust <= 0.0f || s_dustCamera == NULL || s_dustFrame == s_fixFrame || !sunShaftsWanted())
+		return;
+	s_dustFrame = s_fixFrame;
+	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
+	IDirect3DSurface9 *rt = NULL, *rt1 = NULL;
+	if (dev == NULL || FAILED(dev->GetRenderTarget(0, &rt)) || rt == NULL)
+		return;
+	D3DSURFACE_DESC rd;
+	const Bool rtOK = SUCCEEDED(rt->GetDesc(&rd)) ? TRUE : FALSE;
+	rt->Release();
+	if (SUCCEEDED(dev->GetRenderTarget(1, &rt1)) && rt1 != NULL)
+	{
+		rt1->Release();		// a second target bound: not this pass's frame
+		return;
+	}
+	if (!rtOK || !DX8Wrapper::Suspend_Scene_Depth())
+		return;
+	IDirect3DTexture9 *depthTex = DX8Wrapper::Peek_Scene_Depth_Texture();
+	D3DSURFACE_DESC dd;
+	if (depthTex != NULL && SUCCEEDED(depthTex->GetLevelDesc(0, &dd)) && dd.Width == rd.Width && dd.Height == rd.Height)
+		drawSunShafts(dev, depthTex, rd, *s_dustCamera, 13);
+	DX8Wrapper::Invalidate_Cached_Render_States();
+	DX8Wrapper::Resume_Scene_Depth();
+}
+
 void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 {
 	if (!s_active || s_passDone || scene == NULL)
 		return;
 	s_passDone = TRUE;
+	s_dustCamera = &camera;		// Ronin @feature 23/10/2026 DX9: for the shafts' dust, later this frame
 	// Ronin @diagnostic 20/10/2026 DX9: the pass's GPU time: marks 1 and 4 round everything below, early returns included.
 	struct GpuPassMarks { GpuPassMarks() { gpuMark(1); } ~GpuPassMarks() { gpuMark(4); } } gpuPassMarks;
 	s_shadeOpen = FALSE;		// Ronin @feature 10/10/2026 DX9: the sun's shade: what is drawn from here on is not under the lights
