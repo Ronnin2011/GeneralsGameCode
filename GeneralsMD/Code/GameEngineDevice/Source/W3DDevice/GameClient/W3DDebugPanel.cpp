@@ -770,9 +770,30 @@ namespace
 		// Ronin @diagnostic 07/10/2026 DX9: `ssao view 0..3` - corner view: 1 scene depth, 2 raw AO, 3 the blurred AO.
 		else if (argc == 3 && stricmp(argv[1].str(), "view") == 0 && isWholeNumber(argv[2].str()))
 			W3DSsao::setDebugView(atoi(argv[2].str()));
+		// Ronin @feature 24/10/2026 DX9: `ssao sun|bleed|colour <v>` - the lights table's aosun, aobleed, aocolour; `ssao save` keeps sun.
+		else if (argc == 3 && (stricmp(argv[1].str(), "sun") == 0 || stricmp(argv[1].str(), "bleed") == 0 || stricmp(argv[1].str(), "colour") == 0))
+		{
+			const char *name = (stricmp(argv[1].str(), "sun") == 0) ? "aosun" : ((stricmp(argv[1].str(), "bleed") == 0) ? "aobleed" : "aocolour");
+			const W3DLocalLights::Knob *knob = W3DLocalLights::findKnob(name);
+			if (knob != nullptr)
+				knob->set((float)atof(argv[2].str()));
+		}
+		else if (argc == 2 && stricmp(argv[1].str(), "save") == 0)
+		{
+			char path[512];
+			W3DLocalLights::iniPath(path, (Int)sizeof(path));
+			const Bool saved = W3DLocalLights::saveIni();
+			AsciiString note;
+			note.format(saved ? "ssao: sun saved to %s (with the lights' values)" : "ssao: could not write %s", path);
+			printAscii(note, !saved);
+			if (!saved)
+				return;
+		}
 		else if (argc != 1)
 		{
-			printAscii(AsciiString("usage: ssao [0..3]  (0 off, 1 normal, 2 high, 3 ultra) | ssao trees <auto|0|1> | ssao view [0..3]"), TRUE);
+			printAscii(AsciiString("usage: ssao [0..3]  (0 off, 1 normal, 2 high, 3 ultra) | ssao trees <auto|0|1> | ssao view [0..4]  (4 = the colour bleed's bounce) | ssao sun <0..3> | ssao bleed <0..8> | ssao colour <0..1> | ssao save  (sun only)"), TRUE);
+			printAscii(AsciiString("  sun: AO where the sun reaches - 1 = it shades the map's ambient only (all of it in a sun shadow, the ambient's share in the sun), more = less still in the sun, 0 = everywhere alike"), FALSE);
+			printAscii(AsciiString("  bleed: the colour of what blocks the light bounced onto its surroundings, 0 = none; colour: the AO in the surface's own colour, lighter on bright ones, 0 = grey. Both under `lights 0|1`, not saved; save writes sun to DX9Lights.ini"), FALSE);
 			return;
 		}
 		static const char *names[] = { "off", "normal", "high", "ultra" };
@@ -781,10 +802,10 @@ namespace
 		// Ronin @bugfix 27/09/2026 DX9: no `active` here - it is decided at the next frame start, so it read stale right after
 		// a change. The [DEPTH] row shows whether it actually ran.
 		const Int tm = W3DSsao::getTrees();
-		state.format("ssao: quality=%d (%s)  trees=%s%s  view=%d", q, names[(q < 0) ? 0 : ((q > 3) ? 3 : q)],
+		state.format("ssao: quality=%d (%s)  trees=%s%s  view=%d  sun=%.2f  bleed=%.2f  colour=%.2f", q, names[(q < 0) ? 0 : ((q > 3) ? 3 : q)],
 			(tm == W3DSsao::TREES_AUTO) ? "auto" : ((tm == W3DSsao::TREES_ON) ? "1" : "0"),
 			(tm == W3DSsao::TREES_AUTO) ? (W3DSsao::treesNow() ? " (on: TAA running)" : " (off: TAA not running)") : "",
-			W3DSsao::getDebugView());
+			W3DSsao::getDebugView(), W3DLocalLights::getAoSun(), W3DSsao::getBleed(), W3DSsao::getColourAO());
 		printAscii(state, FALSE);
 	}
 
@@ -895,7 +916,7 @@ namespace
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: lights [0|1] | locallighting <0|1> | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..6|9> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | aosun <0..3> | reflect <0..2> | reflectground <0..1> | fresnel <0..4> | ssr <0|1> | bounce <0..2> | sunshafts <0..4> | shaftgaps <0.5..1> | shaftlayer <20..400> | shaftdust <0..4> | vibrance <0..2> | localcontrast <0..2> | nightvibrance <0..2> | nightcontrast <0..2> | fxlights <0..64> | fxstrength <0..4> | fxreach <0.25..4> | fxsmooth <0..0.95> | night... (as `night`) | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
+			printAscii(AsciiString("usage: lights [0|1] | locallighting <0|1> | save | load | defaults | intensity <0..8> | range <0.25..4> | small <0|1> | over <1..8> | boost <0..8> | view <0..6|9> | beams <0..4> | shafts <0..2> | rays <0..2> | rayturn <0|1> | lampwidth <0..4> | spill <0..1> | spillwide <1.2..4> | glows <0..4> | glowreach <0.25..4> | coronas <0..4> | coronasize <0.25..4> | pools <0|1> | beamreach <1..3> | poolfill <0..4> | hotspot <0..0.9> | sunfill <0..1> | sunerase <0..8> | mapshadow <0..1> | reflect <0..2> | reflectground <0..1> | fresnel <0..4> | ssr <0|1> | bounce <0..2> | sunshafts <0..4> | shaftgaps <0.5..1> | shaftlayer <20..400> | shaftdust <0..4> | vibrance <0..2> | localcontrast <0..2> | nightvibrance <0..2> | nightcontrast <0..2> | fxlights <0..64> | fxstrength <0..4> | fxreach <0.25..4> | fxsmooth <0..0.95> | night... (as `night`) | lampmaps <0|1> | lampshadows <0..1> | lampbias <0..4> | lampself <0|1> | lampselfnear <0..0.5> | pointmaps <0|1> | pointsides <0|1>"), TRUE);
 			printAscii(AsciiString("  beams: headlights and lamp cones as spot lights, their strength; 0 = the art's own beams, no lights; shafts: the beam in the air, drawn by the shader - its strength beside the light's, 0 = none; rays: soft rays from the lamp in that beam, 0 = the smooth cone; rayturn: 1 = they turn with the world as the camera goes round a beam, 0 = they stay with the view; lampwidth: how wide the beam leaves its lamp, in the art's own width there, 0 = from a point"), FALSE);
 			printAscii(AsciiString("  spill: the dim light around a beam's cone, its strength beside the cone's, 0 = a hard cone; spillwide: how wide it reaches, in cone widths"), FALSE);
 			printAscii(AsciiString("  glows: the lamp glows (street lamps, warning and runway lights) as point lights, their strength, 0 = none; glowreach: their reach"), FALSE);
@@ -904,7 +925,6 @@ namespace
 			printAscii(AsciiString("  sunfill: how much of the sun's shadow a lamp fills on a mesh, 1 = all of it, 0 = the lamp only scales what the shadow left"), FALSE);
 			printAscii(AsciiString("  sunerase: how fast a lamp gives back what the sun's shadow took - the shadow is gone where the lamp's strength reaches 1 / this; 0 = never. Night only (by sunnight..sunmorning)"), FALSE);
 			printAscii(AsciiString("  mapshadow: the SUN's shadows on terrain and meshes - 1 = they leave what this map's light is without its sun (depth and tint), 0 = 0.45 on every map"), FALSE);
-			printAscii(AsciiString("  aosun: SSAO where the sun reaches - 1 = it shades the map's ambient only (all of it in a sun shadow, the ambient's share in the sun), more = less still in the sun, 0 = everywhere alike as before. `ssao view 3` shows it"), FALSE);
 			printAscii(AsciiString("  sunmorning / sunafternoon / sunevening / sunnight: how far that time of day is day for the local lights (1, 1, .5, 0)"), FALSE);
 			printAscii(AsciiString("  daysun / dayshade: by day a local light's strength where the sun shines / in a sun shadow (.2 / .5); a shadow never gets brighter than the sun beside it"), FALSE);
 			printAscii(AsciiString("  pulsemin / pulsefade: the game's own light pulses (muzzle flashes, blasts) reach at least this far and fade over at least this many frames; 0 = as the FX asks"), FALSE);
@@ -936,7 +956,7 @@ namespace
 			{ "EFFECTS", "fxlights", "fxstrength", "fxreach", "fxmerge", "fxflares", "fxfire", "fxsmooth", "pulsemin", "pulsefade", NULL },
 			{ "LAMP SHADOWS", "lampmaps", "lampshadows", "lampbias", "lampself", "lampselfnear", "pointmaps", "pointsides", NULL },
 			{ "LAMPS & SUN", "sunfill", "sunerase", "daysun", "dayshade", "sunmorning", "sunafternoon", "sunevening", "sunnight", NULL },
-			{ "SUN", "mapshadow", "aosun", "sunshafts", "shaftgaps", "shaftlayer", "shaftdust", NULL },
+			{ "SUN", "mapshadow", "sunshafts", "shaftgaps", "shaftlayer", "shaftdust", NULL },
 			{ "GLASS & GROUND", "reflect", "reflectground", "fresnel", "ssr", "bounce", NULL },
 			{ "COLOUR", "night", "nighttint", "nightlo", "nighthi", "nightfloor", "nightfull", "nightlift", "grade", "gradewarm", "gradesat",
 			  "grademids", "vibrance", "localcontrast", "nightvibrance", "nightcontrast", NULL },		// Ronin @feature 21/10/2026 DX9: the final pass's colour - the night look, the dark lift, the grade
@@ -960,9 +980,10 @@ namespace
 		AsciiString more, one;
 		for (Int k = 0; k < W3DLocalLights::knobCount() && k < LIGHT_KNOBS_MAX; ++k)
 		{
-			if (placed[k])
-				continue;
 			const W3DLocalLights::Knob *knob = W3DLocalLights::knobAt(k);
+			// Ronin @feature 24/10/2026 DX9: SSAO's three are `ssao`'s to show.
+			if (placed[k] || stricmp(knob->name, "aosun") == 0 || stricmp(knob->name, "aobleed") == 0 || stricmp(knob->name, "aocolour") == 0)
+				continue;
 			if (knob->whole)
 				one.format("  %s=%d", knob->name, (Int)knob->get());
 			else
@@ -3502,9 +3523,9 @@ void W3DDebugPanel::update(void)
 		registerCommand("perf", "perf [reset] - the [PERF] run mean; reset starts it over (measure each switch state apart)", cmdPerf);
 		registerCommand("rows", "rows [<name>|all 0|1] - list the readout rows, or switch one or all", cmdRows);
 		registerCommand("taa", "taa [0|1] | taa <knob> <v> - temporal AA; the [TAA] row shows live state", cmdTaa);
-		registerCommand("ssao", "ssao [0..3] | ssao trees <auto|0|1> | ssao view [0..3] - ambient occlusion quality (not saved); trees: AO on trees; view: 1 depth, 2 raw AO, 3 blurred AO in the corner", cmdSsao);
+		registerCommand("ssao", "ssao [0..3] | trees <auto|0|1> | view [0..4] | sun|bleed|colour <v> | save - quality (not saved); trees: AO on trees; view: 1 depth, 2 raw AO, 3 blurred AO, 4 the bleed; sun kept by save", cmdSsao);
 		registerCommand("shadows", "shadows [0..3] - shadow-map quality, 0 off (stencil shadows) .. 3 ultra (not saved)", cmdShadows);
-		registerCommand("lights", "lights [0|1] | save|load|defaults | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|aosun|reflect|reflectground|fresnel|ssr|bounce|fxlights|fxstrength|fxreach|fxmerge|fxflares|fxfire|fxsmooth|pulsemin|pulsefade|searchlight|night*|daysun|dayshade|sun*|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths; save keeps the knobs in DX9Lights.ini", cmdLights);
+		registerCommand("lights", "lights [0|1] | save|load|defaults | intensity|range|small|over|boost|view|beams|shafts|rays|rayturn|lampwidth|spill|spillwide|glows|glowreach|coronas|coronasize|pools|beamreach|poolfill|hotspot|sunfill|sunerase|mapshadow|reflect|reflectground|fresnel|ssr|bounce|fxlights|fxstrength|fxreach|fxmerge|fxflares|fxfire|fxsmooth|pulsemin|pulsefade|searchlight|night*|daysun|dayshade|sun*|lampmaps|lampshadows|lampbias|lampself|lampselfnear|pointmaps|pointsides <v> - local lights per pixel from the scene depth; 0 = the old vertex paths; save keeps the knobs in DX9Lights.ini", cmdLights);
 		registerCommand("glowfx", "glowfx - the glowing (additive) particle systems now: how many, how many on screen, the strongest by colour x alpha x size^2", cmdGlowFx);
 		registerCommand("night", "night [0|1] | night tint|lo|hi|floor|full|lift <v> - the night look and the dark lift: dim colour into one tint from the map's light, lamps keep theirs (at night; not saved)", cmdNight);
 		registerCommand("hdr", "hdr [0|1] | hdr sun <1..4> | hdr warm <0..1> | hdr white <1..2> - HDR stage 1: a float scene, the sun lifted above 1, a tone curve (needs MSAA off; on / off: Options.ini DX9HDR; the rest: DX9Lights.ini)", cmdHdr);

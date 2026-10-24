@@ -19,6 +19,7 @@
 #include "WW3D2/statistics.h"
 #include "W3DDevice/GameClient/W3DShadowMapState.h"
 #include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 12/10/2026 DX9: the sun's shade, for the AO's multiply
+#include "WW3D2/formconv.h"					// Ronin @feature 24/10/2026 DX9: the frame copy's format
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 2. The two tuning knobs, in world units and as a multiplier.
 static const float AO_RADIUS    = 20.0f;
@@ -75,6 +76,49 @@ static Int						s_aoTrees           = W3DSsao::TREES_AUTO;
 static TextureClass				*s_aoTarget[2]      = { NULL, NULL };
 static UnsignedInt				s_aoWidth           = 0;
 static UnsignedInt				s_aoHeight          = 0;
+
+// Ronin @feature 24/10/2026 DX9: COLOUR BLEED (Lighting_Work.md 6h) - the frame before SSAO, which the raw pass reads the occluders'
+// colour from and the composite the surface's. `ssao bleed` / `ssao colour`, panel only (not in DX9Lights.ini); under `lights 0|1`.
+static TextureClass				*s_frameCopy        = NULL;
+static UnsignedInt				s_frameCopyW        = 0;
+static UnsignedInt				s_frameCopyH        = 0;
+static D3DFORMAT					s_frameCopyFormat   = D3DFMT_UNKNOWN;
+static float					s_bleed             = 3.0f;		// one bounce is a few % of the sun: 1 read as nothing, 3 his pick (24/10)
+static float					s_colourAO          = 1.0f;
+void  W3DSsao::setBleed(float v)		{ s_bleed = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
+float W3DSsao::getBleed(void)			{ return s_bleed; }
+void  W3DSsao::setColourAO(float v)	{ s_colourAO = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float W3DSsao::getColourAO(void)		{ return s_colourAO; }
+static Bool bleedNow(void)		{ return (s_bleed > 0.0f && W3DLocalLights::isEnabled()) ? TRUE : FALSE; }
+static Bool colourNow(void)		{ return (s_colourAO > 0.0f && W3DLocalLights::isEnabled()) ? TRUE : FALSE; }
+
+// Ronin @feature 24/10/2026 DX9: the frame copied at its own size; FALSE = no copy, the AO goes in grey as before.
+static Bool copyFrame(IDirect3DDevice9 *dev, IDirect3DSurface9 *rt, const D3DSURFACE_DESC &rd)
+{
+	if (s_frameCopy == NULL || s_frameCopyW != rd.Width || s_frameCopyH != rd.Height || s_frameCopyFormat != rd.Format)
+	{
+		REF_PTR_RELEASE(s_frameCopy);
+		s_frameCopyW = 0;
+		s_frameCopyH = 0;
+		WW3DFormat wwFormat = D3DFormat_To_WW3DFormat(rd.Format);
+		if (wwFormat == WW3D_FORMAT_UNKNOWN)
+			wwFormat = WW3D_FORMAT_A8R8G8B8;
+		s_frameCopy = NEW_REF(TextureClass, (rd.Width, rd.Height, wwFormat, MIP_LEVELS_1, TextureClass::POOL_DEFAULT, true));
+		if (s_frameCopy->Peek_D3D_Base_Texture() == NULL)
+		{
+			REF_PTR_RELEASE(s_frameCopy);	// a macro with its own if - keep the braces
+			return FALSE;
+		}
+		s_frameCopyW = rd.Width;
+		s_frameCopyH = rd.Height;
+		s_frameCopyFormat = rd.Format;
+	}
+	IDirect3DSurface9 *dst = s_frameCopy->Get_D3D_Surface_Level();
+	const Bool ok = (dst != NULL && SUCCEEDED(dev->StretchRect(rt, NULL, dst, NULL, D3DTEXF_NONE))) ? TRUE : FALSE;
+	if (dst != NULL)
+		dst->Release();
+	return ok;
+}
 
 // Same reader as W3DShadowMap.cpp's loadShaderBlob, which is file-static there. Caller frees with HeapFree.
 static DWORD *readShaderBlob(const char *path)
@@ -229,7 +273,8 @@ static void setPassStates(IDirect3DDevice9 *dev)
 }
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 2. SsaoRaw's c0..c3 from the camera that rendered the depth buffer.
-static void uploadAOConstants(IDirect3DDevice9 *dev, const CameraClass &camera, UnsignedInt depthW, UnsignedInt depthH)
+static void uploadAOConstants(IDirect3DDevice9 *dev, const CameraClass &camera, UnsignedInt depthW, UnsignedInt depthH,
+							  Bool gather, Bool greyOut)
 {
 	float zNear = 1.0f;
 	float zFar  = 1000.0f;
@@ -251,6 +296,9 @@ static void uploadAOConstants(IDirect3DDevice9 *dev, const CameraClass &camera, 
 	const float q[4] = { (float)tier.samples, (float)tier.stride,
 						 (tier.samples > 0) ? (1.0f / (float)tier.samples) : 0.0f, 0.0f };
 	dev->SetPixelShaderConstantF(4, q, 1);
+	// Ronin @feature 24/10/2026 DX9: c5 - gather the occluders' colour; grey AO out (the corner view 2).
+	const float c5[4] = { gather ? 1.0f : 0.0f, 0.0f, 0.0f, greyOut ? 1.0f : 0.0f };
+	dev->SetPixelShaderConstantF(5, c5, 1);
 }
 
 // Ronin @feature 13/09/2026 DX9: SSAO. A target-pixel rectangle with UV 0..1 across it, through ScreenQuad.vso.
@@ -403,13 +451,20 @@ void W3DSsao::renderPass(const CameraClass &camera, Bool afterTrees)
 	IDirect3DSurface9 *surf0 = s_aoTarget[0]->Get_D3D_Surface_Level();
 	IDirect3DSurface9 *surf1 = s_aoTarget[1]->Get_D3D_Surface_Level();
 
+	// Ronin @feature 24/10/2026 DX9: colour bleed - the frame as it stands, before the AO darkens it.
+	D3DSURFACE_DESC fd;
+	const Bool haveFrame = ((bleedNow() || colourNow()) && SUCCEEDED(oldRT->GetDesc(&fd)) && copyFrame(dev, oldRT, fd)) ? TRUE : FALSE;
+	const Bool gather    = (haveFrame && bleedNow()) ? TRUE : FALSE;
+
 	if (surf0 != NULL && surf1 != NULL)
 	{
 		// Raw AO. SetRenderTarget resets the viewport to the whole half-size target, which is what the quad expects.
 		dev->SetRenderTarget(0, surf0);
-		uploadAOConstants(dev, camera, dd.Width, dd.Height);
+		uploadAOConstants(dev, camera, dd.Width, dd.Height, gather, FALSE);
 		dev->SetTexture(0, depthTex);
 		setSampler(dev, 0, FALSE);
+		dev->SetTexture(2, gather ? s_frameCopy->Peek_D3D_Texture() : NULL);
+		setSampler(dev, 2, TRUE);
 		drawScreenQuad(dev, s_aoRawPS, aoW, aoH, 0.0f, 0.0f, aoW, aoH);
 
 		float zNear = 1.0f;
@@ -418,6 +473,7 @@ void W3DSsao::renderPass(const CameraClass &camera, Bool afterTrees)
 		const float blurParams[4] = { zNear, zFar, BLUR_DEPTH_TOLERANCE, 0.0f };
 		const float stepAcross[4] = { 1.0f / aoW, 0.0f, 0.0f, 0.0f };
 		const float stepDown[4]   = { 0.0f, 1.0f / aoH, 0.0f, 0.0f };
+		dev->SetTexture(2, NULL);
 		dev->SetTexture(1, depthTex);
 		setSampler(dev, 1, FALSE);
 
@@ -454,15 +510,26 @@ void W3DSsao::renderPass(const CameraClass &camera, Bool afterTrees)
 	{
 		dev->SetTexture(0, s_aoTarget[0]->Peek_D3D_Texture());
 		setSampler(dev, 0, TRUE);
+		// Ronin @feature 24/10/2026 DX9: with the bleed or coloured AO the frame may also gain light: 2x multiply (dest x src x 2).
+		const Bool coloured = (haveFrame && (gather || colourNow())) ? TRUE : FALSE;
 		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
-		dev->SetRenderState(D3DRS_SRCBLEND,  D3DBLEND_ZERO);
+		dev->SetRenderState(D3DRS_SRCBLEND,  coloured ? D3DBLEND_DESTCOLOR : D3DBLEND_ZERO);
 		dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_SRCCOLOR);
 		dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
 							D3DCOLORWRITEENABLE_BLUE);
 		// Ronin @feature 12/10/2026 DX9: lighting step 3. The sun's shade on stages 1 and 2, its floor in c0: AO shades the ambient
 		// only. The invalidate below unbinds both.
 		W3DLocalLights::bindSunShadeForAO();
+		// Ronin @feature 24/10/2026 DX9: after the sun's shade (its pass keeps c0..c3 as it found them): c2, c3 and the frame on s3.
+		float light[3] = { 1.0f, 1.0f, 1.0f };
+		W3DTaa::getMapLightFactor(light);
+		const float c2[8] = { light[0], light[1], light[2], gather ? s_bleed : 0.0f,
+							  colourNow() ? s_colourAO : 0.0f, coloured ? 1.0f : 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(2, c2, 2);
+		dev->SetTexture(3, coloured ? s_frameCopy->Peek_D3D_Texture() : NULL);
+		setSampler(dev, 3, FALSE);
 		drawScreenQuad(dev, s_showPS, (float)rd.Width, (float)rd.Height, 0.0f, 0.0f, (float)rd.Width, (float)rd.Height);
+		dev->SetTexture(3, NULL);
 	}
 
 	// Then the 3D viewport, our depth buffer, the states, and let the wrapper re-assert itself.
@@ -496,7 +563,7 @@ Bool W3DSsao::isActive(void)
 // Ronin @diagnostic 07/10/2026 DX9: `ssao view 0..3` - the corner view at runtime, so the MSAA prepass's depth and AO can
 // be compared with the swap path's without a rebuild.
 static Int s_debugView = 0;
-void W3DSsao::setDebugView(Int view) { s_debugView = (view < 0) ? 0 : ((view > 3) ? 3 : view); }
+void W3DSsao::setDebugView(Int view) { s_debugView = (view < 0) ? 0 : ((view > 4) ? 4 : view); }
 Int  W3DSsao::getDebugView(void)     { return s_debugView; }
 
 // Ronin @feature 13/09/2026 DX9: SSAO. Top-right corner at the screen's aspect. 1 = depth (grey = distance), 2 = raw AO
@@ -552,12 +619,15 @@ void W3DSsao::drawDebugView(const CameraClass *camera)
 	}
 	else if (view == 2)
 	{
-		uploadAOConstants(dev, *camera, dd.Width, dd.Height);
+		uploadAOConstants(dev, *camera, dd.Width, dd.Height, FALSE, TRUE);
 	}
 	else
 	{
 		// Ronin @feature 12/10/2026 DX9: view 3 is the AO as the frame takes it: lifted where the sun reaches (`lights aosun`).
 		W3DLocalLights::bindSunShadeForAO();
+		// Ronin @feature 24/10/2026 DX9: grey, as before; view 4 the colour bleed's bounce alone.
+		const float c2[8] = { 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, (view == 4) ? 2.0f : 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(2, c2, 2);
 	}
 
 	dev->SetTexture(0, tex);
@@ -579,6 +649,9 @@ void W3DSsao::shutdown(void)
 {
 	REF_PTR_RELEASE(s_aoTarget[0]);
 	REF_PTR_RELEASE(s_aoTarget[1]);
+	REF_PTR_RELEASE(s_frameCopy);		// Ronin @feature 24/10/2026 DX9: the colour bleed's
+	s_frameCopyW = 0;
+	s_frameCopyH = 0;
 	s_aoWidth  = 0;
 	s_aoHeight = 0;
 

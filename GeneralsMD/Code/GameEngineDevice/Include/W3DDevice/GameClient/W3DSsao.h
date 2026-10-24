@@ -19,8 +19,8 @@ class SceneClass;
 class W3DSsao
 {
 public:
-	// Corner view: 0 = none, 1 = scene depth, 2 = raw AO recomputed at end of frame, 3 = the blurred AO renderPass made.
-	// Ronin @diagnostic 07/10/2026 DX9: a runtime switch now - the panel's `ssao view`. Clamped to 0..3.
+	// Ronin @diagnostic 07/10/2026 DX9: the panel's `ssao view` corner view: 0 none, 1 scene depth, 2 raw AO recomputed at end of
+	// frame, 3 the blurred AO renderPass made, 4 the colour bleed's bounce (24/10/2026). Clamped to 0..4.
 	static void setDebugView(Int view);
 	static Int  getDebugView(void);
 	// Ronin @feature 13/09/2026 DX9: SSAO step 3b. 0 = compute AO but leave the frame untouched (A/B without a restart).
@@ -49,6 +49,12 @@ public:
 	// took effect instead of us eyeballing subtle differences. Zeroes until the targets exist.
 	static void getTargetSize(Int *outW, Int *outH);
 	static Int  getSampleCount(void);
+	// Ronin @feature 24/10/2026 DX9: colour bleed - the bounce from the occluders' colour (`ssao bleed`, 0 = none) and the AO in
+	// the surface's own colour (`ssao colour`, 0 = grey). Panel only, not saved; under `lights 0|1`.
+	static void  setBleed(float v);
+	static float getBleed(void);
+	static void  setColourAO(float v);
+	static float getColourAO(void);
 	static void shutdown(void);
 };
 

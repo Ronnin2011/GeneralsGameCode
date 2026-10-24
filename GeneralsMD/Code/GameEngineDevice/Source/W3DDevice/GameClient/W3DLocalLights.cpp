@@ -1971,6 +1971,10 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("sunerase", setSunErase, getSunErase),
 	LIGHT_REAL("mapshadow", setMapShadow, getMapShadow),
 	LIGHT_REAL("aosun", setAoSun, getAoSun),
+	// Ronin @feature 24/10/2026 DX9: SSAO's colour bleed (W3DSsao) - the bounce from the occluders, the AO in the surface's colour.
+	// aosun and these two are set and shown by `ssao` (sun, bleed, colour); these two are panel only, never in DX9Lights.ini.
+	{ "aobleed", FALSE, FALSE, [](float v) { W3DSsao::setBleed(v); }, []() -> float { return W3DSsao::getBleed(); } },
+	{ "aocolour", FALSE, FALSE, [](float v) { W3DSsao::setColourAO(v); }, []() -> float { return W3DSsao::getColourAO(); } },
 	LIGHT_REAL("reflect", setReflect, getReflect),
 	LIGHT_REAL("reflectground", setReflectGround, getReflectGround),
 	LIGHT_REAL("fresnel", setFresnel, getFresnel),

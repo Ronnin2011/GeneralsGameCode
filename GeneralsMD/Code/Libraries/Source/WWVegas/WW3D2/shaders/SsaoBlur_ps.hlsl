@@ -4,7 +4,7 @@
 //
 // Compile with: fxc /T ps_3_0 /Fo SsaoBlur.pso SsaoBlur_ps.hlsl   (pairs with ScreenQuad.vso)
 
-sampler2D g_AO         : register(s0);      // AO in R, POINT, CLAMP
+sampler2D g_AO         : register(s0);      // the bounce in RGB, the AO in A (Ronin 24/10/2026: all four blurred), POINT, CLAMP
 sampler2D g_SceneDepth : register(s1);      // INTZ, POINT, CLAMP
 
 float4 g_BlurParams : register(c0);         // x = camera near, y = camera far, z = depth tolerance as a fraction of distance
@@ -29,7 +29,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
     float eCentre   = linearDepth(uv);
     float tolerance = max(eCentre * g_BlurParams.z, 0.0001f);
 
-    float sum  = tex2Dlod(g_AO, float4(uv, 0.0f, 0.0f)).r * WEIGHTS[0];
+    float4 sum = tex2Dlod(g_AO, float4(uv, 0.0f, 0.0f)) * WEIGHTS[0];
     float wsum = WEIGHTS[0];
 
     [loop]
@@ -39,15 +39,14 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 
         float2 uvA = uv + offset;
         float  wA  = WEIGHTS[i] * saturate(1.0f - abs(linearDepth(uvA) - eCentre) / tolerance);
-        sum  += tex2Dlod(g_AO, float4(uvA, 0.0f, 0.0f)).r * wA;
+        sum  += tex2Dlod(g_AO, float4(uvA, 0.0f, 0.0f)) * wA;
         wsum += wA;
 
         float2 uvB = uv - offset;
         float  wB  = WEIGHTS[i] * saturate(1.0f - abs(linearDepth(uvB) - eCentre) / tolerance);
-        sum  += tex2Dlod(g_AO, float4(uvB, 0.0f, 0.0f)).r * wB;
+        sum  += tex2Dlod(g_AO, float4(uvB, 0.0f, 0.0f)) * wB;
         wsum += wB;
     }
 
-    float ao = sum / wsum;
-    return float4(ao, ao, ao, 1.0f);
+    return sum / wsum;
 }

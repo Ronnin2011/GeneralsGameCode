@@ -13,6 +13,10 @@ float4 g_TexelSize  : register(c3);         // xy = 1 / target size, zw = target
 // Ronin @feature 20/09/2026 DX9: SSAO quality tiers. STRIDE, not a prefix: the kernel's lengths grow with index, so the
 // first N entries would all be close-contact and the tier would lose wide occlusion instead of just gaining noise.
 float4 g_AOQuality  : register(c4);         // x = sample count, y = kernel stride, z = 1 / sample count
+// Ronin @feature 24/10/2026 DX9: COLOUR BLEED (SSDO, Ritschel 2009): a blocked sample is a small reflector - its colour, from the frame
+// before SSAO, is gathered as one bounce. x = 1 gather it, w = 1 grey AO out (the corner view 2). Out: rgb = the bounce, a = the AO.
+float4 g_Bleed     : register(c5);
+sampler2D g_Frame  : register(s2);         // the frame before SSAO, LINEAR, CLAMP
 
 // Hemisphere kernel, tangent space (+z = along the normal). Golden-angle azimuths, lengths growing toward the rim so
 // most samples test close contact.
@@ -34,6 +38,13 @@ float linearDepth(float2 uv)
 }
 
 // W3D view space: camera looks down -Z, +Y up. The screen's Y grows downward, the view plane's upward.
+// Ronin @feature 24/10/2026 DX9: the point at `uv` whose distance is already known.
+float3 viewAt(float2 uv, float e)
+{
+    float2 s = (uv - g_Viewport.xy) / g_Viewport.zw;
+    return float3((g_ViewPlane.x + s.x * g_ViewPlane.z) * e, (g_ViewPlane.y - s.y * g_ViewPlane.w) * e, -e);
+}
+
 float3 viewPosition(float2 uv)
 {
     float  e = linearDepth(uv);
@@ -58,7 +69,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
     // mad), and when the viewport is not full-screen the two round apart: red on most rows in a match, stripes on the rest.
     float2 s = (uv - g_Viewport.xy) / g_Viewport.zw;
     if (s.x < 0.0f || s.x > 1.0f || s.y < 0.0f || s.y > 1.0f)
-        return float4(1.0f, 0.0f, 0.0f, 1.0f);
+        return (g_Bleed.w > 0.5f) ? float4(1.0f, 0.0f, 0.0f, 1.0f) : float4(0.0f, 0.0f, 0.0f, 1.0f);	// red in the view; open, no bounce
 
     // Ronin @bugfix 13/09/2026 DX9: SSAO step 3a. Snap to ONE depth texel. At half resolution every pixel centre sits exactly
     // on a full-resolution texel border, and point sampling picked a different side on different rows: horizontal bands.
@@ -66,7 +77,7 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
 
     // Nothing drew here (sky, off-map): fully open.
     if (tex2Dlod(g_SceneDepth, float4(uvT, 0.0f, 0.0f)).r >= 0.99999f)
-        return float4(1.0f, 1.0f, 1.0f, 1.0f);
+        return (g_Bleed.w > 0.5f) ? float4(1.0f, 1.0f, 1.0f, 1.0f) : float4(0.0f, 0.0f, 0.0f, 1.0f);	// fully open, no bounce
 
     // NORMAL from neighbouring depth texels, taking the smaller step on each axis so an edge does not bend it.
     float3 P  = viewPosition(uvT);
@@ -92,7 +103,8 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
     const float bias   = radius * 0.02f;
     const float eP     = -P.z;
 
-    float occlusion = 0.0f;
+    float  occlusion = 0.0f;
+    float3 bounce    = float3(0.0f, 0.0f, 0.0f);
     const int sampleCount  = (int)g_AOQuality.x;
     const int kernelStride = (int)g_AOQuality.y;
     [loop]
@@ -100,13 +112,26 @@ float4 main(float2 uv : TEXCOORD0) : COLOR0
     {
         float3 k       = KERNEL[i * kernelStride];
         float3 S       = P + (T * k.x + B * k.y + N * k.z) * radius;
-        float  sceneE  = linearDepth(viewToUV(S));
+        float2 sUV     = viewToUV(S);
+        float  sceneE  = linearDepth(sUV);
         float  sampleE = -S.z;
         // Only geometry within the radius counts, or a tower far in front would darken the ground behind it.
         float  inRange = saturate(radius / max(abs(eP - sceneE), 0.0001f));
-        occlusion += ((sceneE <= sampleE - bias) ? 1.0f : 0.0f) * inRange;
+        float  occ     = ((sceneE <= sampleE - bias) ? 1.0f : 0.0f) * inRange;
+        occlusion += occ;
+        // Ronin @feature 24/10/2026 DX9: the occluder's colour, by how squarely this surface faces it and how near it is.
+        [branch]
+        if (g_Bleed.x > 0.5f && occ > 0.0f)
+        {
+            float3 d    = viewAt(sUV, sceneE) - P;
+            float  dist = length(d);
+            float  w    = occ * saturate(dot(N, d / max(dist, 0.0001f))) * saturate(1.0f - dist / (2.0f * radius));
+            bounce += tex2Dlod(g_Frame, float4(sUV, 0.0f, 0.0f)).rgb * w;
+        }
     }
 
     float ao = saturate(1.0f - (occlusion * g_AOQuality.z) * g_AOParams.w);
-    return float4(ao, ao, ao, 1.0f);
+    if (g_Bleed.w > 0.5f)
+        return float4(ao, ao, ao, 1.0f);
+    return float4(saturate(bounce * g_AOQuality.z), ao);
 }
