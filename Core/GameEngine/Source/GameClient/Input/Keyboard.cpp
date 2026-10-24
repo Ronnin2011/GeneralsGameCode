@@ -243,8 +243,9 @@ Bool Keyboard::checkKeyRepeat()
 				for( index = 0; index< NUM_KEYS; index++ )
 					m_keyStatus[ index ].keyDownTimeMsec = now;
 
-				// Set repeated key so it will repeat again after the interval
-				m_keyStatus[ key ].keyDownTimeMsec = now - (Keyboard::KEY_REPEAT_DELAY_MSEC + Keyboard::KEY_REPEAT_INTERVAL_MSEC);
+				// Ronin @bugfix 24/10/2026 DX9: repeat again after the interval - minus the delay PLUS the interval. Minus both put the
+				// next frame past the delay at once: one repeat a frame, so at an unlimited frame rate one backspace took a whole word.
+				m_keyStatus[ key ].keyDownTimeMsec = now - Keyboard::KEY_REPEAT_DELAY_MSEC + Keyboard::KEY_REPEAT_INTERVAL_MSEC;
 
 				retVal = TRUE;
 				break;  // exit for key

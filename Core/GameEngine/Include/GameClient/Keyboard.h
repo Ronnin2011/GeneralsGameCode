@@ -88,7 +88,7 @@ class Keyboard : public SubsystemInterface
 	enum
 	{
 		KEY_REPEAT_DELAY_MSEC = 333,	// 10 frames at 30 FPS
-		KEY_REPEAT_INTERVAL_MSEC = 67	// ~2 frames at 30 FPS
+		KEY_REPEAT_INTERVAL_MSEC = 33	// Ronin @bugfix 24/10/2026 DX9: 2003's rate - it repeated every frame at 30 FPS
 	};
 
 public:
