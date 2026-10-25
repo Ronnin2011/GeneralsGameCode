@@ -10,7 +10,7 @@ sampler2D s_Bump       : register(s0);	// caust frame, V8U8: signed du/dv in .rg
 sampler2D s_Reflection : register(s1);	// renderMirror's target
 sampler2D s_Water      : register(s2);	// the standing-water texture; white for the sea
 sampler2D s_Edge       : register(s3);	// river edge fade (TWAlphaEdge); white elsewhere
-sampler2D s_Normal     : register(s4);	// WaterNormal.tga, world-space normals, z up; alpha = the foam pattern
+sampler2D s_Normal     : register(s4);	// WaterNormal.tga, world-space normals, z up; alpha = the froth (foam)
 sampler2D s_Height     : register(s5);	// Ronin @feature 29/09/2026 DX9: terrain heights, one texel per terrain vertex (R32F or L8)
 sampler2D s_Scene      : register(s6);	// Ronin @feature 29/09/2026 DX9: phase 3 - the frame just before the water
 
@@ -36,7 +36,7 @@ float4 g_Wave[8]    : register(c25);	// [2i] (k dx, k dy, omega, this wave's hei
 										// [2i+1] (dx k A, dy k A - both x the normal boost, Q k A, 0)
 float4 g_SwellCfg   : register(c33);	// x: seconds, y: on, z: a lake's shore slope 1 / (depth x MinOpacity) (0 = soft edge off),
 										// w: the map's MinOpacity - Ronin @bugfix 01/10/2026 DX9
-float4 g_SeaFoam    : register(c34);	// x: open-water lace strength, y: 1 / its depth, z: tiles per world unit, w: 1 = the profile's `opacity`, 0 = the map's own
+float4 g_SeaFoam    : register(c34);	// x: open-water foam amount, y: 1 / its depth, z: tiles per world unit, w: 1 = the profile's `opacity`, 0 = the map's own
 float4 g_Refraction : register(c35);	// Ronin @feature 29/09/2026 DX9: phase 3 - xy: 1 / frame copy size, z: bend, w: on
 // Ronin @feature 29/09/2026 DX9: shadows on the water - the terrain's shadow map (TheTerrainShadowPass). Above c35: PS constants are
 // device state, and the other receivers hold c12-c28.
@@ -71,6 +71,23 @@ float shadowPcf4(sampler2D smp, float2 uv, float depth, float texelUV)
 	                tex2Dproj(smp, float4(uv + float2( h, -h), depth, 1.0f)).r +
 	                tex2Dproj(smp, float4(uv + float2(-h,  h), depth, 1.0f)).r +
 	                tex2Dproj(smp, float4(uv + float2( h,  h), depth, 1.0f)).r);
+}
+
+// Ronin @feature 25/10/2026 DX9: the froth - the normal maps' alpha, equalised: a coverage c foams the fraction c of the area.
+// x: how far the colour goes to foam (thin foam translucent, thick white), y: the milky haze over thin foam.
+float2 frothDissolve(float e, float cover)
+{
+	const float c = saturate(cover);
+	const float d = e + c - 1.0f;	// how far above the threshold
+	return float2(saturate(d * 14.3f + 0.29f) * saturate(d * 1.55f + 0.3f), c * 0.12f);
+}
+// Ronin @feature 25/10/2026 DX9: where foam gathers - the alpha at mip 4.5 (only its mass left), ~160-unit patches at the sea's
+// tile: 0..2 x the coverage, so some sea is bare. 1.97 = 0.35 / that mip's spread (GenWaterNormal.ps1 prints it).
+static const float FOAM_CLUMP_GAIN = 1.97f;
+float frothClump(float2 ruv)
+{
+	return 2.0f * saturate(0.5f + (tex2Dlod(s_Normal, float4(ruv * 0.25f + float2(0.13f, 0.71f), 0.0f, 4.5f)).a - 0.5f) *
+	                       (2.0f * FOAM_CLUMP_GAIN));
 }
 
 struct PSInput
@@ -251,6 +268,8 @@ PSOutput main(PSInput input)
 	float  aWater  = c.a;								// Ronin @bugfix 29/09/2026 DX9: the refraction blend's inputs
 	float3 seaCol  = float3(0.0f, 0.0f, 0.0f);
 	float3 foamCol = float3(0.0f, 0.0f, 0.0f);
+	float  seaHaze   = 0.0f;	// Ronin @feature 25/10/2026 DX9: the froth's milky haze, open water and shore
+	float  shoreHaze = 0.0f;
 	float  shoreFoam = shore;	// Ronin @bugfix 02/10/2026 DX9: the distance the shore foam uses (`view 13`); rivers measure it
 #ifdef WATER_RIVER
 	// Ronin @bugfix 02/10/2026 DX9: a river's distance to its banks, measured: four steps across the flow to each side, to
@@ -304,10 +323,11 @@ PSOutput main(PSInput input)
 		c.rgb   = lerp(c.rgb, foamCol, foam);
 		c.a     = max(c.a, foam * smoothstep(0.0f, 0.15f, edge) * input.color.a);
 	}
-	// Ronin @feature 02/10/2026 DX9: phase 4 - the current's foam: lace on the flow map (`seafoamtile`), broken into rafts,
+	// Ronin @feature 02/10/2026 DX9: phase 4 - the current's foam: froth on the flow map (`seafoamtile`), gathered into rafts,
 	// thicker where the river runs fast (swell.z from the VS). `seafoam` scales it; `view 8` shows it cyan.
 	{
-		const float lace  = lerp(tex2D(s_Normal, uvA0 * g_RiverFlow.z).a, tex2D(s_Normal, uvA1 * g_RiverFlow.z).a, wFlow);
+		const float froth = 0.5f + (lerp(tex2D(s_Normal, uvA0 * g_RiverFlow.z).a, tex2D(s_Normal, uvA1 * g_RiverFlow.z).a, wFlow) - 0.5f) *
+		                    rsqrt(wFlow * wFlow + (1.0f - wFlow) * (1.0f - wFlow));	// the blend's spread kept
 		// Ronin @bugfix 03/10/2026 DX9: rafts ~500 units across, from the slope magnitude, on their own 12 s cycle; half the
 		// river stays open.
 		const float  phL0  = frac(g_HeightCfg.w * g_RiverFlow.x * 0.25f);
@@ -317,10 +337,12 @@ PSOutput main(PSInput input)
 		const float rafts = smoothstep(0.13f, 0.21f, lerp(abs(m0.r - 0.5f) + abs(m0.g - 0.5f), abs(m1.r - 0.5f) + abs(m1.g - 0.5f), wL));
 		const float fast  = input.swell.z * 2.0f;
 		const float lum   = dot(input.color.rgb, float3(0.299f, 0.587f, 0.114f));
-		sea    = saturate(lace * 2.0f * rafts * (0.5f + 0.5f * saturate(fast - 0.5f))) * g_SeaFoam.x;
+		// Ronin @feature 25/10/2026 DX9: the froth dissolved by the rafts; 0.45 keeps `seafoam` at its old values
+		const float2 rf = frothDissolve(froth, rafts * (0.5f + 0.5f * saturate(fast - 0.5f)) * g_SeaFoam.x * 0.45f);
+		sea    = rf.x;
 		seaCol = saturate(lum * 1.3f + 0.15f).xxx * shadeLit;
-		c.rgb  = lerp(c.rgb, seaCol, sea);
-		c.a    = max(c.a, sea * smoothstep(0.0f, 0.15f, edge) * input.color.a);
+		c.rgb  = lerp(lerp(c.rgb, seaCol, rf.y), seaCol, sea);
+		c.a    = max(c.a, max(sea, rf.y) * smoothstep(0.0f, 0.15f, edge) * input.color.a);
 	}
 #endif
 #ifndef WATER_RIVER		// Ronin @feature 02/10/2026 DX9: phase 4 - the standing water's block (it skipped rivers anyway)
@@ -342,34 +364,45 @@ PSOutput main(PSInput input)
 		const float t   = g_HeightCfg.w;
 		const float lum = dot(input.color.rgb, float3(0.299f, 0.587f, 0.114f));
 
-		// Ronin @feature 29/09/2026 DX9: the open-water lace - phase 1's first foam, restored as it was. Two
-		// crossing layers at full resolution, fading out by `seafoamdepth`, a slow surge running through them.
+		// Ronin @feature 25/10/2026 DX9: the froth - every foam here hands it a coverage: the open water's, the wakes', the
+		// whitecaps'. One read at full detail and the clumps (a deep-mip read) shared; the whitecaps take their own read.
 		const float2 suv      = input.worldPos.xy * g_SeaFoam.z;
-		const float  seaLace  = max(tex2D(s_Normal, suv + float2(t * 0.013f, t * 0.009f)).a,
-		                            tex2D(s_Normal, suv * 1.7f + float2(0.37f, 0.61f) - float2(t * 0.011f, t * 0.007f)).a);
+		const float2 ruv      = float2(dot(suv, float2(0.766f, -0.643f)), dot(suv, float2(0.643f, 0.766f)));	// turned 40 degrees
+		// Ronin @bugfix 25/10/2026 DX9: two reads on grids that never line up (turned, 1.37x) - one 40-unit grid showed its
+		// strongest flecks in every tile. The max of two flat fields, squared, is flat again.
+		float        froth    = max(tex2D(s_Normal, suv + float2(t * 0.013f, t * 0.009f)).a,
+		                            tex2D(s_Normal, ruv * 1.37f + float2(0.31f, 0.57f) - float2(t * 0.011f, t * 0.007f)).a);
+		froth *= froth;
+		const float  clump    = frothClump(ruv - float2(t * 0.001f, t * 0.0008f));
 		// Ronin @bugfix 29/09/2026 DX9: the surge's peak travels across the water (about 480-unit bands); by depth alone a
 		// shallow sea of one depth peaked everywhere at once and went white.
 		const float  seaBand  = saturate(1.0f - depth * g_SeaFoam.y);
-		const float  seaSurge = 0.6f + 0.4f * sin(depth * 0.9f - t * 1.4f + dot(input.worldPos.xy, float2(0.011f, 0.007f)));
-		sea    = saturate(seaLace * 2.0f * seaBand * seaSurge) * g_SeaFoam.x;
-		// Ronin @feature 03/10/2026 DX9: phase 5 - whitecaps: the same lace where the swell stands highest (`whitecapat`), fainter
-		// where it stood a moment ago. The ripple maps fray the edge, only where the water is raised.
+		// Ronin @tweak 25/10/2026 DX9: a triangle wave, not sin - the same slow pulse, 3 slots instead of sincos's 8 (the budget)
+		const float  surgeX   = (depth * 0.9f - t * 1.4f + dot(input.worldPos.xy, float2(0.011f, 0.007f))) * 0.15915494f;
+		const float  seaSurge = 0.6f + 0.4f * (abs(frac(surgeX) * 2.0f - 1.0f) * 2.0f - 1.0f);
+		// Ronin @feature 25/10/2026 DX9: the open water's (0.45 keeps `seafoam` at its old values) and a wake's foam
+		// the clumps gate the open water only: a wake foams wherever it is
+		float2 fr = frothDissolve(froth, max(seaBand * seaSurge * g_SeaFoam.x * 0.45f * clump, saturate(wake.z) * g_WakeCfg.x));
+		// Ronin @feature 03/10/2026 DX9: phase 5 - whitecaps where the swell stands highest (`whitecapat`), fainter where it stood
+		// a moment ago. The ripple maps fray the edge, only where the water is raised.
 		const float3 capH = hSwell + (nA.x + nB.y) * g_CapCfg.w * saturate(hSwell * 3.0f);
 		float3 capQ = saturate((capH - g_CapCfg.x) * g_CapCfg.y);
 		capQ = capQ * capQ * (3.0f - 2.0f * capQ);
 		const float  cap  = max(capQ.x, max(capQ.y * g_CapTrail.x, capQ.z * g_CapTrail.y));
-		sea    = max(sea, cap * saturate(0.25f + seaLace * 2.0f) * g_CapCfg.z);
-		// Ronin @feature 03/10/2026 DX9: phase 5 - a wake's foam through the same lace: solid where it is thick
-		sea    = max(sea, saturate(wake.z * (0.35f + seaLace * 2.2f)) * g_WakeCfg.x);
-		seaCol = saturate(lum * 1.3f + 0.15f).xxx * shadeLit;
-		c.rgb  = lerp(c.rgb, seaCol, sea);
-		c.a    = max(c.a, sea * saturate(depth * 2.0f) * edge * input.color.a);
+		// Ronin @feature 25/10/2026 DX9: the whitecaps' froth stretched 3:1 along the leading wave's crest
+		const float2 kd    = g_Wave[0].xy * (rsqrt(max(dot(g_Wave[0].xy, g_Wave[0].xy), 1.0e-12f)) * g_SeaFoam.z);
+		const float2 capUV = float2(dot(input.worldPos.xy, float2(-kd.y, kd.x)) * (1.0f / 3.0f), dot(input.worldPos.xy, kd));
+		fr      = max(fr, frothDissolve(tex2D(s_Normal, capUV).a, cap * g_CapCfg.z * clump));
+		sea     = fr.x;
+		seaHaze = fr.y;
+		seaCol  = saturate(lum * 1.3f + 0.15f).xxx * shadeLit;
+		c.rgb   = lerp(c.rgb, seaCol, sea);	// Ronin @feature 25/10/2026 DX9: the haze only over the refraction (the slot budget)
+		c.a     = max(c.a, sea * saturate(depth * 2.0f) * edge * input.color.a);
 
-		// Ronin @bugfix 29/09/2026 DX9: shore foam within `foamwidth` of the waterline: dense lace at the line, thinning out; the
+		// Ronin @bugfix 29/09/2026 DX9: shore foam within `foamwidth` of the waterline: dense froth at the line, thinning out; the
 		// wash breathes, and a line of foam comes in from the sea and spends itself at the line.
 		const float2 fuv     = input.worldPos.xy * g_HeightCfg.z;
-		const float  pattern = max(tex2Dbias(s_Normal, float4(fuv + float2(t * 0.013f, t * 0.009f), 0.0f, 1.0f)).a,
-		                           tex2Dbias(s_Normal, float4(fuv * 1.6f + float2(0.37f, 0.61f) - float2(t * 0.011f, t * 0.007f), 0.0f, 1.0f)).a);
+		const float  pattern = tex2D(s_Normal, fuv - float2(t * 0.011f, t * 0.007f)).a;	// Ronin @feature 25/10/2026 DX9: the froth
 		// Ronin @feature 03/10/2026 DX9: phase 5 - shore breakers: the wash and the incoming front keep the SWELL's time (its
 		// leading wave's phase here), so a front lands with each crest. `breakers` 0, or no swell: the old clocks.
 		const float  th0     = dot(g_Wave[0].xy, input.swell.xy) - g_Wave[0].z * g_SwellCfg.x;
@@ -382,10 +415,13 @@ PSOutput main(PSInput input)
 		// Ronin @bugfix 29/09/2026 DX9: `foam` scales how much of the pattern passes, not the result - as a gain after the
 		// threshold it saturated by about 5 and went no further.
 		const float  cover   = max(saturate(1.0f - reach) * 1.2f, front) * g_FoamCfg.x;
-		foam    = saturate((pattern - 1.0f + cover) * 2.0f) * saturate(shore) * 0.9f * nearSurface;
-		foamCol = saturate(lum * 1.2f + 0.35f).xxx * shadeLit;
-		c.rgb   = lerp(c.rgb, foamCol, foam);
-		c.a     = max(c.a, foam);
+		// Ronin @feature 25/10/2026 DX9: the froth dissolved by it, gathered by the clumps; 0.6 keeps `foam` at its old values
+		const float2 sf      = frothDissolve(pattern, cover * 0.6f * (0.5f + 0.5f * clump)) * (saturate(shore) * nearSurface);	// a milder gate: no bare coast
+		foam      = sf.x;
+		shoreHaze = sf.y;
+		foamCol   = saturate(lum * 1.2f + 0.35f).xxx * shadeLit;
+		c.rgb     = lerp(c.rgb, foamCol, foam);
+		c.a       = max(c.a, foam);
 	}
 #endif
 
@@ -400,7 +436,9 @@ PSOutput main(PSInput input)
 		const float  rim   = lerp(1.0f, saturate(shore * 0.5f), nearSurface);
 		float3 r = lerp(under, body * shadeLit * input.color.rgb, aWater);
 		r = lerp(r, refl.rgb, share * rim) + sun * lit * rim;
-		r = lerp(r, seaCol, sea * saturate(depth * 2.0f));
+		const float deepFoam = saturate(depth * 2.0f);
+		r = lerp(r, seaCol, max(seaHaze * deepFoam, shoreHaze));	// Ronin @feature 25/10/2026 DX9: the froth's milky haze, once
+		r = lerp(r, seaCol, sea * deepFoam);
 		r = lerp(r, foamCol, foam);
 		c.rgb = r;
 		c.a   = 1.0f;
