@@ -86,6 +86,7 @@ enum
 #include "W3DDevice/GameClient/R3DShadowMapState.h"
 #include "W3DDevice/GameClient/R3DWaterMirror.h"	// Ronin @bugfix 01/10/2026 DX9: the mirror plane, for cull()
 #include "W3DDevice/GameClient/R3DLocalLights.h"	// Ronin @feature 12/10/2026 DX9: HDR: noteTreeShade
+#include "W3DDevice/GameClient/R3DTreeFire.h"	// Ronin @feature 25/10/2026 DX9: the trees on fire
 #include "WW3D2/camera.h"
 #include "WW3D2/dx8wrapper.h"
 #include "WW3D2/dx8renderer.h"
@@ -899,7 +900,8 @@ void W3DTreeBuffer::loadTreesInVertexAndIndexBuffers(RefRenderObjListIterator *p
 				curVb->x = vLoc.X;
 				curVb->y = vLoc.Y;
 				curVb->z = vLoc.Z;
-				curVb->nx = m_trees[curTree].swayType;
+				// Ronin @feature 25/10/2026 DX9: the char rides in the sway index's fraction (R3DTreeFire::swaySlot).
+				curVb->nx = R3DTreeFire::swaySlot(m_trees[curTree].swayType, m_trees[curTree].m_burnChar);
 				curVb->ny = 1.0f - m_treeTypes[type].m_data->m_darkening*m_trees[curTree].pushAside;
 				curVb->nz = loc.Z;
 				if (doVertexLighting) {
@@ -1034,6 +1036,7 @@ void W3DTreeBuffer::updateVertexBuffer()
 //=============================================================================
 W3DTreeBuffer::~W3DTreeBuffer()
 {
+	R3DTreeFire::detach(this);	// Ronin @feature 25/10/2026 DX9: the trees on fire
 	freeTreeBuffers();
 	REF_PTR_RELEASE(m_treeTexture);
 	Int i;
@@ -1070,6 +1073,7 @@ W3DTreeBuffer::W3DTreeBuffer()
 	m_curSwayVersion = -1;
 
 	m_shadow = nullptr;
+	R3DTreeFire::attach(this);	// Ronin @feature 25/10/2026 DX9: the logic's fire reports reach this buffer
 
 }
 
@@ -1239,6 +1243,7 @@ void W3DTreeBuffer::clearAllTrees()
 		m_areaPartition[i] = END_OF_PARTITION;
 	}
 	m_numTreeTypes = 0;
+	R3DTreeFire::reset(this, TRUE);	// Ronin @feature 25/10/2026 DX9: the fires and the burnt types go with the types
 }
 
 //=============================================================================
@@ -1373,6 +1378,7 @@ void W3DTreeBuffer::addTree(DrawableID id, Coord3D location, Real scale, Real an
 		if (treeType<0) {
 			return;
 		}
+		R3DTreeFire::typeAdded(this, treeType);	// Ronin @feature 25/10/2026 DX9: can it burn, and where its fire sits
 		m_needToUpdateTexture = true;
 	}
 	if (data->m_framesToMoveOutward > 2 || data->m_doTopple) {
@@ -1416,6 +1422,8 @@ void W3DTreeBuffer::addTree(DrawableID id, Coord3D location, Real scale, Real an
 	m_trees[m_numTrees].pushAsideCos = 1;
 	m_trees[m_numTrees].pushAsideSin = 1;
 	m_trees[m_numTrees].m_toppleState = TOPPLE_UPRIGHT;
+	m_trees[m_numTrees].m_burnState = BURN_GREEN;	// Ronin @feature 25/10/2026 DX9: the trees on fire
+	m_trees[m_numTrees].m_burnChar = 0;
 	m_numTrees++;
 }
 
@@ -1554,6 +1562,9 @@ void W3DTreeBuffer::drawTrees(CameraClass * camera, RefRenderObjListIterator *pD
 	if (!depthPass) {
 		m_isTerrainPass = false;
 	}
+
+	// Ronin @feature 25/10/2026 DX9: the trees on fire - burnt types before the atlas is built, the fires in the main pass only.
+	R3DTreeFire::update(this, !depthPass);
 
 	if (m_needToUpdateTexture) {
 		m_needToUpdateTexture = false;
@@ -2117,6 +2128,8 @@ void W3DTreeBuffer::xfer( Xfer *xfer )
 		for (i=0; i<PARTITION_WIDTH_HEIGHT*PARTITION_WIDTH_HEIGHT; i++) {
 			m_areaPartition[i] = END_OF_PARTITION;
 		}
+		// Ronin @feature 25/10/2026 DX9: the trees come back green, without their fires.
+		R3DTreeFire::reset(this, FALSE);
 	}
 
 	// Save trees. [8/11/2003]
@@ -2130,8 +2143,10 @@ void W3DTreeBuffer::xfer( Xfer *xfer )
 			tree = m_trees[i];
 			treeType = m_trees[i].treeType;
 			if (treeType != DELETED_TREE_TYPE) {
-				modelName = m_treeTypes[treeType].m_data->m_modelName;
-				modelTexture = m_treeTypes[treeType].m_data->m_textureName;
+				// Ronin @feature 25/10/2026 DX9: a burnt tree saves as its green type, so the save stays retail (it loads green).
+				const Int savedType = R3DTreeFire::typeToSave(this, i);
+				modelName = m_treeTypes[savedType].m_data->m_modelName;
+				modelTexture = m_treeTypes[savedType].m_data->m_textureName;
 			}
 		}
 		xfer->xferAsciiString(&modelName);

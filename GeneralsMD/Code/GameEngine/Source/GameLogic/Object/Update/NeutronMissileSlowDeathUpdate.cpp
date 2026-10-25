@@ -497,6 +497,8 @@ void NeutronMissileSlowDeathBehavior::doScorchBlast( const BlastInfo *blastInfo 
 	// scan objects around us and do damage to objects we have "passed over" and are behind us
 	if( blastInfo->outerRadius )
 	{
+		// Ronin @feature 25/10/2026 DX9: the blast burns the map's trees as it does objects, without flames (R3DTreeFire).
+		TheGameClient->notifyTerrainFire(missilePos, blastInfo->outerRadius, TRUE);
 		ObjectIterator *iter = ThePartitionManager->iterateObjectsInRange( missilePos,
 																																			 blastInfo->outerRadius,
 																																			 FROM_CENTER_2D,

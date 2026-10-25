@@ -83,6 +83,13 @@ enum W3DToppleState CPP_11(: Int)
 	TOPPLE_SHROUDED, // unused
 	TOPPLE_DOWN
 };
+// Ronin @feature 25/10/2026 DX9: a tree's fire (R3DTreeFire).
+enum W3DTreeBurnState CPP_11(: Int)
+{
+	BURN_GREEN = 0,
+	BURN_ALIGHT,
+	BURN_BURNT
+};
 /// The individual data for a tree.
 typedef struct {
 	Vector3 location;					///< Drawing location
@@ -119,6 +126,9 @@ typedef struct {
 	UnsignedInt		m_options;								///< topple options
 	Matrix3D			m_mtx;
 	Real					m_sinkFramesLeft;					///< Toppled trees sink into the terrain & disappear, how many frames left.
+	// Ronin @feature 25/10/2026 DX9: the tree's fire (R3DTreeFire): a W3DTreeBurnState, and the shader's char with no burnt art.
+	UnsignedByte	m_burnState;
+	UnsignedByte	m_burnChar;
 
 } TTree;
 
@@ -147,6 +157,7 @@ typedef struct {
 class W3DTreeBuffer : public Snapshot
 {
 //friend class BaseHeightMapRenderObjClass;
+	friend class R3DTreeFire;	// Ronin @feature 25/10/2026 DX9: the trees on fire
 
 	//-----------------------------------------------------------------------------
 	//                             W3DTreeTextureClass

@@ -68,6 +68,7 @@ set(GAMEENGINEDEVICE_SRC
     Include/W3DDevice/GameClient/R3DSkyCube.h
     Include/W3DDevice/GameClient/R3DSsao.h
     Include/W3DDevice/GameClient/R3DTaa.h
+    Include/W3DDevice/GameClient/R3DTreeFire.h
 #    Include/W3DDevice/GameClient/W3DSmudge.h
 #    Include/W3DDevice/GameClient/W3DSnow.h
     Include/W3DDevice/GameClient/W3DStatusCircle.h
@@ -174,6 +175,7 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/R3DSkyCube.cpp
     Source/W3DDevice/GameClient/R3DSsao.cpp
     Source/W3DDevice/GameClient/R3DTaa.cpp
+    Source/W3DDevice/GameClient/R3DTreeFire.cpp
 #    Source/W3DDevice/GameClient/W3DSmudge.cpp
 #    Source/W3DDevice/GameClient/W3DSnow.cpp
     Source/W3DDevice/GameClient/W3DStatusCircle.cpp

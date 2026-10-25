@@ -53,6 +53,7 @@
 #include "W3DDevice/GameClient/R3DSsao.h"	// Ronin @feature 26/09/2026 DX9: `ssao` command
 #include "W3DDevice/GameClient/R3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: `lights` command and the [LIGHT] row
 #include "W3DDevice/GameClient/R3DShadowMap.h"	// Ronin @feature 26/09/2026 DX9: `shadows` command
+#include "W3DDevice/GameClient/R3DTreeFire.h"	// Ronin @feature 25/10/2026 DX9: `treefire` command
 // Ronin @diagnostic 28/09/2026 DX9: [WATER] row - chipset gate and the soft-edge test.
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "GameClient/Water.h"
@@ -1280,6 +1281,61 @@ namespace
 		const Bool night = (TheGlobalData != nullptr) && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT;
 		AsciiString state;
 		state.format("clouds: %s%s", set ? "on" : "off", (set && night) ? "  (not drawn: it is night)" : "");
+		printAscii(state, FALSE);
+	}
+
+	Bool screenCentreOnTerrain(Coord3D *out)
+	{
+		if (TheTacticalView == nullptr)
+			return FALSE;
+		Int x0 = 0, y0 = 0;
+		TheTacticalView->getOrigin(&x0, &y0);
+		ICoord2D pixel;
+		pixel.x = x0 + TheTacticalView->getWidth() / 2;
+		pixel.y = y0 + TheTacticalView->getHeight() / 2;
+		return TheTacticalView->screenToTerrain(&pixel, out);
+	}
+
+	// Ronin @feature 25/10/2026 DX9: `treefire` - the map's trees on fire (R3DTreeFire). `here` lights the tree nearest the middle of
+	// the screen; `area` / `scorch <r>` report there what a flame weapon / the nuke reports. Not saved.
+	void cmdTreeFire(Int argc, const AsciiString *argv)
+	{
+		Bool on = FALSE;
+		const char *a1 = (argc >= 2) ? argv[1].str() : "";
+		const Bool here = (argc == 2 && _stricmp(a1, "here") == 0);
+		const Bool area = (argc == 3 && (_stricmp(a1, "area") == 0 || _stricmp(a1, "scorch") == 0));
+		if (argc == 2 && parseOnOff(a1, &on))
+			R3DTreeFire::setEnabled(on);
+		else if (argc == 3 && _stricmp(a1, "cap") == 0 && isWholeNumber(argv[2].str()))
+			R3DTreeFire::setCap(atoi(argv[2].str()));
+		else if (argc == 3 && _stricmp(a1, "spread") == 0 && parseOnOff(argv[2].str(), &on))
+			R3DTreeFire::setSpread(on);
+		else if (argc == 3 && _stricmp(a1, "thin") == 0)
+			R3DTreeFire::setThin((Real)atof(argv[2].str()));
+		else if (here || area)
+		{
+			Coord3D centre;
+			if (!screenCentreOnTerrain(&centre))
+			{
+				printAscii(AsciiString("treefire: no ground in the middle of the screen"), TRUE);
+				return;
+			}
+			if (here && !R3DTreeFire::igniteNearest(&centre, 80.0f))
+				printAscii(AsciiString("treefire: no green tree that can burn within 80 of the middle of the screen"), TRUE);
+			if (area)
+				R3DTreeFire::onFire(&centre, (Real)atof(argv[2].str()), _stricmp(a1, "scorch") == 0);
+		}
+		else if (argc != 1)
+		{
+			printAscii(AsciiString("usage: treefire [0|1] | here | area <radius> | scorch <radius> | cap <fires> | spread 0|1 | thin <0..1>"), TRUE);
+			return;
+		}
+		Int fires = 0, burnt = 0, burntTypes = 0, types = 0;
+		R3DTreeFire::stats(&fires, &burnt, &burntTypes, &types);
+		AsciiString state;
+		state.format("treefire: %s, spread %s, cap %d, thin %.2f | burning %d, burnt %d | tree types %d, %d of them burnt art",
+			R3DTreeFire::isEnabled() ? "on" : "off", R3DTreeFire::getSpread() ? "on" : "off", R3DTreeFire::getCap(),
+			R3DTreeFire::getThin(), fires, burnt, types, burntTypes);
 		printAscii(state, FALSE);
 	}
 
@@ -3534,6 +3590,7 @@ void R3DDebugPanel::update(void)
 		registerCommand("sky", "sky | sky rebuild - the map's sky cube: its source, its ground, the ambient's six colours (`lights view 5` shows it)", cmdSky);
 		registerCommand("timesetting", "timesetting [1..4] - time of day: 1 morning, 2 afternoon, 3 evening, 4 night (not saved; not in LAN/online)", cmdTimeSetting);
 		registerCommand("clouds", "clouds [on|off] - cloud shadows on terrain and models (not saved; none at night)", cmdClouds);
+		registerCommand("treefire", "treefire [0|1] | here | area <radius> | scorch <radius> | cap <fires> | spread 0|1 | thin <0..1> - the map's trees on fire: here = the tree nearest the middle of the screen; area / scorch = what a flame weapon / the nuke reports there; thin = the burnt canopy's share gone (not saved)", cmdTreeFire);
 		registerCommand("msaa", "msaa [0|2|4|8] - anti-aliasing level, by a device reset (not saved); TAA does not run with it", cmdMsaa);
 		registerCommand("resetcheck", "resetcheck - resets the device at the same settings and says whether it worked; started with DX9Track.txt beside the exe, DX9ResetCheck.txt lists what was still alive", cmdResetCheck);
 		registerCommand("grid", "grid [lift|width|alpha|radius <value>] - the placement grid Ctrl draws", cmdGrid);

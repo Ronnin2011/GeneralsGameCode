@@ -91,6 +91,7 @@ public:
 	virtual void setTeamColor( Int red, Int green, Int blue ) override;  ///< @todo superhack for demo, remove!!!
 	virtual void setTextureLOD( Int level ) override;
 	virtual void notifyTerrainObjectMoved(Object *obj) override;
+	virtual void notifyTerrainFire(const Coord3D *pos, Real radius, Bool scorch) override;	// Ronin @feature 25/10/2026 DX9: the trees on fire
 
 protected:
 

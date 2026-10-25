@@ -152,6 +152,8 @@ public:
 	UnsignedInt getRenderedObjectCount() const { return m_renderedObjectCount; }
 	void incrementRenderedObjectCount() { m_renderedObjectCount++; }
 	virtual void notifyTerrainObjectMoved(Object *obj) = 0;
+	// Ronin @feature 25/10/2026 DX9: flame damage (or the nuke's scorch) at pos - the map's trees have no object to take it.
+	virtual void notifyTerrainFire(const Coord3D *pos, Real radius, Bool scorch) {}
 
 	Bool skipCurrentIntroStage();
 

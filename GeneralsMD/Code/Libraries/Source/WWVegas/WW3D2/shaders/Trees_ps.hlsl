@@ -57,6 +57,8 @@ struct PS_INPUT
     float2 uv1      : TEXCOORD1;
     float3 worldPos : TEXCOORD2;   // shadow receiver
     float2 uv2      : TEXCOORD3;   // cloud projection
+    float2 burn     : TEXCOORD4;   // Ronin @feature 25/10/2026 DX9: x = charred (no burnt art), y = the canopy's share gone
+    float3 basePos  : TEXCOORD5;   // ... the unswayed position the thinning's noise is fixed to
 };
 
 // §29j.13n: COLOR1 carries the shadow term for next frame. Alpha test still uses COLOR0's alpha, so a
@@ -102,14 +104,66 @@ void pcf9(sampler2D smp, float2 uv, float depth, float texelUV,
     litMax = max(litMax, lit + CLIP_FLOOR);
 }
 
+// Ronin @feature 25/10/2026 DX9: the burnt canopy's holes. A hash without sine (exact in float), value noise on a 2-unit lattice,
+// made uniform by a cubic fitted to its own spread, so "share T gone" takes T (worst error 0.011). Lighting_Work.md, "TREES ON FIRE".
+float hash13(float3 p)
+{
+    p  = frac(p * 0.1031f);
+    p += dot(p, p.zyx + 31.32f);
+    return frac((p.x + p.y) * p.z);
+}
+
+float burnNoise(float3 p)
+{
+    float3 i = floor(p);
+    float3 f = frac(p);
+    f = f * f * (3.0f - 2.0f * f);
+    float x00 = lerp(hash13(i),                     hash13(i + float3(1, 0, 0)), f.x);
+    float x10 = lerp(hash13(i + float3(0, 1, 0)), hash13(i + float3(1, 1, 0)), f.x);
+    float x01 = lerp(hash13(i + float3(0, 0, 1)), hash13(i + float3(1, 0, 1)), f.x);
+    float x11 = lerp(hash13(i + float3(0, 1, 1)), hash13(i + float3(1, 1, 1)), f.x);
+    float d = lerp(lerp(x00, x10, f.y), lerp(x01, x11, f.y), f.z) - 0.5f;
+    return saturate(0.5f + 1.9137f * d - 4.4837f * d * d * d);
+}
+
+// Ronin @feature 25/10/2026 DX9: a charred tree's solid green-led texels: the weight that takes share T of the canopy once the soft
+// ones (0.402 of it) are gone; 0.581 = every green-led one (fitted over the 104 ZH tree textures).
+float solidWeight(float T)
+{
+    if (T < 0.45f) return lerp(0.0f,   0.439f, saturate((T - 0.402f) / 0.048f));
+    if (T < 0.50f) return lerp(0.439f, 0.901f, (T - 0.45f) / 0.05f);
+    if (T < 0.55f) return lerp(0.901f, 3.193f, (T - 0.50f) / 0.05f);
+    return lerp(3.193f, 20.0f, saturate((T - 0.55f) / 0.031f));
+}
+
 PS_OUTPUT main(PS_INPUT input)
 {
     PS_OUTPUT o;
     float4 texel = tex2D(g_DiffuseSampler, input.uv0);
 
+    // Ronin @feature 25/10/2026 DX9: a burnt tree's canopy thins, never its trunk. Soft texels (alpha < 1: leaves' edges, the artists
+    // took 70-81%) go first; solid ones only where green leads (60-80%); solid and not green - bark, 13-23% - never.
+    float keep = 1.0f;
+    [branch] if (input.burn.y > 0.0f)
+    {
+        // The class from the full-size texture: a mip blurs a trunk's alpha into a leaf's.
+        float4 full = tex2Dlod(g_DiffuseSampler, float4(input.uv0, 0.0f, 0.0f));
+        float  gone;
+        if (full.a < 0.995f)
+            gone = saturate(input.burn.y / ((input.burn.x > 0.5f) ? 0.402f : 0.376f));	// burnt art: 0.376 of it is soft
+        else
+            gone = (input.burn.x > 0.5f) ? saturate(solidWeight(input.burn.y) * smoothstep(0.0f, 0.07f, full.g - max(full.r, full.b))) : 0.0f;
+        keep = (gone >= 1.0f || burnNoise(input.basePos * 0.5f) < gone) ? 0.0f : 1.0f;
+    }
+
+    // Ronin @feature 25/10/2026 DX9: the char, the artists' own burnt-texture change (21 pairs, medians): luminance x0.47 in a
+    // warm grey. Applied to the texture, before the light. Lighting_Work.md, "TREES ON FIRE".
+    float  burntLum = dot(texel.rgb, float3(0.299f, 0.587f, 0.114f)) * 0.47f;
+    texel.rgb = lerp(texel.rgb, burntLum * float3(1.11f, 0.99f, 0.78f), input.burn.x);
+
     float4 color;
     color.rgb = texel.rgb * input.diffuse.rgb;   // stage 0 MODULATE
-    color.a   = texel.a   * input.diffuse.a;     // stage 0 MODULATE, feeds the 0x60 test
+    color.a   = texel.a   * input.diffuse.a * keep;   // stage 0 MODULATE, feeds the 0x60 test; 0 = a burnt-away texel
 
     // §29j.13n: lit and INVALID until the receiver runs. Alpha is the validity mask the next frame
     // reads — trees cover a fraction of the screen, so "no history here" must be distinguishable.

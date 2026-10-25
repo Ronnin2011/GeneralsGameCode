@@ -50,6 +50,7 @@
 #include "Common/Xfer.h"
 
 #include "GameClient/Drawable.h"
+#include "GameClient/GameClient.h"	// Ronin @feature 25/10/2026 DX9: the trees on fire
 #include "GameClient/FXList.h"
 #include "GameClient/InGameUI.h"
 #include "GameClient/ParticleSys.h"
@@ -1387,6 +1388,9 @@ void WeaponTemplate::dealDamageInternal(ObjectID sourceID, ObjectID victimID, co
 		{
 			iter = ThePartitionManager->iterateObjectsInRange(pos, radius, DAMAGE_RANGE_CALC_TYPE);
 			curVictim = iter->firstWithNumeric(&curVictimDistSqr);
+			// Ronin @feature 25/10/2026 DX9: the map's trees take flame damage too - they have no object to take it (R3DTreeFire).
+			if ((damageType == DAMAGE_FLAME || damageType == DAMAGE_PARTICLE_BEAM) && (affects & WEAPON_AFFECTS_NEUTRALS))
+				TheGameClient->notifyTerrainFire(pos, radius, FALSE);
 		}
 		else
 		{

@@ -60,6 +60,11 @@ public:
 
 	Bool m_doShadow;
 
+	// Ronin @feature 25/10/2026 DX9: the tree catches fire (R3DTreeFire); its burnt art when not the art's own _b / _d names.
+	Bool m_flammable;
+	AsciiString m_burntModelName;
+	AsciiString m_burntTextureName;
+
 	W3DTreeDrawModuleData();
 	virtual ~W3DTreeDrawModuleData() override;
 	static void buildFieldParse(MultiIniFieldParse& p);

@@ -54,6 +54,8 @@ struct VS_OUTPUT
     float2 uv1      : TEXCOORD1;  // shroud, sampled from the UNSWAYED position
     float3 worldPos : TEXCOORD2;  // SWAYED world position, for the shadow receiver
     float2 uv2      : TEXCOORD3;  // terrain cloud projection
+    float2 burn     : TEXCOORD4;  // Ronin @feature 25/10/2026 DX9: x = charred (no burnt art), y = the canopy's share gone
+    float3 basePos  : TEXCOORD5;  // ... the UNSWAYED position: the thinning's holes stay put on the tree
 };
 
 VS_OUTPUT main(VS_INPUT input)
@@ -64,6 +66,12 @@ VS_OUTPUT main(VS_INPUT input)
     float  height = input.pos.z - input.packed.z;
     int    idx    = (int)(input.packed.x + 0.5f);   // mova rounds to nearest
     float4 sway   = g_Sway[idx];
+    // Ronin @feature 25/10/2026 DX9: the sway index's fraction carries the tree's burn byte (R3DTreeFire::swaySlot): 128 = charred,
+    // the low 7 bits the canopy's share gone.
+    float code    = floor((input.packed.x - (float)idx) * 1020.0f + 0.5f);
+    float charred = (code > 127.5f) ? 1.0f : 0.0f;
+    o.burn    = float2(charred, (code - 128.0f * charred) * (1.0f / 127.0f));
+    o.basePos = input.pos.xyz;
 
     float4 swayed;
     swayed.xyz = input.pos.xyz + height * sway.xyz;

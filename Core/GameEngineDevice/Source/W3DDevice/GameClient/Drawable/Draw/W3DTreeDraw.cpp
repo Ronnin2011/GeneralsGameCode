@@ -58,6 +58,7 @@ m_maxOutwardMovement(1.0f)
 	m_killWhenToppled = true;
 	m_doTopple = false;
 	m_doShadow = false;
+	m_flammable = true;	// Ronin @feature 25/10/2026 DX9: the trees on fire
 	m_initialVelocityPercent = START_VELOCITY_PERCENT;
 	m_initialAccelPercent = START_ACCEL_PERCENT;
 	m_bounceVelocityPercent = VELOCITY_BOUNCE_PERCENT;
@@ -98,6 +99,10 @@ void W3DTreeDrawModuleData::buildFieldParse(MultiIniFieldParse& p)
     { "SinkDistance",	INI::parsePositiveNonZeroReal, nullptr, offsetof( W3DTreeDrawModuleData, m_sinkDistance ) },
 		{ "SinkTime", INI::parseDurationUnsignedInt, nullptr, offsetof(W3DTreeDrawModuleData, m_sinkFrames) },
 		{ "DoShadow",	INI::parseBool, nullptr, offsetof( W3DTreeDrawModuleData, m_doShadow ) },
+		// Ronin @feature 25/10/2026 DX9: the trees on fire (R3DTreeFire).
+		{ "Flammable",	INI::parseBool, nullptr, offsetof( W3DTreeDrawModuleData, m_flammable ) },
+		{ "BurntModelName",	INI::parseAsciiString, nullptr, offsetof( W3DTreeDrawModuleData, m_burntModelName ) },
+		{ "BurntTextureName",	INI::parseAsciiString, nullptr, offsetof( W3DTreeDrawModuleData, m_burntTextureName ) },
 		{ nullptr, nullptr, nullptr, 0 }
 	};
   p.add(dataFieldParse);

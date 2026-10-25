@@ -54,6 +54,7 @@
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/HeightMap.h"
+#include "W3DDevice/GameClient/R3DTreeFire.h"	// Ronin @feature 25/10/2026 DX9: the trees on fire
 #include "WW3D2/part_emt.h"
 #include "WW3D2/hanim.h"
 #include "WW3D2/htree.h"
@@ -218,6 +219,14 @@ void W3DGameClient::notifyTerrainObjectMoved(Object *obj)
 		TheTerrainRenderObject->unitMoved(obj);
 	}
 
+}
+
+//-------------------------------------------------------------------------------------------------
+/** Ronin @feature 25/10/2026 DX9: flame damage or the nuke's scorch: the map's trees burn (R3DTreeFire). */
+//-------------------------------------------------------------------------------------------------
+void W3DGameClient::notifyTerrainFire(const Coord3D *pos, Real radius, Bool scorch)
+{
+	R3DTreeFire::onFire(pos, radius, scorch);
 }
 
 

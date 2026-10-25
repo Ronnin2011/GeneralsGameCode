@@ -248,6 +248,8 @@ void FirestormDynamicGeometryInfoUpdate::doDamageScan()
 	// scan objects around us and do damage to objects we have "passed over"
 	if( boundingCircle )
 	{
+		// Ronin @feature 25/10/2026 DX9: the firestorm burns the map's trees too - they have no object to take it (R3DTreeFire).
+		TheGameClient->notifyTerrainFire(firestormPos, boundingCircle, FALSE);
 		ObjectIterator *iter = ThePartitionManager->iterateObjectsInRange( firestormPos,
 																																			 boundingCircle,
 																																			 FROM_BOUNDINGSPHERE_2D,
