@@ -2657,6 +2657,21 @@ static Bool shadeFromSunMap(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, 
 		dev->GetRenderState(D3DRS_COLORWRITEENABLE, &oldWrite);
 		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE);
 		dev->SetRenderState(D3DRS_ALPHATESTENABLE,  FALSE);
+		// Ronin @bugfix 25/10/2026 DX9: its own depth, cull, stencil, scissor and clip states - it ran on the last draw's, and from some
+		// angles those hid the whole quad (0.03 ms, every shade unwritten: the palace's bright/dim flip).
+		DWORD oldZ = 0, oldZWrite = 0, oldCull = 0, oldStencil = 0, oldScissor = 0, oldClip = 0;
+		dev->GetRenderState(D3DRS_ZENABLE,           &oldZ);
+		dev->GetRenderState(D3DRS_ZWRITEENABLE,      &oldZWrite);
+		dev->GetRenderState(D3DRS_CULLMODE,          &oldCull);
+		dev->GetRenderState(D3DRS_STENCILENABLE,     &oldStencil);
+		dev->GetRenderState(D3DRS_SCISSORTESTENABLE, &oldScissor);
+		dev->GetRenderState(D3DRS_CLIPPLANEENABLE,   &oldClip);
+		dev->SetRenderState(D3DRS_ZENABLE,           D3DZB_FALSE);
+		dev->SetRenderState(D3DRS_ZWRITEENABLE,      FALSE);
+		dev->SetRenderState(D3DRS_CULLMODE,          D3DCULL_NONE);
+		dev->SetRenderState(D3DRS_STENCILENABLE,     FALSE);
+		dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+		dev->SetRenderState(D3DRS_CLIPPLANEENABLE,   0);
 		dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE |
 													D3DCOLORWRITEENABLE_ALPHA);
 		DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::shadeFromSunMap");
@@ -2710,6 +2725,12 @@ static Bool shadeFromSunMap(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, 
 		dev->SetRenderState(D3DRS_ALPHABLENDENABLE, oldBlend);
 		dev->SetRenderState(D3DRS_ALPHATESTENABLE,  oldTest);
 		dev->SetRenderState(D3DRS_COLORWRITEENABLE, oldWrite);
+		dev->SetRenderState(D3DRS_ZENABLE,           oldZ);
+		dev->SetRenderState(D3DRS_ZWRITEENABLE,      oldZWrite);
+		dev->SetRenderState(D3DRS_CULLMODE,          oldCull);
+		dev->SetRenderState(D3DRS_STENCILENABLE,     oldStencil);
+		dev->SetRenderState(D3DRS_SCISSORTESTENABLE, oldScissor);
+		dev->SetRenderState(D3DRS_CLIPPLANEENABLE,   oldClip);
 	}
 	dev->SetRenderTarget(0, oldRT);
 	if (oldRT1 != NULL)
