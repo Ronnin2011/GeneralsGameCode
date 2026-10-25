@@ -485,17 +485,19 @@ struct GlowKind
 	float       reach;
 	Bool        hide;		// its art may go clear. Not `coplight`: 9 meshes draw it OPAQUE (hovercraft, battleship lamps)
 };
+// Ronin @bugfix 25/10/2026 DX9: a glow lights a halo, as the runway lamps' 20 - the street lamps' 40/30/25 painted pools over the
+// beams' own (a GLA night building carries 9 to 48 of them).
 static const GlowKind GLOW_TABLE[] =
 {
-	{ "coplight4",      { 1.00f, 0.99f, 0.54f }, 40.0f, TRUE },		// street and building lamps
-	{ "coplight3",      { 1.00f, 0.82f, 0.46f }, 30.0f, TRUE },
+	{ "coplight4",      { 1.00f, 0.99f, 0.54f }, 20.0f, TRUE },		// street and building lamps
+	{ "coplight3",      { 1.00f, 0.82f, 0.46f }, 20.0f, TRUE },
 	{ "coplight",       { 1.00f, 0.23f, 0.15f }, 20.0f, FALSE },
-	{ "spotlight",      { 1.00f, 0.99f, 0.46f }, 40.0f, TRUE },
+	{ "spotlight",      { 1.00f, 0.99f, 0.46f }, 20.0f, TRUE },
 	{ "pmredlight",     { 1.00f, 0.29f, 0.28f }, 18.0f, TRUE },		// red warning lamps
 	{ "pmrunwaylightr", { 1.00f, 0.42f, 0.42f }, 20.0f, TRUE },
 	{ "pmrunwaylight",  { 0.40f, 0.85f, 1.00f }, 20.0f, TRUE },
 	{ "pmgreenlight",   { 0.21f, 1.00f, 0.21f }, 15.0f, TRUE },
-	{ "atyellowlite2",  { 1.00f, 0.97f, 0.31f }, 25.0f, TRUE },
+	{ "atyellowlite2",  { 1.00f, 0.97f, 0.31f }, 20.0f, TRUE },
 };
 static const Int   GLOW_KINDS      = (Int)(sizeof(GLOW_TABLE) / sizeof(GLOW_TABLE[0]));
 static const float GLOW_MAX_RADIUS = 6.0f;		// a larger piece on these textures is a painted pool, not a lamp
