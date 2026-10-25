@@ -1532,6 +1532,9 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 			haveDiffuse  = false;
 			lastShaderBits = rec.shader.Get_Bits();
 			haveShader = true;
+			// Ronin @feature 25/10/2026 DX9: an added (ONE/ONE) pass leaves the sun-shade record alone - blended it would add its own
+			// to the first pass's.
+			dev->SetRenderState(D3DRS_COLORWRITEENABLE1, (rec.shader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE) ? 0 : 0x0000000F);
 		}
 
 		// Per-material: upload VS material constants (c7..c13). Lights ride the stream, so the lightEnv
@@ -1709,6 +1712,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	if (s_SunShadeEnd != nullptr) {
 		s_SunShadeEnd();
 	}
+	dev->SetRenderState(D3DRS_COLORWRITEENABLE1, 0x0000000F);	// Ronin @feature 25/10/2026 DX9: as an added pass may have left it
 
 	// --- Teardown ONCE -------------------------------------------------------------------------
 	dev->SetStreamSourceFreq(0, 1);

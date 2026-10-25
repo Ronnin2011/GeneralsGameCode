@@ -329,6 +329,30 @@ static bool Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(
 		Classify_Programmable_Rigid_Texture_Mapping(material));
 }
 
+// Ronin @feature 25/10/2026 DX9: the passes the programmable path takes whole - one, or the night models' two (opaque, then added
+// ONE/ONE), each one stage on one shader and material: both collect, and the flush keeps the added one behind its first.
+static bool Programmable_Rigid_Passes_Supported(MeshModelClass* model)
+{
+	const int passes = model->Get_Pass_Count();
+	if (passes == 1) {
+		return true;
+	}
+	if (passes != 2) {
+		return false;
+	}
+	for (int pass = 0; pass < 2; ++pass) {
+		if (model->Has_Shader_Array(pass) || model->Has_Material_Array(pass) || model->Has_Texture_Array(pass, 1) ||
+			model->Peek_Single_Texture(pass, 1) != nullptr ||
+			Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(model->Peek_Single_Material(pass))) {
+			return false;
+		}
+	}
+	const ShaderClass first = model->Get_Single_Shader(0);
+	const ShaderClass added = model->Get_Single_Shader(1);
+	return first.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE && first.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO &&
+		added.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE && added.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE;
+}
+
 
 // Ronin @feature 16/06/2026 DX9 Rigid parity: resolve the programmable texcoord-gen
 // state forwarded to Draw_Single_Rigid / Draw_Instanced. Phase 1 wires only AFFINE_UV
@@ -693,6 +717,28 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 			// inline Draw_Single_Rigid), exactly like the opaque canUseProgrammableFallback branch.
 			return RIGID_RENDER_PATH_SINGLE_RIGID;
 		}
+	}
+
+	// Ronin @feature 25/10/2026 DX9: the added (ONE/ONE) second pass of a mesh the gate let through whole - collected behind its
+	// opaque first pass (a non-opaque record keeps its place in the flush), never drawn inline before it.
+	if (allowProgrammableRigidFallback &&
+		renderer->Get_Pass() == 1 &&
+		!materialStateIsTransient &&
+		activeShader.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE &&
+		activeShader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE &&
+		((geometryFVF & D3DFVF_NORMAL) != 0) &&
+		(fvfTexCount == 1) &&
+		(stage1Texture == nullptr) &&
+		TheDX8InstanceManager.Collect_Single_Rigid(
+			renderer,
+			geometryFVF,
+			lightEnv,
+			material,
+			stage0Texture,
+			worldTransform,
+			singleRigidTexGen,
+			activeShader)) {
+		return RIGID_RENDER_PATH_SINGLE_RIGID;
 	}
 
 	if (canUseProgrammableFallback) {
@@ -2606,7 +2652,8 @@ void DX8TextureCategoryClass::Render()
 			(mesh->Get_Alpha_Override() == 1.0f || MeshClass::s_InShadowDepthPass) &&
 			Programmable_Rigid_Material_Override_Is_Supported(mesh, vmaterial) &&
 			mesh->Get_ObjectScale() == 1.0f &&
-			mesh->Peek_Model()->Get_Pass_Count() == 1 && // multi-pass: some passes may qualify for the deferred batch while others draw inline (FFP), splitting a mesh's passes across two draw times -> order breaks. (The flush preserves collection order; the risk is the deferred-vs-inline split, not the flush.)
+			// Ronin @feature 25/10/2026 DX9: one pass, or two the programmable path takes whole (Programmable_Rigid_Passes_Supported).
+			Programmable_Rigid_Passes_Supported(mesh->Peek_Model()) && // multi-pass: some passes may qualify for the deferred batch while others draw inline (FFP), splitting a mesh's passes across two draw times -> order breaks. (The flush preserves collection order; the risk is the deferred-vs-inline split, not the flush.)
 			!Material_Uses_Unsupported_Programmable_Rigid_Texture_Mapping(vmaterial);
 
 		/*
