@@ -27,6 +27,8 @@ float4 g_ViewPlane  : register(c1);         // x = view-plane min X, y = view-pl
 float4 g_Viewport   : register(c2);         // xy = 3D viewport min, zw = its size - both 0..1 of the render target
 float4 g_TexelSize  : register(c3);         // xy = 1 / target size, z = how much of the sun's shade the lights undo (0 = none known), w = how fast a lamp restores it
 float4 g_SceneLight : register(c4);         // rgb = 1 / the map's own light on open ground: frame * this ~ surface colour
+float4 g_FrameAmb      : register(c44);     // Ronin @feature 25/10/2026 DX9: the map's ambient, summed; w = 1: the frame's light by each pixel's facing
+float4 g_FrameLight[6] : register(c45);     // ... per light: the way to it (view space), then its diffuse
 float4 g_LightPos   : register(c5);         // xyz = the light in view space, w = 1 / (outer - inner)
 float4 g_LightDiff  : register(c6);         // rgb = diffuse * intensity, w = inner radius
 float4 g_LightAmb   : register(c7);         // rgb = ambient * intensity, w = the cone's edge: 1 / (cos inner - cos outer)
@@ -660,7 +662,17 @@ PS_OUTPUT main(float2 uv : TEXCOORD0)
             float  dayKeep   = lerp(g_DayShade.x, g_Jitter.w, sunLit);
             light  *= dayKeep;
             lightP *= dayKeep;
-            float3 surface = saturate(frame * g_SceneLight.rgb / shade);
+            // Ronin @bugfix 25/10/2026 DX9: the frame's light by this pixel's own facing, not open ground's - a wall turned from the moon
+            // got ambient only, and one lamp lit two walls of a corner differently.
+            float3 frameLight = g_SceneLight.rgb;
+            if (g_FrameAmb.w > 0.5f)
+            {
+                float3 lit = g_FrameAmb.rgb + g_FrameLight[1].rgb * saturate(dot(N, g_FrameLight[0].xyz))
+                                            + g_FrameLight[3].rgb * saturate(dot(N, g_FrameLight[2].xyz))
+                                            + g_FrameLight[5].rgb * saturate(dot(N, g_FrameLight[4].xyz));
+                frameLight = 1.0f / clamp(lit, 0.1f, 1.0f);
+            }
+            float3 surface = saturate(frame * frameLight / shade);
             float3 ceiling = max(frame, surface * g_Camera.w);
             // Ronin @feature 10/10/2026 DX9: and the lamp gives back what the sun's shadow took, in step with its own strength here: the
             // shadow was still to be seen at the pool's rim, where the lamp is weak (`lights sunerase`).

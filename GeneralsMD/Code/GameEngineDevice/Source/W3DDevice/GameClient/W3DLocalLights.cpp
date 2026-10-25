@@ -3890,6 +3890,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	const Bool haveVP = SUCCEEDED(dev->GetViewport(&oldVP));
 	float savedConstants[34 * 4];		// c0..c15, c16..c29: a light's shadow maps, c30..c32: the world's axes, c33: `dayshade`
 	const Bool haveConstants = SUCCEEDED(dev->GetPixelShaderConstantF(0, savedConstants, 34));
+	float savedFrameLights[7 * 4];		// Ronin @feature 25/10/2026 DX9: c44..c50, the map's lights by facing
+	const Bool haveFrameLights = SUCCEEDED(dev->GetPixelShaderConstantF(44, savedFrameLights, 7));
 
 	// Ronin @feature 11/10/2026 DX9: lamp shadow maps, stage B1: into their own target, before the pass sets anything of its own.
 	drawLampMaps(dev);
@@ -3947,6 +3949,35 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		factor[0], factor[1], factor[2], floorLum
 	};
 	dev->SetPixelShaderConstantF(0, shared, 5);
+	// Ronin @bugfix 25/10/2026 DX9: the map's lights for the frame's light by each pixel's facing (c44..c50): ambient summed, then per
+	// light the way to it in view space and its diffuse. Off with `boost`, its own factor.
+	{
+		float frameLights[7 * 4];
+		memset(frameLights, 0, sizeof(frameLights));
+		frameLights[3] = (s_boost <= 0.0f && TheGlobalData != NULL) ? 1.0f : 0.0f;
+		if (TheGlobalData != NULL)
+		{
+			const Matrix3D &viewTM = camera.Get_Transform();
+			for (Int i = 0; i < MAX_GLOBAL_LIGHTS && i < 3; ++i)
+			{
+				const GlobalData::TerrainLighting &tl = TheGlobalData->m_terrainLighting[TheGlobalData->m_timeOfDay][i];
+				frameLights[0] += tl.ambient.red;
+				frameLights[1] += tl.ambient.green;
+				frameLights[2] += tl.ambient.blue;
+				Vector3 toLight(-tl.lightPos.x, -tl.lightPos.y, -tl.lightPos.z), toLightView;
+				const float len = toLight.Length();
+				if (len > 0.0001f)
+					toLight /= len;
+				Matrix3D::Inverse_Rotate_Vector(viewTM, toLight, &toLightView);
+				float *dir = frameLights + 4 + i * 8, *diff = dir + 4;
+				dir[0] = toLightView.X; dir[1] = toLightView.Y; dir[2] = toLightView.Z;
+				diff[0] = (len > 0.0001f) ? tl.diffuse.red : 0.0f;
+				diff[1] = (len > 0.0001f) ? tl.diffuse.green : 0.0f;
+				diff[2] = (len > 0.0001f) ? tl.diffuse.blue : 0.0f;
+			}
+		}
+		dev->SetPixelShaderConstantF(44, frameLights, 7);
+	}
 	// Ronin @bugfix 11/10/2026 DX9: TAA shifts the frame by part of a pixel, another each frame (camera.cpp). Rebuilt from the depth as
 	// if it had not, a point is up to 0.15 units off its surface: the pools of lamps close to what they light flickered in shadow.
 	float jitterX = 0.0f, jitterY = 0.0f;
@@ -4217,6 +4248,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	dev->SetRenderState(D3DRS_DESTBLEND,        destBlend);
 	if (haveConstants)
 		dev->SetPixelShaderConstantF(0, savedConstants, 34);
+	if (haveFrameLights)
+		dev->SetPixelShaderConstantF(44, savedFrameLights, 7);
 
 	dev->SetVertexShader(NULL);
 	dev->SetPixelShader(NULL);
