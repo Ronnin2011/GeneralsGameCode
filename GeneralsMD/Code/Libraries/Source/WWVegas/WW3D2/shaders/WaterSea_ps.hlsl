@@ -54,7 +54,7 @@ float4 g_CapTrail           : register(c52);	// xy: the two trails' weights, z: 
 float4 g_ShroudMap          : register(c53);	// xy: world xy -> shroud uv scale (0 = no shroud here), zw: the offset added first
 // Ronin @feature 03/10/2026 DX9: phase 5 - wakes (W3DWater.cpp renderWakes, WaterWake_ps.hlsl).
 float4 g_WakeMap            : register(c54);	// world xy -> wake uv: xy scale, zw offset
-float4 g_WakeCfg            : register(c55);	// x: foam (`wakefoam`), y: its slope -> the normal, z: its height -> crest units (all 0 = none)
+float4 g_WakeCfg            : register(c55);	// x: foam (`wakefoam`), y: its slope -> the normal, z: its height -> crest units, w: `waketint` (all 0 = none)
 // Ronin @feature 08/10/2026 DX9: `mirrorsoft` (R3DWaterSea.h). c62: WaterWake_ps holds c56-c61.
 float4 g_MirrorSoft         : register(c62);	// xy: the extra taps' offset in mirror uv, z: 1 = on
 
@@ -143,6 +143,7 @@ PSOutput main(PSInput input)
 	// Ronin @feature 03/10/2026 DX9: phase 5 - x: the swell's height in units of the default sea's total (crest tint,
 	// whitecaps); yz: the same a moment earlier, twice - where a crest was, for the whitecaps' trail.
 	float3 hSwell = float3(0.0f, 0.0f, 0.0f);
+	float  hWake  = 0.0f;	// Ronin @bugfix 25/10/2026 DX9: the wakes' height, the same units - kept apart for `wakefoam`
 #ifndef WATER_RIVER		// Ronin @feature 02/10/2026 DX9: phase 4 - rivers never swell
 	if (g_SwellCfg.y > 0.5f)
 	{
@@ -160,7 +161,7 @@ PSOutput main(PSInput input)
 	// counts as a crest's (tint, whitecaps), their foam joins the open water's below.
 	const float4 wake = tex2D(s_Wake, input.worldPos.xy * g_WakeMap.xy + g_WakeMap.zw);
 	nSwell.xy -= wake.xy * g_WakeCfg.y;
-	hSwell.x  += wake.w * g_WakeCfg.z;
+	hWake      = wake.w * g_WakeCfg.z;
 #endif
 	const float3 n = normalize(float3(nFine.xy + nSwell.xy, nFine.z * nSwell.z));
 
@@ -215,7 +216,7 @@ PSOutput main(PSInput input)
 	const float3 detail = lerp(float3(1.0f, 1.0f, 1.0f), water.rgb, g_FoamCfg.z);
 	// Ronin @feature 03/10/2026 DX9: phase 5 - crests lighter and greener, troughs darker (`swelltint`). From an RTS camera a
 	// wave's slope barely changes the light; its height reads. Per pixel, not from the grid: the cell changes with zoom.
-	const float  hTint  = hSwell.x * g_CapTrail.z;
+	const float  hTint  = clamp(hSwell.x * g_CapTrail.z + hWake * g_WakeCfg.w, -0.45f, 0.45f);	// Ronin @bugfix 25/10/2026 DX9: the swell's crests' reach - tall wakes washed it pale
 	const float3 crest  = 1.0f + hTint + max(hTint, 0.0f) * float3(0.0f, 0.35f, 0.15f);
 	const float3 body   = (depthOn ? detail * lerp(1.0f, g_DepthCfg.y, absorb) : water.rgb) * shade * crest;
 
@@ -385,7 +386,8 @@ PSOutput main(PSInput input)
 		float2 fr = frothDissolve(froth, max(seaBand * seaSurge * g_SeaFoam.x * 0.45f * clump, saturate(wake.z) * g_WakeCfg.x));
 		// Ronin @feature 03/10/2026 DX9: phase 5 - whitecaps where the swell stands highest (`whitecapat`), fainter where it stood
 		// a moment ago. The ripple maps fray the edge, only where the water is raised.
-		const float3 capH = hSwell + (nA.x + nB.y) * g_CapCfg.w * saturate(hSwell * 3.0f);
+		const float3 capIn = hSwell + float3(hWake * saturate(g_WakeCfg.x), 0.0f, 0.0f);	// Ronin @bugfix 25/10/2026 DX9: a wake's caps by `wakefoam`
+		const float3 capH = capIn + (nA.x + nB.y) * g_CapCfg.w * saturate(capIn * 3.0f);
 		float3 capQ = saturate((capH - g_CapCfg.x) * g_CapCfg.y);
 		capQ = capQ * capQ * (3.0f - 2.0f * capQ);
 		const float  cap  = max(capQ.x, max(capQ.y * g_CapTrail.x, capQ.z * g_CapTrail.y));

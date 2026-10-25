@@ -34,6 +34,8 @@ struct WaterSeaGlobal
 	Real wakeFoam;		///< the foam's share of it
 	Real wakeHeight;	///< the wake's broad swell, x its own height - the mesh and its shading together; 0 = none
 	Real wakeShade;		///< Ronin @feature 04/10/2026 DX9: how far the wake's slopes tilt the lit normal, x the true slope (the swell's is 2)
+	Real wakeSharp;		///< Ronin @feature 25/10/2026 DX9: the wake's crests: 0 = round, 1 = pointed (as `swellsharp` for the swell)
+	Real wakeTint;		///< Ronin @feature 25/10/2026 DX9: wake crests lighter, its hollow darker (as `swelltint` for the swell)
 	// Ronin @feature 04/10/2026 DX9: what a hull does to the water without a wake, as RA3's do.
 	Real wakeRings;		///< the rings round a unit at rest; x their height, 0 = off
 	Real wakeSurge;		///< the wave that runs on ahead of a unit that stops; x its height, 0 = off
@@ -110,11 +112,13 @@ inline const WaterSeaGlobal TheWaterSeaGlobalDefault =
 	0.5f,		// mirrorSoft - calms the crawl of cut-out edges without the smear of higher values (Ronin, 08/10)
 	1.0f,		// ride
 	1.0f,		// wakes
-	1.0f,		// wakeFoam
-	3.0f,		// wakeHeight
+	0.8f,		// wakeFoam
+	4.0f,		// wakeHeight
 	1.0f,		// wakeShade - as the swell's normal boost
-	1.0f,		// wakeRings
-	1.0f,		// wakeSurge
+	0.5f,		// wakeSharp
+	0.45f,		// wakeTint - what `swelltint` gave wakes until it had its own
+	2.0f,		// wakeRings
+	3.0f,		// wakeSurge
 	FALSE,		// oldWakes - the water's wake replaces them; `water oldwakes 1` brings them back (Ronin, 03/10)
 	WATER_KIND_SEA,	// edit
 };
@@ -295,6 +299,8 @@ inline const WaterKnobInfo TheWaterGlobalKnobs[] =
 	{ "wakefoam",       WATER_KNOB_REAL, offsetof(WaterSeaGlobal, wakeFoam), 0.0f, 4.0f, TRUE },
 	{ "wakeheight",     WATER_KNOB_REAL, offsetof(WaterSeaGlobal, wakeHeight), 0.0f, 8.0f, TRUE },
 	{ "wakeshade",      WATER_KNOB_REAL, offsetof(WaterSeaGlobal, wakeShade), 0.0f, 12.0f, TRUE },
+	{ "wakesharp",      WATER_KNOB_REAL, offsetof(WaterSeaGlobal, wakeSharp), 0.0f, 1.0f, TRUE },
+	{ "waketint",       WATER_KNOB_REAL, offsetof(WaterSeaGlobal, wakeTint), 0.0f, 1.0f, TRUE },
 	{ "wakerings",      WATER_KNOB_REAL, offsetof(WaterSeaGlobal, wakeRings), 0.0f, 4.0f, TRUE },
 	{ "wakesurge",      WATER_KNOB_REAL, offsetof(WaterSeaGlobal, wakeSurge), 0.0f, 4.0f, TRUE },
 	{ "oldwakes",       WATER_KNOB_BOOL, offsetof(WaterSeaGlobal, oldWakes), 0.0f, 1.0f, TRUE },

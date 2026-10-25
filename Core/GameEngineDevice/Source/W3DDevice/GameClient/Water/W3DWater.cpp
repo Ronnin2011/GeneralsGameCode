@@ -4456,6 +4456,8 @@ void WaterRenderObjClass::renderWakes()
 		dev->SetPixelShaderConstantF(57, wash, 1);
 		dev->SetPixelShaderConstantF(58, feather, 1);
 		dev->SetPixelShaderConstantF(59, ringCfg, 1);
+		const float shape[4]   = { 2.0f - TheWaterSeaGlobal.wakeSharp, 0.0f, 0.0f, 0.0f };	// Ronin @feature 25/10/2026 DX9: `wakesharp`
+		dev->SetPixelShaderConstantF(63, shape, 1);
 
 		// Ronin @bugfix 04/10/2026 DX9: turns. Two strips, left and right of the track; each stops short of where its cross-
 		// section meets a neighbour's, or the ribbon folds over itself inside a tight turn (Water_Work.md §6).
@@ -4733,7 +4735,9 @@ void WaterRenderObjClass::drawTrapezoidWater(Vector3 points[4])
 	const Real uLen = 0.5f * (uVec1.Length() + uVec2.Length());
 	const Real vLen = 0.5f * (vVec1.Length() + vVec2.Length());
 	m_swellCellNow = 0.0f;
-	if (useReflection() && WaterSea_SwellActive(standingKind, m_heightVTF) && uLen > 0.0f && vLen > 0.0f)
+	// Ronin @feature 25/10/2026 DX9: dense for a live wake too - it raises the water with the swell off (renderWakes ran first)
+	if (useReflection() && WaterSea_MeshActive(standingKind, m_heightVTF, (m_wakeLive && m_wakeFormat == 2) ? TRUE : FALSE) &&
+		uLen > 0.0f && vLen > 0.0f)
 	{
 		// the part of this polygon in view, as a range along each axis, with room for the waves' sideways travel
 		const Real    swellCell = WaterSea_Profile(standingKind).swellCell;

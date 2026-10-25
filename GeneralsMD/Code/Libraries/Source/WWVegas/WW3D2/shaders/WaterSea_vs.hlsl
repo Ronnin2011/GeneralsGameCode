@@ -12,7 +12,7 @@ float4 g_NormalBRot  : register(c10);	// layer B: world xy -> uv rows (x0, y0, x
 float4 g_NormalBOff  : register(c11);	// layer B: xy scroll offset
 // Ronin @feature 29/09/2026 DX9: phase 2 - Gerstner swell (R3DWaterSea.h), per wave two rows.
 float4 g_Wave[8]     : register(c12);	// [2i] (k dx, k dy, omega, height), [2i+1] (travel dx, travel dy, 0, 0)
-float4 g_SwellCfg    : register(c20);	// x: seconds, y: on, z: 1 / `swelldepth` (world units), w: world z per sampled height
+float4 g_SwellCfg    : register(c20);	// x: seconds, y: the mesh moves (the swell, or wakes - 25/10/2026), z: 1 / `swelldepth`, w: world z per sampled height
 float4 g_HeightUV    : register(c21);	// world xy -> height uv: xy scale, zw offset
 // Ronin @feature 02/10/2026 DX9: phase 4 - the river's flow map (R3DWaterSea.h).
 float4 g_Flow        : register(c22);	// x: the current, world units per second; y: one flow cycle, seconds;

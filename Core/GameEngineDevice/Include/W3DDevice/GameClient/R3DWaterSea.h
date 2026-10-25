@@ -325,6 +325,11 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 	// Ronin @feature 29/09/2026 DX9: phase 2 - Gerstner swell, vertex c12-c21, pixel c25-c33. The VS moves the grid by the
 	// waves at least 4 cells long, ramped in over `swellDepth` from the waterline; the PS shades with all of them.
 	const Bool swellOn = (in.swell && t.swell && in.heightsVTF && in.heights != nullptr) ? TRUE : FALSE;
+	// Ronin @feature 25/10/2026 DX9: wakes raise the water with the swell off too: the VS's branch runs for either (`meshOn`),
+	// the swell's waves at 0 height when it is off. PS c54 / c55 and s10; VS c23 / c24 and its sampler 1.
+	const Bool wakeOn   = (in.wake != nullptr && g.wakes > 0.0f) ? TRUE : FALSE;
+	const Bool wakeMesh = (wakeOn && in.wakeVTF && in.swell && in.heightsVTF && in.heights != nullptr) ? TRUE : FALSE;
+	const Bool meshOn   = (swellOn || wakeMesh) ? TRUE : FALSE;
 	float vsWave[2 * WATERSEA_WAVE_COUNT][4];
 	float psWave[2 * WATERSEA_WAVE_COUNT][4];
 	// Ronin @bugfix 03/10/2026 DX9: the grid's real cell decides which waves it can carry - it is coarser than `swellcell`
@@ -344,8 +349,8 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 		const Real omega  = wave[w].omega;
 		const Real a      = wave[w].a;
 		const Real qa     = wave[w].qa;
-		const Real aVS    = wave[w].moves ? a : 0.0f;
-		const Real qaVS   = wave[w].moves ? qa : 0.0f;
+		const Real aVS    = (swellOn && wave[w].moves) ? a : 0.0f;
+		const Real qaVS   = (swellOn && wave[w].moves) ? qa : 0.0f;
 		const Real share  = a * shareUnit;	// the PS sums these x sin: the height, for the crest tint and the whitecaps
 		// the whitecap trails: the same sum a moment earlier, sin(th + phase) = sin cos(phase) + cos sin(phase). The phase is by
 		// the wave's own speed, not `swellspeed`: a trail's length stays.
@@ -365,7 +370,7 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 			psWave[2 * w][c] = ps0[c];  psWave[2 * w + 1][c] = ps1[c];
 		}
 	}
-	const float swellVS[4]  = { in.clockSeconds, swellOn ? 1.0f : 0.0f, (t.swellDepth > 0.0f) ? 1.0f / t.swellDepth : 0.0f, in.heightUnit };
+	const float swellVS[4]  = { in.clockSeconds, meshOn ? 1.0f : 0.0f, (t.swellDepth > 0.0f) ? 1.0f / t.swellDepth : 0.0f, in.heightUnit };
 	// Ronin @bugfix 01/10/2026 DX9: zw - a lake's own soft shore, vanilla's slope 1 / (TransparentWaterDepth x MinOpacity) and
 	// its cap MinOpacity (BaseHeightMap updateShorelineTile, initDestAlphaLUT); slope 0 = soft edge off, the source alpha.
 	const Real lakeSpan  = TheWaterTransparency->m_transparentWaterDepth * minOpacity;
@@ -394,15 +399,11 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 	dev->SetSamplerState(9, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
 	dev->SetSamplerState(9, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
 	dev->SetSamplerState(9, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-	// Ronin @feature 03/10/2026 DX9: phase 5 - wakes. PS c54 / c55 and s10; VS c23 / c24 and its sampler 1 (set with the
-	// heights' below). No texture: every strength 0, so whatever an unbound sampler returns is not used.
-	const Bool  wakeOn      = (in.wake != nullptr && g.wakes > 0.0f) ? TRUE : FALSE;
-	// Ronin @bugfix 04/10/2026 DX9: `wakeheight` scales the swell where it is drawn (renderWakes), height and slope
-	// together: here it moved the vertices alone and the shading stayed at height 1.
-	const Bool  wakeMesh    = (wakeOn && in.wakeVTF && swellOn) ? TRUE : FALSE;
+	// Ronin @feature 03/10/2026 DX9: phase 5 - wakes (`wakeOn`, `wakeMesh` above). No texture: every strength 0, so whatever
+	// an unbound sampler returns is not used. `wakeheight` is in the texture (renderWakes), height and slope together.
 	const float wakeMap[4]  = { in.wakeScale, in.wakeScale, in.wakeOffsetU, in.wakeOffsetV };
 	const float wakePS[4]   = { wakeOn ? g.wakes * g.wakeFoam : 0.0f, wakeOn ? g.wakes * g.wakeShade : 0.0f,
-	                            wakeOn ? g.wakes / WATERSEA_SWELL_REF : 0.0f, 0.0f };
+	                            wakeOn ? g.wakes / WATERSEA_SWELL_REF : 0.0f, wakeOn ? g.wakeTint : 0.0f };	// w: `waketint` (25/10/2026)
 	const float wakeVS[4]   = { wakeMesh ? g.wakes : 0.0f, 0.0f, 0.0f, 0.0f };
 	dev->SetPixelShaderConstantF(54, wakeMap, 1);
 	dev->SetPixelShaderConstantF(55, wakePS, 1);
@@ -417,7 +418,7 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 
 	// the vertex shader's heights: vs_3_0 s0 is D3DVERTEXTEXTURESAMPLER0, outside the wrapper's cached stages. Point sampled -
 	// the one filter every vertex-texture format takes.
-	dev->SetTexture(D3DVERTEXTEXTURESAMPLER0, swellOn ? in.heights : nullptr);
+	dev->SetTexture(D3DVERTEXTEXTURESAMPLER0, meshOn ? in.heights : nullptr);	// Ronin @feature 25/10/2026 DX9: swell or wakes
 	dev->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 	dev->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 	dev->SetSamplerState(D3DVERTEXTEXTURESAMPLER0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
@@ -436,6 +437,13 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 inline Bool WaterSea_SwellActive(Int kind, Bool heightsVTF)
 {
 	return (WaterSea_Profile(kind).swell && heightsVTF) ? TRUE : FALSE;
+}
+
+// Ronin @feature 25/10/2026 DX9: the dense grid - for the swell, or while a wake is live (wakes raise the water without the
+// swell). `wakeLive`: a wake texture this frame that the VS can read.
+inline Bool WaterSea_MeshActive(Int kind, Bool heightsVTF, Bool wakeLive)
+{
+	return (heightsVTF && (WaterSea_Profile(kind).swell || (wakeLive && TheWaterSeaGlobal.wakes > 0.0f))) ? TRUE : FALSE;
 }
 
 // Ronin @feature 29/09/2026 DX9: the flat water's soft shore comes from the shader's depth, not destination alpha, when

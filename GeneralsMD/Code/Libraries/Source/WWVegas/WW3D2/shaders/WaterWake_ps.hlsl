@@ -12,6 +12,8 @@ float4 g_Ring    : register(c59);	// x: the foam on a ring that runs ahead only 
 // Ronin @feature 04/10/2026 DX9: the rings round a hull at rest, per draw: three waves' phases now, the long one's height.
 float4 g_Idle    : register(c60);	// xyz: the two ripples' and the long wave's phase, w: the long wave's height
 float4 g_IdleK   : register(c61);	// xyz: their 2 pi / length
+// Ronin @feature 25/10/2026 DX9: c63 - the water's PS holds c10-c62.
+float4 g_Shape   : register(c63);	// x: the swell's profile exponent, 2 - `wakesharp` (2 round, 1 pointed)
 
 struct PSInput
 {
@@ -83,8 +85,10 @@ float4 main(PSInput input) : COLOR0
 	// Ronin @bugfix 04/10/2026 DX9: the broad swell is ALL of the height the mesh takes, and smooth: wavelets and the
 	// strip's trough were finer than the 10-unit grid can carry, and the mesh came out in sharp facets (py: mesh error).
 	const float xb     = (ad - w) / g_Arm.z;
-	const float hBroad = exp(-xb * xb) * g_Arm.w;
-	const float dBroad = -2.0f * xb / g_Arm.z * hBroad;
+	const float axb    = max(abs(xb), 1.0e-4f);
+	const float pb     = pow(axb, g_Shape.x);	// Ronin @feature 25/10/2026 DX9: exp(-|x|^p) - p 2 the round gaussian, 1 pointed (`wakesharp`)
+	const float hBroad = exp(-pb) * g_Arm.w;
+	const float dBroad = -g_Shape.x * pb / axb * sign(xb) / g_Arm.z * hBroad;	// d/dx: -p |x|^(p-1) sign(x)
 
 	// Ronin @feature 04/10/2026 DX9: the hollow a moving hull leaves: along the track from amidships aft, between the two
 	// arms. From an RTS camera height reads as light against dark, not as a bump.

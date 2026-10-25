@@ -405,6 +405,14 @@ namespace
 			waterCell(col, name, WaterSea_GetKnob(&t, *k));
 	}
 
+	// Ronin @feature 25/10/2026 DX9: the same for an all-water knob (the WAKES column).
+	void waterGlobalCell(PanelColumn &col, const WaterSeaGlobal &g, const char *name)
+	{
+		const WaterKnobInfo *k = WaterSea_FindKnob(TheWaterGlobalKnobs, TheWaterGlobalKnobCount, name);
+		if (k != nullptr)
+			waterCell(col, name, WaterSea_GetKnob(&g, *k));
+	}
+
 	// Ronin @feature 19/10/2026 DX9: how wide each column must be - at least `width` already holds, so tables printed one under
 	// another can share their widths and line up.
 	void columnWidths(const PanelColumn *cols, Int colCount, Int *width)
@@ -558,14 +566,10 @@ namespace
 		state.format("            mirror=%d  mirrorres=%d  mirrorclip=%d  mirrorfar=%.3g  mirrorsoft=%.3g  ride=%.3g", g.mirror ? 1 : 0,
 			g.mirrorRes, g.mirrorClip ? 1 : 0, g.mirrorFar, g.mirrorSoft, g.ride);
 		printAscii(state, FALSE);
-		// Ronin @feature 03/10/2026 DX9: phase 5 - wakes
-		state.format("            wakes=%.3g  wakefoam=%.3g  wakeheight=%.3g  wakeshade=%.3g  wakerings=%.3g  wakesurge=%.3g  oldwakes=%d",
-			g.wakes, g.wakeFoam, g.wakeHeight, g.wakeShade, g.wakeRings, g.wakeSurge, g.oldWakes ? 1 : 0);
-		printAscii(state, FALSE);
 		state.format("profile %s  (`water profile sea|lake|river` picks the one these edit)", kindNames[g.edit]);
 		printAscii(state, FALSE, GameMakeColor(255, 220, 120, 255));
 
-		PanelColumn cols[6] = {};
+		PanelColumn cols[7] = {};
 		cols[0].title = "REFLECTION";
 		waterKnobCell(cols[0], t, "refl");
 		waterCell(cols[0], "fresnel", t.fresnel ? 1.0f : 0.0f);
@@ -616,7 +620,18 @@ namespace
 		waterKnobCell(cols[5], t, "swellcell");
 		waterKnobCell(cols[5], t, "swellsharp");
 		waterKnobCell(cols[5], t, "swelltint");
-		printColumns(cols, 6);
+		// Ronin @feature 25/10/2026 DX9: wakes beside the swell - all water's knobs, not the profile's (they were a line above)
+		cols[6].title = "WAKES (all water)";
+		waterGlobalCell(cols[6], g, "wakes");
+		waterGlobalCell(cols[6], g, "wakefoam");
+		waterGlobalCell(cols[6], g, "wakeheight");
+		waterGlobalCell(cols[6], g, "wakesharp");
+		waterGlobalCell(cols[6], g, "waketint");
+		waterGlobalCell(cols[6], g, "wakeshade");
+		waterGlobalCell(cols[6], g, "wakerings");
+		waterGlobalCell(cols[6], g, "wakesurge");
+		waterCell(cols[6], "oldwakes", g.oldWakes ? 1.0f : 0.0f);
+		printColumns(cols, 7);
 	}
 
 	// Ronin @feature 28/09/2026 DX9: [PERF] run mean. `perf reset` starts it over, so a runtime switch gets its own mean
