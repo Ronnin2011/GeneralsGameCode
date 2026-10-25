@@ -42,7 +42,7 @@
 #include <cstring>
 
 // Ronin @feature 09/10/2026 DX9: more lights than this in one frame are counted (live) and left undrawn.
-static const Int MAX_LIGHTS_DRAWN = 256;
+static const Int MAX_LIGHTS_DRAWN = 512;		// Ronin @feature 25/10/2026 DX9: 256 -> 512, a joined string's bulbs draw a corona each
 
 static IDirect3DVertexShader9	*s_quadVS        = NULL;
 static IDirect3DPixelShader9	*s_lightPS       = NULL;
@@ -243,8 +243,8 @@ static const Int   MAX_FIXTURE_VERTS  = 1024;
 static const Int   MAX_FIXTURE_QUADS  = 256;
 static const Int   MAX_FRAME_BEAMS    = 192;
 static const Int   MAX_FIXTURE_GLOWS  = 4096;
-static const Int   MAX_GLOWS_A_MESH   = 24;
-static const Int   MAX_FRAME_GLOWS    = 192;
+static const Int   MAX_GLOWS_A_MESH   = 64;		// Ronin @feature 25/10/2026 DX9: 24 -> 64 - the palace has 48 lamps, 40 of them bulbs
+static const Int   MAX_FRAME_GLOWS    = 384;
 static const Int   MAX_FIXTURE_POOLS  = 2048;
 static const Int   MAX_POOLS_A_MESH   = 40;
 static const Int   MAX_FRAME_POOLS    = 128;
@@ -287,6 +287,8 @@ struct FixtureGlow
 	Vector3 centre;			// in the mesh's own space
 	float   radius;			// of the art's glow
 	Int     kind;			// GLOW_TABLE
+	float   spread;			// Ronin @feature 25/10/2026 DX9: > 0 = a joined string's light, this far round its centre; no corona
+	float   power;			// ... its light, in lamps (1 = a lone lamp); 0 = a bulb of a joined string: its corona only
 };
 static FixtureGlow	s_fixGlows[MAX_FIXTURE_GLOWS];
 static Int			s_fixGlowCount  = 0;
@@ -310,6 +312,8 @@ struct FrameGlow
 	float       scale;		// its object's
 	float       radius;		// of the art's glow, world
 	Int         kind;
+	float       spread;		// Ronin @feature 25/10/2026 DX9: FixtureGlow's, world
+	float       power;
 };
 static FrameGlow	s_frameGlows[MAX_FRAME_GLOWS];
 static Int			s_frameGlowCount = 0;
@@ -341,6 +345,8 @@ static Bool			s_rayTurn   = FALSE;	// `lights rayturn`: the rays turn with the w
 static Bool			s_beamsOn   = FALSE;	// this frame the beams are lights (decided in beginFrame)
 static float		s_glows     = 0.5f;		// `lights glows`: the lamp glows as point lights, their strength; 0 = none
 static float		s_glowReach = 0.8f;		// `lights glowreach`: multiplies GLOW_TABLE's reach
+static float		s_glowJoin  = 2.5f;		// Ronin @feature 25/10/2026 DX9: `lights glowjoin`: lamps this near each other light as one
+static Bool			s_fixReread = FALSE;	// ... it changed: every model's lamps are read again
 static Bool			s_glowsOn   = FALSE;
 static float		s_coronas   = 1.5f;		// `lights coronas`: the lamp's own glow drawn by the shader; 0 = the art's glow textures
 static float		s_coronaSize = 1.0f;	// `lights coronasize`: its radius, in the art glow's own
@@ -501,6 +507,7 @@ static const GlowKind GLOW_TABLE[] =
 };
 static const Int   GLOW_KINDS      = (Int)(sizeof(GLOW_TABLE) / sizeof(GLOW_TABLE[0]));
 static const float GLOW_MAX_RADIUS = 6.0f;		// a larger piece on these textures is a painted pool, not a lamp
+static const float GLOW_RADIUS_USUAL = 2.0f;	// Ronin @feature 25/10/2026 DX9: the most common lamp's: 1727 of the art's 3956 (glow_survey.py)
 
 static Int glowTextureKind(TextureClass *tex)
 {
@@ -596,6 +603,12 @@ static void readGlows(MeshModelClass *mdl, FixtureModel *slot, GlowPolys &gp)
 		parent[b] = (UnsignedShort)a;
 		parent[fixRoot(parent, polys[i].K)] = (UnsignedShort)a;
 	}
+	// Ronin @feature 25/10/2026 DX9: every lamp first; then lamps within `glowjoin` of each other light as one, each keeping its corona
+	// (the palace's 40 bulbs, 1.9 apart, were 24 street lamps' light and the cap hid the rest).
+	static const Int MAX_MESH_LAMPS = MAX_FIXTURE_VERTS / 3;
+	static FixtureGlow   lamps[MAX_MESH_LAMPS];
+	static UnsignedShort joinTo[MAX_MESH_LAMPS];
+	Int lampCount = 0;
 	for (Int r = 0; r < nv; ++r)
 	{
 		if (kind[r] < 0 || fixRoot(parent, r) != r)
@@ -624,14 +637,16 @@ static void readGlows(MeshModelClass *mdl, FixtureModel *slot, GlowPolys &gp)
 				fp.centre = centre;
 				fp.radius = radius;
 				fp.kind   = kind[r];
+				fp.spread = 0.0f;
+				fp.power  = 1.0f;
 				++slot->poolCount;
 			}
 			continue;
 		}
 		Bool merged = FALSE;
-		for (Int g = 0; g < slot->glowCount && !merged; ++g)
+		for (Int g = 0; g < lampCount && !merged; ++g)
 		{
-			FixtureGlow &fg = s_fixGlows[slot->firstGlow + g];
+			FixtureGlow &fg = lamps[g];
 			const float reach = (radius > fg.radius) ? radius : fg.radius;
 			if ((centre - fg.centre).Length() <= 0.75f * reach)
 			{
@@ -639,16 +654,82 @@ static void readGlows(MeshModelClass *mdl, FixtureModel *slot, GlowPolys &gp)
 				merged = TRUE;
 			}
 		}
-		if (!merged && slot->glowCount < MAX_GLOWS_A_MESH)
+		if (!merged && lampCount < MAX_MESH_LAMPS)
 		{
-			FixtureGlow &fg = s_fixGlows[s_fixGlowCount++];
+			FixtureGlow &fg = lamps[lampCount++];
 			fg.centre = centre;
 			fg.radius = radius;
 			fg.kind   = kind[r];
-			++slot->glowCount;
+			fg.spread = 0.0f;
+			fg.power  = 1.0f;
 		}
 		else if (!merged)
 			s_glowRejected = TRUE;
+	}
+
+	// Ronin @feature 25/10/2026 DX9: joined by chains of near neighbours; each group's root is its first lamp.
+	for (Int a = 0; a < lampCount; ++a)
+	{
+		joinTo[a] = (UnsignedShort)a;
+		for (Int b = 0; b < a && s_glowJoin > 0.0f; ++b)
+		{
+			if ((lamps[a].centre - lamps[b].centre).Length() > s_glowJoin)
+				continue;
+			const Int ra = fixRoot(joinTo, a);
+			const Int rb = fixRoot(joinTo, b);
+			if (ra != rb)
+				joinTo[(ra > rb) ? ra : rb] = (UnsignedShort)((ra < rb) ? ra : rb);
+		}
+	}
+	// Ronin @feature 25/10/2026 DX9: the lights first, then the joined bulbs' coronas - what the cap leaves out is a corona, never a light.
+	for (Int pass = 0; pass < 2; ++pass)
+	{
+		for (Int a = 0; a < lampCount; ++a)
+		{
+			const Int root = fixRoot(joinTo, a);
+			if (pass == 0 && root != a)
+				continue;
+			Int members = 0;
+			float area = 0.0f;
+			Vector3 lo(1.0e9f, 1.0e9f, 1.0e9f), hi(-1.0e9f, -1.0e9f, -1.0e9f);
+			for (Int b = root; b < lampCount; ++b)
+			{
+				if (fixRoot(joinTo, b) != root)
+					continue;
+				++members;
+				const float share = lamps[b].radius / GLOW_RADIUS_USUAL;
+				area += share * share;
+				const Vector3 &c = lamps[b].centre;
+				if (c.X < lo.X) lo.X = c.X;
+				if (c.Y < lo.Y) lo.Y = c.Y;
+				if (c.Z < lo.Z) lo.Z = c.Z;
+				if (c.X > hi.X) hi.X = c.X;
+				if (c.Y > hi.Y) hi.Y = c.Y;
+				if (c.Z > hi.Z) hi.Z = c.Z;
+			}
+			if (pass == 1 && members < 2)
+				continue;
+			if (slot->glowCount >= MAX_GLOWS_A_MESH)
+			{
+				s_glowRejected = TRUE;
+				continue;
+			}
+			FixtureGlow &fg = s_fixGlows[s_fixGlowCount++];
+			fg = lamps[a];
+			++slot->glowCount;
+			if (pass == 1)
+				fg.power = 0.0f;		// a bulb: its corona; the string's light is the joined one
+			else if (members > 1)
+			{
+				// Ronin @feature 25/10/2026 DX9: the joined light - the light its bulbs' glow area holds, in usual lamps, never more than
+				// they gave apart; as far round as the string runs.
+				fg.centre = (lo + hi) * 0.5f;
+				fg.spread = (hi - lo).Length() * 0.5f;
+				fg.power  = (area < (float)members) ? area : (float)members;
+				if (fg.spread < 0.01f)
+					fg.spread = 0.01f;
+			}
+		}
 	}
 }
 
@@ -1100,6 +1181,8 @@ int W3DLocalLights::noteFixtureMesh(MeshClass *mesh)
 				Matrix3D::Transform_Vector(tm, fg.centre + Vector3(1.0f, 0.0f, 0.0f), &beside);
 				o.scale = (beside - o.pos).Length();
 				o.radius = fg.radius * o.scale;
+				o.spread = fg.spread * o.scale;
+				o.power  = fg.power;
 				o.mesh  = mesh;
 				o.index = g;
 				o.kind  = fg.kind;
@@ -1522,6 +1605,14 @@ void  W3DLocalLights::setGlows(float v)	{ s_glows = (v < 0.0f) ? 0.0f : ((v > 4.
 float W3DLocalLights::getGlows(void)	{ return s_glows; }
 void  W3DLocalLights::setGlowReach(float v)	{ s_glowReach = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
 float W3DLocalLights::getGlowReach(void)	{ return s_glowReach; }
+void  W3DLocalLights::setGlowJoin(float v)
+{
+	const float was = s_glowJoin;
+	s_glowJoin = (v < 0.0f) ? 0.0f : ((v > 10.0f) ? 10.0f : v);
+	if (s_glowJoin != was)
+		s_fixReread = TRUE;
+}
+float W3DLocalLights::getGlowJoin(void)	{ return s_glowJoin; }
 void  W3DLocalLights::setCoronas(float v)	{ s_coronas = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
 float W3DLocalLights::getCoronas(void)	{ return s_coronas; }
 void  W3DLocalLights::setCoronaSize(float v)	{ s_coronaSize = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
@@ -1963,6 +2054,7 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("spillwide", setSpillWide, getSpillWide),
 	LIGHT_REAL("glows", setGlows, getGlows),
 	LIGHT_REAL("glowreach", setGlowReach, getGlowReach),
+	LIGHT_REAL("glowjoin", setGlowJoin, getGlowJoin),
 	LIGHT_REAL("coronas", setCoronas, getCoronas),
 	LIGHT_REAL("coronasize", setCoronaSize, getCoronaSize),
 	LIGHT_SWITCH("pools", setPools, getPools),
@@ -2263,6 +2355,16 @@ void W3DLocalLights::beginFrame(void)
 
 	// Ronin @feature 09/10/2026 DX9: the beams. Meshes rendered from here to the pass add theirs; the shadow passes of the NEXT frame run
 	// before its beginFrame and only skip. The hook is set every frame, as TAA's.
+	// Ronin @feature 25/10/2026 DX9: `glowjoin` changed - every model's lamps are read again when next drawn, joined the new way.
+	if (s_fixReread)
+	{
+		memset(s_fixModels, 0, sizeof(s_fixModels));
+		s_fixBeamCount  = 0;
+		s_fixGlowCount  = 0;
+		s_fixPoolCount  = 0;
+		s_fixModelCount = 0;
+		s_fixReread     = FALSE;
+	}
 	++s_fixFrame;
 	s_frameBeamCount = 0;
 	s_frameGlowCount = 0;
@@ -3368,15 +3470,25 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			const float k = s_glows * s_intensity;
 			if (count >= MAX_LIGHTS_DRAWN || k <= 0.002f)
 				continue;
+			// Ronin @feature 25/10/2026 DX9: a joined string's bulb is its corona alone (the string's light is one); with the art's own
+			// glows shown, nothing. The joined light has no corona: its bulbs draw theirs.
+			const Bool bulb   = (glow.power <= 0.0f) ? TRUE : FALSE;
+			const Bool joined = (glow.spread > 0.0f) ? TRUE : FALSE;
+			if (bulb && !s_coronasOn)
+				continue;
+			// Ronin @bugfix 25/10/2026 DX9: a bulb lights no surface - its colour 1/100, its corona x100 (the shader draws colour x corona);
+			// at full strength each painted a strip on the wall it hangs on.
+			const float bulbShare = 0.01f;
+			const float power = bulb ? bulbShare : glow.power;
 			const GlowKind &gk = GLOW_TABLE[glow.kind];
 			LightMemo now;
 			now.key   = glow.mesh;
 			now.sub   = 1000 + glow.index;		// apart from the same mesh's beams
 			now.coronaRadius   = glow.radius * s_coronaSize;
-			now.coronaStrength = s_coronasOn ? (s_coronas / k) : 0.0f;		// the shader multiplies by the light's colour x k
+			now.coronaStrength = (s_coronasOn && !joined) ? (s_coronas / (k * (bulb ? bulbShare : 1.0f))) : 0.0f;		// the shader multiplies by the light's colour x k
 			now.seen  = FALSE;
 			now.world = glow.pos;
-			now.outer = gk.reach * glow.scale * s_glowReach * s_range;
+			now.outer = (gk.reach * glow.scale * s_glowReach + glow.spread) * s_range;
 			// Ronin @feature 17/10/2026 DX9: a police car's beacon - the car's own light lights round it; the glow keeps its corona.
 			for (Int s = 0; s < searchAtCount; ++s)
 			{
@@ -3386,6 +3498,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 					break;
 				}
 			}
+			if (bulb)
+				now.outer = (now.coronaRadius > 0.7f) ? now.coronaRadius : 0.7f;
 			now.inner = now.outer * 0.25f;
 			if (now.outer - now.inner < 0.5f)
 				continue;
@@ -3397,8 +3511,8 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			now.boundRadius = now.outer;
 			for (Int ch = 0; ch < 3; ++ch)
 			{
-				now.diffuse[ch] = gk.colour[ch] * k * 0.5f;
-				now.ambient[ch] = gk.colour[ch] * k * 0.5f;
+				now.diffuse[ch] = gk.colour[ch] * k * 0.5f * power;
+				now.ambient[ch] = gk.colour[ch] * k * 0.5f * power;
 			}
 			LightMemo was = now;
 			was.diffuse[0] = was.diffuse[1] = was.diffuse[2] = 0.0f;

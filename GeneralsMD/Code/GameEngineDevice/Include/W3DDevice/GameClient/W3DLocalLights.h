@@ -106,6 +106,8 @@ public:
 	static float getGlows(void);
 	static void  setGlowReach(float v);		// multiplies every glow light's reach
 	static float getGlowReach(void);
+	static void  setGlowJoin(float v);		// lamps this near each other (art units) light as one, each keeping its corona; 0 = apart
+	static float getGlowJoin(void);
 	static void  setCoronas(float v);		// the lamp's own glow drawn by the shader, its strength; 0 = the art's glow textures
 	static float getCoronas(void);
 	static void  setCoronaSize(float v);	// its radius, in the art glow's own
