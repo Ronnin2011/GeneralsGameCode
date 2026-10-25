@@ -68,7 +68,7 @@
 #include "GameClient/TerrainVisual.h"
 #include "GameClient/Water.h"
 
-#include "W3DDevice/GameClient/W3DTaa.h"
+#include "W3DDevice/GameClient/R3DTaa.h"
 
 #include "GameLogic/AI.h"			///< For AI debug (yes, I'm cheating for now)
 #include "GameLogic/AIPathfind.h"			///< For AI debug (yes, I'm cheating for now)
@@ -1871,7 +1871,7 @@ void W3DView::draw()
 		// Ronin @feature 20/09/2026 DX9: TAA step 2. Redirect the scene into a texture so the resolve can read it back.
 		// The camera comes in so preRender can snapshot the UNJITTERED view-projection for next frame's reprojection.
 		// Returns FALSE and does nothing when TAA is off, or when a view filter above already took the redirect.
-		const Bool taaRedirected = W3DTaa::preRender(*m_3DCamera);
+		const Bool taaRedirected = R3DTaa::preRender(*m_3DCamera);
 
 		// Render 3D scene from our camera
 		W3DDisplay::m_3DScene->setCustomPassMode(customScenePassMode);
@@ -1883,9 +1883,9 @@ void W3DView::draw()
 
 		// Back to the frame buffer, then resolve the scene texture against the history. A no-op if preRender declined.
 		if (taaRedirected)
-			W3DTaa::postRender();
+			R3DTaa::postRender();
 		else
-			W3DTaa::finishScene(*m_3DCamera);	// Ronin @feature 17/10/2026 DX9: the night look and the dark lift without TAA
+			R3DTaa::finishScene(*m_3DCamera);	// Ronin @feature 17/10/2026 DX9: the night look and the dark lift without TAA
 	}
 
 	if (m_viewFilterMode &&

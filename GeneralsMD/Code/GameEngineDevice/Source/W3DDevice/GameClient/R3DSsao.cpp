@@ -13,12 +13,12 @@
 #include "WW3D2/camera.h"
 #include "WW3D2/texture.h"
 #include "Common/GlobalData.h"
-#include "W3DDevice/GameClient/W3DSsao.h"
-#include "W3DDevice/GameClient/W3DTaa.h"	// Ronin @feature 27/09/2026 DX9: trees AO follows TAA
+#include "W3DDevice/GameClient/R3DSsao.h"
+#include "W3DDevice/GameClient/R3DTaa.h"	// Ronin @feature 27/09/2026 DX9: trees AO follows TAA
 #include "WW3D2/ww3d.h"						// Ronin @feature 06/10/2026 DX9: the depth prepass renders the scene
 #include "WW3D2/statistics.h"
-#include "W3DDevice/GameClient/W3DShadowMapState.h"
-#include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 12/10/2026 DX9: the sun's shade, for the AO's multiply
+#include "W3DDevice/GameClient/R3DShadowMapState.h"
+#include "W3DDevice/GameClient/R3DLocalLights.h"	// Ronin @feature 12/10/2026 DX9: the sun's shade, for the AO's multiply
 #include "WW3D2/formconv.h"					// Ronin @feature 24/10/2026 DX9: the frame copy's format
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 2. The two tuning knobs, in world units and as a multiplier.
@@ -69,7 +69,7 @@ static Bool						s_aoReadyThisFrame  = FALSE;
 static Bool						s_prepassThisFrame  = FALSE;
 // Ronin @feature 27/09/2026 DX9: `ssao trees` - AUTO (default) runs the pass after the trees only while TAA runs, so its
 // history smooths the foliage flicker; without TAA or under MSAA the pass stays before them, as on 14/09.
-static Int						s_aoTrees           = W3DSsao::TREES_AUTO;
+static Int						s_aoTrees           = R3DSsao::TREES_AUTO;
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 3a. Half-resolution ping-pong pair. TextureClass render targets, so
 // DX8TextureManagerClass recreates them across a device reset — the shadow map's colour targets rely on the same.
@@ -85,12 +85,12 @@ static UnsignedInt				s_frameCopyH        = 0;
 static D3DFORMAT					s_frameCopyFormat   = D3DFMT_UNKNOWN;
 static float					s_bleed             = 3.0f;		// one bounce is a few % of the sun: 1 read as nothing, 3 his pick (24/10)
 static float					s_colourAO          = 1.0f;
-void  W3DSsao::setBleed(float v)		{ s_bleed = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
-float W3DSsao::getBleed(void)			{ return s_bleed; }
-void  W3DSsao::setColourAO(float v)	{ s_colourAO = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-float W3DSsao::getColourAO(void)		{ return s_colourAO; }
-static Bool bleedNow(void)		{ return (s_bleed > 0.0f && W3DLocalLights::isEnabled()) ? TRUE : FALSE; }
-static Bool colourNow(void)		{ return (s_colourAO > 0.0f && W3DLocalLights::isEnabled()) ? TRUE : FALSE; }
+void  R3DSsao::setBleed(float v)		{ s_bleed = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
+float R3DSsao::getBleed(void)			{ return s_bleed; }
+void  R3DSsao::setColourAO(float v)	{ s_colourAO = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float R3DSsao::getColourAO(void)		{ return s_colourAO; }
+static Bool bleedNow(void)		{ return (s_bleed > 0.0f && R3DLocalLights::isEnabled()) ? TRUE : FALSE; }
+static Bool colourNow(void)		{ return (s_colourAO > 0.0f && R3DLocalLights::isEnabled()) ? TRUE : FALSE; }
 
 // Ronin @feature 24/10/2026 DX9: the frame copied at its own size; FALSE = no copy, the AO goes in grey as before.
 static Bool copyFrame(IDirect3DDevice9 *dev, IDirect3DSurface9 *rt, const D3DSURFACE_DESC &rd)
@@ -120,7 +120,7 @@ static Bool copyFrame(IDirect3DDevice9 *dev, IDirect3DSurface9 *rt, const D3DSUR
 	return ok;
 }
 
-// Same reader as W3DShadowMap.cpp's loadShaderBlob, which is file-static there. Caller frees with HeapFree.
+// Same reader as R3DShadowMap.cpp's loadShaderBlob, which is file-static there. Caller frees with HeapFree.
 static DWORD *readShaderBlob(const char *path)
 {
 	HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -320,29 +320,29 @@ static void drawScreenQuad(IDirect3DDevice9 *dev, IDirect3DPixelShader9 *ps, flo
 	for (int i = 0; i < 4; ++i)
 		q[i].z = 0.0f;
 
-	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DSsao::drawScreenQuad");
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DSsao::drawScreenQuad");
 	dev->SetVertexShader(s_quadVS);		// AFTER the layout bind — BindLayoutFVF clears the VS
 	dev->SetPixelShader(ps);
 	dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, q, sizeof(QuadVertex));
 }
 
-void W3DSsao::getTargetSize(Int *outW, Int *outH)
+void R3DSsao::getTargetSize(Int *outW, Int *outH)
 {
 	if (outW != NULL) *outW = (Int)s_aoWidth;
 	if (outH != NULL) *outH = (Int)s_aoHeight;
 }
 
-Int W3DSsao::getSampleCount(void)
+Int R3DSsao::getSampleCount(void)
 {
 	return activeTier().samples;
 }
 
-Int W3DSsao::getQuality(void)
+Int R3DSsao::getQuality(void)
 {
 	return (TheGlobalData != NULL) ? TheGlobalData->m_ssaoQuality : 0;
 }
 
-void W3DSsao::beginFrame(void)
+void R3DSsao::beginFrame(void)
 {
 	s_aoReadyThisFrame = FALSE;
 	// Ronin @feature 06/10/2026 DX9: a prepass frame already holds its depth; Begin_Scene_Depth would mark it unwritten.
@@ -351,12 +351,12 @@ void W3DSsao::beginFrame(void)
 
 // Ronin @feature 06/10/2026 DX9: SSAO under MSAA (SSAO_Work.md 6). INTZ has no multisampled form, so the solid scene's
 // depth is rendered once more - main camera, colour off - into the texture the swap fills. A no-op without MSAA.
-void W3DSsao::updateDepthPrepass(CameraClass *camera, SceneClass *scene)
+void R3DSsao::updateDepthPrepass(CameraClass *camera, SceneClass *scene)
 {
 	s_prepassThisFrame = FALSE;
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
 	// Ronin @feature 17/10/2026 DX9: for the local lights too, with SSAO off - under MSAA this is their only scene depth.
-	if (dev == NULL || camera == NULL || scene == NULL || (getQuality() <= 0 && !W3DLocalLights::wantsDepthPrepass()) ||
+	if (dev == NULL || camera == NULL || scene == NULL || (getQuality() <= 0 && !R3DLocalLights::wantsDepthPrepass()) ||
 		!DX8Wrapper::Begin_Scene_Depth_Prepass())
 		return;
 
@@ -382,30 +382,30 @@ void W3DSsao::updateDepthPrepass(CameraClass *camera, SceneClass *scene)
 }
 
 // Ronin @feature 06/10/2026 DX9: from RTS3DScene::Flush, where the AO pass sits in the main render: depth stops here.
-void W3DSsao::prepassSolidDone(void)
+void R3DSsao::prepassSolidDone(void)
 {
 	DX8Wrapper::Freeze_Scene_Depth_Prepass();
 }
 
-Int W3DSsao::getPrepassTarget(void)
+Int R3DSsao::getPrepassTarget(void)
 {
 	return s_prepassThisFrame ? DX8Wrapper::Get_Scene_Depth_Prepass_Target() : 0;
 }
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 3a. Everything solid is in the depth buffer and nothing see-through has drawn.
 // Raw AO into target 0, then the depth-aware blur across into target 1 and down back into target 0.
-void W3DSsao::setTrees(Int mode) { s_aoTrees = (mode < 0) ? TREES_AUTO : ((mode > 0) ? TREES_ON : TREES_OFF); }
-Int  W3DSsao::getTrees(void)     { return s_aoTrees; }
-Bool W3DSsao::treesNow(void)
+void R3DSsao::setTrees(Int mode) { s_aoTrees = (mode < 0) ? TREES_AUTO : ((mode > 0) ? TREES_ON : TREES_OFF); }
+Int  R3DSsao::getTrees(void)     { return s_aoTrees; }
+Bool R3DSsao::treesNow(void)
 {
 	// TAA decides isActive in its beginFrame, which runs before the scene draws this pass.
 	// Ronin @feature 06/10/2026 DX9: never on a prepass frame - its depth holds no trees, and MSAA has no TAA to smooth them.
 	if (s_prepassThisFrame)
 		return FALSE;
-	return (s_aoTrees == TREES_ON || (s_aoTrees == TREES_AUTO && W3DTaa::isActive())) ? TRUE : FALSE;
+	return (s_aoTrees == TREES_ON || (s_aoTrees == TREES_AUTO && R3DTaa::isActive())) ? TRUE : FALSE;
 }
 
-void W3DSsao::renderPass(const CameraClass &camera, Bool afterTrees)
+void R3DSsao::renderPass(const CameraClass &camera, Bool afterTrees)
 {
 	if (!s_activeThisFrame || afterTrees != treesNow())
 		return;
@@ -519,10 +519,10 @@ void W3DSsao::renderPass(const CameraClass &camera, Bool afterTrees)
 							D3DCOLORWRITEENABLE_BLUE);
 		// Ronin @feature 12/10/2026 DX9: lighting step 3. The sun's shade on stages 1 and 2, its floor in c0: AO shades the ambient
 		// only. The invalidate below unbinds both.
-		W3DLocalLights::bindSunShadeForAO();
+		R3DLocalLights::bindSunShadeForAO();
 		// Ronin @feature 24/10/2026 DX9: after the sun's shade (its pass keeps c0..c3 as it found them): c2, c3 and the frame on s3.
 		float light[3] = { 1.0f, 1.0f, 1.0f };
-		W3DTaa::getMapLightFactor(light);
+		R3DTaa::getMapLightFactor(light);
 		const float c2[8] = { light[0], light[1], light[2], gather ? s_bleed : 0.0f,
 							  colourNow() ? s_colourAO : 0.0f, coloured ? 1.0f : 0.0f, 0.0f, 0.0f };
 		dev->SetPixelShaderConstantF(2, c2, 2);
@@ -545,17 +545,17 @@ void W3DSsao::renderPass(const CameraClass &camera, Bool afterTrees)
 	DX8Wrapper::Invalidate_Cached_Render_States();
 }
 
-void W3DSsao::endFrame(void)
+void R3DSsao::endFrame(void)
 {
 	DX8Wrapper::End_Scene_Depth();
 }
 
-Bool W3DSsao::isSupported(void)
+Bool R3DSsao::isSupported(void)
 {
 	return DX8Wrapper::Is_Scene_Depth_Supported() ? TRUE : FALSE;
 }
 
-Bool W3DSsao::isActive(void)
+Bool R3DSsao::isActive(void)
 {
 	return s_activeThisFrame;
 }
@@ -563,12 +563,12 @@ Bool W3DSsao::isActive(void)
 // Ronin @diagnostic 07/10/2026 DX9: `ssao view 0..3` - the corner view at runtime, so the MSAA prepass's depth and AO can
 // be compared with the swap path's without a rebuild.
 static Int s_debugView = 0;
-void W3DSsao::setDebugView(Int view) { s_debugView = (view < 0) ? 0 : ((view > 4) ? 4 : view); }
-Int  W3DSsao::getDebugView(void)     { return s_debugView; }
+void R3DSsao::setDebugView(Int view) { s_debugView = (view < 0) ? 0 : ((view > 4) ? 4 : view); }
+Int  R3DSsao::getDebugView(void)     { return s_debugView; }
 
 // Ronin @feature 13/09/2026 DX9: SSAO. Top-right corner at the screen's aspect. 1 = depth (grey = distance), 2 = raw AO
 // recomputed here, 3 = the blurred AO renderPass produced. White = open, black = occluded; RED = outside the 3D viewport.
-void W3DSsao::drawDebugView(const CameraClass *camera)
+void R3DSsao::drawDebugView(const CameraClass *camera)
 {
 	const Int view = s_debugView;
 	if (view == 0 || !s_activeThisFrame || camera == NULL)
@@ -624,7 +624,7 @@ void W3DSsao::drawDebugView(const CameraClass *camera)
 	else
 	{
 		// Ronin @feature 12/10/2026 DX9: view 3 is the AO as the frame takes it: lifted where the sun reaches (`lights aosun`).
-		W3DLocalLights::bindSunShadeForAO();
+		R3DLocalLights::bindSunShadeForAO();
 		// Ronin @feature 24/10/2026 DX9: grey, as before; view 4 the colour bleed's bounce alone.
 		const float c2[8] = { 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, (view == 4) ? 2.0f : 0.0f, 0.0f, 0.0f };
 		dev->SetPixelShaderConstantF(2, c2, 2);
@@ -645,7 +645,7 @@ void W3DSsao::drawDebugView(const CameraClass *camera)
 	DX8Wrapper::Invalidate_Cached_Render_States();
 }
 
-void W3DSsao::shutdown(void)
+void R3DSsao::shutdown(void)
 {
 	REF_PTR_RELEASE(s_aoTarget[0]);
 	REF_PTR_RELEASE(s_aoTarget[1]);

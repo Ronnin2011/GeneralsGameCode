@@ -393,7 +393,7 @@ protected:
 	// Ronin @feature 28/09/2026 DX9: reflective water (WaterType 2) on the map's own polygons, WaterSea_vs/_ps.
 	Bool useReflection() const;					///< WaterType 2 with both sea shaders and the reflection target
 	void setupReflectiveWater(Bool river);		///< state, textures, constants; the shaders go on in bindReflectiveShaders
-	void bindWaterSea(IDirect3DBaseTexture9 *water, IDirect3DBaseTexture9 *edge, Real edgeScaleU, Bool riverShroud, Bool standing);	///< fill and bind the W3DWaterSea.h inputs this object owns
+	void bindWaterSea(IDirect3DBaseTexture9 *water, IDirect3DBaseTexture9 *edge, Real edgeScaleU, Bool riverShroud, Bool standing);	///< fill and bind the R3DWaterSea.h inputs this object owns
 	void bindReflectiveShaders();				///< after the draw's BindLayoutFVF, which clears the vertex shader
 	void unbindReflectiveShaders(DWORD fvf);	///< back to fixed function, texture references dropped
 
@@ -440,7 +440,7 @@ struct WaterDebugFlags
 	Bool skipMesh;		///< skip renderWaterMesh: the deforming water grid
 	// Ronin @feature 28/09/2026 DX9: shore waves, Water_Work.md F5.
 	Bool skipWaves;		///< skip WaterTracksRenderSystem::flush: the shore waves
-	// Ronin @feature 28/09/2026 DX9: WaterType 2. The look knobs live in W3DWaterSeaTuning.h (29/09).
+	// Ronin @feature 28/09/2026 DX9: WaterType 2. The look knobs live in R3DWaterSeaTuning.h (29/09).
 	Bool seaPlane;		///< draw the original infinite sea plane (drawSea) instead of the map's water polygons
 };
 extern WaterDebugFlags TheWaterDebug;

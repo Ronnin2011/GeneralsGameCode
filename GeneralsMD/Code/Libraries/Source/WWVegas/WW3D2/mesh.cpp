@@ -127,13 +127,13 @@ static unsigned MeshDebugIdCount;
 bool MeshClass::Legacy_Meshes_Fogged = true;
 // Ronin @perf 20/08/2026 DX9: §29j.8 — FALSE except inside the shadow depth pass.
 bool MeshClass::s_SkipBakedShadowCasters = false;
-// Ronin @bugfix 19/09/2026 DX9: set by W3DShadowMap so a mover mesh can mark itself in the moving-caster mask.
+// Ronin @bugfix 19/09/2026 DX9: set by R3DShadowMap so a mover mesh can mark itself in the moving-caster mask.
 MeshClass::ShadowMoverNoteFunc MeshClass::s_ShadowMoverNote = NULL;
-// Ronin @feature 24/09/2026 DX9: set by W3DTaa so every main-pass mesh can report itself for motion vectors (§14).
+// Ronin @feature 24/09/2026 DX9: set by R3DTaa so every main-pass mesh can report itself for motion vectors (§14).
 MeshClass::TaaMeshNoteFunc MeshClass::s_TaaMeshNote = NULL;
-// Ronin @feature 09/10/2026 DX9: set by W3DLocalLights so a mesh that only looks like a light can report itself (lighting part 2).
+// Ronin @feature 09/10/2026 DX9: set by R3DLocalLights so a mesh that only looks like a light can report itself (lighting part 2).
 MeshClass::LightFixtureNoteFunc MeshClass::s_LightFixtureNote = NULL;
-// Ronin @feature 11/10/2026 DX9: set by W3DLocalLights: every drawn mesh reports itself as a possible caster of a lamp's shadow.
+// Ronin @feature 11/10/2026 DX9: set by R3DLocalLights: every drawn mesh reports itself as a possible caster of a lamp's shadow.
 MeshClass::LightCasterNoteFunc MeshClass::s_LightCasterNote = NULL;
 // Ronin @perf 26/08/2026 DX9: §29i.5 — FALSE except inside the shadow depth-pass scene render.
 bool MeshClass::s_InShadowDepthPass = false;

@@ -20,21 +20,21 @@
 #include "WW3D2/hanim.h"
 #include "WW3D2/shader.h"
 #include "WW3D2/dx8instancing.h"	// Ronin @feature 10/10/2026 DX9: the hooks round the mesh shader's draws
-#include "W3DDevice/GameClient/W3DShadowMapState.h"
+#include "W3DDevice/GameClient/R3DShadowMapState.h"
 #include "Common/GlobalData.h"
 #include "GameLogic/TerrainLogic.h"	// Ronin @feature 11/10/2026 DX9: how high a point light is over the ground
-#include "W3DDevice/GameClient/W3DLocalLights.h"
-#include "W3DDevice/GameClient/W3DSkyCube.h"	// Ronin @feature 12/10/2026 DX9: the sky cube: kept current each frame, shown by view 5
+#include "W3DDevice/GameClient/R3DLocalLights.h"
+#include "W3DDevice/GameClient/R3DSkyCube.h"	// Ronin @feature 12/10/2026 DX9: the sky cube: kept current each frame, shown by view 5
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "GameClient/ParticleSys.h"			// Ronin @feature 15/10/2026 DX9: item 7, glowing effects as lights
 #include "GameLogic/GameLogic.h"			// Ronin @bugfix 17/10/2026 DX9: a projectile's exhaust is lit at the projectile
 #include "GameLogic/Object.h"
 #include "W3DDevice/GameClient/W3DScene.h"
-#include "W3DDevice/GameClient/W3DSsao.h"
-#include "W3DDevice/GameClient/W3DTaa.h"
+#include "W3DDevice/GameClient/R3DSsao.h"
+#include "W3DDevice/GameClient/R3DTaa.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"	// Ronin @feature 22/10/2026 DX9: the sun shafts: the ground's cloud drift
 #include "WW3D2/assetmgr.h"
-#include <d3dx9math.h>				// Ronin @feature 11/10/2026 DX9: the lamp shadow maps' matrices, as W3DTaa.cpp
+#include <d3dx9math.h>				// Ronin @feature 11/10/2026 DX9: the lamp shadow maps' matrices, as R3DTaa.cpp
 #include "Common/FileSystem.h"		// Ronin @feature 12/10/2026 DX9: DX9Lights.ini
 #include "Common/File.h"
 #include <cstdio>
@@ -72,11 +72,11 @@ static UnsignedInt				s_copyW         = 0;
 static UnsignedInt				s_copyH         = 0;
 static D3DFORMAT				s_copyFormat    = D3DFMT_UNKNOWN;
 
-static W3DLocalLights::Stats	s_stats;	// this frame, being counted
-static W3DLocalLights::Stats	s_shown;	// last frame, complete
+static R3DLocalLights::Stats	s_stats;	// this frame, being counted
+static R3DLocalLights::Stats	s_shown;	// last frame, complete
 
 // Ronin @diagnostic 20/10/2026 DX9: GPU TIME of the 3D scene up to the light pass, the sun's-shade pass and the light pass, from
-// timestamps read LIGHT_GPU_RING frames later so nothing waits (W3DTaa's pattern). ms, eased; -1 = not measured. [LIGHT2] row.
+// timestamps read LIGHT_GPU_RING frames later so nothing waits (R3DTaa's pattern). ms, eased; -1 = not measured. [LIGHT2] row.
 enum { LIGHT_GPU_RING = 4, LIGHT_GPU_MARKS = 5 };	// 0 beginFrame, 1 light pass start, 2 shade pass start, 3 its end, 4 light pass end
 struct LightGpuFrame { IDirect3DQuery9 *disjoint; IDirect3DQuery9 *freq; IDirect3DQuery9 *t[LIGHT_GPU_MARKS]; Bool marked[LIGHT_GPU_MARKS];
 					   Bool issued; };
@@ -128,7 +128,7 @@ struct ViewMap
 	float vx0, vy0, vx1, vy1;					// the 3D viewport in target pixels
 };
 
-// Ronin @feature 09/10/2026 DX9: same reader as W3DSsao.cpp's, which is file-static there. Caller frees with HeapFree.
+// Ronin @feature 09/10/2026 DX9: same reader as R3DSsao.cpp's, which is file-static there. Caller frees with HeapFree.
 static DWORD *readShaderBlob(const char *path)
 {
 	HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -223,7 +223,7 @@ static Bool ensureCopy(UnsignedInt width, UnsignedInt height, D3DFORMAT format)
 }
 
 // Ronin @feature 09/10/2026 DX9: 1 / the map's own light on open ground, per channel, so frame x this ~ the surface's colour.
-// W3DTaa works it out (its selection flash is added to the same surface); `lights boost` overrides it here.
+// R3DTaa works it out (its selection flash is added to the same surface); `lights boost` overrides it here.
 static void sceneLightFactor(float out[3])
 {
 	if (s_boost > 0.0f)
@@ -231,7 +231,7 @@ static void sceneLightFactor(float out[3])
 		out[0] = out[1] = out[2] = s_boost;
 		return;
 	}
-	W3DTaa::getMapLightFactor(out);
+	R3DTaa::getMapLightFactor(out);
 }
 
 // Ronin @feature 09/10/2026 DX9: LIGHTING PART 2, THE BEAMS (docs/Lighting_Work.md 4.2). A cone of light in the art is loose
@@ -1112,7 +1112,7 @@ static Bool lampSunk(MeshClass *mesh)
 
 // Ronin @feature 09/10/2026 DX9: called by MeshClass::Render for every mesh it has not ruled out, in every pass. Only a mesh that
 // is being drawn reaches this, so a unit hidden by the fog of war gives no light away.
-int W3DLocalLights::noteFixtureMesh(MeshClass *mesh)
+int R3DLocalLights::noteFixtureMesh(MeshClass *mesh)
 {
 	MeshModelClass *mdl = (mesh != NULL) ? mesh->Peek_Model() : NULL;
 	if (mdl == NULL)
@@ -1238,7 +1238,7 @@ static inline Bool castsLampShadow(ShaderClass shader)
 			shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_DISABLE) ? TRUE : FALSE;
 }
 
-void W3DLocalLights::noteCaster(MeshClass *mesh)
+void R3DLocalLights::noteCaster(MeshClass *mesh)
 {
 	if (!s_casterOpen || mesh == NULL || s_casterCount >= MAX_LAMP_CASTERS || ShaderClass::Is_Backface_Culling_Inverted() ||
 		TheTerrainShadowPass.inDepthPass || TheTerrainShadowPass.viewDepthPass)
@@ -1249,7 +1249,7 @@ void W3DLocalLights::noteCaster(MeshClass *mesh)
 	const Bool perPoly = mdl->Has_Shader_Array(0) ? TRUE : FALSE;
 	if (!perPoly && !castsLampShadow(mdl->Get_Single_Shader(0)))
 		return;
-	// Ronin @feature 11/10/2026 DX9: a skin is deformed through its container's bones (as W3DTaa::noteMesh): without them, no caster.
+	// Ronin @feature 11/10/2026 DX9: a skin is deformed through its container's bones (as R3DTaa::noteMesh): without them, no caster.
 	const Bool isSkin = mdl->Get_Flag(MeshGeometryClass::SKIN) ? TRUE : FALSE;
 	if (isSkin && (mesh->Get_Container() == NULL || mesh->Get_Container()->Get_HTree() == NULL))
 		return;
@@ -1331,20 +1331,20 @@ static const float		LAMP_BIAS_NORMAL = 1.5f;
 static const float		LAMP_BIAS_LIGHT  = 1.0f;
 static const float		LAMP_BIAS_UNITS  = 0.05f;
 
-void  W3DLocalLights::setLampMaps(Bool on)		{ s_lampMapsOn = on; }
-Bool  W3DLocalLights::getLampMaps(void)			{ return s_lampMapsOn; }
-void  W3DLocalLights::setLampShadows(float v)	{ s_lampShadows = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-float W3DLocalLights::getLampShadows(void)		{ return s_lampShadows; }
-void  W3DLocalLights::setLampBias(float v)		{ s_lampBias = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getLampBias(void)			{ return s_lampBias; }
-void  W3DLocalLights::setLampSelf(Bool on)		{ s_lampSelf = on; }
-Bool  W3DLocalLights::getLampSelf(void)			{ return s_lampSelf; }
-void  W3DLocalLights::setLampSelfNear(float v)	{ s_lampSelfNear = (v < 0.0f) ? 0.0f : ((v > 0.5f) ? 0.5f : v); }
-float W3DLocalLights::getLampSelfNear(void)		{ return s_lampSelfNear; }
-void  W3DLocalLights::setPointMaps(Bool on)		{ s_pointMaps = on; }
-Bool  W3DLocalLights::getPointMaps(void)		{ return s_pointMaps; }
-void  W3DLocalLights::setPointSides(Bool on)	{ s_pointSides = on; }
-Bool  W3DLocalLights::getPointSides(void)		{ return s_pointSides; }
+void  R3DLocalLights::setLampMaps(Bool on)		{ s_lampMapsOn = on; }
+Bool  R3DLocalLights::getLampMaps(void)			{ return s_lampMapsOn; }
+void  R3DLocalLights::setLampShadows(float v)	{ s_lampShadows = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float R3DLocalLights::getLampShadows(void)		{ return s_lampShadows; }
+void  R3DLocalLights::setLampBias(float v)		{ s_lampBias = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getLampBias(void)			{ return s_lampBias; }
+void  R3DLocalLights::setLampSelf(Bool on)		{ s_lampSelf = on; }
+Bool  R3DLocalLights::getLampSelf(void)			{ return s_lampSelf; }
+void  R3DLocalLights::setLampSelfNear(float v)	{ s_lampSelfNear = (v < 0.0f) ? 0.0f : ((v > 0.5f) ? 0.5f : v); }
+float R3DLocalLights::getLampSelfNear(void)		{ return s_lampSelfNear; }
+void  R3DLocalLights::setPointMaps(Bool on)		{ s_pointMaps = on; }
+Bool  R3DLocalLights::getPointMaps(void)		{ return s_pointMaps; }
+void  R3DLocalLights::setPointSides(Bool on)	{ s_pointSides = on; }
+Bool  R3DLocalLights::getPointSides(void)		{ return s_pointSides; }
 
 // Ronin @feature 11/10/2026 DX9: TextureClass targets, so the texture manager carries them across a device reset - as TAA's mask pair.
 static Bool ensureLampTargets(void)
@@ -1410,7 +1410,7 @@ static void drawLampMaps(IDirect3DDevice9 *dev)
 			dev->SetRenderState(D3DRS_DEPTHBIAS,           0);
 			dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
 														D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
-			DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ, "W3DLocalLights::lampMaps");
+			DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ, "R3DLocalLights::lampMaps");
 			dev->SetVertexShader(s_lampVS);		// AFTER the layout bind - it clears the VS
 			dev->SetPixelShader(s_lampPS);
 			for (Int i = 0; i < s_lampMapCount; ++i)
@@ -1582,71 +1582,71 @@ static void lampRegisters(const LampMap &lm, Int tileIndex, const D3DXMATRIX &vi
 	tile4[2] = (tx + (float)LAMP_TILE) / atlas; tile4[3] = (ty + (float)LAMP_TILE) / atlas;
 }
 
-Bool W3DLocalLights::beamsHiddenIn(const MeshClass *mesh)
+Bool R3DLocalLights::beamsHiddenIn(const MeshClass *mesh)
 {
 	return (s_beamsOn && mesh != NULL && mesh->Get_Light_Fixture() == 2) ? TRUE : FALSE;
 }
 
-void  W3DLocalLights::setBeams(float v)	{ s_beams = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getBeams(void)	{ return s_beams; }
-void  W3DLocalLights::setShafts(float v)	{ s_shafts = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
-float W3DLocalLights::getShafts(void)	{ return s_shafts; }
-void  W3DLocalLights::setRays(float v)	{ s_rays = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
-float W3DLocalLights::getRays(void)	{ return s_rays; }
-void  W3DLocalLights::setLampWidth(float v)	{ s_lampWidth = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getLampWidth(void)	{ return s_lampWidth; }
-void  W3DLocalLights::setRayTurn(Bool on)	{ s_rayTurn = on; }
-Bool  W3DLocalLights::getRayTurn(void)	{ return s_rayTurn; }
-void  W3DLocalLights::setSpill(float v)	{ s_spill = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-float W3DLocalLights::getSpill(void)	{ return s_spill; }
-void  W3DLocalLights::setSpillWide(float v)	{ s_spillWide = (v < 1.2f) ? 1.2f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getSpillWide(void)	{ return s_spillWide; }
-void  W3DLocalLights::setGlows(float v)	{ s_glows = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getGlows(void)	{ return s_glows; }
-void  W3DLocalLights::setGlowReach(float v)	{ s_glowReach = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getGlowReach(void)	{ return s_glowReach; }
-void  W3DLocalLights::setGlowJoin(float v)
+void  R3DLocalLights::setBeams(float v)	{ s_beams = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getBeams(void)	{ return s_beams; }
+void  R3DLocalLights::setShafts(float v)	{ s_shafts = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float R3DLocalLights::getShafts(void)	{ return s_shafts; }
+void  R3DLocalLights::setRays(float v)	{ s_rays = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float R3DLocalLights::getRays(void)	{ return s_rays; }
+void  R3DLocalLights::setLampWidth(float v)	{ s_lampWidth = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getLampWidth(void)	{ return s_lampWidth; }
+void  R3DLocalLights::setRayTurn(Bool on)	{ s_rayTurn = on; }
+Bool  R3DLocalLights::getRayTurn(void)	{ return s_rayTurn; }
+void  R3DLocalLights::setSpill(float v)	{ s_spill = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float R3DLocalLights::getSpill(void)	{ return s_spill; }
+void  R3DLocalLights::setSpillWide(float v)	{ s_spillWide = (v < 1.2f) ? 1.2f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getSpillWide(void)	{ return s_spillWide; }
+void  R3DLocalLights::setGlows(float v)	{ s_glows = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getGlows(void)	{ return s_glows; }
+void  R3DLocalLights::setGlowReach(float v)	{ s_glowReach = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getGlowReach(void)	{ return s_glowReach; }
+void  R3DLocalLights::setGlowJoin(float v)
 {
 	const float was = s_glowJoin;
 	s_glowJoin = (v < 0.0f) ? 0.0f : ((v > 10.0f) ? 10.0f : v);
 	if (s_glowJoin != was)
 		s_fixReread = TRUE;
 }
-float W3DLocalLights::getGlowJoin(void)	{ return s_glowJoin; }
-void  W3DLocalLights::setCoronas(float v)	{ s_coronas = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getCoronas(void)	{ return s_coronas; }
-void  W3DLocalLights::setCoronaSize(float v)	{ s_coronaSize = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getCoronaSize(void)	{ return s_coronaSize; }
-void  W3DLocalLights::setPools(Bool keep)	{ s_keepPools = keep; }
-Bool  W3DLocalLights::getPools(void)	{ return s_keepPools; }
-void  W3DLocalLights::setBeamReach(float v)	{ s_beamReach = (v < 1.0f) ? 1.0f : ((v > 3.0f) ? 3.0f : v); }
-float W3DLocalLights::getBeamReach(void)	{ return s_beamReach; }
-void  W3DLocalLights::setPoolFill(float v)	{ s_poolFill = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getPoolFill(void)	{ return s_poolFill; }
-void  W3DLocalLights::setHotspot(float v)	{ s_hotspot = (v < 0.0f) ? 0.0f : ((v > 0.9f) ? 0.9f : v); }
-float W3DLocalLights::getHotspot(void)	{ return s_hotspot; }
+float R3DLocalLights::getGlowJoin(void)	{ return s_glowJoin; }
+void  R3DLocalLights::setCoronas(float v)	{ s_coronas = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getCoronas(void)	{ return s_coronas; }
+void  R3DLocalLights::setCoronaSize(float v)	{ s_coronaSize = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getCoronaSize(void)	{ return s_coronaSize; }
+void  R3DLocalLights::setPools(Bool keep)	{ s_keepPools = keep; }
+Bool  R3DLocalLights::getPools(void)	{ return s_keepPools; }
+void  R3DLocalLights::setBeamReach(float v)	{ s_beamReach = (v < 1.0f) ? 1.0f : ((v > 3.0f) ? 3.0f : v); }
+float R3DLocalLights::getBeamReach(void)	{ return s_beamReach; }
+void  R3DLocalLights::setPoolFill(float v)	{ s_poolFill = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getPoolFill(void)	{ return s_poolFill; }
+void  R3DLocalLights::setHotspot(float v)	{ s_hotspot = (v < 0.0f) ? 0.0f : ((v > 0.9f) ? 0.9f : v); }
+float R3DLocalLights::getHotspot(void)	{ return s_hotspot; }
 
-void W3DLocalLights::setEnabled(Bool on)	{ s_enabled = on; }
-Bool W3DLocalLights::isEnabled(void)		{ return s_enabled; }
-void W3DLocalLights::setEffects(Bool on)	{ s_effects = on; }
-Bool W3DLocalLights::isEffects(void)		{ return s_effects; }
-void W3DLocalLights::setIntensity(float v)	{ s_intensity = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
-float W3DLocalLights::getIntensity(void)	{ return s_intensity; }
-void W3DLocalLights::setOver(float v)		{ s_over = (v < 1.0f) ? 1.0f : ((v > 8.0f) ? 8.0f : v); }
-float W3DLocalLights::getOver(void)			{ return s_over; }
-void W3DLocalLights::setBoost(float v)		{ s_boost = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
-float W3DLocalLights::getBoost(void)		{ return s_boost; }
-void W3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v == 9) ? 9 : ((v > 6) ? 6 : v)); }	// Ronin @diagnostic 22/10/2026 DX9: 9 = the sun shafts' march
-Int  W3DLocalLights::getView(void)			{ return s_view; }
-Bool W3DLocalLights::ownsDynamicLights(void)	{ return (s_active && s_effects) ? TRUE : FALSE; }	// Ronin @feature 23/10/2026 DX9: lamps off = the game's
-void W3DLocalLights::setRange(float v)		{ s_range = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getRange(void)		{ return s_range; }
-void W3DLocalLights::setSmall(Bool on)		{ s_small = on; }
-Bool W3DLocalLights::getSmall(void)			{ return s_small; }
+void R3DLocalLights::setEnabled(Bool on)	{ s_enabled = on; }
+Bool R3DLocalLights::isEnabled(void)		{ return s_enabled; }
+void R3DLocalLights::setEffects(Bool on)	{ s_effects = on; }
+Bool R3DLocalLights::isEffects(void)		{ return s_effects; }
+void R3DLocalLights::setIntensity(float v)	{ s_intensity = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
+float R3DLocalLights::getIntensity(void)	{ return s_intensity; }
+void R3DLocalLights::setOver(float v)		{ s_over = (v < 1.0f) ? 1.0f : ((v > 8.0f) ? 8.0f : v); }
+float R3DLocalLights::getOver(void)			{ return s_over; }
+void R3DLocalLights::setBoost(float v)		{ s_boost = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
+float R3DLocalLights::getBoost(void)		{ return s_boost; }
+void R3DLocalLights::setView(Int v)			{ s_view = (v < 0) ? 0 : ((v == 9) ? 9 : ((v > 6) ? 6 : v)); }	// Ronin @diagnostic 22/10/2026 DX9: 9 = the sun shafts' march
+Int  R3DLocalLights::getView(void)			{ return s_view; }
+Bool R3DLocalLights::ownsDynamicLights(void)	{ return (s_active && s_effects) ? TRUE : FALSE; }	// Ronin @feature 23/10/2026 DX9: lamps off = the game's
+void R3DLocalLights::setRange(float v)		{ s_range = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getRange(void)		{ return s_range; }
+void R3DLocalLights::setSmall(Bool on)		{ s_small = on; }
+Bool R3DLocalLights::getSmall(void)			{ return s_small; }
 // Ronin @feature 17/10/2026 DX9: the pulse minimum - `lights pulsemin` (units of reach) and `lights pulsefade` (frames).
 static float s_pulseMin  = 18.0f;		// value for the testers, 17/10
 static Int   s_pulseFade = 11;
-void W3DLocalLights::minimumPulse(Real innerRadius, Real *attenuationWidth, UnsignedInt *decayFrames)
+void R3DLocalLights::minimumPulse(Real innerRadius, Real *attenuationWidth, UnsignedInt *decayFrames)
 {
 	if (!s_active || !s_effects || attenuationWidth == NULL || decayFrames == NULL)
 		return;
@@ -1655,17 +1655,17 @@ void W3DLocalLights::minimumPulse(Real innerRadius, Real *attenuationWidth, Unsi
 	if (s_pulseFade > 0 && *decayFrames != 0 && *decayFrames < (UnsignedInt)s_pulseFade)
 		*decayFrames = (UnsignedInt)s_pulseFade;		// 0 = a pulse that never fades: left so
 }
-void  W3DLocalLights::setPulseMin(float v)	{ s_pulseMin = (v < 0.0f) ? 0.0f : ((v > 60.0f) ? 60.0f : v); }
-float W3DLocalLights::getPulseMin(void)	{ return s_pulseMin; }
-void  W3DLocalLights::setPulseFade(float v)	{ s_pulseFade = (v < 0.5f) ? 0 : ((v > 30.0f) ? 30 : (Int)(v + 0.5f)); }
-float W3DLocalLights::getPulseFade(void)	{ return (float)s_pulseFade; }
+void  R3DLocalLights::setPulseMin(float v)	{ s_pulseMin = (v < 0.0f) ? 0.0f : ((v > 60.0f) ? 60.0f : v); }
+float R3DLocalLights::getPulseMin(void)	{ return s_pulseMin; }
+void  R3DLocalLights::setPulseFade(float v)	{ s_pulseFade = (v < 0.5f) ? 0 : ((v > 30.0f) ? 30 : (Int)(v + 0.5f)); }
+float R3DLocalLights::getPulseFade(void)	{ return (float)s_pulseFade; }
 
-Bool W3DLocalLights::wantsSmallLights(void)	{ return (s_active && s_effects && s_small) ? TRUE : FALSE; }
+Bool R3DLocalLights::wantsSmallLights(void)	{ return (s_active && s_effects && s_small) ? TRUE : FALSE; }
 // Ronin @feature 17/10/2026 DX9: under MSAA the scene depth comes only from the view prepass - asked for while the lights are on.
-Bool W3DLocalLights::wantsDepthPrepass(void)	{ return s_enabled ? TRUE : FALSE; }
+Bool R3DLocalLights::wantsDepthPrepass(void)	{ return s_enabled ? TRUE : FALSE; }
 
 
-void W3DLocalLights::getStats(Stats *out)
+void R3DLocalLights::getStats(Stats *out)
 {
 	if (out == NULL)
 		return;
@@ -1675,8 +1675,8 @@ void W3DLocalLights::getStats(Stats *out)
 	out->gpuLights = s_gpuMs[2];
 }
 
-// Ronin @diagnostic 20/10/2026 DX9: a device reset fails while any query lives: W3DTaa::releaseResources calls this with its own.
-void W3DLocalLights::releaseQueries(void)
+// Ronin @diagnostic 20/10/2026 DX9: a device reset fails while any query lives: R3DTaa::releaseResources calls this with its own.
+void R3DLocalLights::releaseQueries(void)
 {
 	for (Int i = 0; i < LIGHT_GPU_RING; ++i)
 	{
@@ -1729,7 +1729,7 @@ static void gpuFrameBegin(IDirect3DDevice9 *dev)
 				ok = SUCCEEDED(dev->CreateQuery(D3DQUERYTYPE_TIMESTAMP, &f.t[m]));
 		}
 		if (!ok)
-			W3DLocalLights::releaseQueries();		// no timestamps on this card: the row shows n/a
+			R3DLocalLights::releaseQueries();		// no timestamps on this card: the row shows n/a
 		s_gpuOK    = ok;
 		s_gpuTried = TRUE;
 	}
@@ -1818,7 +1818,7 @@ static const float			SSR_RUN         = 300.0f;	// a reflection's ray runs this f
 static const float			SSR_THICK       = 10.0f;	// ... and meets a surface it ends this far behind, at most
 static const float			GROUND_RAY_MAX  = 400.0f;	// a reflection looking down meets the ground within this far
 
-void W3DLocalLights::beginSunShade(void)
+void R3DLocalLights::beginSunShade(void)
 {
 	if (!s_shadeOpen || s_shadeBound || (s_sunFill <= 0.0f && s_aoSun <= 0.0f) || ShaderClass::Is_Backface_Culling_Inverted() ||
 		TheTerrainShadowPass.inDepthPass || TheTerrainShadowPass.viewDepthPass)
@@ -1868,7 +1868,7 @@ void W3DLocalLights::beginSunShade(void)
 	surf->Release();
 }
 
-void W3DLocalLights::endSunShade(void)
+void R3DLocalLights::endSunShade(void)
 {
 	if (!s_shadeBound)
 		return;
@@ -1878,10 +1878,10 @@ void W3DLocalLights::endSunShade(void)
 		dev->SetRenderTarget(1, NULL);
 }
 
-void  W3DLocalLights::setSunFill(float v)	{ s_sunFill = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-float W3DLocalLights::getSunFill(void)		{ return s_sunFill; }
-void  W3DLocalLights::setSunErase(float v)	{ s_sunErase = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
-float W3DLocalLights::getSunErase(void)		{ return s_sunErase; }
+void  R3DLocalLights::setSunFill(float v)	{ s_sunFill = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float R3DLocalLights::getSunFill(void)		{ return s_sunFill; }
+void  R3DLocalLights::setSunErase(float v)	{ s_sunErase = (v < 0.0f) ? 0.0f : ((v > 8.0f) ? 8.0f : v); }
+float R3DLocalLights::getSunErase(void)		{ return s_sunErase; }
 
 // Ronin @feature 10/10/2026 DX9: what a sun shadow leaves on THIS map: its light without the sun over its light
 // with it, on flat ground, per channel (it was 0.45 everywhere). For TerrainShadow_ps (c21) and RigidInstance_ps (c24).
@@ -1923,12 +1923,12 @@ static void publishMapShadow(void)
 	DX8InstanceManagerClass::Set_Shadow_Shade(out);
 }
 
-void  W3DLocalLights::setMapShadow(float v)	{ s_mapShadow = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-float W3DLocalLights::getMapShadow(void)	{ return s_mapShadow; }
+void  R3DLocalLights::setMapShadow(float v)	{ s_mapShadow = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float R3DLocalLights::getMapShadow(void)	{ return s_mapShadow; }
 
 // Ronin @feature 12/10/2026 DX9: LIGHTING, STEP 3 - SSAO is the shade of the map's AMBIENT. Where the sun reaches, the ambient is only
 // the shade's floor over the shade of the pixel's light: SSAO's multiply (SsaoShow_ps) takes that much. Needs the sun's shadow maps.
-void W3DLocalLights::bindSunShadeForAO(void)
+void R3DLocalLights::bindSunShadeForAO(void)
 {
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
 	if (dev == NULL)
@@ -1942,7 +1942,7 @@ void W3DLocalLights::bindSunShadeForAO(void)
 	{
 		// Ronin @feature 21/10/2026 DX9: the shade pass's record, as the lights read it: every pixel's own shade (glass, trees and
 		// infantry too), under MSAA as well. Run here while SSAO has the scene depth out; its stage 0 is put back after.
-		const CameraClass *cam = W3DTaa::getSceneCamera();
+		const CameraClass *cam = R3DTaa::getSceneCamera();
 		IDirect3DTexture9 *depthTex = DX8Wrapper::Peek_Scene_Depth_Texture();
 		D3DSURFACE_DESC dd;
 		Bool fromMap = FALSE;
@@ -2002,16 +2002,16 @@ void W3DLocalLights::bindSunShadeForAO(void)
 	dev->SetTexture(2, ground);
 }
 
-void  W3DLocalLights::setAoSun(float v)	{ s_aoSun = (v < 0.0f) ? 0.0f : ((v > 3.0f) ? 3.0f : v); }
-float W3DLocalLights::getAoSun(void)		{ return s_aoSun; }
-void  W3DLocalLights::setReflect(float v)	{ s_reflect = (v < 0.5f) ? 0 : ((v < 1.5f) ? 1 : 2); }
-float W3DLocalLights::getReflect(void)	{ return (float)s_reflect; }
-void  W3DLocalLights::setReflectGround(float v)	{ s_reflectGround = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-float W3DLocalLights::getReflectGround(void)		{ return s_reflectGround; }
-void  W3DLocalLights::setFresnel(float v)	{ s_fresnel = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getFresnel(void)		{ return s_fresnel; }
-void  W3DLocalLights::setSsr(Bool on)		{ s_ssr = on; }
-Bool  W3DLocalLights::getSsr(void)		{ return s_ssr; }
+void  R3DLocalLights::setAoSun(float v)	{ s_aoSun = (v < 0.0f) ? 0.0f : ((v > 3.0f) ? 3.0f : v); }
+float R3DLocalLights::getAoSun(void)		{ return s_aoSun; }
+void  R3DLocalLights::setReflect(float v)	{ s_reflect = (v < 0.5f) ? 0 : ((v < 1.5f) ? 1 : 2); }
+float R3DLocalLights::getReflect(void)	{ return (float)s_reflect; }
+void  R3DLocalLights::setReflectGround(float v)	{ s_reflectGround = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float R3DLocalLights::getReflectGround(void)		{ return s_reflectGround; }
+void  R3DLocalLights::setFresnel(float v)	{ s_fresnel = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getFresnel(void)		{ return s_fresnel; }
+void  R3DLocalLights::setSsr(Bool on)		{ s_ssr = on; }
+Bool  R3DLocalLights::getSsr(void)		{ return s_ssr; }
 
 // Ronin @feature 22/10/2026 DX9: SUN SHAFTS through the cloud gaps - `lights sunshafts` (strength per 100 units of lit air; 0 = off),
 // `shaftgaps` (the cloud shadow's brightness that lets the sun through), `shaftlayer` (how high the lit air reaches).
@@ -2022,29 +2022,29 @@ static TextureClass				*s_cloudTex     = NULL;		// the ground's cloud shadow tex
 static float					s_shaftDust     = 1.0f;		
 static const CameraClass		*s_dustCamera   = NULL;		// the light pass's camera, this frame only
 static UnsignedInt				s_dustFrame     = 0;
-void  W3DLocalLights::setSunShafts(float v)	{ s_sunShafts = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getSunShafts(void)		{ return s_sunShafts; }
-void  W3DLocalLights::setShaftGaps(float v)	{ s_shaftGaps = (v < 0.5f) ? 0.5f : ((v > 1.0f) ? 1.0f : v); }
-float W3DLocalLights::getShaftGaps(void)		{ return s_shaftGaps; }
-void  W3DLocalLights::setShaftLayer(float v)	{ s_shaftLayer = (v < 20.0f) ? 20.0f : ((v > 400.0f) ? 400.0f : v); }
-float W3DLocalLights::getShaftLayer(void)	{ return s_shaftLayer; }
-void  W3DLocalLights::setShaftDust(float v)	{ s_shaftDust = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getShaftDust(void)		{ return s_shaftDust; }
+void  R3DLocalLights::setSunShafts(float v)	{ s_sunShafts = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getSunShafts(void)		{ return s_sunShafts; }
+void  R3DLocalLights::setShaftGaps(float v)	{ s_shaftGaps = (v < 0.5f) ? 0.5f : ((v > 1.0f) ? 1.0f : v); }
+float R3DLocalLights::getShaftGaps(void)		{ return s_shaftGaps; }
+void  R3DLocalLights::setShaftLayer(float v)	{ s_shaftLayer = (v < 20.0f) ? 20.0f : ((v > 400.0f) ? 400.0f : v); }
+float R3DLocalLights::getShaftLayer(void)	{ return s_shaftLayer; }
+void  R3DLocalLights::setShaftDust(float v)	{ s_shaftDust = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getShaftDust(void)		{ return s_shaftDust; }
 
 // Ronin @feature 12/10/2026 DX9: THE LIGHTS' INI. Every `lights` knob by its name, in the panel's order: one table for the panel
 // (set, print) and for DX9Lights.ini, a modder's file. A knob added here is tunable and kept, with nothing else to touch.
-#define LIGHT_REAL(text, setter, getter)   { text, FALSE, TRUE, [](float v) { W3DLocalLights::setter(v); }, []() -> float { return W3DLocalLights::getter(); } }
-#define LIGHT_SWITCH(text, setter, getter) { text, TRUE, TRUE, [](float v) { W3DLocalLights::setter((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DLocalLights::getter() ? 1.0f : 0.0f; } }
-static const W3DLocalLights::Knob s_knobs[] =
+#define LIGHT_REAL(text, setter, getter)   { text, FALSE, TRUE, [](float v) { R3DLocalLights::setter(v); }, []() -> float { return R3DLocalLights::getter(); } }
+#define LIGHT_SWITCH(text, setter, getter) { text, TRUE, TRUE, [](float v) { R3DLocalLights::setter((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return R3DLocalLights::getter() ? 1.0f : 0.0f; } }
+static const R3DLocalLights::Knob s_knobs[] =
 {
 	LIGHT_REAL("intensity", setIntensity, getIntensity),
 	LIGHT_REAL("range", setRange, getRange),
 	LIGHT_SWITCH("small", setSmall, getSmall),
 	LIGHT_REAL("over", setOver, getOver),
 	LIGHT_REAL("boost", setBoost, getBoost),
-	{ "view", TRUE, FALSE, [](float v) { W3DLocalLights::setView((Int)v); }, []() -> float { return (float)W3DLocalLights::getView(); } },
+	{ "view", TRUE, FALSE, [](float v) { R3DLocalLights::setView((Int)v); }, []() -> float { return (float)R3DLocalLights::getView(); } },
 	// Ronin @feature 23/10/2026 DX9: the lamps' switch - a player's (Options.ini DX9LightEffects), so never in DX9Lights.ini.
-	{ "locallighting", TRUE, FALSE, [](float v) { W3DLocalLights::setEffects((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DLocalLights::isEffects() ? 1.0f : 0.0f; } },
+	{ "locallighting", TRUE, FALSE, [](float v) { R3DLocalLights::setEffects((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return R3DLocalLights::isEffects() ? 1.0f : 0.0f; } },
 	LIGHT_REAL("beams", setBeams, getBeams),
 	LIGHT_REAL("shafts", setShafts, getShafts),
 	LIGHT_REAL("rays", setRays, getRays),
@@ -2065,10 +2065,10 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("sunerase", setSunErase, getSunErase),
 	LIGHT_REAL("mapshadow", setMapShadow, getMapShadow),
 	LIGHT_REAL("aosun", setAoSun, getAoSun),
-	// Ronin @feature 24/10/2026 DX9: SSAO's colour bleed (W3DSsao) - the bounce from the occluders, the AO in the surface's colour.
+	// Ronin @feature 24/10/2026 DX9: SSAO's colour bleed (R3DSsao) - the bounce from the occluders, the AO in the surface's colour.
 	// aosun and these two are set and shown by `ssao` (sun, bleed, colour); these two are panel only, never in DX9Lights.ini.
-	{ "aobleed", FALSE, FALSE, [](float v) { W3DSsao::setBleed(v); }, []() -> float { return W3DSsao::getBleed(); } },
-	{ "aocolour", FALSE, FALSE, [](float v) { W3DSsao::setColourAO(v); }, []() -> float { return W3DSsao::getColourAO(); } },
+	{ "aobleed", FALSE, FALSE, [](float v) { R3DSsao::setBleed(v); }, []() -> float { return R3DSsao::getBleed(); } },
+	{ "aocolour", FALSE, FALSE, [](float v) { R3DSsao::setColourAO(v); }, []() -> float { return R3DSsao::getColourAO(); } },
 	LIGHT_REAL("reflect", setReflect, getReflect),
 	LIGHT_REAL("reflectground", setReflectGround, getReflectGround),
 	LIGHT_REAL("fresnel", setFresnel, getFresnel),
@@ -2078,10 +2078,10 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_REAL("shaftgaps", setShaftGaps, getShaftGaps),
 	LIGHT_REAL("shaftlayer", setShaftLayer, getShaftLayer),
 	LIGHT_REAL("shaftdust", setShaftDust, getShaftDust),
-	{ "sunmorning", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(1, v); }, []() -> float { return W3DLocalLights::getSunTime(1); } },
-	{ "sunafternoon", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(2, v); }, []() -> float { return W3DLocalLights::getSunTime(2); } },
-	{ "sunevening", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(3, v); }, []() -> float { return W3DLocalLights::getSunTime(3); } },
-	{ "sunnight", FALSE, TRUE, [](float v) { W3DLocalLights::setSunTime(4, v); }, []() -> float { return W3DLocalLights::getSunTime(4); } },
+	{ "sunmorning", FALSE, TRUE, [](float v) { R3DLocalLights::setSunTime(1, v); }, []() -> float { return R3DLocalLights::getSunTime(1); } },
+	{ "sunafternoon", FALSE, TRUE, [](float v) { R3DLocalLights::setSunTime(2, v); }, []() -> float { return R3DLocalLights::getSunTime(2); } },
+	{ "sunevening", FALSE, TRUE, [](float v) { R3DLocalLights::setSunTime(3, v); }, []() -> float { return R3DLocalLights::getSunTime(3); } },
+	{ "sunnight", FALSE, TRUE, [](float v) { R3DLocalLights::setSunTime(4, v); }, []() -> float { return R3DLocalLights::getSunTime(4); } },
 	LIGHT_REAL("daysun", setDaySun, getDaySun),
 	LIGHT_REAL("dayshade", setDayShade, getDayShade),
 	LIGHT_REAL("fxlights", setFxLights, getFxLights),
@@ -2094,32 +2094,32 @@ static const W3DLocalLights::Knob s_knobs[] =
 	LIGHT_SWITCH("searchlight", setSearchLight, getSearchLight),
 	LIGHT_REAL("fxfire", setFxFire, getFxFire),
 	LIGHT_REAL("fxsmooth", setFxSmooth, getFxSmooth),
-	// Ronin @feature 15/10/2026 DX9: the night look and the dark lift live in W3DTaa; listed here so DX9Lights.ini keeps them.
-	{ "night", TRUE, TRUE, [](float v) { W3DTaa::setNight((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DTaa::getNight() ? 1.0f : 0.0f; } },
-	{ "nighttint", FALSE, TRUE, [](float v) { W3DTaa::setNightTint(v); }, []() -> float { return W3DTaa::getNightTint(); } },
-	{ "nightlo", FALSE, TRUE, [](float v) { W3DTaa::setNightLo(v); }, []() -> float { return W3DTaa::getNightLo(); } },
-	{ "nighthi", FALSE, TRUE, [](float v) { W3DTaa::setNightHi(v); }, []() -> float { return W3DTaa::getNightHi(); } },
-	{ "nightfloor", FALSE, TRUE, [](float v) { W3DTaa::setNightFloor(v); }, []() -> float { return W3DTaa::getNightFloor(); } },
-	{ "nightfull", FALSE, TRUE, [](float v) { W3DTaa::setNightFull(v); }, []() -> float { return W3DTaa::getNightFull(); } },
-	{ "nightlift", FALSE, TRUE, [](float v) { W3DTaa::setNightLift(v); }, []() -> float { return W3DTaa::getNightLift(); } },
-	// Ronin @feature 21/10/2026 DX9: the daytime grade (W3DTaa) - final-pass colour as the night look is, so DX9Lights.ini keeps it too.
-	{ "grade", TRUE, TRUE, [](float v) { W3DTaa::setGrade((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return W3DTaa::getGrade() ? 1.0f : 0.0f; } },
-	{ "gradewarm", FALSE, TRUE, [](float v) { W3DTaa::setGradeWarm(v); }, []() -> float { return W3DTaa::getGradeWarm(); } },
-	{ "gradesat", FALSE, TRUE, [](float v) { W3DTaa::setGradeSat(v); }, []() -> float { return W3DTaa::getGradeSat(); } },
-	{ "grademids", FALSE, TRUE, [](float v) { W3DTaa::setGradeMids(v); }, []() -> float { return W3DTaa::getGradeMids(); } },
-	// Ronin @feature 22/10/2026 DX9: vibrance and local contrast (W3DTaa), by day - the final pass's colour, kept in DX9Lights.ini.
-	{ "vibrance", FALSE, TRUE, [](float v) { W3DTaa::setVibrance(v); }, []() -> float { return W3DTaa::getVibrance(); } },
-	{ "localcontrast", FALSE, TRUE, [](float v) { W3DTaa::setLocalContrast(v); }, []() -> float { return W3DTaa::getLocalContrast(); } },
-	{ "nightvibrance", FALSE, TRUE, [](float v) { W3DTaa::setNightVibrance(v); }, []() -> float { return W3DTaa::getNightVibrance(); } },
-	{ "nightcontrast", FALSE, TRUE, [](float v) { W3DTaa::setNightContrast(v); }, []() -> float { return W3DTaa::getNightContrast(); } },
-	// Ronin @feature 21/10/2026 DX9: HDR's look (W3DTaa, `hdr`) - the sun's lift by the time of day, its warmth, the curve's white. Its on /
+	// Ronin @feature 15/10/2026 DX9: the night look and the dark lift live in R3DTaa; listed here so DX9Lights.ini keeps them.
+	{ "night", TRUE, TRUE, [](float v) { R3DTaa::setNight((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return R3DTaa::getNight() ? 1.0f : 0.0f; } },
+	{ "nighttint", FALSE, TRUE, [](float v) { R3DTaa::setNightTint(v); }, []() -> float { return R3DTaa::getNightTint(); } },
+	{ "nightlo", FALSE, TRUE, [](float v) { R3DTaa::setNightLo(v); }, []() -> float { return R3DTaa::getNightLo(); } },
+	{ "nighthi", FALSE, TRUE, [](float v) { R3DTaa::setNightHi(v); }, []() -> float { return R3DTaa::getNightHi(); } },
+	{ "nightfloor", FALSE, TRUE, [](float v) { R3DTaa::setNightFloor(v); }, []() -> float { return R3DTaa::getNightFloor(); } },
+	{ "nightfull", FALSE, TRUE, [](float v) { R3DTaa::setNightFull(v); }, []() -> float { return R3DTaa::getNightFull(); } },
+	{ "nightlift", FALSE, TRUE, [](float v) { R3DTaa::setNightLift(v); }, []() -> float { return R3DTaa::getNightLift(); } },
+	// Ronin @feature 21/10/2026 DX9: the daytime grade (R3DTaa) - final-pass colour as the night look is, so DX9Lights.ini keeps it too.
+	{ "grade", TRUE, TRUE, [](float v) { R3DTaa::setGrade((v != 0.0f) ? TRUE : FALSE); }, []() -> float { return R3DTaa::getGrade() ? 1.0f : 0.0f; } },
+	{ "gradewarm", FALSE, TRUE, [](float v) { R3DTaa::setGradeWarm(v); }, []() -> float { return R3DTaa::getGradeWarm(); } },
+	{ "gradesat", FALSE, TRUE, [](float v) { R3DTaa::setGradeSat(v); }, []() -> float { return R3DTaa::getGradeSat(); } },
+	{ "grademids", FALSE, TRUE, [](float v) { R3DTaa::setGradeMids(v); }, []() -> float { return R3DTaa::getGradeMids(); } },
+	// Ronin @feature 22/10/2026 DX9: vibrance and local contrast (R3DTaa), by day - the final pass's colour, kept in DX9Lights.ini.
+	{ "vibrance", FALSE, TRUE, [](float v) { R3DTaa::setVibrance(v); }, []() -> float { return R3DTaa::getVibrance(); } },
+	{ "localcontrast", FALSE, TRUE, [](float v) { R3DTaa::setLocalContrast(v); }, []() -> float { return R3DTaa::getLocalContrast(); } },
+	{ "nightvibrance", FALSE, TRUE, [](float v) { R3DTaa::setNightVibrance(v); }, []() -> float { return R3DTaa::getNightVibrance(); } },
+	{ "nightcontrast", FALSE, TRUE, [](float v) { R3DTaa::setNightContrast(v); }, []() -> float { return R3DTaa::getNightContrast(); } },
+	// Ronin @feature 21/10/2026 DX9: HDR's look (R3DTaa, `hdr`) - the sun's lift by the time of day, its warmth, the curve's white. Its on /
 	// off is the player's: Options.ini DX9HDR.
-	{ "hdrmorning", FALSE, TRUE, [](float v) { W3DTaa::setSunGainAt(0, v); }, []() -> float { return W3DTaa::getSunGainAt(0); } },
-	{ "hdrafternoon", FALSE, TRUE, [](float v) { W3DTaa::setSunGainAt(1, v); }, []() -> float { return W3DTaa::getSunGainAt(1); } },
-	{ "hdrevening", FALSE, TRUE, [](float v) { W3DTaa::setSunGainAt(2, v); }, []() -> float { return W3DTaa::getSunGainAt(2); } },
-	{ "hdrnight", FALSE, TRUE, [](float v) { W3DTaa::setSunGainAt(3, v); }, []() -> float { return W3DTaa::getSunGainAt(3); } },
-	{ "hdrwarm", FALSE, TRUE, [](float v) { W3DTaa::setSunWarm(v); }, []() -> float { return W3DTaa::getSunWarm(); } },
-	{ "hdrwhite", FALSE, TRUE, [](float v) { W3DTaa::setWhite(v); }, []() -> float { return W3DTaa::getWhite(); } },
+	{ "hdrmorning", FALSE, TRUE, [](float v) { R3DTaa::setSunGainAt(0, v); }, []() -> float { return R3DTaa::getSunGainAt(0); } },
+	{ "hdrafternoon", FALSE, TRUE, [](float v) { R3DTaa::setSunGainAt(1, v); }, []() -> float { return R3DTaa::getSunGainAt(1); } },
+	{ "hdrevening", FALSE, TRUE, [](float v) { R3DTaa::setSunGainAt(2, v); }, []() -> float { return R3DTaa::getSunGainAt(2); } },
+	{ "hdrnight", FALSE, TRUE, [](float v) { R3DTaa::setSunGainAt(3, v); }, []() -> float { return R3DTaa::getSunGainAt(3); } },
+	{ "hdrwarm", FALSE, TRUE, [](float v) { R3DTaa::setSunWarm(v); }, []() -> float { return R3DTaa::getSunWarm(); } },
+	{ "hdrwhite", FALSE, TRUE, [](float v) { R3DTaa::setWhite(v); }, []() -> float { return R3DTaa::getWhite(); } },
 	LIGHT_SWITCH("lampmaps", setLampMaps, getLampMaps),
 	LIGHT_REAL("lampshadows", setLampShadows, getLampShadows),
 	LIGHT_REAL("lampbias", setLampBias, getLampBias),
@@ -2134,9 +2134,9 @@ static const Int	s_knobCount = (Int)(sizeof(s_knobs) / sizeof(s_knobs[0]));
 static float		s_knobDefaults[sizeof(s_knobs) / sizeof(s_knobs[0])];
 static Bool			s_knobsStarted = FALSE;
 
-Int W3DLocalLights::knobCount(void)	{ return s_knobCount; }
-const W3DLocalLights::Knob *W3DLocalLights::knobAt(Int index)	{ return (index >= 0 && index < s_knobCount) ? &s_knobs[index] : NULL; }
-const W3DLocalLights::Knob *W3DLocalLights::findKnob(const char *name)
+Int R3DLocalLights::knobCount(void)	{ return s_knobCount; }
+const R3DLocalLights::Knob *R3DLocalLights::knobAt(Int index)	{ return (index >= 0 && index < s_knobCount) ? &s_knobs[index] : NULL; }
+const R3DLocalLights::Knob *R3DLocalLights::findKnob(const char *name)
 {
 	for (Int k = 0; name != NULL && k < s_knobCount; ++k)
 	{
@@ -2148,7 +2148,7 @@ const W3DLocalLights::Knob *W3DLocalLights::findKnob(const char *name)
 
 // Ronin @feature 12/10/2026 DX9: the file is a modder's, not a player's setting: in the game's own Data\INI, where a loose
 // GameData.ini goes - not beside Options.ini.
-void W3DLocalLights::iniPath(char *out, Int size)
+void R3DLocalLights::iniPath(char *out, Int size)
 {
 	strncpy(out, "Data\\INI\\DX9Lights.ini", (size_t)size);
 	out[size - 1] = 0;
@@ -2156,7 +2156,7 @@ void W3DLocalLights::iniPath(char *out, Int size)
 
 // Ronin @feature 12/10/2026 DX9: reads the file over the current values: `name = value` lines, `;` or `#` comments, a missing line
 // keeps what the knob has; a switch also takes yes / no. Through the game's file system: a mod's .big can carry it.
-Int W3DLocalLights::loadIni(Int *skipped)
+Int R3DLocalLights::loadIni(Int *skipped)
 {
 	if (skipped != NULL)
 		*skipped = 0;
@@ -2207,7 +2207,7 @@ Int W3DLocalLights::loadIni(Int *skipped)
 	return set;
 }
 
-Bool W3DLocalLights::saveIni(void)
+Bool R3DLocalLights::saveIni(void)
 {
 	char path[512];
 	iniPath(path, (Int)sizeof(path));
@@ -2237,7 +2237,7 @@ Bool W3DLocalLights::saveIni(void)
 }
 
 // Ronin @feature 12/10/2026 DX9: the values the knobs had before the file was read. The debug view stays as it is.
-void W3DLocalLights::resetDefaults(void)
+void R3DLocalLights::resetDefaults(void)
 {
 	for (Int k = 0; s_knobsStarted && k < s_knobCount; ++k)
 	{
@@ -2246,7 +2246,7 @@ void W3DLocalLights::resetDefaults(void)
 	}
 }
 
-void W3DLocalLights::beginFrame(void)
+void R3DLocalLights::beginFrame(void)
 {
 	if (!s_knobsStarted)		// Ronin @feature 12/10/2026 DX9: once: the built-in values are noted, then the file is read over them
 	{
@@ -2265,16 +2265,16 @@ void W3DLocalLights::beginFrame(void)
 	gpuFrameEnd();		// Ronin @diagnostic 20/10/2026 DX9: a frame left open (no endFrame) is closed before the next one opens
 	if (s_enabled)
 		gpuFrameBegin(DX8Wrapper::_Get_D3D_Device8());
-	W3DSkyCube::update();		// Ronin @feature 12/10/2026 DX9: the map's sky cube: built again when the map, its time or its sky changed
+	R3DSkyCube::update();		// Ronin @feature 12/10/2026 DX9: the map's sky cube: built again when the map, its time or its sky changed
 	// Ronin @feature 12/10/2026 DX9: the sky cube: the reflective meshes mirror it (`lights reflect`). With the lights off, the art's picture.
-	DX8InstanceManagerClass::Set_Sky_Reflection(W3DSkyCube::peek(), s_enabled ? (float)s_reflect : 0.0f);
+	DX8InstanceManagerClass::Set_Sky_Reflection(R3DSkyCube::peek(), s_enabled ? (float)s_reflect : 0.0f);
 	// Ronin @feature 18/10/2026 DX9: reflections of the ground - the ground map and c12..c15 for ReflectiveRigid_ps: uv, the knobs,
 	// the level light and the height. All 0 with the lights off: the reflection as before.
 	{
 		float c[4 * 4] = { 0.0f };
 		float uv[4], amb[3], light[3], lo = 0.0f, span = 0.0f;
-		IDirect3DTexture9 *ground = W3DSkyCube::groundMap(uv, amb);
-		W3DSkyCube::groundLevel(light, &lo, &span);
+		IDirect3DTexture9 *ground = R3DSkyCube::groundMap(uv, amb);
+		R3DSkyCube::groundLevel(light, &lo, &span);
 		if (s_enabled)
 		{
 			for (Int k = 0; k < 4; ++k)
@@ -2292,8 +2292,8 @@ void W3DLocalLights::beginFrame(void)
 		IDirect3DTexture9 *prevColour = NULL, *prevDepth = NULL, *olderColour = NULL;
 		float c[6 * 4] = { 0.0f };
 		float cOlder[6 * 4] = { 0.0f };
-		W3DTaa::setLastFrameWanted((s_enabled && s_ssr && s_reflect > 0) ? TRUE : FALSE);	// Ronin @feature 19/10/2026 DX9: TAA or not
-		if (s_enabled && s_ssr && s_reflect > 0 && W3DTaa::getLastFrame(&prevColour, &prevDepth, c, &olderColour, cOlder))
+		R3DTaa::setLastFrameWanted((s_enabled && s_ssr && s_reflect > 0) ? TRUE : FALSE);	// Ronin @feature 19/10/2026 DX9: TAA or not
+		if (s_enabled && s_ssr && s_reflect > 0 && R3DTaa::getLastFrame(&prevColour, &prevDepth, c, &olderColour, cOlder))
 		{
 			c[22] = SSR_RUN;
 			c[23] = SSR_THICK;
@@ -2301,7 +2301,7 @@ void W3DLocalLights::beginFrame(void)
 		}
 		else
 			DX8InstanceManagerClass::Set_Screen_Reflection(NULL, NULL, NULL, NULL, NULL);
-		DX8InstanceManagerClass::Set_Reflect_Mask_Hooks(&W3DTaa::beginReflectMask, &W3DTaa::endReflectMask);
+		DX8InstanceManagerClass::Set_Reflect_Mask_Hooks(&R3DTaa::beginReflectMask, &R3DTaa::endReflectMask);
 	}
 	publishMapShadow();		// Ronin @feature 10/10/2026 DX9: every frame, whether or not the light pass runs
 	s_shown = s_stats;
@@ -2340,7 +2340,7 @@ void W3DLocalLights::beginFrame(void)
 		{
 			// Ronin @feature 09/10/2026 DX9: SSAO and TAA begin the scene depth before this; begin it here only when neither did.
 			// Ronin @feature 17/10/2026 DX9: under MSAA the view prepass fills it - for SSAO, or for the lights alone (wantsDepthPrepass).
-			if (W3DSsao::isActive() || W3DTaa::ownsDepth() || W3DSsao::getPrepassTarget() != 0)
+			if (R3DSsao::isActive() || R3DTaa::ownsDepth() || R3DSsao::getPrepassTarget() != 0)
 				active = TRUE;
 			else
 			{
@@ -2383,7 +2383,7 @@ void W3DLocalLights::beginFrame(void)
 	// Ronin @feature 09/10/2026 DX9: with the lamps' glows drawn by the shader, their textures go clear - and with them the pools
 	// of light painted on ground and walls, which the real lights now make.
 	swapBeamTextures(dev, s_beamsOn, (s_coronasOn && !s_keepPools) ? TRUE : FALSE);
-	MeshClass::Set_Light_Fixture_Note_Func(&W3DLocalLights::noteFixtureMesh);
+	MeshClass::Set_Light_Fixture_Note_Func(&R3DLocalLights::noteFixtureMesh);
 	// Ronin @feature 10/10/2026 DX9: the sun's shade is recorded from here to the light pass. The hooks are set every frame.
 	endSunShade();
 	s_shadeOpen    = active;
@@ -2391,7 +2391,7 @@ void W3DLocalLights::beginFrame(void)
 	s_treeShadeFrame = FALSE;
 	s_shadeWritten = FALSE;
 	s_shadeBeside  = NULL;
-	DX8InstanceManagerClass::Set_Sun_Shade_Hooks(&W3DLocalLights::beginSunShade, &W3DLocalLights::endSunShade);
+	DX8InstanceManagerClass::Set_Sun_Shade_Hooks(&R3DLocalLights::beginSunShade, &R3DLocalLights::endSunShade);
 	// Ronin @feature 11/10/2026 DX9: the lamp shadow maps: the frame's casters are listed from here to the light pass.
 	s_casterCount  = 0;
 	s_casterOpen   = (active && s_effects && s_lampMapsOn && (s_beamsOn || s_pointMaps)) ? TRUE : FALSE;	// point lights want casters without any beam
@@ -2402,10 +2402,10 @@ void W3DLocalLights::beginFrame(void)
 	s_lampMapCount = 0;
 	s_lampDrawn    = FALSE;
 	s_skinUsed     = 0;
-	MeshClass::Set_Light_Caster_Note_Func(&W3DLocalLights::noteCaster);
+	MeshClass::Set_Light_Caster_Note_Func(&R3DLocalLights::noteCaster);
 }
 
-void W3DLocalLights::endFrame(void)
+void R3DLocalLights::endFrame(void)
 {
 	s_dustCamera = NULL;		// Ronin @feature 23/10/2026 DX9: the camera was this frame's
 	// Ronin @bugfix 19/10/2026 DX9: last frame's picture is borrowed for this frame only. Handed back here, or the sun's shadow map,
@@ -2519,31 +2519,31 @@ static Bool makeDraw(LightDraw &d, const LightMemo &now, const LightMemo &was, c
 
 // Ronin @feature 12/10/2026 DX9: called by W3DTreeBuffer once it has cleared and bound the trees' shade record for the frame:
 // without it the record on that target is an older frame's.
-void W3DLocalLights::noteTreeShade(void)	{ s_treeShadeFrame = TRUE; }
-void  W3DLocalLights::setBounce(float v)	{ s_bounce = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
-void  W3DLocalLights::setSunTime(Int tod, float v)	{ if (tod >= 1 && tod <= 4) s_sunTime[tod - 1] = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-float W3DLocalLights::getSunTime(Int tod)			{ return (tod >= 1 && tod <= 4) ? s_sunTime[tod - 1] : 0.0f; }
-void  W3DLocalLights::setDaySun(float v)	{ s_daySun = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-float W3DLocalLights::getDaySun(void)		{ return s_daySun; }
-void  W3DLocalLights::setDayShade(float v)	{ s_dayShade = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-float W3DLocalLights::getDayShade(void)	{ return s_dayShade; }
-void  W3DLocalLights::setFxLights(float v)	{ s_fxLights = (v < 0.5f) ? 0 : ((v > 64.0f) ? 64 : (Int)(v + 0.5f)); }
-float W3DLocalLights::getFxLights(void)		{ return (float)s_fxLights; }
-void  W3DLocalLights::setFxStrength(float v)	{ s_fxStrength = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getFxStrength(void)	{ return s_fxStrength; }
-void  W3DLocalLights::setFxReach(float v)	{ s_fxReach = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
-float W3DLocalLights::getFxReach(void)		{ return s_fxReach; }
-void  W3DLocalLights::setFxMerge(Bool on)	{ s_fxMerge = on; }
-Bool  W3DLocalLights::getFxMerge(void)		{ return s_fxMerge; }
-void  W3DLocalLights::setFxFlares(Bool on)	{ s_fxFlares = on; }
-Bool  W3DLocalLights::getFxFlares(void)		{ return s_fxFlares; }
-void  W3DLocalLights::setFxFire(float v)	{ s_fxFire = (v < 0.0f) ? 0.0f : ((v > 200.0f) ? 200.0f : v); }
-float W3DLocalLights::getFxFire(void)		{ return s_fxFire; }
-void  W3DLocalLights::setFxSmooth(float v)	{ s_fxSmooth = (v < 0.0f) ? 0.0f : ((v > 0.95f) ? 0.95f : v); }
-float W3DLocalLights::getFxSmooth(void)		{ return s_fxSmooth; }
-void  W3DLocalLights::setSearchLight(Bool on)	{ s_searchLight = on; }
-Bool  W3DLocalLights::getSearchLight(void)	{ return s_searchLight; }
-float W3DLocalLights::getBounce(void)		{ return s_bounce; }
+void R3DLocalLights::noteTreeShade(void)	{ s_treeShadeFrame = TRUE; }
+void  R3DLocalLights::setBounce(float v)	{ s_bounce = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+void  R3DLocalLights::setSunTime(Int tod, float v)	{ if (tod >= 1 && tod <= 4) s_sunTime[tod - 1] = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float R3DLocalLights::getSunTime(Int tod)			{ return (tod >= 1 && tod <= 4) ? s_sunTime[tod - 1] : 0.0f; }
+void  R3DLocalLights::setDaySun(float v)	{ s_daySun = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float R3DLocalLights::getDaySun(void)		{ return s_daySun; }
+void  R3DLocalLights::setDayShade(float v)	{ s_dayShade = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float R3DLocalLights::getDayShade(void)	{ return s_dayShade; }
+void  R3DLocalLights::setFxLights(float v)	{ s_fxLights = (v < 0.5f) ? 0 : ((v > 64.0f) ? 64 : (Int)(v + 0.5f)); }
+float R3DLocalLights::getFxLights(void)		{ return (float)s_fxLights; }
+void  R3DLocalLights::setFxStrength(float v)	{ s_fxStrength = (v < 0.0f) ? 0.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getFxStrength(void)	{ return s_fxStrength; }
+void  R3DLocalLights::setFxReach(float v)	{ s_fxReach = (v < 0.25f) ? 0.25f : ((v > 4.0f) ? 4.0f : v); }
+float R3DLocalLights::getFxReach(void)		{ return s_fxReach; }
+void  R3DLocalLights::setFxMerge(Bool on)	{ s_fxMerge = on; }
+Bool  R3DLocalLights::getFxMerge(void)		{ return s_fxMerge; }
+void  R3DLocalLights::setFxFlares(Bool on)	{ s_fxFlares = on; }
+Bool  R3DLocalLights::getFxFlares(void)		{ return s_fxFlares; }
+void  R3DLocalLights::setFxFire(float v)	{ s_fxFire = (v < 0.0f) ? 0.0f : ((v > 200.0f) ? 200.0f : v); }
+float R3DLocalLights::getFxFire(void)		{ return s_fxFire; }
+void  R3DLocalLights::setFxSmooth(float v)	{ s_fxSmooth = (v < 0.0f) ? 0.0f : ((v > 0.95f) ? 0.95f : v); }
+float R3DLocalLights::getFxSmooth(void)		{ return s_fxSmooth; }
+void  R3DLocalLights::setSearchLight(Bool on)	{ s_searchLight = on; }
+Bool  R3DLocalLights::getSearchLight(void)	{ return s_searchLight; }
+float R3DLocalLights::getBounce(void)		{ return s_bounce; }
 
 // Ronin @feature 12/10/2026 DX9: HDR STAGE 1B - THE SUN LIFT. With a float frame the sun may be brighter than 1: one quad adds the
 // frame times (gain - 1) times the sun's share of each pixel, from the two shade records. Before the lamps' copy of the frame.
@@ -2551,7 +2551,7 @@ static Bool sunLiftWanted(const D3DSURFACE_DESC &rd)
 {
 	float lift[3];
 	return (s_view != 1 && s_view != 2 && s_quadVS != NULL && s_lightPS != NULL && rd.Format == D3DFMT_A16B16G16R16F &&
-			rd.MultiSampleType == D3DMULTISAMPLE_NONE && s_shadeFrame && TheTerrainShadowPass.enabled && W3DTaa::getSunLift(lift)) ? TRUE : FALSE;
+			rd.MultiSampleType == D3DMULTISAMPLE_NONE && s_shadeFrame && TheTerrainShadowPass.enabled && R3DTaa::getSunLift(lift)) ? TRUE : FALSE;
 }
 
 // Ronin @feature 21/10/2026 DX9: `fromMap` - the shade pass ran this frame: its record holds every pixel's shade (infantry, glass and
@@ -2559,7 +2559,7 @@ static Bool sunLiftWanted(const D3DSURFACE_DESC &rd)
 static void drawSunLift(IDirect3DDevice9 *dev, const D3DSURFACE_DESC &rd, Bool fromMap)
 {
 	float lift[3];
-	if (!sunLiftWanted(rd) || !W3DTaa::getSunLift(lift))
+	if (!sunLiftWanted(rd) || !R3DTaa::getSunLift(lift))
 		return;
 	IDirect3DSurface9 *rt1 = NULL;
 	if (SUCCEEDED(dev->GetRenderTarget(1, &rt1)) && rt1 != NULL)
@@ -2648,7 +2648,7 @@ static void drawSunLift(IDirect3DDevice9 *dev, const D3DSURFACE_DESC &rd, Bool f
 	dev->SetTexture(3, ground);
 	dev->SetTexture(5, trees);
 
-	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::drawSunLift");
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DLocalLights::drawSunLift");
 	dev->SetVertexShader(s_quadVS);		// AFTER the layout bind - BindLayoutFVF clears the VS
 	dev->SetPixelShader(s_lightPS);
 	const float w = (float)rd.Width, h = (float)rd.Height;
@@ -2778,7 +2778,7 @@ static Bool shadeFromSunMap(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, 
 		dev->SetRenderState(D3DRS_CLIPPLANEENABLE,   0);
 		dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE |
 													D3DCOLORWRITEENABLE_ALPHA);
-		DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::shadeFromSunMap");
+		DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DLocalLights::shadeFromSunMap");
 		dev->SetVertexShader(s_quadVS);		// after the layout bind - BindLayoutFVF clears the VS
 		dev->SetPixelShader(s_lightPS);
 		// Ronin @feature 21/10/2026 DX9: c0..c3 and c15 put back after - this runs before the light pass keeps what it restores.
@@ -2787,7 +2787,7 @@ static Bool shadeFromSunMap(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, 
 		dev->SetPixelShaderConstantF(0, c0to3, 4);
 		// Ronin @feature 20/10/2026 DX9: TAA's shift this frame, as the lights take it: without it a rebuilt point sits ~0.12 off its surface.
 		float jitterX = 0.0f, jitterY = 0.0f;
-		W3DTaa::getJitterNDC(&jitterX, &jitterY);
+		R3DTaa::getJitterNDC(&jitterX, &jitterY);
 		const float jitter[4] = { -0.5f * jitterX, 0.5f * jitterY, 0.0f, 0.0f };
 		dev->SetPixelShaderConstantF(15, jitter, 1);
 		dev->SetPixelShaderConstantF(84, c84, 12);
@@ -2889,12 +2889,12 @@ static Bool sunShaftsWanted(void)
 }
 
 // Ronin @feature 22/10/2026 DX9: the beams' two half-size buffers (16-bit float: the lit air, the depth). A device reset fails while
-// they live: W3DTaa::releaseResources lets them go, and the next shafts frame makes them again.
+// they live: R3DTaa::releaseResources lets them go, and the next shafts frame makes them again.
 static IDirect3DTexture9			*s_shaftBuf[2]  = { NULL, NULL };
 static UnsignedInt				s_shaftBufW     = 0;
 static UnsignedInt				s_shaftBufH     = 0;
 
-void W3DLocalLights::releaseShaftBuffers(void)
+void R3DLocalLights::releaseShaftBuffers(void)
 {
 	for (Int i = 0; i < 2; ++i)
 	{
@@ -2912,13 +2912,13 @@ static Bool ensureShaftBuffers(IDirect3DDevice9 *dev, UnsignedInt w, UnsignedInt
 {
 	if (s_shaftBuf[0] != NULL && s_shaftBuf[1] != NULL && s_shaftBufW == w && s_shaftBufH == h)
 		return TRUE;
-	W3DLocalLights::releaseShaftBuffers();
+	R3DLocalLights::releaseShaftBuffers();
 	for (Int i = 0; i < 2; ++i)
 	{
 		if (FAILED(dev->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &s_shaftBuf[i], NULL)))
 		{
 			s_shaftBuf[i] = NULL;
-			W3DLocalLights::releaseShaftBuffers();
+			R3DLocalLights::releaseShaftBuffers();
 			return FALSE;
 		}
 	}
@@ -2953,9 +2953,9 @@ static void drawSunShafts(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, co
 						vpMin.X, vpMin.Y, vpMax.X - vpMin.X, vpMax.Y - vpMin.Y, 1.0f / (float)rd.Width, 1.0f / (float)rd.Height,
 						0.0f, 0.0f };
 	float jitterX = 0.0f, jitterY = 0.0f;
-	W3DTaa::getJitterNDC(&jitterX, &jitterY);
+	R3DTaa::getJitterNDC(&jitterX, &jitterY);
 	// Ronin @feature 22/10/2026 DX9: the step starts move on each frame only for TAA to average; without it they stay put.
-	const float c15[4] = { -0.5f * jitterX, 0.5f * jitterY, 0.0f, W3DTaa::isActive() ? (float)(s_fixFrame & 63) : 0.0f };
+	const float c15[4] = { -0.5f * jitterX, 0.5f * jitterY, 0.0f, R3DTaa::isActive() ? (float)(s_fixFrame & 63) : 0.0f };
 	Vector3 worldZ;
 	Matrix3D::Inverse_Rotate_Vector(camera.Get_Transform(), Vector3(0.0f, 0.0f, 1.0f), &worldZ);
 	const float c32[4] = { worldZ.X, worldZ.Y, worldZ.Z, s_shaftLayer };
@@ -3031,7 +3031,7 @@ static void drawSunShafts(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, co
 	dev->SetSamplerState(11, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 	dev->SetSamplerState(11, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 
-	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::drawSunShafts");
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DLocalLights::drawSunShafts");
 	dev->SetVertexShader(s_quadVS);		// after the layout bind - BindLayoutFVF clears the VS
 	dev->SetPixelShader(s_lightPS);
 	if (view == 10)
@@ -3128,7 +3128,7 @@ static void drawSunShafts(IDirect3DDevice9 *dev, IDirect3DTexture9 *depthTex, co
 
 // Ronin @feature 23/10/2026 DX9: DUST IN THE SHAFTS (`lights shaftdust`), drawn after TAA's copy of the frame before the effects, so its
 // auto-reactive mask treats a mote as it treats a snowflake. Once a frame, with the light pass's camera; full size, added.
-void W3DLocalLights::drawShaftDust(void)
+void R3DLocalLights::drawShaftDust(void)
 {
 	if (s_shaftDust <= 0.0f || s_dustCamera == NULL || s_dustFrame == s_fixFrame || !sunShaftsWanted())
 		return;
@@ -3155,7 +3155,7 @@ void W3DLocalLights::drawShaftDust(void)
 	DX8Wrapper::Resume_Scene_Depth();
 }
 
-void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
+void R3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 {
 	if (!s_active || s_passDone || scene == NULL)
 		return;
@@ -3915,7 +3915,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	}
 	// Ronin @feature 15/10/2026 DX9: the ground as a light (`lights bounce`) wants the pass with no lamp on screen too.
 	float bounceUV[4], bounceAmb[3];
-	IDirect3DTexture9 *bounceMap = (s_bounce > 0.0f && (s_view == 0 || s_view == 6)) ? W3DSkyCube::groundMap(bounceUV, bounceAmb) : NULL;
+	IDirect3DTexture9 *bounceMap = (s_bounce > 0.0f && (s_view == 0 || s_view == 6)) ? R3DSkyCube::groundMap(bounceUV, bounceAmb) : NULL;
 	// Ronin @feature 21/10/2026 DX9: HDR's sun lift (stage 1b) draws with or without a light on screen - after the shade pass below.
 	const Bool liftWanted = sunLiftWanted(rd);
 	const Bool shaftsWanted = sunShaftsWanted();		// Ronin @feature 22/10/2026 DX9: the sun shafts draw with no light on screen too
@@ -4024,7 +4024,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
 
 	// Ronin @bugfix 09/10/2026 DX9: TAA's change mask as render target 1 while the lights draw (it blends as target 0 does: summed).
-	const Bool masked = W3DTaa::beginLightMask();
+	const Bool masked = R3DTaa::beginLightMask();
 	s_stats.masked = masked;
 
 	// Ronin @feature 09/10/2026 DX9: the quads are in whole-target pixels, so the viewport is the whole target for the pass.
@@ -4097,7 +4097,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	// Ronin @bugfix 11/10/2026 DX9: TAA shifts the frame by part of a pixel, another each frame (camera.cpp). Rebuilt from the depth as
 	// if it had not, a point is up to 0.15 units off its surface: the pools of lamps close to what they light flickered in shadow.
 	float jitterX = 0.0f, jitterY = 0.0f;
-	W3DTaa::getJitterNDC(&jitterX, &jitterY);
+	R3DTaa::getJitterNDC(&jitterX, &jitterY);
 	const float jitter[4] = { -0.5f * jitterX, 0.5f * jitterY, s_rays, 1.0f + (s_daySun - 1.0f) * s_sunNow };		// the shift, in viewport widths and heights; z: `lights rays`
 	dev->SetPixelShaderConstantF(15, jitter, 1);
 	// Ronin @feature 16/10/2026 DX9: c33.x - a local light's strength in a sun shadow, by the time of day (`dayshade`).
@@ -4149,7 +4149,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	Bool mapUp = TRUE;							// whatever c16..c29 hold is not ours yet
 
 	// Ronin @feature 09/10/2026 DX9: the layout goes through the wrapper - a raw SetFVF leaves its cached layout stale.
-	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DLocalLights::renderPass");
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DLocalLights::renderPass");
 	dev->SetVertexShader(s_quadVS);		// AFTER the layout bind - BindLayoutFVF clears the VS
 	dev->SetPixelShader(s_lightPS);
 
@@ -4262,7 +4262,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	}
 	s_stats.drawn = lightCount;
 	if (masked)
-		W3DTaa::endLightMask();
+		R3DTaa::endLightMask();
 	if (shaftsWanted)
 		drawSunShafts(dev, depthTex, rd, camera, 10);		// Ronin @feature 22/10/2026 DX9: after the lights - the air is in front of what they lit
 
@@ -4320,7 +4320,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 
 	// Ronin @diagnostic 12/10/2026 DX9: `lights view 5` - the sky cube as a panorama across the top of the view: all round from left
 	// to right, straight up at its top edge, straight down at its bottom. Over the lit frame, at the nearest depth as view 4 is.
-	if (s_view == 5 && W3DSkyCube::peek() != NULL)
+	if (s_view == 5 && R3DSkyCube::peek() != NULL)
 	{
 		const float showSky[4] = { zNear, zFar, 5.0f, s_over };
 		dev->SetPixelShaderConstantF(0, showSky, 1);
@@ -4333,7 +4333,7 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		dev->SetSamplerState(7, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
 		dev->SetSamplerState(7, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
 		dev->SetSamplerState(7, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-		dev->SetTexture(7, W3DSkyCube::peek());
+		dev->SetTexture(7, R3DSkyCube::peek());
 		const float wide = floorf((vx1 - vx0) * 0.6f), high = floorf(wide * 0.5f);
 		const float x0 = vx0 + floorf((vx1 - vx0 - wide) * 0.5f), y0 = vy0 + 2.0f;
 		const float l = ((x0 - 0.5f) / targetW) * 2.0f - 1.0f;
@@ -4372,13 +4372,13 @@ void W3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	DX8Wrapper::Invalidate_Cached_Render_States();
 }
 
-void W3DLocalLights::shutdown(void)
+void R3DLocalLights::shutdown(void)
 {
 	DX8InstanceManagerClass::Set_Sky_Reflection(NULL, 0.0f);	// Ronin @feature 12/10/2026 DX9: the mesh renderer holds the cube too
 	DX8InstanceManagerClass::Set_Reflection_Ground(NULL, NULL);	// Ronin @feature 18/10/2026 DX9: ... and the ground map
 	DX8InstanceManagerClass::Set_Screen_Reflection(NULL, NULL, NULL, NULL, NULL);	// Ronin @feature 18/10/2026 DX9: ... and last frame's
 	DX8InstanceManagerClass::Set_Reflect_Mask_Hooks(NULL, NULL);
-	W3DSkyCube::shutdown();
+	R3DSkyCube::shutdown();
 	// Ronin @feature 09/10/2026 DX9: the beams: every swapped texture gets its own surface back, and meshes stop asking.
 	MeshClass::Set_Light_Fixture_Note_Func(NULL);
 	DX8InstanceManagerClass::Set_Sun_Shade_Hooks(NULL, NULL);

@@ -1,5 +1,5 @@
 // Ronin @bugfix 03/10/2026 DX9: TAA's water mask, copied into the velocity target. The water marks its own pixels while it
-// draws (WaterSea_ps COLOR1, W3DTaa::beginWaterMask). docs/Water_Work.md §6, docs/AntiAliasing_Work.md.
+// draws (WaterSea_ps COLOR1, R3DTaa::beginWaterMask). docs/Water_Work.md §6, docs/AntiAliasing_Work.md.
 //
 // Compile with: fxc /T ps_3_0 /Fo TaaWaterMask.pso TaaWaterMask_ps.hlsl   (pairs with ScreenQuad.vso)
 

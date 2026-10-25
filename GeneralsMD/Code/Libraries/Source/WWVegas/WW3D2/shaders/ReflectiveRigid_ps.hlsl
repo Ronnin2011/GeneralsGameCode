@@ -5,11 +5,11 @@
 sampler2D g_EnvSampler : register(s0); // this pass's stage-0 texture (lakedusk)
 float4    g_CameraPos  : register(c0); // world-space camera position (xyz)
 float4x4  g_View       : register(c1); // world->view; uploaded transposed (mirrors the VS g_ViewProj convention)
-// Ronin @feature 12/10/2026 DX9: lighting step 5. The map's own sky (W3DSkyCube) by the WORLD reflection vector, in place of the
+// Ronin @feature 12/10/2026 DX9: lighting step 5. The map's own sky (R3DSkyCube) by the WORLD reflection vector, in place of the
 // art's one picture. g_SkyMode.x: 0 = the picture as before, 1 = the cube, 2 = the cube with the sky in every pane.
 samplerCUBE g_SkyCube  : register(s6);
 float4    g_SkyMode    : register(c6);
-// Ronin @feature 18/10/2026 DX9: reflections of the ground. The lit ground map (W3DSkyCube: rgb = colour x its level light, halved;
+// Ronin @feature 18/10/2026 DX9: reflections of the ground. The lit ground map (R3DSkyCube: rgb = colour x its level light, halved;
 // a = height) and its constants (Set_Reflection_Ground).
 sampler2D g_GroundMap  : register(s7);
 float4    g_GroundUV   : register(c12);  // xy = the map's corner in the world, zw = 1 / its size
@@ -24,13 +24,13 @@ float4x4  g_PrevViewProj : register(c16);
 float4    g_PrevView   : register(c20);  // xy = the 3D view's corner in those textures, zw = its size (0..1)
 float4    g_Ssr        : register(c21);  // x = on, y = the far plane, z = how far a ray runs, w = how far behind a hit may end
 // Ronin @feature 18/10/2026 DX9: the reflections' change mask - the frame before last (TAA's other history) and its camera. Where
-// the hit changed between the two, COLOR1.r marks the pane for TAA (W3DTaa::beginReflectMask). c69..c74: no other shader's.
+// the hit changed between the two, COLOR1.r marks the pane for TAA (R3DTaa::beginReflectMask). c69..c74: no other shader's.
 sampler2D g_OlderColour   : register(s10);
 float4x4  g_OlderViewProj : register(c69);
 float4    g_OlderView     : register(c73);  // xy = the 3D view's corner in it, zw = its size (0..1)
 float4    g_ReflMark      : register(c74);  // x = the mask is bound, y = the older picture is there, z = least change, w = gain
 // Ronin @feature 19/10/2026 DX9: the mover mark - last frame's velocity and the frame before's (TAA's; alpha = what drew there),
-// bound by W3DTaa::beginReflectMask round this draw. A unit at the hit in either frame: COLOR1.b, and TAA restarts the pane.
+// bound by R3DTaa::beginReflectMask round this draw. A unit at the hit in either frame: COLOR1.b, and TAA restarts the pane.
 sampler2D g_PrevVel       : register(s11);
 sampler2D g_OlderVel      : register(s12);
 float4    g_ReflVel       : register(c75);  // x = both are there, yz = one texel (uv)

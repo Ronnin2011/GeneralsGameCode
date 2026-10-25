@@ -27,8 +27,8 @@
 #include "Common/GlobalData.h"
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "WW3D2/dx8instancing.h"
-#include "W3DDevice/GameClient/W3DShadowMapState.h"
-#include "W3DDevice/GameClient/W3DShadowMap.h"
+#include "W3DDevice/GameClient/R3DShadowMapState.h"
+#include "W3DDevice/GameClient/R3DShadowMap.h"
 // Ronin @perf 19/08/2026 DX9: §29j.7 static caster bake
 #include <vector>
 #include "WW3D2/rendobj.h"
@@ -50,28 +50,28 @@ Bool TheShowShadowMapDebug = FALSE;
 Bool TheKeepShadowVolumesWithMaps = FALSE;
 
 
-ShadowMapMode	W3DShadowMap::m_mode		= SHADOWMAP_UNAVAILABLE;
-Int				W3DShadowMap::m_resolution	= 0;
+ShadowMapMode	R3DShadowMap::m_mode		= SHADOWMAP_UNAVAILABLE;
+Int				R3DShadowMap::m_resolution	= 0;
 // Ronin @feature 23/08/2026 DX9: §29i.2. Defaults are the SHIPPED values (High), so nothing moves
 // until applyQuality runs.
-Real			W3DShadowMap::m_maxShadowDistance = 1200.0f;
-Int				W3DShadowMap::m_quality		= W3DShadowMap::SHADOWQ_HIGH;
-Int				W3DShadowMap::m_splitCount	= 2;
-TextureClass	*W3DShadowMap::m_colorTarget[W3DShadowMap::MAX_SHADOW_SPLITS] = { NULL };
-ZTextureClass	*W3DShadowMap::m_depthTarget[W3DShadowMap::MAX_SHADOW_SPLITS] = { NULL };
-IDirect3DTexture9	*W3DShadowMap::m_accumTex[2]  = { NULL, NULL };
-IDirect3DSurface9	*W3DShadowMap::m_accumSurf[2] = { NULL, NULL };
-IDirect3DTexture9	*W3DShadowMap::m_treeAccumTex[2]  = { NULL, NULL };
-IDirect3DSurface9	*W3DShadowMap::m_treeAccumSurf[2] = { NULL, NULL };
-IDirect3DTexture9	*W3DShadowMap::m_movingMaskTex[W3DShadowMap::MAX_SHADOW_SPLITS] = { NULL };
-unsigned char		W3DShadowMap::m_movingMaskGrid[W3DShadowMap::MOVING_MASK_RES * W3DShadowMap::MOVING_MASK_RES] = { 0 };
-Int					W3DShadowMap::m_movingMaskSplit = -1;
-Int				W3DShadowMap::m_accumIndex	= 0;
-Int				W3DShadowMap::m_accumW		= 0;
-Int				W3DShadowMap::m_accumH		= 0;
+Real			R3DShadowMap::m_maxShadowDistance = 1200.0f;
+Int				R3DShadowMap::m_quality		= R3DShadowMap::SHADOWQ_HIGH;
+Int				R3DShadowMap::m_splitCount	= 2;
+TextureClass	*R3DShadowMap::m_colorTarget[R3DShadowMap::MAX_SHADOW_SPLITS] = { NULL };
+ZTextureClass	*R3DShadowMap::m_depthTarget[R3DShadowMap::MAX_SHADOW_SPLITS] = { NULL };
+IDirect3DTexture9	*R3DShadowMap::m_accumTex[2]  = { NULL, NULL };
+IDirect3DSurface9	*R3DShadowMap::m_accumSurf[2] = { NULL, NULL };
+IDirect3DTexture9	*R3DShadowMap::m_treeAccumTex[2]  = { NULL, NULL };
+IDirect3DSurface9	*R3DShadowMap::m_treeAccumSurf[2] = { NULL, NULL };
+IDirect3DTexture9	*R3DShadowMap::m_movingMaskTex[R3DShadowMap::MAX_SHADOW_SPLITS] = { NULL };
+unsigned char		R3DShadowMap::m_movingMaskGrid[R3DShadowMap::MOVING_MASK_RES * R3DShadowMap::MOVING_MASK_RES] = { 0 };
+Int					R3DShadowMap::m_movingMaskSplit = -1;
+Int				R3DShadowMap::m_accumIndex	= 0;
+Int				R3DShadowMap::m_accumW		= 0;
+Int				R3DShadowMap::m_accumH		= 0;
 
 // Ronin @feature 03/09/2026 DX9: §29j.13h. Screen-space accumulation pair.
-void W3DShadowMap::releaseAccumTargets(void)
+void R3DShadowMap::releaseAccumTargets(void)
 {
 	for (int i = 0; i < 2; ++i)
 	{
@@ -86,7 +86,7 @@ void W3DShadowMap::releaseAccumTargets(void)
 
 // Made lazily and re-made on a resolution change or a device reset: these are raw D3D objects in
 // POOL_DEFAULT, so nothing else recreates them. Failure is non-fatal — NULL means no accumulation.
-void W3DShadowMap::ensureAccumTargets(void)
+void R3DShadowMap::ensureAccumTargets(void)
 {
 	int w = 0, h = 0, bits = 0;
 	bool windowed = false;
@@ -163,25 +163,25 @@ void W3DShadowMap::ensureAccumTargets(void)
 }
 
 
-Matrix4x4		W3DShadowMap::m_lightViewProj[W3DShadowMap::MAX_SHADOW_SPLITS];
-Real			W3DShadowMap::m_lastRadius[W3DShadowMap::MAX_SHADOW_SPLITS] = { 0.0f };
-Real			W3DShadowMap::m_lastSunCot	= 2.0f;	// ~27 deg sun until updateLightMatrices runs
-Real			W3DShadowMap::m_lastDepthHalf[W3DShadowMap::MAX_SHADOW_SPLITS] = { 0.0f };
-Real			W3DShadowMap::m_lastRequired = 0.0f;	// §29j.13f — fit before the extent hold
-Real			W3DShadowMap::m_lastBoxX	= 0.0f;
-Real			W3DShadowMap::m_lastBoxY	= 0.0f;
-Real			W3DShadowMap::m_lastBareBoxX = 0.0f;
-Real			W3DShadowMap::m_lastBareBoxY = 0.0f;
-Real			W3DShadowMap::m_lastExtentX = 0.0f;
-Real			W3DShadowMap::m_lastExtentY = 0.0f;
-Real			W3DShadowMap::m_frameMaxReceiverZ = -1.0e30f;
-Real			W3DShadowMap::m_heldHeadroom = 400.0f;
+Matrix4x4		R3DShadowMap::m_lightViewProj[R3DShadowMap::MAX_SHADOW_SPLITS];
+Real			R3DShadowMap::m_lastRadius[R3DShadowMap::MAX_SHADOW_SPLITS] = { 0.0f };
+Real			R3DShadowMap::m_lastSunCot	= 2.0f;	// ~27 deg sun until updateLightMatrices runs
+Real			R3DShadowMap::m_lastDepthHalf[R3DShadowMap::MAX_SHADOW_SPLITS] = { 0.0f };
+Real			R3DShadowMap::m_lastRequired = 0.0f;	// §29j.13f — fit before the extent hold
+Real			R3DShadowMap::m_lastBoxX	= 0.0f;
+Real			R3DShadowMap::m_lastBoxY	= 0.0f;
+Real			R3DShadowMap::m_lastBareBoxX = 0.0f;
+Real			R3DShadowMap::m_lastBareBoxY = 0.0f;
+Real			R3DShadowMap::m_lastExtentX = 0.0f;
+Real			R3DShadowMap::m_lastExtentY = 0.0f;
+Real			R3DShadowMap::m_frameMaxReceiverZ = -1.0e30f;
+Real			R3DShadowMap::m_heldHeadroom = 400.0f;
 // Ronin @perf 14/09/2026 DX9: §29i.3. Near map's own held headroom, unfloored. Starts high like the far one.
-Real			W3DShadowMap::m_heldNearHeadroom = 400.0f;
+Real			R3DShadowMap::m_heldNearHeadroom = 400.0f;
 
-CameraClass		*W3DShadowMap::m_lightCamera	= NULL;
-IDirect3DVertexShader9	*W3DShadowMap::m_terrainShadowVS = NULL;
-IDirect3DPixelShader9	*W3DShadowMap::m_terrainShadowPS = NULL;
+CameraClass		*R3DShadowMap::m_lightCamera	= NULL;
+IDirect3DVertexShader9	*R3DShadowMap::m_terrainShadowVS = NULL;
+IDirect3DPixelShader9	*R3DShadowMap::m_terrainShadowPS = NULL;
 
 // Ronin @feature 14/08/2026 §29 DX9: read a compiled shader blob. Mirrors
 // DX8InstanceManagerClass::Load_Pixel_Shader_From_File; duplicated because that one is private and
@@ -232,12 +232,12 @@ static DWORD *loadShaderBlob(const char *path, DWORD *outSize)
 #define FOURCC_DF16 ((D3DFORMAT)MAKEFOURCC('D','F','1','6'))
 #define FOURCC_DF24 ((D3DFORMAT)MAKEFOURCC('D','F','2','4'))
 
-Bool W3DShadowMap::isAvailable(void)
+Bool R3DShadowMap::isAvailable(void)
 {
 	return m_mode != SHADOWMAP_UNAVAILABLE && m_colorTarget[0] != NULL;
 }
 
-TextureBaseClass *W3DShadowMap::peekShadowTexture(void)
+TextureBaseClass *R3DShadowMap::peekShadowTexture(void)
 {
 	// On HW_DEPTH the depth texture IS the shadow map; the colour target is a bound dummy.
 	// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. Split 0 is the NEAR map; the far one is published separately.
@@ -262,7 +262,7 @@ static Bool checkShadowFormat(D3DFORMAT adapterFormat, DWORD usage, D3DRESOURCET
 	return ok;
 }
 
-ShadowMapMode W3DShadowMap::probeCapabilities(void)
+ShadowMapMode R3DShadowMap::probeCapabilities(void)
 {
 	D3DDISPLAYMODE mode;
 	const D3DCAPS9 &caps = DX8Wrapper::Get_Current_Caps()->Get_DX8_Caps();
@@ -335,7 +335,7 @@ ShadowMapMode W3DShadowMap::probeCapabilities(void)
 // Phase 1 — target, light matrices, depth-pass bind
 //=============================================================================================
 
-Bool W3DShadowMap::init(Int resolution)
+Bool R3DShadowMap::init(Int resolution)
 {
 	shutdown();
 
@@ -424,7 +424,7 @@ Bool W3DShadowMap::init(Int resolution)
 	return TRUE;
 }
 
-void W3DShadowMap::shutdown(void)
+void R3DShadowMap::shutdown(void)
 {
 	for (Int i = 0; i < MAX_SHADOW_SPLITS; ++i)
 	{
@@ -444,7 +444,7 @@ void W3DShadowMap::shutdown(void)
 		m_lastRadius[i] = 0.0f;
 }
 
-void W3DShadowMap::releaseResources(void)
+void R3DShadowMap::releaseResources(void)
 {
 	// Ronin @bugfix 08/10/2026 DX9: unpublish first, as applyQuality does. The receivers keep raw pointers; after a device
 	// reset the water mirror (drawn before the next update) bound a freed depth texture and crashed in SetTexture.
@@ -458,7 +458,7 @@ void W3DShadowMap::releaseResources(void)
 	shutdown();
 }
 
-void W3DShadowMap::reacquireResources(void)
+void R3DShadowMap::reacquireResources(void)
 {
 	if (m_resolution > 0)
 		init(m_resolution);
@@ -468,7 +468,7 @@ void W3DShadowMap::reacquireResources(void)
 // HAZARD: init() calls shutdown(), which releases the targets — so both receivers are pushed to NULL
 // FIRST, then the target is rebuilt, and the bake is dirtied because its map is gone.
 // RESOLUTION AND MAP COUNT are the levers, measured: PCF is not a tier. Doc §6.
-Bool W3DShadowMap::applyQuality(void)
+Bool R3DShadowMap::applyQuality(void)
 {
 	Int level = (TheGlobalData != NULL) ? TheGlobalData->m_shadowMapQuality : (Int)SHADOWQ_HIGH;
 	if (level < SHADOWQ_OFF)    level = SHADOWQ_OFF;
@@ -518,7 +518,7 @@ Bool W3DShadowMap::applyQuality(void)
 // Ronin @feature 09/09/2026 DX9: §29i.3 step 2. `split` selects the held-extent lattice; fitNear/fitFar
 // are the ground band along the view ray. Split 0 over 0..maxShadowDistance is the fit that shipped.
 // Ronin @bugfix 13/09/2026 DX9: §29i.3. screenFrac fits only the central fraction of the screen; 1 = the whole view.
-void W3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int split, Real fitNear, Real fitFar, Real screenFrac)
+void R3DShadowMap::updateLightMatrices(const FrustumClass &cameraFrustum, Int split, Real fitNear, Real fitFar, Real screenFrac)
 {
 	if (split < 0) split = 0;
 	if (split >= MAX_SHADOW_SPLITS) split = MAX_SHADOW_SPLITS - 1;
@@ -1200,7 +1200,7 @@ static void verifyCasterMotion(void)
 
 // Ronin @perf 19/08/2026 DX9: §29j.7. Terrain has no drawable but is not a CLASSID_MESH, so it is NOT
 // static and stays on the normal path.
-Bool W3DShadowMap::isStaticCaster(RenderObjClass *robj)
+Bool R3DShadowMap::isStaticCaster(RenderObjClass *robj)
 {
 	if (robj == NULL)
 		return FALSE;
@@ -1223,7 +1223,7 @@ Bool W3DShadowMap::isStaticCaster(RenderObjClass *robj)
 
 // Ronin @feature 13/09/2026 DX9: §29i.3. Start a split's moving-caster mask. Cleared every split every frame — the
 // light box moves with the camera, so a grid kept across frames would sit in the wrong place.
-void W3DShadowMap::beginMovingMask(Int split)
+void R3DShadowMap::beginMovingMask(Int split)
 {
 	m_movingMaskSplit = split;
 	memset(m_movingMaskGrid, 0, sizeof(m_movingMaskGrid));
@@ -1231,7 +1231,7 @@ void W3DShadowMap::beginMovingMask(Int split)
 
 // Ronin @feature 13/09/2026 DX9: §29i.3. Project a moving caster's bounding sphere through THIS split's light camera
 // — the same mapping the receiver's shadowUV uses — and fill its disc, dilated one texel for bilinear sampling.
-void W3DShadowMap::noteMovingCaster(Real cx, Real cy, Real cz, Real radius)
+void R3DShadowMap::noteMovingCaster(Real cx, Real cy, Real cz, Real radius)
 {
 	if (m_movingMaskSplit < 0 || m_lightCamera == NULL)
 		return;
@@ -1279,7 +1279,7 @@ void W3DShadowMap::noteMovingCaster(Real cx, Real cy, Real cz, Real radius)
 
 // Ronin @feature 13/09/2026 DX9: §29i.3. Copy the grid into this split's texture. MANAGED pool, so the lock writes
 // system memory only — none of §7's dynamic-buffer stall.
-void W3DShadowMap::uploadMovingMask(Int split)
+void R3DShadowMap::uploadMovingMask(Int split)
 {
 	m_movingMaskSplit = -1;
 	if (split < 0 || split >= MAX_SHADOW_SPLITS || m_movingMaskTex[split] == NULL)
@@ -1302,12 +1302,12 @@ void W3DShadowMap::uploadMovingMask(Int split)
 }
 
 // Flag only — releasing buffers mid-frame could pull them from under a bound draw.
-void W3DShadowMap::invalidateStaticCasters(void)
+void R3DShadowMap::invalidateStaticCasters(void)
 {
 	s_casterCacheDirty = TRUE;
 }
 
-void W3DShadowMap::ensureStaticCasters(SceneClass *scene)
+void R3DShadowMap::ensureStaticCasters(SceneClass *scene)
 {
 	// Ronin @bugfix 13/09/2026 DX9: §29j.7. A baked building that has since become invisible to the player — shrouded,
 	// stealthed, hidden — would keep casting from the bake. Rebuild without it; an excluded one cannot trigger this again.
@@ -1334,7 +1334,7 @@ void W3DShadowMap::ensureStaticCasters(SceneClass *scene)
 }
 
 // Rebuilt only when the static caster SET changes, never on camera movement.
-void W3DShadowMap::rebuildStaticCasters(SceneClass *scene)
+void R3DShadowMap::rebuildStaticCasters(SceneClass *scene)
 {
 	releaseCasterChunks();
 	s_bakeVerts.clear();
@@ -1377,7 +1377,7 @@ void W3DShadowMap::rebuildStaticCasters(SceneClass *scene)
 }
 
 // Draw the bake into the depth map. FFP, position only, world = identity.
-void W3DShadowMap::drawStaticCasters(void)
+void R3DShadowMap::drawStaticCasters(void)
 {
 	if (s_casterChunkCount == 0)
 		return;
@@ -1394,14 +1394,14 @@ void W3DShadowMap::drawStaticCasters(void)
 		// Ronin @bugfix 19/09/2026 DX9: bind our own layout. These chunks are position-only (DX8_FVF_XYZ) and
 		// Apply_Render_State_Changes keeps the LAST bound FVF (dx8wrapper.cpp:3403), so the bake drew with whatever
 		// stride the previous draw left. Inside the loop: every chunk changes the vertex buffer.
-		DX8Wrapper::BindLayoutFVF(s_casterChunk[i].vb->FVF_Info().Get_FVF(), "W3DShadowMap::drawStaticCasters");
+		DX8Wrapper::BindLayoutFVF(s_casterChunk[i].vb->FVF_Info().Get_FVF(), "R3DShadowMap::drawStaticCasters");
 		DX8Wrapper::Draw_Triangles(0, s_casterChunk[i].polyCount, 0, s_casterChunk[i].vertCount);
 	}
 }
 
 // Ronin @feature 12/08/2026 DX9: §29 phase 1b. Mirrors the water reflection pass exactly
 // (W3DWater.cpp:1485-1521) — a full scene render with an alternate camera, NOT hand-picked objects.
-void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *scene)
+void R3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *scene)
 {
 	// Ronin @bugfix 14/08/2026 DX9: §29h-4.2. Every early return here means NO map this frame, so the
 	// flags must go down — otherwise the terrain pass keeps sampling a stale texture and the decals
@@ -1478,7 +1478,7 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 		MeshClass::Set_In_Shadow_Depth_Pass(true);		// §29i.5 — colour writes are off past here
 		// Ronin @bugfix 19/09/2026 DX9: a mover mesh marks ITSELF in the mask as it draws. Visibility_Check can only mark
 		// per object, and a flag's parent structure is a static caster, so its moving shadow kept full EMA history.
-		MeshClass::Set_Shadow_Mover_Note_Func(&W3DShadowMap::noteMovingCaster);
+		MeshClass::Set_Shadow_Mover_Note_Func(&R3DShadowMap::noteMovingCaster);
 		HLodClass::Set_Force_Lowest_LOD(true);
 
 		// Ronin @feature 09/09/2026 DX9: §29i.3 step 2. One fit + one scene render per split. The fit
@@ -1632,7 +1632,7 @@ void W3DShadowMap::updateRenderTargetTexture(CameraClass *sceneCam, SceneClass *
 	TheTerrainShadowPass.lightTravelDir[2] = travel.Z;
 }
 
-void W3DShadowMap::drawDebugOverlay(void)
+void R3DShadowMap::drawDebugOverlay(void)
 {
 	if (!TheShowShadowMapDebug || !isAvailable() || m_colorTarget[0] == NULL)
 		return;
@@ -1674,7 +1674,7 @@ void W3DShadowMap::drawDebugOverlay(void)
 	DX8Wrapper::Invalidate_Cached_Render_States();
 }
 
-Bool W3DShadowMap::beginDepthPass(Int split)
+Bool R3DShadowMap::beginDepthPass(Int split)
 {
 	if (!isAvailable())
 		return FALSE;
@@ -1707,7 +1707,7 @@ Bool W3DShadowMap::beginDepthPass(Int split)
 
 
 
-void W3DShadowMap::endDepthPass(void)
+void R3DShadowMap::endDepthPass(void)
 {
 	// Restores the back buffer AND the default depth buffer — the same call the water reflection
 	// pass uses to come back (W3DWater.cpp:1521).

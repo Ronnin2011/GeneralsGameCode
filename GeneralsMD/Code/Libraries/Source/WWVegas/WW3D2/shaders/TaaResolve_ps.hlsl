@@ -15,8 +15,8 @@ sampler2D g_History : register(s1);      // last frame's resolved output
 sampler2D g_Depth   : register(s2);      // INTZ scene depth, this frame
 sampler2D g_PrevDepth: register(s4);     // last frame's LINEAR depth, packed RGBA8 by TaaDepthStore
 sampler2D g_VelPrev  : register(s6);     // LAST frame's mesh velocity; its alpha = a mover covered this pixel
-sampler2D g_Opaque   : register(s7);     // this frame BEFORE particles (W3DTaa::noteOpaqueDone) - auto-reactive
-sampler2D g_Velocity : register(s5);     // mesh velocity, 12-bit packed by TaaVelMesh_ps; alpha = kind (W3DTaa.cpp)
+sampler2D g_Opaque   : register(s7);     // this frame BEFORE particles (R3DTaa::noteOpaqueDone) - auto-reactive
+sampler2D g_Velocity : register(s5);     // mesh velocity, 12-bit packed by TaaVelMesh_ps; alpha = kind (R3DTaa.cpp)
 // Ronin @feature 19/10/2026 DX9: the change mask. g = where a local light changed this pixel since last frame (LocalLight_ps
 // COLOR1), r = where a screen-space reflection did (ReflectiveRigid_ps), b = and a unit moved there, a = lamp light.
 sampler2D g_LightMask: register(s8);
@@ -35,7 +35,7 @@ float4   g_TaaDebug  : register(c6);     // x = debug view, yz = clip planes (th
 float4   g_TaaSharpen: register(c7);     // x = CAS (screen copy only), y = this frame's velocity is bound, z = `taa reflmark`, w = clamp
 float4   g_TaaExtra  : register(c10);    // x = last frame's velocity bound, y = `taa disocc` mode, z = `taa reactive`, w = light mask bound
 float4   g_TaaVel    : register(c11);    // x = 1: an effect that just left resets the pixel, y = 1 / (`autofull` - `autoreact`), z = `taa disoccv` px, w = `taa autoreact` (0 = off or no snapshot)
-// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask (W3DTaa renderMoverMask) - sun depth of every mesh that moved this
+// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask (R3DTaa renderMoverMask) - sun depth of every mesh that moved this
 // frame, 16-bit packed: RG where it is now, BA where it was. c12..c15 take a screen clip position to the sun's.
 sampler2D g_MoverMap : register(s3);
 float4x4 g_ToSun     : register(c12);
@@ -254,7 +254,7 @@ float luminance(float3 c)
     return dot(c, float3(0.2127f, 0.7152f, 0.0722f));
 }
 
-// Ronin @feature 22/10/2026 DX9: LOCAL CONTRAST's surroundings (W3DTaa buildSurround; c0.x below 0): -1 = the source's luminance as shown,
+// Ronin @feature 22/10/2026 DX9: LOCAL CONTRAST's surroundings (R3DTaa buildSurround; c0.x below 0): -1 = the source's luminance as shown,
 // 4x4 texels each, from the 3D view in it (c24); -2 / -3 = a Gaussian across / down, sigma 5 texels x c0.w. c0.yz = a source texel.
 float4 g_SurroundSrc : register(c24);
 float4 surround(float2 uv)

@@ -3,7 +3,7 @@
 **	DX9 port: the sky cube - a cube map of a map's sky and ground, made when the map loads.
 */
 
-// Ronin @feature 12/10/2026 DX9: LIGHTING PART 4, STEP 1 (docs/Lighting_Work.md 4.4b). See W3DSkyCube.h.
+// Ronin @feature 12/10/2026 DX9: LIGHTING PART 4, STEP 1 (docs/Lighting_Work.md 4.4b). See R3DSkyCube.h.
 #include "WW3D2/dx8todx9.h"
 #include "WWLib/always.h"
 #include "Lib/BaseType.h"
@@ -15,7 +15,7 @@
 #include "GameClient/Water.h"
 #include "GameClient/TerrainVisual.h"
 #include "GameLogic/TerrainLogic.h"
-#include "W3DDevice/GameClient/W3DSkyCube.h"
+#include "W3DDevice/GameClient/R3DSkyCube.h"
 #include <d3dx9.h>
 #include <cmath>
 #include <cstdio>
@@ -408,7 +408,7 @@ static void buildGroundMap(void)
 	s_groundSpan = (hi > lo) ? (hi - lo) : 0.0f;
 }
 
-void W3DSkyCube::update(void)
+void R3DSkyCube::update(void)
 {
 	const WaterTransparencySetting *water = TheWaterTransparency;		// none before the INIs are read
 	if (TheGlobalData == NULL || water == NULL)
@@ -426,9 +426,9 @@ void W3DSkyCube::update(void)
 	buildGroundMap();		// Ronin @feature 15/10/2026 DX9: the lit terrain colour map, with the cube
 }
 
-void W3DSkyCube::rebuild(void)	{ s_wanted = TRUE; }
+void R3DSkyCube::rebuild(void)	{ s_wanted = TRUE; }
 
-void W3DSkyCube::shutdown(void)
+void R3DSkyCube::shutdown(void)
 {
 	if (s_cube != NULL)
 		s_cube->Release();
@@ -439,9 +439,9 @@ void W3DSkyCube::shutdown(void)
 	s_key[0] = 0;
 }
 
-IDirect3DCubeTexture9 *W3DSkyCube::peek(void)	{ return s_cube; }
+IDirect3DCubeTexture9 *R3DSkyCube::peek(void)	{ return s_cube; }
 
-IDirect3DTexture9 *W3DSkyCube::groundMap(float uv[4], float ambient[3])
+IDirect3DTexture9 *R3DSkyCube::groundMap(float uv[4], float ambient[3])
 {
 	for (Int k = 0; k < 4; ++k)
 		uv[k] = s_groundUV[k];
@@ -449,7 +449,7 @@ IDirect3DTexture9 *W3DSkyCube::groundMap(float uv[4], float ambient[3])
 		ambient[k] = s_groundAmb[k];
 	return s_groundMap;
 }
-void W3DSkyCube::groundLevel(float light[3], float *heightLo, float *heightSpan)
+void R3DSkyCube::groundLevel(float light[3], float *heightLo, float *heightSpan)
 {
 	for (Int k = 0; k < 3; ++k)
 		light[k] = s_groundLight[k];
@@ -457,7 +457,7 @@ void W3DSkyCube::groundLevel(float light[3], float *heightLo, float *heightSpan)
 	*heightSpan = s_groundSpan;
 }
 
-void W3DSkyCube::describe(char *out, Int size)
+void R3DSkyCube::describe(char *out, Int size)
 {
 	if (s_cube == NULL)
 		_snprintf(out, (size_t)size, "sky: no cube (%s)", (s_key[0] == 0) ? "not built yet" : "a sky picture is missing");

@@ -13,7 +13,7 @@ sampler2D g_GroundShade : register(s3);     // the same for the terrain, as its 
 // Ronin @feature 20/10/2026 DX9: view 8 - the sun's shade from its shadow map, every mode: both cascades (the near one twice when one).
 sampler2D g_SunDepth    : register(s8);      // depth, LINEAR, CLAMP - the sampler compares, as RigidInstance_ps's
 sampler2D g_SunDepthFar : register(s9);
-samplerCUBE g_SkyCube  : register(s7);      // `lights view 5` only: the map's sky cube (W3DSkyCube), looked up by a world direction
+samplerCUBE g_SkyCube  : register(s7);      // `lights view 5` only: the map's sky cube (R3DSkyCube), looked up by a world direction
 
 // Ronin @feature 20/10/2026 DX9: view 8's constants, c84..c95 - no other shader reads them.
 float4x4 g_SunNear     : register(c84);   // view space -> the near cascade's clip (c84..c87)
@@ -79,7 +79,7 @@ float4 g_Corona     : register(c14);        // a lamp's own glow: x = radius, y 
 struct PS_OUTPUT
 {
     float4 color : COLOR0;                  // added to the frame
-    float4 mask  : COLOR1;                  // W3DTaa::beginLightMask - how much this light changed the pixel since last frame
+    float4 mask  : COLOR1;                  // R3DTaa::beginLightMask - how much this light changed the pixel since last frame
 };
 
 // Ronin @feature 09/10/2026 DX9: W3D view space: camera looks down -Z, +Y up. Same reconstruction as SsaoRaw_ps.
@@ -226,7 +226,7 @@ float corona(float3 P, float3 lamp, float radius)
     return g * g * seen * step(0.0f, t);
 }
 
-static const float LAMP_TILES_ROW = 8.0f;       // W3DLocalLights: LAMP_ATLAS / LAMP_TILE
+static const float LAMP_TILES_ROW = 8.0f;       // R3DLocalLights: LAMP_ATLAS / LAMP_TILE
 
 // Ronin @feature 11/10/2026 DX9: a big point light low over the ground (a blast) has four more maps, level, a quarter turn apart. Which
 // one holds a point, and where in it, is worked out by hand - one register a light, no matrix a face (scratchpad lampside_math_check.py).

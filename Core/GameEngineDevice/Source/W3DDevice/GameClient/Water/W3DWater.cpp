@@ -38,7 +38,7 @@
 
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "W3DDevice/GameClient/HeightMap.h"
-#include "W3DDevice/GameClient/W3DShadowMapState.h"
+#include "W3DDevice/GameClient/R3DShadowMapState.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "W3DDevice/GameClient/W3DWaterTracks.h"
 #include "W3DDevice/GameClient/W3DAssetManager.h"
@@ -73,12 +73,12 @@
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 #include "WW3D2/statistics.h"   // Ronin @diagnostic 02/08/2026: per-subsystem draw attribution ([DRAW])
-#include "W3DDevice/GameClient/W3DWaterSea.h"	// Ronin @feature 29/09/2026 DX9: the WaterSea binding and look
-#include "W3DDevice/GameClient/W3DWaterSeaIni.h"	// Ronin @feature 04/10/2026 DX9: the water ini, read once in init
-#include "W3DDevice/GameClient/W3DWaterMirror.h"	// Ronin @bugfix 01/10/2026 DX9: the mirror plane, for the tree cull
-#include "W3DDevice/GameClient/W3DTaa.h"	// Ronin @bugfix 30/09/2026 DX9: the jitter the reflection lookup takes out
-// Ronin @feature 03/10/2026 DX9: phase 5 - units that float ride the swell (W3DWater_RideSwell)
-#include "W3DDevice/GameClient/W3DWaterFloat.h"
+#include "W3DDevice/GameClient/R3DWaterSea.h"	// Ronin @feature 29/09/2026 DX9: the WaterSea binding and look
+#include "W3DDevice/GameClient/R3DWaterSeaIni.h"	// Ronin @feature 04/10/2026 DX9: the water ini, read once in init
+#include "W3DDevice/GameClient/R3DWaterMirror.h"	// Ronin @bugfix 01/10/2026 DX9: the mirror plane, for the tree cull
+#include "W3DDevice/GameClient/R3DTaa.h"	// Ronin @bugfix 30/09/2026 DX9: the jitter the reflection lookup takes out
+// Ronin @feature 03/10/2026 DX9: phase 5 - units that float ride the swell (R3DWater_RideSwell)
+#include "W3DDevice/GameClient/R3DWaterFloat.h"
 #include "GameClient/Drawable.h"
 #include "GameLogic/Object.h"
 
@@ -177,7 +177,7 @@ static ShaderClass blendStagesShader(SC_DETAIL_BLEND);
 
 WaterRenderObjClass *TheWaterRenderObj=nullptr; ///<global water rendering object
 // Ronin @feature 15/09/2026 DX9: water on/off switches for the debug panel (W3DWater.h).
-// Ronin @feature 28/09/2026 DX9: + seaPlane (WaterType 2). The look knobs moved to W3DWaterSeaTuning.h on 29/09.
+// Ronin @feature 28/09/2026 DX9: + seaPlane (WaterType 2). The look knobs moved to R3DWaterSeaTuning.h on 29/09.
 WaterDebugFlags TheWaterDebug = { FALSE, FALSE, FALSE, FALSE };
 // Ronin @diagnostic 28/09/2026 DX9: [WATER] panel row (W3DWater.h).
 WaterDebugStats TheWaterStats = {};
@@ -1641,7 +1641,7 @@ void WaterRenderObjClass::loadSetting( Setting *setting, TimeOfDay timeOfDay )
 void WaterRenderObjClass::updateRenderTargetTextures(CameraClass *cam)
 {
 	// Ronin @bugfix 01/10/2026 DX9: no mirror without the sea shaders or with `water mirror 0`; its plane is published for
-	// the tree cull (W3DWaterMirror.h).
+	// the tree cull (R3DWaterMirror.h).
 	TheWaterMirror.active = FALSE;
 	if (m_waterType == WATER_TYPE_2_PVSHADER && m_pReflectionTexture && TheWaterSeaGlobal.mirror &&
 		getClippedWaterPlane(cam, nullptr) && TheTerrainRenderObject && TheTerrainRenderObject->getMap())
@@ -2221,7 +2221,7 @@ void WaterRenderObjClass::drawSea(RenderInfoClass& rinfo)
 	// Ronin @bugfix 28/09/2026 DX9: DX8's SetVertexShader carried the input layout; DX9 needs the declaration bound too.
 	m_pDev->SetVertexDeclaration(W3DShaderManager::GetShaderDeclaration(m_dwWaveVertexShader));
 	m_pDev->SetPixelShader(pickWavePS(WATER_KIND_SEA));	// Ronin @feature 02/10/2026 DX9: phase 4 - the views variant under `water view`
-	// Ronin @feature 29/09/2026 DX9: the WaterSea inputs the polygons use too (W3DWaterSea.h). The sea has no water texture
+	// Ronin @feature 29/09/2026 DX9: the WaterSea inputs the polygons use too (R3DWaterSea.h). The sea has no water texture
 	// and no river edge, so both take the white texture.
 	bindWaterSea(m_whiteTexture->Peek_D3D_Texture(), m_whiteTexture->Peek_D3D_Texture(), 0.0f, FALSE, FALSE);	// no swell on the sea plane's patches
 
@@ -3369,10 +3369,10 @@ void WaterRenderObjClass::drawRiverWater(PolygonTrigger *pTrig)
 	if (reflect)
 		bindReflectiveShaders();
 	// Ronin @bugfix 03/10/2026 DX9: the WaterSea PS marks these pixels for TAA's water mask (render target 1 while TAA runs).
-	const Bool taaMarked = reflect ? W3DTaa::beginWaterMask() : FALSE;
+	const Bool taaMarked = reflect ? R3DTaa::beginWaterMask() : FALSE;
 	DX8Wrapper::Draw_Triangles(0, rectangleCount * 2, 0, (rectangleCount + 1) * 2);
 	if (taaMarked)
-		W3DTaa::endWaterMask();
+		R3DTaa::endWaterMask();
 	// Ronin @diagnostic 28/09/2026 DX9: [WATER] row - count this draw and whether the water shader was bound for it.
 	if (reflect)
 		countWaterDraw(TheWaterStats.riverDraws, TheWaterStats.riverPSDraws, pickWavePS(WATER_KIND_RIVER), m_dwWaveVertexShader);
@@ -3528,7 +3528,7 @@ Bool WaterRenderObjClass::useReflection() const
 	return m_waterType == WATER_TYPE_2_PVSHADER && m_dwWaveVertexShader && m_dwWavePixelShader && m_pReflectionTexture;
 }
 
-// Ronin @feature 29/09/2026 DX9: fill the WaterSea inputs this object owns and bind them (W3DWaterSea.h). water / edge: the
+// Ronin @feature 29/09/2026 DX9: fill the WaterSea inputs this object owns and bind them (R3DWaterSea.h). water / edge: the
 // standing texture and a river's edge fade. standing: the flat polygons - they alone take the swell and the refraction.
 void WaterRenderObjClass::bindWaterSea(IDirect3DBaseTexture9 *water, IDirect3DBaseTexture9 *edge, Real edgeScaleU, Bool riverShroud, Bool standing)
 {
@@ -3592,7 +3592,7 @@ void WaterRenderObjClass::bindWaterSea(IDirect3DBaseTexture9 *water, IDirect3DBa
 	in.sceneInvW        = (refract && m_refractionW > 0) ? 1.0f / (Real)m_refractionW : 0.0f;
 	in.sceneInvH        = (refract && m_refractionH > 0) ? 1.0f / (Real)m_refractionH : 0.0f;
 	float jx = 0.0f, jy = 0.0f;
-	W3DTaa::getJitterNDC(&jx, &jy);	// Ronin @bugfix 30/09/2026 DX9: 0 unless the main scene is drawing jittered
+	R3DTaa::getJitterNDC(&jx, &jy);	// Ronin @bugfix 30/09/2026 DX9: 0 unless the main scene is drawing jittered
 	in.jitterX          = jx;
 	in.jitterY          = jy;
 	// Ronin @feature 03/10/2026 DX9: phase 5 - this frame's wakes, on standing water (renderWakes)
@@ -3791,7 +3791,7 @@ void WaterRenderObjClass::unbindReflectiveShaders(DWORD fvf)
 {
 	m_pDev->SetPixelShader(nullptr);
 	DX8Wrapper::BindLayoutFVF(fvf, "WaterRenderObjClass::unbindReflectiveShaders");	// clears the vertex shader too
-	WaterSea_Unbind();	// Ronin @feature 29/09/2026 DX9: drop the WaterSea texture references (W3DWaterSea.h)
+	WaterSea_Unbind();	// Ronin @feature 29/09/2026 DX9: drop the WaterSea texture references (R3DWaterSea.h)
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -3910,7 +3910,7 @@ void WaterRenderObjClass::rideSwell(Matrix3D &mtx, Real halfLength, Real halfWid
 
 // Which units float and leave a wake: vehicles, boats, and whatever is flagged OVER_WATER - on the ground layer. Not
 // structures, aircraft or projectiles; a unit carried by another leaves no wake.
-void W3DWater_RideSwell(const Drawable *draw, Matrix3D &mtx)
+void R3DWater_RideSwell(const Drawable *draw, Matrix3D &mtx)
 {
 	if (TheWaterRenderObj == nullptr || draw == nullptr || (TheWaterSeaGlobal.ride <= 0.0f && TheWaterSeaGlobal.wakes <= 0.0f))
 		return;
@@ -3989,7 +3989,7 @@ Bool WaterRenderObjClass::ownsWake(UnsignedInt drawableID) const
 	return FALSE;
 }
 
-bool W3DWater_OwnsWake(unsigned int drawableID)
+bool R3DWater_OwnsWake(unsigned int drawableID)
 {
 	return TheWaterRenderObj != nullptr && TheWaterRenderObj->ownsWake(drawableID);
 }
@@ -4772,7 +4772,7 @@ void WaterRenderObjClass::drawTrapezoidWater(Vector3 points[4])
 				break;
 			scale *= 2.0f;
 		}
-		// the real cell: the VS only moves the grid by waves it can carry (W3DWaterSea.h), and the [WATER] row shows it
+		// the real cell: the VS only moves the grid by waves it can carry (R3DWaterSea.h), and the [WATER] row shows it
 		m_swellCellNow = scale * swellCell;
 		if (uCount > 2 && vCount > 2)
 		{
@@ -5053,10 +5053,10 @@ void WaterRenderObjClass::drawTrapezoidWater(Vector3 points[4])
 
 		// Ronin @bugfix 03/10/2026 DX9: the WaterSea PS marks these pixels for TAA's water mask (render target 1 while TAA runs).
 		// Not under the DESTALPHA blend (`depth` 0): it would scale the mark by the mask's own empty alpha.
-		const Bool taaMarked = (reflect && WaterSea_DepthActive(m_heightTexture != nullptr)) ? W3DTaa::beginWaterMask() : FALSE;
+		const Bool taaMarked = (reflect && WaterSea_DepthActive(m_heightTexture != nullptr)) ? R3DTaa::beginWaterMask() : FALSE;
 		DX8Wrapper::Draw_Triangles(0, rectangleCount * 2, 0, uCount* vCount);//lorenzen thinks this is where to itereate the soft shoreline effect
 		if (taaMarked)
-			W3DTaa::endWaterMask();
+			R3DTaa::endWaterMask();
 		// Ronin @diagnostic 28/09/2026 DX9: [WATER] row - count this draw and whether the water shader was bound for it.
 		if (reflect)
 			countWaterDraw(TheWaterStats.flatDraws, TheWaterStats.flatPSDraws, pickWavePS(m_bindKind), m_dwWaveVertexShader);

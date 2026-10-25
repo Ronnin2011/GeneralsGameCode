@@ -17,12 +17,12 @@ class CameraClass;
 class RTS3DScene;
 class MeshClass;
 
-class W3DLocalLights
+class R3DLocalLights
 {
 public:
-	static void beginFrame(void);			// W3DDisplay::draw, after W3DTaa::beginFrame: can this frame run
+	static void beginFrame(void);			// W3DDisplay::draw, after R3DTaa::beginFrame: can this frame run
 	static void renderPass(const CameraClass &camera, RTS3DScene *scene);	// RTS3DScene::Flush, after the trees
-	static void endFrame(void);				// after W3DTaa::endFrame: ends the scene depth if this pass began it
+	static void endFrame(void);				// after R3DTaa::endFrame: ends the scene depth if this pass began it
 	static void shutdown(void);				// frees the shaders and the frame copy while the device exists
 
 	// Ronin @feature 09/10/2026 DX9: TRUE while this pass draws the scene's dynamic lights - the old paths must not add them again.
@@ -30,7 +30,7 @@ public:
 	// Ronin @feature 09/10/2026 DX9: TRUE = W3DDisplay::createLightPulse keeps the pulses it drops as too small for the 10-unit
 	// vertex grid (26 of the game's 65). Per pixel they show.
 	static Bool wantsSmallLights(void);
-	// Ronin @feature 17/10/2026 DX9: W3DSsao runs its view depth prepass under MSAA for this too, SSAO or not: the lights need a depth.
+	// Ronin @feature 17/10/2026 DX9: R3DSsao runs its view depth prepass under MSAA for this too, SSAO or not: the lights need a depth.
 	static Bool wantsDepthPrepass(void);
 	// Ronin @feature 17/10/2026 DX9: an engine pulse's minimum reach (inner + width) and fade frames while the lights run - called
 	// by W3DDisplay::createLightPulse. `lights pulsemin` / `pulsefade`, 0 = as the FX asks.
@@ -179,7 +179,7 @@ public:
 	static float getShaftLayer(void);
 	static void  setShaftDust(float v);		// Ronin @feature 23/10/2026 DX9: the dust in the shafts, its strength (0 = none)
 	static float getShaftDust(void);
-	static void  drawShaftDust(void);		// ... drawn by W3DTaa::noteOpaqueDone, after its copy of the frame before the effects
+	static void  drawShaftDust(void);		// ... drawn by R3DTaa::noteOpaqueDone, after its copy of the frame before the effects
 	// Ronin @feature 15/10/2026 DX9: how far each time of day is "day" for the local lights, 0..1: the sun up full, dusk half, the
 	// moon none. 1 = `daysun` / `dayshade` in full; 0 = the lights at full strength and `sunerase` in full.
 	static void  setSunTime(Int timeOfDay, float v);		// 1 morning, 2 afternoon, 3 evening, 4 night

@@ -182,7 +182,7 @@ public:
 	Bool m_useShadowVolumes;
 	Bool m_useShadowDecals;
 	// Ronin @feature 24/08/2026 DX9: §29i.2. 0=Off 1=Normal 2=High 3=Ultra. Drives resolution in
-	// W3DShadowMap; 0 leaves the map path off entirely and the stencil volumes / decals in charge.
+	// R3DShadowMap; 0 leaves the map path off entirely and the stencil volumes / decals in charge.
 	// Options.ini key: DX9ShadowQuality. Low and Medium merged into Normal — they measured identical.
 	Int  m_shadowMapQuality;
 	// Ronin @feature 13/09/2026 DX9: SSAO. 0=Off 1=Normal 2=High 3=Ultra; Options.ini key DX9SSAOQuality. Off by default.
@@ -194,11 +194,11 @@ public:
 	Real m_taaMipBias;
 	// Ronin @feature 04/10/2026 DX9: the WaterType 2 mirror; Options.ini key DX9WaterReflections = yes|no. On by default.
 	Bool m_waterReflections;
-	// Ronin @feature 23/10/2026 DX9: all the new lighting, HDR included (W3DLocalLights `lights`); Options.ini DX9Lighting = yes|no. On by default.
+	// Ronin @feature 23/10/2026 DX9: all the new lighting, HDR included (R3DLocalLights `lights`); Options.ini DX9Lighting = yes|no. On by default.
 	Bool m_lighting;
 	// Ronin @feature 23/10/2026 DX9: the lamps under it - lights, beams, glows, effects; Options.ini DX9LightEffects = yes|no. On by default.
 	Bool m_lightEffects;
-	// Ronin @feature 21/10/2026 DX9: HDR (W3DTaa: a float scene, the sun lifted above 1, a tone curve); Options.ini key DX9HDR = yes|no. Off by default.
+	// Ronin @feature 21/10/2026 DX9: HDR (R3DTaa: a float scene, the sun lifted above 1, a tone curve); Options.ini key DX9HDR = yes|no. Off by default.
 	Bool m_hdr;
 	Int  m_textureReductionFactor;	//how much to cut texture resolution: 2 is half, 3 is quarter, etc.
 	Bool m_enableBehindBuildingMarkers;

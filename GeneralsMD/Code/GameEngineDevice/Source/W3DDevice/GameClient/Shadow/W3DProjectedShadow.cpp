@@ -59,7 +59,7 @@
 #include "GameClient/Drawable.h"
 #include "W3DDevice/GameClient/Module/W3DModelDraw.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
-#include "W3DDevice/GameClient/W3DShadowMapState.h"
+#include "W3DDevice/GameClient/R3DShadowMapState.h"
 
 /** @todo: We're going to have a pool of a couple rendertargets to use
 in rare cases when dynamic shadows need to be generated.  Maybe we can

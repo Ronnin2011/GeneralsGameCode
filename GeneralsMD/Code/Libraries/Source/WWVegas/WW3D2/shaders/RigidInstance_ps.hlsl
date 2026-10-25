@@ -65,7 +65,7 @@ struct PS_INPUT
 };
 
 // Ronin @feature 10/10/2026 DX9: lighting part 3. sunShade = what the sun's shadow left of this pixel (1 = it took nothing); main
-// writes it to COLOR1 for W3DLocalLights, which binds a target there in the main pass.
+// writes it to COLOR1 for R3DLocalLights, which binds a target there in the main pass.
 float4 meshColour(PS_INPUT input, out float3 sunShade)
 {
     sunShade = float3(1.0f, 1.0f, 1.0f);

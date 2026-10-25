@@ -36,7 +36,7 @@ class Matrix3D;
 class Matrix4x4;
 class Vector3;
 
-class W3DTaa
+class R3DTaa
 {
 public:
 
@@ -55,12 +55,12 @@ public:
 	static void finishScene(const CameraClass &camera);
 
 	// Ronin @feature 20/09/2026 DX9: reprojection needs the INTZ scene depth. SSAO owns that buffer when it is on; when
-	// it is off TAA begins it, and then TAA must end it. Called beside W3DSsao's pair in W3DDisplay::draw.
+	// it is off TAA begins it, and then TAA must end it. Called beside R3DSsao's pair in W3DDisplay::draw.
 	static void endFrame(void);
-	// Ronin @feature 09/10/2026 DX9: TRUE while TAA holds the scene depth this frame - W3DLocalLights begins it only if nobody did.
+	// Ronin @feature 09/10/2026 DX9: TRUE while TAA holds the scene depth this frame - R3DLocalLights begins it only if nobody did.
 	static Bool ownsDepth(void);
 
-	// Frees shaders and targets while the device still exists. Called from W3DDisplay's shutdown, beside W3DSsao's.
+	// Frees shaders and targets while the device still exists. Called from W3DDisplay's shutdown, beside R3DSsao's.
 	static void shutdown(void);
 	// Ronin @bugfix 07/10/2026 DX9: before a device reset. Drops the GPU timer queries - a reset fails while one is alive.
 	static void releaseResources(void);
@@ -90,7 +90,7 @@ public:
 	static void  setFloatScene(Bool on);
 	static Bool  getFloatScene(void);
 	static void  describeScene(char *out, Int size);	// one line for the panel's `hdr`
-	// Ronin @feature 12/10/2026 DX9: HDR stage 1b. The sun brighter than 1 (W3DLocalLights lifts the sun's share of the frame by the
+	// Ronin @feature 12/10/2026 DX9: HDR stage 1b. The sun brighter than 1 (R3DLocalLights lifts the sun's share of the frame by the
 	// gain of this time of day, tinted by `warm`), and `white`: the scene value the resolve's tone curve shows as white.
 	static void  setSunGain(float v);
 	static float getSunGain(void);
@@ -202,7 +202,7 @@ public:
 	static void  endWaterMask(void);
 	static Bool  getWaterMaskDrawn(void);	// last frame: the water marked itself (else the flat polygons)
 	// Ronin @bugfix 09/10/2026 DX9: the local lights mark where a light CHANGED a pixel since last frame (LocalLight_ps COLOR1); the
-	// resolve clamps there. Around W3DLocalLights' draws, as the water's pair.
+	// resolve clamps there. Around R3DLocalLights' draws, as the water's pair.
 	static Bool  beginLightMask(void);
 	static void  endLightMask(void);
 	// Ronin @bugfix 09/10/2026 DX9: the selection flash is drawn after the resolve, not through the history. The scene asks

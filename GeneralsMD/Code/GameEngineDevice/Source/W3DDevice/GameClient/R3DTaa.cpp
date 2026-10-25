@@ -16,12 +16,12 @@
 **	along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// Ronin @feature 20/09/2026 DX9: TAA step 1 — the jitter. See W3DTaa.h for why this is the only thing step 1 does.
+// Ronin @feature 20/09/2026 DX9: TAA step 1 — the jitter. See R3DTaa.h for why this is the only thing step 1 does.
 
 #include "WW3D2/dx8todx9.h"
 #include "WWLib/always.h"
 #include "Lib/BaseType.h"
-#include "W3DDevice/GameClient/W3DTaa.h"
+#include "W3DDevice/GameClient/R3DTaa.h"
 #include "WW3D2/ww3d.h"
 #include "WW3D2/dx8wrapper.h"
 #include "WW3D2/shader.h"
@@ -33,17 +33,17 @@
 #include "WW3D2/matinfo.h"		// Ronin @feature 24/09/2026 DX9: reactive mask - time-variant mappers
 #include <d3dx9math.h>		// Ronin @bugfix 20/09/2026 DX9: D3DX matrix maths, to match the shadow map's convention
 #include "W3DDevice/GameClient/W3DShaderManager.h"
-#include "W3DDevice/GameClient/W3DSsao.h"
+#include "W3DDevice/GameClient/R3DSsao.h"
 #include "Common/GlobalData.h"		// Ronin @feature 26/09/2026 DX9: Options.ini DX9TAA keys
-#include "W3DDevice/GameClient/W3DShadowMap.h"	// Ronin @bugfix 27/09/2026 DX9: the sun matrix, for the moving-shadow mask
+#include "W3DDevice/GameClient/R3DShadowMap.h"	// Ronin @bugfix 27/09/2026 DX9: the sun matrix, for the moving-shadow mask
 #include "GameClient/Drawable.h"				// Ronin @bugfix 27/09/2026 DX9: idle infantry - which object a mesh belongs to
 #include "GameClient/DrawableInfo.h"
-#include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: which meshes have their beam polygons hidden
+#include "W3DDevice/GameClient/R3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: which meshes have their beam polygons hidden
 #include "Common/KindOf.h"
 #include "GameLogic/PolygonTrigger.h"			// Ronin @bugfix 29/09/2026 DX9: the water's polygons, for its reactive mask
 #include "W3DDevice/GameClient/W3DWater.h"
 
-Bool W3DTaa::s_enabled = FALSE;
+Bool R3DTaa::s_enabled = FALSE;
 
 static Int s_phase = 0;
 
@@ -87,7 +87,7 @@ static DWORD       s_lightMaskWrite = 0;		// Ronin @bugfix 19/10/2026 DX9: targe
 static Bool        s_lightMaskSet   = FALSE;
 // Ronin @feature 19/10/2026 DX9: screen-space reflections WITHOUT TAA - last frame kept by the frame itself (storeLastFrame): its
 // picture, its linear depth packed as TaaDepthStore_ps packs it, the s_frameNo it was kept in (0 = none), its camera and 3D view.
-static Bool         s_lastFrameWanted = FALSE;	// W3DLocalLights, every frame: the screen-space reflections are on
+static Bool         s_lastFrameWanted = FALSE;	// R3DLocalLights, every frame: the screen-space reflections are on
 static TextureClass *s_reflColour     = NULL;
 static TextureClass *s_reflDepth      = NULL;
 static UnsignedInt  s_reflW = 0, s_reflH = 0;
@@ -356,10 +356,10 @@ static inline float taaKnob(float v, float lo, float hi, float ifNaN)
 		return ifNaN;
 	return (v < lo) ? lo : ((v > hi) ? hi : v);
 }
-void  W3DTaa::setSharpen(float s)     { s_sharpen = taaKnob(s, 0.0f, 1.0f, 0.0f); }
-void  W3DTaa::setMipBias(float b)     { s_mipBias = taaKnob(b, -2.0f, 0.0f, -1.0f); }
-float W3DTaa::getMipBias(void)        { return s_mipBias; }
-float W3DTaa::getSharpen(void)        { return s_sharpen; }
+void  R3DTaa::setSharpen(float s)     { s_sharpen = taaKnob(s, 0.0f, 1.0f, 0.0f); }
+void  R3DTaa::setMipBias(float b)     { s_mipBias = taaKnob(b, -2.0f, 0.0f, -1.0f); }
+float R3DTaa::getMipBias(void)        { return s_mipBias; }
+float R3DTaa::getSharpen(void)        { return s_sharpen; }
 
 // Ronin @feature 12/10/2026 DX9: HDR STAGE 1A - the scene's target as 16-bit float (`hdr`). Nothing else changes yet: the resolve
 // still writes 8-bit history and the 8-bit frame. A reset gives the engine's texture its old format; beginFrame asks again.
@@ -380,7 +380,7 @@ static void keepSceneFormat(void)
 	if (tex == NULL || FAILED(tex->GetLevelDesc(0, &d)))
 		return;
 	Bool isFloat = (d.Format == D3DFMT_A16B16G16R16F) ? TRUE : FALSE;
-	const Bool wantFloat = (s_floatScene && W3DLocalLights::isEnabled()) ? TRUE : FALSE;	// Ronin @feature 23/10/2026 DX9: HDR needs the master
+	const Bool wantFloat = (s_floatScene && R3DLocalLights::isEnabled()) ? TRUE : FALSE;	// Ronin @feature 23/10/2026 DX9: HDR needs the master
 	if (isFloat != wantFloat && !(wantFloat && s_floatRefused))
 	{
 		if (W3DShaderManager::remakeRenderTexture(wantFloat ? D3DFMT_A16B16G16R16F : D3DFMT_UNKNOWN))
@@ -397,21 +397,21 @@ static Int sunGainSlot(void)
 	return (slot < 0 || slot > 3) ? 1 : slot;
 }
 
-void  W3DTaa::setSunGain(float v)	{ s_sunGain[sunGainSlot()] = (v < 1.0f) ? 1.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DTaa::getSunGain(void)		{ return s_sunGain[sunGainSlot()]; }
+void  R3DTaa::setSunGain(float v)	{ s_sunGain[sunGainSlot()] = (v < 1.0f) ? 1.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DTaa::getSunGain(void)		{ return s_sunGain[sunGainSlot()]; }
 // Ronin @feature 21/10/2026 DX9: one time of day's gain by its slot (0 morning .. 3 night), for DX9Lights.ini.
-void  W3DTaa::setSunGainAt(Int slot, float v)	{ if (slot >= 0 && slot < 4) s_sunGain[slot] = (v < 1.0f) ? 1.0f : ((v > 4.0f) ? 4.0f : v); }
-float W3DTaa::getSunGainAt(Int slot)			{ return (slot >= 0 && slot < 4) ? s_sunGain[slot] : 1.0f; }
+void  R3DTaa::setSunGainAt(Int slot, float v)	{ if (slot >= 0 && slot < 4) s_sunGain[slot] = (v < 1.0f) ? 1.0f : ((v > 4.0f) ? 4.0f : v); }
+float R3DTaa::getSunGainAt(Int slot)			{ return (slot >= 0 && slot < 4) ? s_sunGain[slot] : 1.0f; }
 // Ronin @feature 21/10/2026 DX9: the camera preRender took for this frame's 3D view - SSAO's `aosun` runs the shade pass with it.
-const CameraClass *W3DTaa::getSceneCamera(void)	{ return s_camera; }
-void  W3DTaa::setSunWarm(float v)	{ s_sunWarm = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-float W3DTaa::getSunWarm(void)		{ return s_sunWarm; }
-void  W3DTaa::setWhite(float v)		{ s_white = (v < 1.0f) ? 1.0f : ((v > 2.0f) ? 2.0f : v); }
-float W3DTaa::getWhite(void)		{ return s_white; }
+const CameraClass *R3DTaa::getSceneCamera(void)	{ return s_camera; }
+void  R3DTaa::setSunWarm(float v)	{ s_sunWarm = (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
+float R3DTaa::getSunWarm(void)		{ return s_sunWarm; }
+void  R3DTaa::setWhite(float v)		{ s_white = (v < 1.0f) ? 1.0f : ((v > 2.0f) ? 2.0f : v); }
+float R3DTaa::getWhite(void)		{ return s_white; }
 
 // Ronin @feature 12/10/2026 DX9: what the lift adds to a wholly sunlit pixel, as a share of it: gain - 1, less in green and
 // blue by `warm` (to 0.90 and 0.72 of it).
-Bool W3DTaa::getSunLift(float rgb[3])
+Bool R3DTaa::getSunLift(float rgb[3])
 {
 	const float more = s_sunGain[sunGainSlot()] - 1.0f;
 	if (!s_floatNow || more <= 0.0f)
@@ -469,7 +469,7 @@ static void nightConstants(float c[8], float levelOut[3], Bool lampMask)
 		for (Int k = 0; k < 3; ++k)
 			tint[k] /= tl;
 	}
-	const Bool on = (s_nightOn && W3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+	const Bool on = (s_nightOn && R3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
 	// Ronin @feature 15/10/2026 DX9: the strength follows how coloured the map's light is: the look counters a saturated light.
 	const float hi = (e[0] > e[1]) ? ((e[0] > e[2]) ? e[0] : e[2]) : ((e[1] > e[2]) ? e[1] : e[2]);
 	const float lo = (e[0] < e[1]) ? ((e[0] < e[2]) ? e[0] : e[2]) : ((e[1] < e[2]) ? e[1] : e[2]);
@@ -502,7 +502,7 @@ static float s_gradeSat  = 1.2f;		// `grade sat`: 1 = none; 1.2 his pick 21/10 (
 static float s_gradeMids = 1.34f;		// `grade mids`: the mid-tones' power, 1 = none, above 1 darker (their mid grey 0.2, ours 0.3)
 static Bool gradeNow(void)
 {
-	return (s_gradeOn && W3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+	return (s_gradeOn && R3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
 }
 
 // Ronin @feature 21/10/2026 DX9: the grade into a screen copy of the resolve shader: c20 = (on, saturation, mid-tones' power), c21 = the
@@ -514,14 +514,14 @@ static void bindGrade(IDirect3DDevice9 *dev)
 	dev->SetPixelShaderConstantF(20, c20, 2);
 }
 
-void  W3DTaa::setGrade(Bool on)			{ s_gradeOn = on; }
-Bool  W3DTaa::getGrade(void)			{ return s_gradeOn; }
-void  W3DTaa::setGradeWarm(float v)		{ s_gradeWarm = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
-float W3DTaa::getGradeWarm(void)		{ return s_gradeWarm; }
-void  W3DTaa::setGradeSat(float v)		{ s_gradeSat = (v < 0.0f) ? 0.0f : ((v > 2.5f) ? 2.5f : v); }
-float W3DTaa::getGradeSat(void)			{ return s_gradeSat; }
-void  W3DTaa::setGradeMids(float v)		{ s_gradeMids = (v < 0.5f) ? 0.5f : ((v > 2.0f) ? 2.0f : v); }
-float W3DTaa::getGradeMids(void)		{ return s_gradeMids; }
+void  R3DTaa::setGrade(Bool on)			{ s_gradeOn = on; }
+Bool  R3DTaa::getGrade(void)			{ return s_gradeOn; }
+void  R3DTaa::setGradeWarm(float v)		{ s_gradeWarm = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float R3DTaa::getGradeWarm(void)		{ return s_gradeWarm; }
+void  R3DTaa::setGradeSat(float v)		{ s_gradeSat = (v < 0.0f) ? 0.0f : ((v > 2.5f) ? 2.5f : v); }
+float R3DTaa::getGradeSat(void)			{ return s_gradeSat; }
+void  R3DTaa::setGradeMids(float v)		{ s_gradeMids = (v < 0.5f) ? 0.5f : ((v > 2.0f) ? 2.0f : v); }
+float R3DTaa::getGradeMids(void)		{ return s_gradeMids; }
 
 // Ronin @feature 22/10/2026 DX9: VIBRANCE and LOCAL CONTRAST (`vibrance`, `localcontrast`), on by default; at night their own pair
 // (`nightvibrance`, `nightcontrast`, 23/10). 0 turns each off, and so does `lights 0`.
@@ -534,16 +534,16 @@ static float vibranceNow(void)	{ return vividNight() ? s_nightVibrance : s_vibra
 static float contrastNow(void)	{ return vividNight() ? s_nightContrast : s_localContrast; }
 static Bool vividNow(void)
 {
-	return ((vibranceNow() > 0.0f || contrastNow() > 0.0f) && W3DLocalLights::isEnabled() && TheGlobalData != NULL) ? TRUE : FALSE;
+	return ((vibranceNow() > 0.0f || contrastNow() > 0.0f) && R3DLocalLights::isEnabled() && TheGlobalData != NULL) ? TRUE : FALSE;
 }
-void  W3DTaa::setVibrance(float v)		{ s_vibrance = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
-float W3DTaa::getVibrance(void)			{ return s_vibrance; }
-void  W3DTaa::setLocalContrast(float v)	{ s_localContrast = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
-float W3DTaa::getLocalContrast(void)	{ return s_localContrast; }
-void  W3DTaa::setNightVibrance(float v)	{ s_nightVibrance = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
-float W3DTaa::getNightVibrance(void)	{ return s_nightVibrance; }
-void  W3DTaa::setNightContrast(float v)	{ s_nightContrast = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
-float W3DTaa::getNightContrast(void)	{ return s_nightContrast; }
+void  R3DTaa::setVibrance(float v)		{ s_vibrance = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float R3DTaa::getVibrance(void)			{ return s_vibrance; }
+void  R3DTaa::setLocalContrast(float v)	{ s_localContrast = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float R3DTaa::getLocalContrast(void)	{ return s_localContrast; }
+void  R3DTaa::setNightVibrance(float v)	{ s_nightVibrance = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float R3DTaa::getNightVibrance(void)	{ return s_nightVibrance; }
+void  R3DTaa::setNightContrast(float v)	{ s_nightContrast = (v < 0.0f) ? 0.0f : ((v > 2.0f) ? 2.0f : v); }
+float R3DTaa::getNightContrast(void)	{ return s_nightContrast; }
 static void releaseSurround(void);		// local contrast's surroundings, beside drawFinish
 
 static Bool finishWanted(void)
@@ -554,7 +554,7 @@ static Bool finishWanted(void)
 		return TRUE;		// Ronin @feature 21/10/2026 DX9: the grade is drawn by the finish pass
 	if (vividNow())
 		return TRUE;		// Ronin @feature 22/10/2026 DX9: so are vibrance and local contrast
-	if (!s_nightOn || !W3DLocalLights::isEnabled() || TheGlobalData == NULL || TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT)
+	if (!s_nightOn || !R3DLocalLights::isEnabled() || TheGlobalData == NULL || TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT)
 		return FALSE;
 	if (s_nightLift < 0.999f)
 		return TRUE;
@@ -564,22 +564,22 @@ static Bool finishWanted(void)
 }
 
 static float clamp01(float v)	{ return (v < 0.0f) ? 0.0f : ((v > 1.0f) ? 1.0f : v); }
-void  W3DTaa::setNight(Bool on)			{ s_nightOn = on; }
-Bool  W3DTaa::getNight(void)			{ return s_nightOn; }
-void  W3DTaa::setNightTint(float v)		{ s_nightTint = clamp01(v); }
-float W3DTaa::getNightTint(void)		{ return s_nightTint; }
-void  W3DTaa::setNightLo(float v)		{ s_nightLo = clamp01(v); }
-float W3DTaa::getNightLo(void)			{ return s_nightLo; }
-void  W3DTaa::setNightHi(float v)		{ s_nightHi = clamp01(v); }
-float W3DTaa::getNightHi(void)			{ return s_nightHi; }
-void  W3DTaa::setNightFloor(float v)	{ s_nightFloor = clamp01(v); }
-float W3DTaa::getNightFloor(void)		{ return s_nightFloor; }
-void  W3DTaa::setNightLift(float v)		{ s_nightLift = (v < 0.4f) ? 0.4f : ((v > 1.0f) ? 1.0f : v); }
-float W3DTaa::getNightLift(void)		{ return s_nightLift; }
-void  W3DTaa::setNightFull(float v)		{ s_nightFull = (v < 0.2f) ? 0.2f : ((v > 1.0f) ? 1.0f : v); }
-float W3DTaa::getNightFull(void)		{ return s_nightFull; }
+void  R3DTaa::setNight(Bool on)			{ s_nightOn = on; }
+Bool  R3DTaa::getNight(void)			{ return s_nightOn; }
+void  R3DTaa::setNightTint(float v)		{ s_nightTint = clamp01(v); }
+float R3DTaa::getNightTint(void)		{ return s_nightTint; }
+void  R3DTaa::setNightLo(float v)		{ s_nightLo = clamp01(v); }
+float R3DTaa::getNightLo(void)			{ return s_nightLo; }
+void  R3DTaa::setNightHi(float v)		{ s_nightHi = clamp01(v); }
+float R3DTaa::getNightHi(void)			{ return s_nightHi; }
+void  R3DTaa::setNightFloor(float v)	{ s_nightFloor = clamp01(v); }
+float R3DTaa::getNightFloor(void)		{ return s_nightFloor; }
+void  R3DTaa::setNightLift(float v)		{ s_nightLift = (v < 0.4f) ? 0.4f : ((v > 1.0f) ? 1.0f : v); }
+float R3DTaa::getNightLift(void)		{ return s_nightLift; }
+void  R3DTaa::setNightFull(float v)		{ s_nightFull = (v < 0.2f) ? 0.2f : ((v > 1.0f) ? 1.0f : v); }
+float R3DTaa::getNightFull(void)		{ return s_nightFull; }
 
-void W3DTaa::describeNight(char *out, Int size)
+void R3DTaa::describeNight(char *out, Int size)
 {
 	if (out == NULL || size <= 0)
 		return;
@@ -593,16 +593,16 @@ void W3DTaa::describeNight(char *out, Int size)
 	out[size - 1] = 0;
 }
 
-void W3DTaa::setFloatScene(Bool on)
+void R3DTaa::setFloatScene(Bool on)
 {
 	s_floatScene   = on;
 	s_floatRefused = FALSE;
 	keepSceneFormat();		// the panel runs between frames: never while the scene is redirected
 }
 
-Bool W3DTaa::getFloatScene(void)	{ return s_floatScene; }
+Bool R3DTaa::getFloatScene(void)	{ return s_floatScene; }
 
-void W3DTaa::describeScene(char *out, Int size)
+void R3DTaa::describeScene(char *out, Int size)
 {
 	if (out == NULL || size <= 0)
 		return;
@@ -625,24 +625,24 @@ void W3DTaa::describeScene(char *out, Int size)
 			  s_sunGain[sunGainSlot()], s_sunGain[0], s_sunGain[1], s_sunGain[2], s_sunGain[3], s_sunWarm, s_white);
 	out[size - 1] = 0;
 }
-void  W3DTaa::setClamp(float v)       { s_clamp = taaKnob(v, 0.0f, 1.0f, 1.0f); }
-float W3DTaa::getClamp(void)          { return s_clamp; }
-void  W3DTaa::setShadowMask(Bool on)  { s_moverOn = on; }
-Bool  W3DTaa::getShadowMask(void)     { return s_moverOn; }
-void  W3DTaa::setMaskCap(Bool on)     { s_moverCap = on; }
-Bool  W3DTaa::getMaskCap(void)        { return s_moverCap; }
-Int   W3DTaa::getShadowMaskDraws(void) { return s_moverOK ? s_moverDraws : -1; }
-void  W3DTaa::getGpuMs(float *total, float *mask)
+void  R3DTaa::setClamp(float v)       { s_clamp = taaKnob(v, 0.0f, 1.0f, 1.0f); }
+float R3DTaa::getClamp(void)          { return s_clamp; }
+void  R3DTaa::setShadowMask(Bool on)  { s_moverOn = on; }
+Bool  R3DTaa::getShadowMask(void)     { return s_moverOn; }
+void  R3DTaa::setMaskCap(Bool on)     { s_moverCap = on; }
+Bool  R3DTaa::getMaskCap(void)        { return s_moverCap; }
+Int   R3DTaa::getShadowMaskDraws(void) { return s_moverOK ? s_moverDraws : -1; }
+void  R3DTaa::getGpuMs(float *total, float *mask)
 {
 	if (total != NULL) *total = s_gpuOK ? s_gpuTotalMs : -1.0f;
 	if (mask  != NULL) *mask  = s_gpuOK ? s_gpuMaskMs  : -1.0f;
 }
 
 
-void  W3DTaa::setWeight(float w)    { s_weight = taaKnob(w, 0.0f, 0.99f, 0.9f); s_historyValid = FALSE; }
-float W3DTaa::getWeight(void)       { return s_weight; }
-void  W3DTaa::setDebug(Int mode)    { s_debugMode = mode; }
-Int   W3DTaa::getDebug(void)        { return s_debugMode; }
+void  R3DTaa::setWeight(float w)    { s_weight = taaKnob(w, 0.0f, 0.99f, 0.9f); s_historyValid = FALSE; }
+float R3DTaa::getWeight(void)       { return s_weight; }
+void  R3DTaa::setDebug(Int mode)    { s_debugMode = mode; }
+Int   R3DTaa::getDebug(void)        { return s_debugMode; }
 
 
 // Ronin @feature 20/09/2026 DX9: Halton(2,3). A low-discrepancy sequence beats random offsets because 8 consecutive
@@ -675,7 +675,7 @@ static void currentJitterPixels(float *outX, float *outY)
 	*outY = halton(s_phase + 1, 3) - 0.5f;
 }
 
-void W3DTaa::beginFrame(void)
+void R3DTaa::beginFrame(void)
 {
 	++s_frameNo;		// Ronin @feature 17/10/2026 DX9: the finish pass's frame stamp
 	// Ronin @feature 26/09/2026 DX9: Options.ini `DX9TAA`, `DX9TAASharpness`, `DX9TAAMipBias` apply at the first frame; the console
@@ -720,11 +720,11 @@ void W3DTaa::beginFrame(void)
 	// Off and it runs BEFORE us in W3DDisplay::draw, so its isActive() already answers "did anyone take it". Only start
 	// our own when nobody did — Begin_Scene_Depth refuses a second start, and two owners would fight over the end.
 	s_ownsDepth = FALSE;
-	if (!W3DSsao::isActive())
+	if (!R3DSsao::isActive())
 		s_ownsDepth = DX8Wrapper::Begin_Scene_Depth() ? TRUE : FALSE;
 }
 
-void W3DTaa::endFrame(void)
+void R3DTaa::endFrame(void)
 {
 	if (!s_ownsDepth)
 		return;					// SSAO started it, SSAO ends it
@@ -732,10 +732,10 @@ void W3DTaa::endFrame(void)
 	DX8Wrapper::End_Scene_Depth();
 }
 
-Bool W3DTaa::isActive(void) { return s_active; }
-Bool W3DTaa::ownsDepth(void) { return s_ownsDepth; }
+Bool R3DTaa::isActive(void) { return s_active; }
+Bool R3DTaa::ownsDepth(void) { return s_ownsDepth; }
 
-void W3DTaa::setEnabled(Bool on)
+void R3DTaa::setEnabled(Bool on)
 {
 	if (s_enabled == on)
 		return;
@@ -752,7 +752,7 @@ static Bool s_redirected = FALSE;
 // projection's off-centre terms (matrix4.h Init_Perspective: Row[0][2], Row[1][2]) are in exactly those units.
 // The sign is NEGATED because this port's frustum is column-vector with w = -z: adding j to Row[0][2] contributes
 // j*z to clip.x, and clip.x/w = j*z/(-z) = -j. Y flips again because NDC +Y is up while screen +Y is down.
-void W3DTaa::getJitterNDC(float *outX, float *outY)
+void R3DTaa::getJitterNDC(float *outX, float *outY)
 {
 	if (outX != NULL) *outX = 0.0f;
 	if (outY != NULL) *outY = 0.0f;
@@ -798,18 +798,18 @@ static UnsignedInt   s_historyW     = 0;
 static UnsignedInt   s_historyH     = 0;
 static Int           s_historyIndex  = 0;
 
-Int  W3DTaa::getMoverCount(void)   { return s_meshDrawCount; }
-Int  W3DTaa::getMeshSeen(void)     { return s_meshSeen; }
-void  W3DTaa::setReactive(float w) { s_reactiveW = taaKnob(w, 0.0f, 1.0f, 0.5f); }
-float W3DTaa::getReactive(void)    { return s_reactiveW; }
-void  W3DTaa::setDisoccV(float px) { s_disoccV = taaKnob(px, 0.0f, 8.0f, 0.5f); }
-float W3DTaa::getDisoccV(void)     { return s_disoccV; }
-void  W3DTaa::setAutoReact(float t) { s_autoReact = taaKnob(t, 0.0f, 1.0f, 0.03f); }
-float W3DTaa::getAutoReact(void)    { return s_autoReact; }
-void  W3DTaa::setAutoFull(float t)  { s_autoFull = taaKnob(t, 0.0f, 1.0f, 0.20f); }
-float W3DTaa::getAutoFull(void)     { return s_autoFull; }
-Bool  W3DTaa::getOpaqueOK(void)     { return s_opaqueOK; }
-void  W3DTaa::noteCursorBib(const Vector3 *corners)
+Int  R3DTaa::getMoverCount(void)   { return s_meshDrawCount; }
+Int  R3DTaa::getMeshSeen(void)     { return s_meshSeen; }
+void  R3DTaa::setReactive(float w) { s_reactiveW = taaKnob(w, 0.0f, 1.0f, 0.5f); }
+float R3DTaa::getReactive(void)    { return s_reactiveW; }
+void  R3DTaa::setDisoccV(float px) { s_disoccV = taaKnob(px, 0.0f, 8.0f, 0.5f); }
+float R3DTaa::getDisoccV(void)     { return s_disoccV; }
+void  R3DTaa::setAutoReact(float t) { s_autoReact = taaKnob(t, 0.0f, 1.0f, 0.03f); }
+float R3DTaa::getAutoReact(void)    { return s_autoReact; }
+void  R3DTaa::setAutoFull(float t)  { s_autoFull = taaKnob(t, 0.0f, 1.0f, 0.20f); }
+float R3DTaa::getAutoFull(void)     { return s_autoFull; }
+Bool  R3DTaa::getOpaqueOK(void)     { return s_opaqueOK; }
+void  R3DTaa::noteCursorBib(const Vector3 *corners)
 {
 	if (!s_active || corners == NULL)
 		return;
@@ -824,11 +824,11 @@ void  W3DTaa::noteCursorBib(const Vector3 *corners)
 		s_bibMovedFrame = (s_moverFrame != 0) ? s_moverFrame : 1;
 }
 
-void W3DTaa::setWaterMask(Bool on)   { s_waterMask = on; }
+void R3DTaa::setWaterMask(Bool on)   { s_waterMask = on; }
 
 // Ronin @bugfix 09/10/2026 DX9: 1 / the map's own light on open ground, per channel, so frame x this ~ the surface's colour - what the
 // selection flash is added to. Terrain values at the map's time of day: ambient plus each light by how steeply it comes down.
-void W3DTaa::getMapLightFactor(float out[3])
+void R3DTaa::getMapLightFactor(float out[3])
 {
 	static const float LIGHT_MIN = 0.25f, LIGHT_MAX = 1.0f;	// bounds on very dark or very bright maps
 	float sum[3] = { 0.0f, 0.0f, 0.0f };
@@ -857,15 +857,15 @@ void W3DTaa::getMapLightFactor(float out[3])
 
 // Ronin @bugfix 09/10/2026 DX9: RTS3DScene::renderOneObject asks before it adds a drawable's selection flash to its lights. TRUE = leave
 // it out: TAA draws it after the resolve. Only inside the redirected 3D render; the mirror and the shadow passes keep it.
-Bool W3DTaa::ownsSelectionFlash(void)
+Bool R3DTaa::ownsSelectionFlash(void)
 {
 	if (!s_redirected || !s_velocityOn || s_velMeshVS == NULL || s_velMeshPS == NULL || s_resolvePS == NULL)
 		return FALSE;
 	s_flashAsked = s_moverFrame;
 	return TRUE;
 }
-Bool W3DTaa::getWaterMask(void)      { return s_waterMask; }
-Int  W3DTaa::getWaterMaskTris(void)  { return s_waterVertCount / 3; }
+Bool R3DTaa::getWaterMask(void)      { return s_waterMask; }
+Int  R3DTaa::getWaterMaskTris(void)  { return s_waterVertCount / 3; }
 
 static inline void addWaterTri(const ICoord3D &a, const ICoord3D &b, const ICoord3D &c)
 {
@@ -931,10 +931,10 @@ static void buildWaterMask(void)
 
 // Ronin @feature 26/09/2026 DX9: called by RTS3DScene::Flush in the main pass, just before particles and the sorted
 // translucent flush. The first call of the frame is the one: later flushes draw on top of it.
-void W3DTaa::noteOpaqueDone(void)
+void R3DTaa::noteOpaqueDone(void)
 {
 	// Ronin @feature 23/10/2026 DX9: the shafts' dust, after the copy below - on every path, TAA or not: to the resolve it is an effect.
-	struct DustAfter { ~DustAfter() { W3DLocalLights::drawShaftDust(); } } dustAfter;
+	struct DustAfter { ~DustAfter() { R3DLocalLights::drawShaftDust(); } } dustAfter;
 	if (!s_redirected || s_autoReact <= 0.0f || s_opaqueStamp == s_moverFrame)
 		return;
 	s_opaqueStamp = s_moverFrame;
@@ -983,15 +983,15 @@ static Bool autoReactUsable(Int w, Int h)
 			s_opaqueW == (UnsignedInt)w && s_opaqueH == (UnsignedInt)h &&
 			s_depthHist[0] != NULL && s_depthHist[1] != NULL) ? TRUE : FALSE;
 }
-Int   W3DTaa::getReactiveCount(void) { return s_reactCount; }
-Int   W3DTaa::getTrackMisses(void) { return s_trkFull; }
-Int   W3DTaa::getSkinDrawCount(void) { return s_skinDrawCount; }
-void  W3DTaa::setDisocc(Int m)     { s_disocc = (m < 0) ? 0 : ((m > 2) ? 2 : m); }
-Int   W3DTaa::getDisocc(void)      { return s_disocc; }
+Int   R3DTaa::getReactiveCount(void) { return s_reactCount; }
+Int   R3DTaa::getTrackMisses(void) { return s_trkFull; }
+Int   R3DTaa::getSkinDrawCount(void) { return s_skinDrawCount; }
+void  R3DTaa::setDisocc(Int m)     { s_disocc = (m < 0) ? 0 : ((m > 2) ? 2 : m); }
+Int   R3DTaa::getDisocc(void)      { return s_disocc; }
 
 // Ronin @feature 24/09/2026 DX9: called from CameraClass::Apply for the TAA camera, BEFORE the jitter is added, with
 // exactly the projection and view it is about to send. The last call before postRender is the scene's.
-void W3DTaa::noteCameraApplied(const Matrix4x4 &d3dProjClean, const Matrix3D &view)
+void R3DTaa::noteCameraApplied(const Matrix4x4 &d3dProjClean, const Matrix3D &view)
 {
 	s_appliedProj  = D3DXMATRIX(To_D3DMATRIX(d3dProjClean));
 	s_appliedView  = D3DXMATRIX(To_D3DMATRIX(view));
@@ -1095,7 +1095,7 @@ static UnsignedByte classifyModel(MeshClass *mesh, MeshModelClass *mdl)
 // Ronin @feature 24/09/2026 DX9: MeshClass::Render calls this for every mesh drawn outside the shadow depth pass. Only
 // meshes inside the TAA-redirected 3D render count, and each is taken once a frame - the water reflection redraws the
 // scene, and a second note would read back the transform the first one just stored.
-void W3DTaa::noteMesh(MeshClass *mesh)
+void R3DTaa::noteMesh(MeshClass *mesh)
 {
 	if (!s_redirected || !s_velocityOn || mesh == NULL)
 		return;
@@ -1198,7 +1198,7 @@ void W3DTaa::noteMesh(MeshClass *mesh)
 	UnsignedByte f = (s_reactiveW > 0.0f) ? classifyModel(mesh, mdl) : 0;
 	// Ronin @feature 09/10/2026 DX9: its scrolling, see-through polygons are a beam that is not drawn (a spot light stands in): what is
 	// left of the mesh is the lamp's housing, and marking the beam's footprint reactive would cost that area its AA.
-	if (W3DLocalLights::beamsHiddenIn(mesh))
+	if (R3DLocalLights::beamsHiddenIn(mesh))
 		f &= (UnsignedByte)~(TAA_MF_TIMEVAR | TAA_MF_TRANSL);
 	if (f & TAA_MF_TRANSL)
 		sl->boxOK = FALSE;		// Ronin @bugfix 09/10/2026 DX9: a translucent mesh that goes (a muzzle flash) is the reactive mask's, not a box reset
@@ -1279,8 +1279,8 @@ void W3DTaa::noteMesh(MeshClass *mesh)
 	if (kind != TAA_KIND_VEL && kind != TAA_KIND_STILL && kind != TAA_KIND_VEL_IDLE)
 		++s_reactCount;
 }
-void W3DTaa::setVelocity(Bool on)  { s_velocityOn = on; }
-Bool W3DTaa::getVelocity(void)     { return s_velocityOn; }
+void R3DTaa::setVelocity(Bool on)  { s_velocityOn = on; }
+Bool R3DTaa::getVelocity(void)     { return s_velocityOn; }
 
 
 
@@ -1288,7 +1288,7 @@ Bool W3DTaa::getVelocity(void)     { return s_velocityOn; }
 // reprojection.
 // Ronin @bugfix 20/09/2026 DX9: these are D3D-convention matrices read straight off the DEVICE, not built from
 // Matrix4x4. Matrix4x4 is column-vector and D3D is row-vector, so building here and reasoning about HLSL's matrix
-// packing on top gave two chances to get the handedness wrong — and it got it wrong. W3DShadowMap.cpp:1509-1518 is the
+// packing on top gave two chances to get the handedness wrong — and it got it wrong. R3DShadowMap.cpp:1509-1518 is the
 // convention that demonstrably works in this codebase: GetTransform, multiply view*proj, transpose, mul(rowVec, M).
 // Both of these are JITTER-FREE. The device's projection carries this frame's subpixel offset; it is stripped before
 // either is built, so a still camera produces an exactly zero reprojection delta. See the note at the D3DXMatrixInverse
@@ -1387,7 +1387,7 @@ static void prepareWaterMask(IDirect3DDevice9 *dev)
 
 // Around a water draw (W3DWater.cpp). TRUE = render target 1 is the mask; call endWaterMask after the draw. Only inside
 // the TAA redirect and over a target the mask's size.
-Bool W3DTaa::beginWaterMask(void)
+Bool R3DTaa::beginWaterMask(void)
 {
 	if (!s_redirected || !s_waterMaskReady || s_waterMaskTex == NULL)
 		return FALSE;
@@ -1415,18 +1415,18 @@ Bool W3DTaa::beginWaterMask(void)
 	return ok;
 }
 
-void W3DTaa::endWaterMask(void)
+void R3DTaa::endWaterMask(void)
 {
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
 	if (dev != NULL)
 		dev->SetRenderTarget(1, NULL);
 }
 
-Bool W3DTaa::getWaterMaskDrawn(void) { return s_waterMaskLast; }
+Bool R3DTaa::getWaterMaskDrawn(void) { return s_waterMaskLast; }
 
 // Ronin @feature 18/10/2026 DX9: screen-space reflections - read during this frame's scene, before postRender overwrites the older
 // buffer: the history and depth last written, with their camera; the one before them for the change mask (NULL: every hit marks).
-Bool W3DTaa::getLastFrame(IDirect3DTexture9 **colour, IDirect3DTexture9 **depth, float c[24], IDirect3DTexture9 **older,
+Bool R3DTaa::getLastFrame(IDirect3DTexture9 **colour, IDirect3DTexture9 **depth, float c[24], IDirect3DTexture9 **older,
 						  float cOlder[24])
 {
 	const Int last = s_historyIndex ^ 1;
@@ -1540,9 +1540,9 @@ static IDirect3DSurface9 *lightMaskSurface(IDirect3DDevice9 *dev, Bool sceneOnly
 	return surf;
 }
 
-// Ronin @bugfix 09/10/2026 DX9: around W3DLocalLights' draws. TRUE = render target 1 is this frame's light-change mask, cleared;
+// Ronin @bugfix 09/10/2026 DX9: around R3DLocalLights' draws. TRUE = render target 1 is this frame's light-change mask, cleared;
 // call endLightMask after the draws. Only inside the TAA redirect - there is no MSAA then, so two targets can pair.
-Bool W3DTaa::beginLightMask(void)
+Bool R3DTaa::beginLightMask(void)
 {
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
 	// Ronin @feature 17/10/2026 DX9: or for the finish pass - it keeps a lamp-lit pixel's colour by it. Not under MSAA (lightMaskSurface).
@@ -1562,7 +1562,7 @@ Bool W3DTaa::beginLightMask(void)
 	return ok;
 }
 
-void W3DTaa::endLightMask(void)
+void R3DTaa::endLightMask(void)
 {
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
 	if (dev == NULL)
@@ -1577,7 +1577,7 @@ void W3DTaa::endLightMask(void)
 
 // Ronin @feature 18/10/2026 DX9: the reflections' change mask - the light mask's red for ReflectiveRigid_ps COLOR1, where a pane's
 // reflection changed: the resolve clamps it as a light's change. Only over the TAA frame, never over another pass's target 1.
-Bool W3DTaa::beginReflectMask(void)
+Bool R3DTaa::beginReflectMask(void)
 {
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
 	if (!s_redirected || s_reflMark <= 0 || s_reflMarkBound || dev == NULL)
@@ -1618,7 +1618,7 @@ Bool W3DTaa::beginReflectMask(void)
 	return s_reflMarkBound;
 }
 
-void W3DTaa::endReflectMask(void)
+void R3DTaa::endReflectMask(void)
 {
 	if (!s_reflMarkBound)
 		return;
@@ -1632,9 +1632,9 @@ void W3DTaa::endReflectMask(void)
 	dev->SetTexture(12, NULL);
 }
 
-void W3DTaa::setReflMark(Int mode)	{ s_reflMark = (mode < 0) ? 0 : ((mode > 2) ? 2 : mode); }
-void W3DTaa::setLastFrameWanted(Bool on)	{ s_lastFrameWanted = on; }
-Int  W3DTaa::getReflMark(void)		{ return s_reflMark; }
+void R3DTaa::setReflMark(Int mode)	{ s_reflMark = (mode < 0) ? 0 : ((mode > 2) ? 2 : mode); }
+void R3DTaa::setLastFrameWanted(Bool on)	{ s_lastFrameWanted = on; }
+Int  R3DTaa::getReflMark(void)		{ return s_reflMark; }
 
 // Ronin @bugfix 09/10/2026 DX9: the selection-flash mask, made the frame's size, cleared and bound as render target 1. ColorFill,
 // not Clear - that wipes every bound target. A TextureClass target, so a device reset is the texture manager's.
@@ -1751,7 +1751,7 @@ static Bool ensureHistory(UnsignedInt width, UnsignedInt height)
 	return TRUE;
 }
 
-// Same blob reader W3DSsao and W3DShadowMap use; file-static in each so no header has to carry it.
+// Same blob reader R3DSsao and R3DShadowMap use; file-static in each so no header has to carry it.
 static DWORD *readShaderBlob(const char *path)
 {
 	HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
@@ -1892,7 +1892,7 @@ static void renderMoverMask(IDirect3DDevice9 *dev, const D3DVIEWPORT9 &vp, Bool 
 {
 	s_moverOK    = FALSE;
 	s_moverDraws = 0;
-	if (!s_moverOn || !haveDepth || !TheUseShadowMaps || !W3DShadowMap::isAvailable() || W3DShadowMap::getSplitCount() < 1 ||
+	if (!s_moverOn || !haveDepth || !TheUseShadowMaps || !R3DShadowMap::isAvailable() || R3DShadowMap::getSplitCount() < 1 ||
 		s_meshDrawCount <= 0 || s_velMeshVS == NULL || s_moverPS == NULL || !s_curViewProjValid)
 		return;
 	Int movers = 0;
@@ -1905,8 +1905,8 @@ static void renderMoverMask(IDirect3DDevice9 *dev, const D3DVIEWPORT9 &vp, Bool 
 	if (movers == 0 || !ensureMoverTargets())
 		return;
 
-	// Stored TRANSPOSED and ready to upload (W3DShadowMap.cpp, the capture after each split's render); back to row-vector.
-	const Matrix4x4 &sunStored = W3DShadowMap::getLightViewProj(W3DShadowMap::getSplitCount() - 1);
+	// Stored TRANSPOSED and ready to upload (R3DShadowMap.cpp, the capture after each split's render); back to row-vector.
+	const Matrix4x4 &sunStored = R3DShadowMap::getLightViewProj(R3DShadowMap::getSplitCount() - 1);
 	D3DXMATRIX sunT((const float *)&sunStored), sun;
 	D3DXMatrixTranspose(&sun, &sunT);
 
@@ -1924,7 +1924,7 @@ static void renderMoverMask(IDirect3DDevice9 *dev, const D3DVIEWPORT9 &vp, Bool 
 			dev->SetRenderState(D3DRS_ZENABLE,      D3DZB_TRUE);
 			dev->SetRenderState(D3DRS_ZWRITEENABLE, TRUE);
 			dev->SetRenderState(D3DRS_ZFUNC,        D3DCMP_LESSEQUAL);
-			DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ, "W3DTaa::moverMask");
+			DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ, "R3DTaa::moverMask");
 			dev->SetVertexShader(s_velMeshVS);		// AFTER the layout bind - it clears the VS
 			dev->SetPixelShader(s_moverPS);
 			for (Int pass = 0; pass < 2; ++pass)		// 0 = where it is now (RG), 1 = where it was (BA)
@@ -1980,7 +1980,7 @@ static void renderMoverMask(IDirect3DDevice9 *dev, const D3DVIEWPORT9 &vp, Bool 
 		dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN |
 													D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA);
 		dev->SetViewport(&vp);		// SetRenderTarget reset it to the whole target
-		DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::postRender");
+		DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DTaa::postRender");
 		dev->SetVertexShader(s_quadVS);
 		dev->SetPixelShader(s_resolvePS);
 	}
@@ -2009,16 +2009,16 @@ static void renderMoverMask(IDirect3DDevice9 *dev, const D3DVIEWPORT9 &vp, Bool 
 
 // Ronin @bugfix 07/10/2026 DX9: a device reset fails while any query is alive - `msaa 8` froze the game on it. The
 // targets are TextureClass, which the texture manager releases and remakes itself; the queries were the one thing left.
-void W3DTaa::releaseResources(void)
+void R3DTaa::releaseResources(void)
 {
 	s_gpuRemake = (s_gpuRemake || s_gpuOK) ? TRUE : FALSE;
 	gpuRelease();
 	releaseOpaque();		// Ronin @feature 12/10/2026 DX9: a raw default-pool texture: a reset fails while it lives
-	W3DLocalLights::releaseQueries();	// Ronin @diagnostic 20/10/2026 DX9: the lights' GPU timer, likewise
-	W3DLocalLights::releaseShaftBuffers();	// Ronin @feature 22/10/2026 DX9: the sun shafts' raw default-pool buffers
+	R3DLocalLights::releaseQueries();	// Ronin @diagnostic 20/10/2026 DX9: the lights' GPU timer, likewise
+	R3DLocalLights::releaseShaftBuffers();	// Ronin @feature 22/10/2026 DX9: the sun shafts' raw default-pool buffers
 }
 
-void W3DTaa::shutdown(void)
+void R3DTaa::shutdown(void)
 {
 	s_camera = NULL;
 	releaseSurround();		// Ronin @feature 22/10/2026 DX9: local contrast's surroundings
@@ -2170,14 +2170,14 @@ static Bool buildSurround(IDirect3DDevice9 *dev, IDirect3DBaseTexture9 *src, Uns
 	dev->SetRenderState(D3DRS_CULLMODE,         D3DCULL_NONE);
 	dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE |
 												D3DCOLORWRITEENABLE_ALPHA);
-	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::buildSurround");
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DTaa::buildSurround");
 	dev->SetVertexShader(s_quadVS);		// after the layout bind - BindLayoutFVF clears the VS
 	dev->SetPixelShader(s_resolvePS);
 	const float c9[4] = { s_white, floatScene ? 1.0f : 0.0f, 0.0f, 0.0f };
 	dev->SetPixelShaderConstantF(9, c9, 1);
 	dev->SetPixelShaderConstantF(24, rect, 1);
 	// Ronin @feature 23/10/2026 DX9: the dark lift, so the night's surroundings are as shown (c19 is uploaded after this).
-	const float nightLiftC[4] = { s_nightLift, (s_nightOn && W3DLocalLights::isEnabled() && vividNight()) ? 1.0f : 0.0f, 0.0f, 0.0f };
+	const float nightLiftC[4] = { s_nightLift, (s_nightOn && R3DLocalLights::isEnabled() && vividNight()) ? 1.0f : 0.0f, 0.0f, 0.0f };
 	dev->SetPixelShaderConstantF(19, nightLiftC, 1);
 	const float step = (float)vpH / 900.0f;
 	Bool ok = TRUE;
@@ -2275,7 +2275,7 @@ static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DV
 	for (int i = 0; i < 4; ++i)
 		q[i].z = 0.0f;
 
-	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::drawFinish");
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DTaa::drawFinish");
 	dev->SetVertexShader(s_quadVS);		// after the layout bind - BindLayoutFVF clears the VS
 	dev->SetPixelShader(s_resolvePS);
 	const float c0[4] = { 0.0f, 1.0f / (float)texW, 1.0f / (float)texH, 0.0f };
@@ -2299,7 +2299,7 @@ static void drawFinish(IDirect3DDevice9 *dev, IDirect3DTexture9 *src, const D3DV
 	float nightC[8], nightLevel[3];
 	nightConstants(nightC, nightLevel, nightMask);
 	dev->SetPixelShaderConstantF(17, nightC, 2);
-	const Bool night = (s_nightOn && W3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
+	const Bool night = (s_nightOn && R3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? TRUE : FALSE;
 	const float nightLiftC[4] = { s_nightLift, night ? 1.0f : 0.0f, 0.0f, 0.0f };
 	dev->SetPixelShaderConstantF(19, nightLiftC, 1);
 	bindGrade(dev);		// Ronin @feature 21/10/2026 DX9: the daytime grade
@@ -2400,7 +2400,7 @@ static void storeLastFrame(IDirect3DDevice9 *dev, IDirect3DSurface9 *src, IDirec
 			q[3].x =  1.0f - hx; q[3].y = -1.0f + hy; q[3].u = 1.0f; q[3].v = 1.0f;
 			for (int i = 0; i < 4; ++i)
 				q[i].z = 0.0f;
-			DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::storeLastFrame");
+			DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DTaa::storeLastFrame");
 			dev->SetVertexShader(s_quadVS);		// after the layout bind - BindLayoutFVF clears the VS
 			dev->SetPixelShader(s_depthStorePS);
 			const float dcfg[4] = { 0.0f, zn, zf, 0.0f };		// w = 0: no auto-reactive flag
@@ -2498,7 +2498,7 @@ static void endHdrAlone(void)
 		DX8Wrapper::Resume_Scene_Depth();
 }
 
-Bool W3DTaa::preRender(const CameraClass &camera)
+Bool R3DTaa::preRender(const CameraClass &camera)
 {
 	s_redirected = FALSE;
 	s_floatNow   = FALSE;		// Ronin @feature 17/10/2026 DX9: float only once a redirect is taken
@@ -2518,7 +2518,7 @@ Bool W3DTaa::preRender(const CameraClass &camera)
 	s_appliedValid  = FALSE;	// Apply runs during the scene render and sets it again
 	s_meshVpValid   = FALSE;
 	s_opaqueOK      = FALSE;
-	MeshClass::Set_Taa_Mesh_Note_Func(&W3DTaa::noteMesh);	// §14; noteMesh itself checks the redirect window
+	MeshClass::Set_Taa_Mesh_Note_Func(&R3DTaa::noteMesh);	// §14; noteMesh itself checks the redirect window
 	++s_moverFrame;
 	if (s_moverFrame == 0) ++s_moverFrame;	// 0 is the "no previous position" marker
 
@@ -2557,7 +2557,7 @@ Bool W3DTaa::preRender(const CameraClass &camera)
 }
 
 // Ronin @feature 17/10/2026 DX9: THE FINISH PASS (finishWanted): the frame copied, then drawFinish over the camera's viewport.
-void W3DTaa::finishScene(const CameraClass &camera)
+void R3DTaa::finishScene(const CameraClass &camera)
 {
 	// Ronin @feature 19/10/2026 DX9: or for screen-space reflections without TAA - they read last frame from storeLastFrame.
 	const Bool finish = finishWanted();
@@ -2631,7 +2631,7 @@ void W3DTaa::finishScene(const CameraClass &camera)
 		drawFinish(dev, s_finishCopy->Peek_D3D_Texture(), vp, rd.Width, rd.Height, FALSE);
 }
 
-void W3DTaa::postRender(void)
+void R3DTaa::postRender(void)
 {
 	if (s_hdrAlone)
 	{
@@ -2653,7 +2653,7 @@ void W3DTaa::postRender(void)
 	// texture over while ours is suspended. Resumed at the bottom — the rest of the frame keeps testing against it.
 	const Bool depthSuspended = DX8Wrapper::Suspend_Scene_Depth() ? TRUE : FALSE;
 	IDirect3DTexture9 *depthTex = depthSuspended ? DX8Wrapper::Peek_Scene_Depth_Texture() : NULL;
-	// Ronin @bugfix 23/09/2026 DX9: build the view-projection from the CAMERA, not off the device. W3DShadowMap
+	// Ronin @bugfix 23/09/2026 DX9: build the view-projection from the CAMERA, not off the device. R3DShadowMap
 	// records the hazard at its own capture site: "reading the device cold returned whatever drew last (particles set
 	// VIEW to identity)". TAA had exactly that exposure - this runs after the scene, and Apply_Render_State_Changes
 	// pushes whatever the wrapper last cached, which need not be the 3D camera. It looked fine only because the check
@@ -2752,7 +2752,7 @@ void W3DTaa::postRender(void)
 	for (int i = 0; i < 4; ++i)
 		q[i].z = 0.0f;
 
-	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::postRender");
+	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DTaa::postRender");
 	dev->SetVertexShader(s_quadVS);		// AFTER the layout bind — BindLayoutFVF clears the VS
 	dev->SetPixelShader(s_resolvePS);
 
@@ -2864,7 +2864,7 @@ void W3DTaa::postRender(void)
 					m[3].x =  1.0f - mhx; m[3].y = -1.0f + mhy; m[3].u = mu1; m[3].v = mv1;
 					for (int mi = 0; mi < 4; ++mi)
 						m[mi].z = 0.0f;
-					DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::waterMask");
+					DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DTaa::waterMask");
 					dev->SetVertexShader(s_quadVS);		// AFTER the layout bind
 					dev->SetPixelShader(s_waterMaskPS);
 					dev->SetTexture(0, s_waterMaskTex->Peek_D3D_Texture());
@@ -2872,7 +2872,7 @@ void W3DTaa::postRender(void)
 					dev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, m, sizeof(QuadVertex));
 					dev->SetTexture(0, NULL);
 				}
-				DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ, "W3DTaa::velMesh");
+				DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ, "R3DTaa::velMesh");
 				dev->SetVertexShader(s_velMeshVS);	// AFTER the layout bind - BindLayoutFVF clears the VS
 				dev->SetPixelShader(s_velMeshPS);
 				dev->SetTexture(2, depthTex);
@@ -3004,7 +3004,7 @@ void W3DTaa::postRender(void)
 				// each vertex carries this frame's and last frame's position. Same pixel shader as the rigid draws.
 				if (s_skinDrawCount > 0 && s_velSkinVS != NULL)
 				{
-					DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1 | D3DFVF_TEXCOORDSIZE3(0), "W3DTaa::velSkin");
+					DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1 | D3DFVF_TEXCOORDSIZE3(0), "R3DTaa::velSkin");
 					dev->SetVertexShader(s_velSkinVS);	// AFTER the layout bind - it clears the VS
 					setResolveSampler(dev, 2);			// POINT, re-set after the rebind
 					D3DXMATRIX cT, pT;
@@ -3063,7 +3063,7 @@ void W3DTaa::postRender(void)
 		dev->SetViewport(&vp);
 
 		// The resolve passes below assume their layout and shaders are still bound.
-		DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "W3DTaa::postRender");
+		DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX1, "R3DTaa::postRender");
 		dev->SetVertexShader(s_quadVS);
 		dev->SetPixelShader(s_resolvePS);
 	}
@@ -3141,7 +3141,7 @@ void W3DTaa::postRender(void)
 					dev->SetTexture(6, s_velPrevTex->Peek_D3D_Texture());
 					setResolveSampler(dev, 6);		// POINT - the alpha is a flag, not a value to blend
 				}
-				// Ronin @bugfix 09/10/2026 DX9: the local lights' change mask at s8 (c10.w), only when W3DLocalLights drew it this frame.
+				// Ronin @bugfix 09/10/2026 DX9: the local lights' change mask at s8 (c10.w), only when R3DLocalLights drew it this frame.
 				const Bool useLightMask = (s_lightMaskTex != NULL && s_lightMaskStamp == s_moverFrame &&
 										   s_lightMaskW == (UnsignedInt)fbW && s_lightMaskH == (UnsignedInt)fbH) ? TRUE : FALSE;
 				if (useLightMask)
@@ -3274,7 +3274,7 @@ void W3DTaa::postRender(void)
 		nightConstants(nightC, nightLevel, nightMask);
 		dev->SetPixelShaderConstantF(17, nightC, 2);
 		// Ronin @feature 15/10/2026 DX9: the dark lift (`night lift`), c19: at night, with the look switched on.
-		const float nightLiftC[4] = { s_nightLift, (s_nightOn && W3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? 1.0f : 0.0f,
+		const float nightLiftC[4] = { s_nightLift, (s_nightOn && R3DLocalLights::isEnabled() && TheGlobalData != NULL && TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT) ? 1.0f : 0.0f,
 									  0.0f, 0.0f };
 		dev->SetPixelShaderConstantF(19, nightLiftC, 1);
 		// Ronin @bugfix 09/10/2026 DX9: the selection flash, added here - after the resolve, never in the history. c8 = 1 / the map's light

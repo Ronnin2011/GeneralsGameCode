@@ -99,8 +99,8 @@
 #include "W3DDevice/GameClient/FlatHeightMap.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/W3DSnow.h"
-#include "W3DDevice/GameClient/W3DShadowMapState.h"	// Ronin 24/08/2026: §29h-5 depth-pass gate
-#include "W3DDevice/GameClient/W3DTaa.h"				// Ronin 08/10/2026: its queries, before a device reset
+#include "W3DDevice/GameClient/R3DShadowMapState.h"	// Ronin 24/08/2026: §29h-5 depth-pass gate
+#include "W3DDevice/GameClient/R3DTaa.h"				// Ronin 08/10/2026: its queries, before a device reset
 
 
 extern FlatHeightMapRenderObjClass *TheFlatHeightMap;
@@ -436,7 +436,7 @@ void BaseHeightMapRenderObjClass::ReleaseResources()
 		((W3DSnowManager *)TheSnowManager)->ReleaseResources();
 
 	// Ronin @bugfix 08/10/2026 DX9: the TAA GPU timer's queries. A device reset fails while any query is alive.
-	W3DTaa::releaseResources();
+	R3DTaa::releaseResources();
 
 	//Release any resources that may be used by custom pixel/vertex shaders
 	W3DShaderManager::shutdown();

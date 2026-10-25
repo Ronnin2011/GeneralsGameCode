@@ -169,7 +169,7 @@ public:
 	static bool						s_SkipBakedShadowCasters;
 	// Ronin @bugfix 19/09/2026 DX9: a mover draws in the depth pass every frame, but the moving-caster mask is marked per
 	// OBJECT and a flag's parent structure is a static caster — so the terrain EMA kept history under a shadow that moves,
-	// and the flag/dish/turret trailed. The mesh marks itself instead. Set by W3DShadowMap; WW3D2 must not know about it.
+	// and the flag/dish/turret trailed. The mesh marks itself instead. Set by R3DShadowMap; WW3D2 must not know about it.
 	typedef void					(*ShadowMoverNoteFunc)(float cx, float cy, float cz, float radius);
 	static void						Set_Shadow_Mover_Note_Func(ShadowMoverNoteFunc fn) { s_ShadowMoverNote = fn; }
 	static ShadowMoverNoteFunc		s_ShadowMoverNote;
@@ -197,7 +197,7 @@ public:
 	static LightFixtureNoteFunc	s_LightFixtureNote;
 	unsigned char					Get_Light_Fixture() const { return LightFixture; }
 
-	// Ronin @feature 11/10/2026 DX9: lamp shadow maps - every mesh that is drawn reports itself, so W3DLocalLights knows what stands in
+	// Ronin @feature 11/10/2026 DX9: lamp shadow maps - every mesh that is drawn reports itself, so R3DLocalLights knows what stands in
 	// each lamp's light (docs/Lighting_Work.md 6b). The callback itself sorts out which pass this is.
 	typedef void					(*LightCasterNoteFunc)(MeshClass *mesh);
 	static void						Set_Light_Caster_Note_Func(LightCasterNoteFunc fn) { s_LightCasterNote = fn; }

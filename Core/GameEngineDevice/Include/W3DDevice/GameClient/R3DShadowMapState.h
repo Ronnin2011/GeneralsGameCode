@@ -3,7 +3,7 @@
 **	DX9 shadow-map terrain receiver — cross-tree state hand-off.
 */
 
-// Ronin @feature 14/08/2026 DX9: §29h. Core/HeightMap.cpp compiles for both targets but W3DShadowMap is
+// Ronin @feature 14/08/2026 DX9: §29h. Core/HeightMap.cpp compiles for both targets but R3DShadowMap is
 // GeneralsMD-only, so the shadow map PUSHES state down into this Core-owned struct. Doc §3.
 #pragma once
 
@@ -81,7 +81,7 @@ struct TerrainShadowPassState
 	// second render like the light's, but none of the light's culls apply. APPENDED - rebuild GeneralsMD and Core.
 	Bool viewDepthPass;
 	// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. What a sun shadow leaves on this map, per channel (rgb), and how far to
-	// follow it (w; 0 = the old 0.45). Written by W3DLocalLights each frame. APPENDED - rebuild GeneralsMD and Core.
+	// follow it (w; 0 = the old 0.45). Written by R3DLocalLights each frame. APPENDED - rebuild GeneralsMD and Core.
 	float shadeColour[4];
 };
 

@@ -16,7 +16,7 @@
 #include "Common/GameMemory.h"
 #include "GameClient/Display.h"
 #include "W3DDevice/GameClient/BaseHeightMap.h"
-#include "W3DDevice/GameClient/W3DDebugGrid.h"
+#include "W3DDevice/GameClient/R3DDebugGrid.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "WW3D2/camera.h"
@@ -517,11 +517,11 @@ namespace
 		DX8Wrapper::Set_Material(m_material);
 		DX8Wrapper::Set_Shader(m_shader);
 		DX8Wrapper::Set_Texture(0, nullptr);
-		DX8Wrapper::Set_Index_Buffer(ib_access, 0, "W3DDebugGrid::Render");
+		DX8Wrapper::Set_Index_Buffer(ib_access, 0, "R3DDebugGrid::Render");
 		DX8Wrapper::Set_Vertex_Buffer(vb_access);
 		DX8Wrapper::Set_Transform(D3DTS_WORLD, Matrix3D(1));
 		// Ronin @bugfix 16/09/2026 DX9: bind our own layout — Apply_Render_State_Changes re-binds the PREVIOUS draw's one.
-		DX8Wrapper::BindLayoutFVF(vb_access.FVF_Info().Get_FVF(), "W3DDebugGrid::Render");
+		DX8Wrapper::BindLayoutFVF(vb_access.FVF_Info().Get_FVF(), "R3DDebugGrid::Render");
 		DX8Wrapper::Draw_Triangles(0, indices / 3, 0, vertices);
 	}
 
@@ -530,7 +530,7 @@ namespace
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DDebugGrid::show(const Coord3D &centre, Real cell, Int radius,
+void R3DDebugGrid::show(const Coord3D &centre, Real cell, Int radius,
 						const Coord3D *spots, Int spotCount, Real spotHalf)
 {
 	if (W3DDisplay::m_3DScene == nullptr)
@@ -553,7 +553,7 @@ void W3DDebugGrid::show(const Coord3D &centre, Real cell, Int radius,
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DDebugGrid::hide(void)
+void R3DDebugGrid::hide(void)
 {
 	if (s_scene != nullptr && s_grid != nullptr && s_scene == W3DDisplay::m_3DScene)
 		s_scene->Remove_Render_Object(s_grid);

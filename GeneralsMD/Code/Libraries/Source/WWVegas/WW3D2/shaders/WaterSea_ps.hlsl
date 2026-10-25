@@ -1,5 +1,5 @@
 // Ronin @feature 28/09/2026 DX9: the WaterType 2 water, SM3: normal maps, Fresnel, sun, depth, swell, foam. Began as a port
-// of Water/wave.nvp. Inputs bound by W3DWaterSea.h; the knobs are TheWaterSeaProfiles. docs/Water_Work.md.
+// of Water/wave.nvp. Inputs bound by R3DWaterSea.h; the knobs are TheWaterSeaProfiles. docs/Water_Work.md.
 //
 // Compile with: fxc /T ps_3_0 /Fo WaterSea.pso WaterSea_ps.hlsl
 // Ronin @feature 02/10/2026 DX9: four builds of this source: plain, /D WATER_VIEWS (debug views), /D WATER_RIVER, and both.
@@ -31,7 +31,7 @@ float4 g_HeightCfg  : register(c21);	// x: depth on, y: world z per sampled unit
 float4 g_DepthCfg   : register(c22);	// x: 1 / tint depth, y: deep brightness, z: opacity, w: 1 / soft shore width, 0 = off
 float4 g_FoamCfg    : register(c23);	// x: foam strength, y: 1 / foam width, z: water-texture amount, w: 1 = a river
 float4 g_HeightStep : register(c24);	// xy: one height texel in uv, z: 1 / world units per texel, w: `shoredepth`
-// Ronin @feature 29/09/2026 DX9: phase 2 - Gerstner swell (W3DWaterSea.h), per wave two rows.
+// Ronin @feature 29/09/2026 DX9: phase 2 - Gerstner swell (R3DWaterSea.h), per wave two rows.
 float4 g_Wave[8]    : register(c25);	// [2i] (k dx, k dy, omega, this wave's height / the default sea's total),
 										// [2i+1] (dx k A, dy k A - both x the normal boost, Q k A, 0)
 float4 g_SwellCfg   : register(c33);	// x: seconds, y: on, z: a lake's shore slope 1 / (depth x MinOpacity) (0 = soft edge off),
@@ -46,16 +46,16 @@ float4 g_ShadowCfg          : register(c44);	// x: on, y: near bias, z: half-tex
 float4 g_CascadeCfg         : register(c45);	// x: far bias, y: cascade count
 float4 g_RiverFlow          : register(c46);	// Ronin @feature 02/10/2026 DX9: phase 4 - x: 1 / flow cycle seconds, y: layer-A uv -> foam uv,
 												// z: layer-A uv -> the current foam's uv (`seafoamtile`)
-// Ronin @feature 03/10/2026 DX9: phase 5 - whitecaps (W3DWaterSea.h).
+// Ronin @feature 03/10/2026 DX9: phase 5 - whitecaps (R3DWaterSea.h).
 float4 g_Cap[4]             : register(c47);	// per wave: its height share x (cos, sin) of the phase of two trail lags (xy, zw)
 float4 g_CapCfg             : register(c51);	// x: `whitecapat`, y: 1 / the foam edge's softness, z: `whitecaps`, w: edge noise
 float4 g_CapTrail           : register(c52);	// xy: the two trails' weights, z: `swelltint`, w: 1 = shore breakers (`breakers`)
-// Ronin @bugfix 03/10/2026 DX9: the fog of war, read at the displaced surface (W3DWaterSea.h).
+// Ronin @bugfix 03/10/2026 DX9: the fog of war, read at the displaced surface (R3DWaterSea.h).
 float4 g_ShroudMap          : register(c53);	// xy: world xy -> shroud uv scale (0 = no shroud here), zw: the offset added first
 // Ronin @feature 03/10/2026 DX9: phase 5 - wakes (W3DWater.cpp renderWakes, WaterWake_ps.hlsl).
 float4 g_WakeMap            : register(c54);	// world xy -> wake uv: xy scale, zw offset
 float4 g_WakeCfg            : register(c55);	// x: foam (`wakefoam`), y: its slope -> the normal, z: its height -> crest units (all 0 = none)
-// Ronin @feature 08/10/2026 DX9: `mirrorsoft` (W3DWaterSea.h). c62: WaterWake_ps holds c56-c61.
+// Ronin @feature 08/10/2026 DX9: `mirrorsoft` (R3DWaterSea.h). c62: WaterWake_ps holds c56-c61.
 float4 g_MirrorSoft         : register(c62);	// xy: the extra taps' offset in mirror uv, z: 1 = on
 
 sampler2D s_ShadowNear : register(s7);	// Ronin @feature 29/09/2026 DX9: the shadow maps, depth textures, hardware compare
@@ -87,7 +87,7 @@ struct PSInput
 	float4 color    : COLOR0;
 };
 
-// Ronin @bugfix 03/10/2026 DX9: COLOR1 marks the pixel for TAA's water mask (W3DTaa::beginWaterMask binds the target while
+// Ronin @bugfix 03/10/2026 DX9: COLOR1 marks the pixel for TAA's water mask (R3DTaa::beginWaterMask binds the target while
 // TAA runs; unbound, the write goes nowhere). White: it survives whatever blend the draw uses.
 struct PSOutput
 {

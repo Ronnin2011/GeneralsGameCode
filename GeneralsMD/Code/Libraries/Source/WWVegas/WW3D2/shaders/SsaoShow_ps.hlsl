@@ -5,7 +5,7 @@
 // Compile with: fxc /T ps_3_0 /Fo SsaoShow.pso SsaoShow_ps.hlsl   (pairs with ScreenQuad.vso)
 
 sampler2D g_AO          : register(s0);
-sampler2D g_SunShade    : register(s1);     // what the sun's shadow left of each mesh pixel (W3DLocalLights); a = 1 where a mesh wrote
+sampler2D g_SunShade    : register(s1);     // what the sun's shadow left of each mesh pixel (R3DLocalLights); a = 1 where a mesh wrote
 sampler2D g_GroundShade : register(s2);     // the same for the terrain, from its own shadow pass
 
 float4 g_Sun  : register(c0);               // rgb = the shade's floor on this map, w = how far to follow it (`lights aosun`)

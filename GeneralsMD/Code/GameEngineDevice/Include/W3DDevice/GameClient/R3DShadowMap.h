@@ -35,7 +35,7 @@ enum ShadowMapMode
 								// slot for the INTZ / manual-compare path when an AMD card is available.
 };
 
-class W3DShadowMap
+class R3DShadowMap
 {
 public:
 	// Phase 0. Logs every probe result and picks m_mode. Safe to call before init().

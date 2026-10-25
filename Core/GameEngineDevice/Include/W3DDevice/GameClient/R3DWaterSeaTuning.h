@@ -183,7 +183,7 @@ inline WaterSeaTuning WaterSea_DefaultProfile(WaterKind kind)
 		t.gloss       = 180.0f;		// (Ronin, 02/10)
 		t.sheen       = 0.15f;		// (Ronin, 02/10)
 		// Ronin @feature 03/10/2026 DX9: phase 5 - the lake keeps phase 2's swell as it was settled: the calm wave table
-		// (W3DWaterSea.h), round crests, no tint, the 20-unit grid.
+		// (R3DWaterSea.h), round crests, no tint, the 20-unit grid.
 		t.swellCell   = 20.0f;
 		t.swellSharp  = 0.0f;
 		t.swellTint   = 0.0f;
@@ -218,7 +218,7 @@ inline WaterSeaTuning &WaterSea_Profile(Int kind)
 }
 
 // Ronin @feature 04/10/2026 DX9: every knob by its name - one table for the debug panel's `water` command and for the
-// water ini (W3DWaterSeaIni.h). A knob added to a struct above and to its table here is tunable in the panel and saved,
+// water ini (R3DWaterSeaIni.h). A knob added to a struct above and to its table here is tunable in the panel and saved,
 // with nothing else to touch. `saved` FALSE: not in the ini (the debug view; `mirror`, which is Options.ini's
 // DX9WaterReflections).
 enum WaterKnobKind { WATER_KNOB_REAL = 0, WATER_KNOB_BOOL, WATER_KNOB_INT };

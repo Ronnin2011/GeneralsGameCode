@@ -75,12 +75,12 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DProfilerFrameCapture.h"
 // Ronin @feature 14/09/2026 DX9: debug panel that hosts the HUD readouts.
-#include "W3DDevice/GameClient/W3DDebugPanel.h"
+#include "W3DDevice/GameClient/R3DDebugPanel.h"
 // Ronin @feature 12/08/2026 DX9: §29 shadow-map render-to-texture pass.
-#include "W3DDevice/GameClient/W3DShadowMap.h"
-#include "W3DDevice/GameClient/W3DSsao.h"
-#include "W3DDevice/GameClient/W3DTaa.h"
-#include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: local lights drawn in screen space
+#include "W3DDevice/GameClient/R3DShadowMap.h"
+#include "W3DDevice/GameClient/R3DSsao.h"
+#include "W3DDevice/GameClient/R3DTaa.h"
+#include "W3DDevice/GameClient/R3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: local lights drawn in screen space
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DScene.h"
@@ -493,9 +493,9 @@ W3DDisplay::~W3DDisplay()
 	if (!TheGlobalData->m_headless)
 	{
 		W3DShaderManager::shutdown();
-		W3DSsao::shutdown();	// Ronin @feature 13/09/2026 DX9: SSAO step 1 — its shader, while the device exists
-		W3DTaa::shutdown();		// Ronin @feature 20/09/2026 DX9: TAA — resolve shader and history targets, likewise
-		W3DLocalLights::shutdown();	// Ronin @feature 09/10/2026 DX9: its shaders and frame copy, likewise
+		R3DSsao::shutdown();	// Ronin @feature 13/09/2026 DX9: SSAO step 1 — its shader, while the device exists
+		R3DTaa::shutdown();		// Ronin @feature 20/09/2026 DX9: TAA — resolve shader and history targets, likewise
+		R3DLocalLights::shutdown();	// Ronin @feature 09/10/2026 DX9: its shaders and frame copy, likewise
 	}
 	m_assetManager->Free_Assets();
 	delete m_assetManager;
@@ -2137,12 +2137,12 @@ AGAIN:
 			// Ronin @feature 12/08/2026 DX9: §29 — the shadow-map depth pass is a render-to-texture,
 			// so it belongs HERE with the others, never inside DoShadows.
 			if (TheUseShadowMaps)
-				W3DShadowMap::updateRenderTargetTexture(primaryW3DView->get3DCamera(), m_3DScene);
+				R3DShadowMap::updateRenderTargetTexture(primaryW3DView->get3DCamera(), m_3DScene);
 
 			// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. The solid scene's depth into a readable texture - after the
 			// shadow map, whose receiver state it switches off and puts back. A no-op without MSAA.
 			// Ronin @feature 17/10/2026 DX9: and with neither SSAO nor the local lights on - under MSAA it is their only scene depth.
-			W3DSsao::updateDepthPrepass(primaryW3DView ? primaryW3DView->get3DCamera() : NULL, m_3DScene);
+			R3DSsao::updateDepthPrepass(primaryW3DView ? primaryW3DView->get3DCamera() : NULL, m_3DScene);
 		}
 
 		viewsUpdated = FALSE;
@@ -2179,15 +2179,15 @@ AGAIN:
 					Debug_Statistics::Record_DX8_Polys_And_Vertices(numRenderTargetPolygons,numRenderTargetVertices,ShaderClass::_PresetOpaqueShader);
 
 				// Ronin @feature 13/09/2026 DX9: SSAO step 1. The 3D views render into a readable depth buffer from here to
-				// W3DSsao::endFrame, just before End_Render.
-				W3DSsao::beginFrame();
+				// R3DSsao::endFrame, just before End_Render.
+				R3DSsao::beginFrame();
 
 				// Ronin @feature 20/09/2026 DX9: TAA. Advance the sample sequence once per frame, before any view draws —
 				// every camera's Apply() in this frame must see the SAME offset or the passes disagree by a subpixel.
-				W3DTaa::beginFrame();
+				R3DTaa::beginFrame();
 
 				// Ronin @feature 09/10/2026 DX9: local lights. After both: it uses the scene depth SSAO or TAA began, or begins its own.
-				W3DLocalLights::beginFrame();
+				R3DLocalLights::beginFrame();
 
 				// draw all views of the world
 				drawViews();
@@ -2197,7 +2197,7 @@ AGAIN:
 				// readouts. Ctrl+Shift+Z shows/hides the panel at runtime.
 				static const bool USE_DEBUG_PANEL = true;
 				if (USE_DEBUG_PANEL)
-					W3DDebugPanel::update();
+					R3DDebugPanel::update();
 
 				// draw the user interface
 				TheInGameUI->DRAW();
@@ -2256,7 +2256,7 @@ AGAIN:
 
 				// Ronin @feature 12/08/2026 DX9: §29 — the light's-eye view, bottom-left. Gated by
 				// TheShowShadowMapDebug.
-				W3DShadowMap::drawDebugOverlay();
+				R3DShadowMap::drawDebugOverlay();
 
 #if defined(RTS_DEBUG)
 				if (TheGlobalData->m_benchmarkTimer > 0)
@@ -2286,13 +2286,13 @@ AGAIN:
 #endif
 				// Ronin @feature 13/09/2026 DX9: SSAO step 1. Device's own depth buffer back FIRST, then show ours — a bound
 				// depth buffer cannot be read.
-				W3DSsao::endFrame();
-				W3DSsao::drawDebugView(primaryW3DView ? primaryW3DView->get3DCamera() : NULL);
+				R3DSsao::endFrame();
+				R3DSsao::drawDebugView(primaryW3DView ? primaryW3DView->get3DCamera() : NULL);
 				// Ronin @feature 20/09/2026 DX9: TAA. Ends the INTZ buffer only if TAA was the one that started it —
 				// when SSAO is on it owns that lifetime and this is a no-op.
-				W3DTaa::endFrame();
+				R3DTaa::endFrame();
 				// Ronin @feature 09/10/2026 DX9: likewise for the local lights - a no-op unless they began the scene depth.
-				W3DLocalLights::endFrame();
+				R3DLocalLights::endFrame();
 
 				// render is all done!
 				WW3D::End_Render();
@@ -2405,9 +2405,9 @@ void W3DDisplay::createLightPulse( const Coord3D *pos, const RGBColor *color,
 		return;
 	// Ronin @feature 17/10/2026 DX9: with the screen-space lights a pulse gets a minimum reach and fade (`lights pulsemin`,
 	// `pulsefade`) - a Gatling's muzzle pulse was 10 units for 3 frames.
-	W3DLocalLights::minimumPulse(innerRadius, &attenuationWidth, &decayFrameTime);
+	R3DLocalLights::minimumPulse(innerRadius, &attenuationWidth, &decayFrameTime);
 	// Ronin @feature 09/10/2026 DX9: the vertex paths could not show a pulse under two cells of reach; per pixel it shows.
-	if (innerRadius+attenuationWidth<2.0*PATHFIND_CELL_SIZE_F + 1.0f && !W3DLocalLights::wantsSmallLights()) {
+	if (innerRadius+attenuationWidth<2.0*PATHFIND_CELL_SIZE_F + 1.0f && !R3DLocalLights::wantsSmallLights()) {
 		return; // it basically won't make any visual difference.  jba.
 	}
 	W3DDynamicLight * theDynamicLight = m_3DScene->getADynamicLight();
@@ -2441,7 +2441,7 @@ void W3DDisplay::toggleLetterBox()
 // Ronin @feature 14/09/2026 DX9: Ctrl+Shift+Z. The panel owns its visibility — no GlobalData flag needed any more.
 void W3DDisplay::toggleDebugPanel()
 {
-	W3DDebugPanel::toggleVisible();
+	R3DDebugPanel::toggleVisible();
 }
 
 void W3DDisplay::enableLetterBox(Bool enable)

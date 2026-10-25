@@ -38,8 +38,8 @@ set(GAMEENGINEDEVICE_SRC
     Include/W3DDevice/GameClient/W3DBufferManager.h
     Include/W3DDevice/GameClient/W3DCustomScene.h
 #    Include/W3DDevice/GameClient/W3DDebugDisplay.h
-    Include/W3DDevice/GameClient/W3DDebugPanel.h
-    Include/W3DDevice/GameClient/W3DDebugGrid.h
+    Include/W3DDevice/GameClient/R3DDebugPanel.h
+    Include/W3DDevice/GameClient/R3DDebugGrid.h
 #    Include/W3DDevice/GameClient/W3DDebugIcons.h
 #    Include/W3DDevice/GameClient/W3DDisplay.h
 #    Include/W3DDevice/GameClient/W3DDisplayString.h
@@ -53,7 +53,7 @@ set(GAMEENGINEDEVICE_SRC
 #    Include/W3DDevice/GameClient/W3DGameWindowManager.h
 #    Include/W3DDevice/GameClient/W3DGUICallbacks.h
     Include/W3DDevice/GameClient/W3DInGameUI.h
-    Include/W3DDevice/GameClient/W3DLocalLights.h
+    Include/W3DDevice/GameClient/R3DLocalLights.h
     Include/W3DDevice/GameClient/W3DMirror.h
 #    Include/W3DDevice/GameClient/W3DMouse.h
 #    Include/W3DDevice/GameClient/W3DParticleSys.h
@@ -65,9 +65,9 @@ set(GAMEENGINEDEVICE_SRC
 #    Include/W3DDevice/GameClient/W3DShaderManager.h
     Include/W3DDevice/GameClient/W3DShadow.h
     Include/W3DDevice/GameClient/W3DShroud.h
-    Include/W3DDevice/GameClient/W3DSkyCube.h
-    Include/W3DDevice/GameClient/W3DSsao.h
-    Include/W3DDevice/GameClient/W3DTaa.h
+    Include/W3DDevice/GameClient/R3DSkyCube.h
+    Include/W3DDevice/GameClient/R3DSsao.h
+    Include/W3DDevice/GameClient/R3DTaa.h
 #    Include/W3DDevice/GameClient/W3DSmudge.h
 #    Include/W3DDevice/GameClient/W3DSnow.h
     Include/W3DDevice/GameClient/W3DStatusCircle.h
@@ -77,7 +77,7 @@ set(GAMEENGINEDEVICE_SRC
 #    Include/W3DDevice/GameClient/W3DTreeBuffer.h
 #    Include/W3DDevice/GameClient/W3DVideoBuffer.h
 #    Include/W3DDevice/GameClient/W3DView.h
-    Include/W3DDevice/GameClient/W3DShadowMap.h
+    Include/W3DDevice/GameClient/R3DShadowMap.h
     Include/W3DDevice/GameClient/W3DVolumetricShadow.h
 #    Include/W3DDevice/GameClient/W3DWater.h
 #    Include/W3DDevice/GameClient/W3DWaterTracks.h
@@ -143,7 +143,7 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/Shadow/W3DBufferManager.cpp
     Source/W3DDevice/GameClient/Shadow/W3DProjectedShadow.cpp
     Source/W3DDevice/GameClient/Shadow/W3DShadow.cpp
-    Source/W3DDevice/GameClient/Shadow/W3DShadowMap.cpp
+    Source/W3DDevice/GameClient/Shadow/R3DShadowMap.cpp
     Source/W3DDevice/GameClient/Shadow/W3DVolumetricShadow.cpp
 #    Source/W3DDevice/GameClient/TerrainTex.cpp
 #    Source/W3DDevice/GameClient/TileData.cpp
@@ -152,8 +152,8 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/W3DBibBuffer.cpp
     Source/W3DDevice/GameClient/W3DBridgeBuffer.cpp
 #    Source/W3DDevice/GameClient/W3DDebugDisplay.cpp
-    Source/W3DDevice/GameClient/W3DDebugGrid.cpp
-    Source/W3DDevice/GameClient/W3DDebugPanel.cpp
+    Source/W3DDevice/GameClient/R3DDebugGrid.cpp
+    Source/W3DDevice/GameClient/R3DDebugPanel.cpp
 #    Source/W3DDevice/GameClient/W3DDebugIcons.cpp
 #    Source/W3DDevice/GameClient/W3DDisplay.cpp
 #    Source/W3DDevice/GameClient/W3DDisplayString.cpp
@@ -162,7 +162,7 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/W3DFileSystem.cpp
     Source/W3DDevice/GameClient/W3DGameClient.cpp
     Source/W3DDevice/GameClient/W3DInGameUI.cpp
-    Source/W3DDevice/GameClient/W3DLocalLights.cpp
+    Source/W3DDevice/GameClient/R3DLocalLights.cpp
 #    Source/W3DDevice/GameClient/W3DMouse.cpp
 #    Source/W3DDevice/GameClient/W3DParticleSys.cpp
     Source/W3DDevice/GameClient/W3DPoly.cpp
@@ -171,9 +171,9 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/W3DScene.cpp
 #    Source/W3DDevice/GameClient/W3DShaderManager.cpp
     Source/W3DDevice/GameClient/W3DShroud.cpp
-    Source/W3DDevice/GameClient/W3DSkyCube.cpp
-    Source/W3DDevice/GameClient/W3DSsao.cpp
-    Source/W3DDevice/GameClient/W3DTaa.cpp
+    Source/W3DDevice/GameClient/R3DSkyCube.cpp
+    Source/W3DDevice/GameClient/R3DSsao.cpp
+    Source/W3DDevice/GameClient/R3DTaa.cpp
 #    Source/W3DDevice/GameClient/W3DSmudge.cpp
 #    Source/W3DDevice/GameClient/W3DSnow.cpp
     Source/W3DDevice/GameClient/W3DStatusCircle.cpp

@@ -3,7 +3,7 @@
 **	DX9 port: the water ini - the advanced look of the reflective water (WaterType 2), kept by the player.
 */
 
-// Ronin @feature 04/10/2026 DX9: every knob of W3DWaterSeaTuning.h, per water kind, in a file of its own. Read
+// Ronin @feature 04/10/2026 DX9: every knob of R3DWaterSeaTuning.h, per water kind, in a file of its own. Read
 // when the water is created and by `water load`, written by `water save`; a missing file or key keeps the built-in value.
 #pragma once
 
@@ -14,7 +14,7 @@
 #include "Common/GlobalData.h"
 #include "Common/FileSystem.h"
 #include "Common/File.h"
-#include "W3DDevice/GameClient/W3DWaterSeaTuning.h"
+#include "W3DDevice/GameClient/R3DWaterSeaTuning.h"
 
 // Ronin @bugfix 12/10/2026 DX9: the file is a modder's, not a player's setting: in the game's own Data\INI, where a loose
 // GameData.ini goes. It was beside Options.ini.

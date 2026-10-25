@@ -90,14 +90,14 @@ public:
 	// of Set_Shadow_Map is untouched. tex == NULL means one cascade and the receiver ignores the rest.
 	static void Set_Shadow_Map_Far(IDirect3DBaseTexture9* tex, const float* lightViewProjT,
 	                               float depthBias, float texelWorldSize);
-	// Ronin @feature 10/10/2026 DX9: lighting part 3. Round Flush_Single_Rigid's draws W3DLocalLights binds a second target and
+	// Ronin @feature 10/10/2026 DX9: lighting part 3. Round Flush_Single_Rigid's draws R3DLocalLights binds a second target and
 	// RigidInstance_ps writes the sun's shade there (COLOR1): a lamp can then light what the sun's shadow hides.
 	typedef void (*SunShadeHookFunc)(void);
 	static void Set_Sun_Shade_Hooks(SunShadeHookFunc begin, SunShadeHookFunc end) { s_SunShadeBegin = begin; s_SunShadeEnd = end; }
 	static SunShadeHookFunc s_SunShadeBegin;
 	static SunShadeHookFunc s_SunShadeEnd;
 	// Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. What a sun shadow leaves on this map (rgb) and how far to follow it (w; 0 =
-	// the old 0.45) - RigidInstance_ps c24. Pushed down by W3DLocalLights, as the shadow map is.
+	// the old 0.45) - RigidInstance_ps c24. Pushed down by R3DLocalLights, as the shadow map is.
 	static void Set_Shadow_Shade(const float* rgbw);
 	// Ronin @feature 12/10/2026 DX9: lighting step 5. The map's sky cube for ReflectiveRigid_ps (s6) and how to use it (c6.x: 0 = the
 	// art's picture, 1 = the cube, 2 = sky in every pane). A reference is held: pass NULL before the device goes.
@@ -109,7 +109,7 @@ public:
 	// and the frame before (s10, c69..c74), 24 floats each, NULLs = off. Borrowed, never held: a default-pool reference blocks a reset.
 	static void Set_Screen_Reflection(IDirect3DTexture9* prevColour, IDirect3DTexture9* prevDepth, const float* c16to21,
 	                                  IDirect3DTexture9* olderColour, const float* c69to74);
-	// Ronin @feature 18/10/2026 DX9: the reflections' change mask. Round each draw with screen-space reflections W3DTaa binds it as
+	// Ronin @feature 18/10/2026 DX9: the reflections' change mask. Round each draw with screen-space reflections R3DTaa binds it as
 	// target 1 (begin returns true when it did); ReflectiveRigid_ps marks there where the reflection changed (COLOR1).
 	typedef bool (*ReflectMaskBeginFunc)(void);
 	static void Set_Reflect_Mask_Hooks(ReflectMaskBeginFunc begin, SunShadeHookFunc end) { s_ReflectMaskBegin = begin; s_ReflectMaskEnd = end; }

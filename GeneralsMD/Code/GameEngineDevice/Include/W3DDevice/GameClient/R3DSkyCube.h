@@ -11,7 +11,7 @@
 
 struct IDirect3DCubeTexture9;
 
-class W3DSkyCube
+class R3DSkyCube
 {
 public:
 	static void update(void);			// every frame: builds the cube again when the map, its time of day or its sky changed

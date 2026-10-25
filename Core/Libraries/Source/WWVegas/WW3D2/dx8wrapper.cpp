@@ -2681,7 +2681,7 @@ void DX8Wrapper::Clear(bool clear_color, bool clear_z_stencil, const Vector3 &co
 }
 
 // Ronin @feature 13/09/2026 DX9: SSAO step 1. Can INTZ be a texture on this adapter? Asked once per device, same call
-// shape as W3DShadowMap's probe.
+// shape as R3DShadowMap's probe.
 bool DX8Wrapper::Is_Scene_Depth_Supported()
 {
 	if (SceneDepthSupport < 0)

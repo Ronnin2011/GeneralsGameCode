@@ -36,7 +36,7 @@ float4x4 g_CurViewProj : register(c12);  // c12..c15, TRANSPOSED — §29j.13q
 float4x4 g_LightViewProjFar : register(c16); // c16..c19, TRANSPOSED — §29i.3 step 2
 float4 g_CascadeParams : register(c20);  // x = far bias, y = far texel world size, z = cascade count
 // Ronin @feature 10/10/2026 DX9: lighting part 3, step 2. What a shadow leaves on this map: its light without the sun over its light
-// with it (W3DLocalLights). w = how far to follow it; 0 = 0.45 on every map, as before.
+// with it (R3DLocalLights). w = how far to follow it; 0 = 0.45 on every map, as before.
 float4 g_ShadeColour : register(c21);
 // Ronin @bugfix 20/10/2026 DX9: the map's terrain light now (HeightMap.cpp): x = its ambient, y = 1 / the sun's own diffuse
 // (luminances). y = 0: not set, the fixed floor as before.

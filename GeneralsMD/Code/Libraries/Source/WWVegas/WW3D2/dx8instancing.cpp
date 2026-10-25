@@ -577,7 +577,7 @@ static unsigned g_SR_DrawCount      = 0;          // accumulating during the cur
 static unsigned g_SR_LastFrameCount = 0;          // total from the last COMPLETED frame (for the HUD)
 static unsigned g_SR_LastFrame      = 0xFFFFFFFFu;
 
-// Ronin @feature 12/08/2026 DX9: §29 phase 2 — shadow map pushed down from W3DShadowMap.
+// Ronin @feature 12/08/2026 DX9: §29 phase 2 — shadow map pushed down from R3DShadowMap.
 static IDirect3DBaseTexture9* s_shadowMapTex   = nullptr;
 static float                  s_shadowLightVP[16] = { 0 };
 static float                  s_shadowTexelOfs  = 0.0f;
@@ -633,10 +633,10 @@ void DX8InstanceManagerClass::Set_Shadow_Map_Far(IDirect3DBaseTexture9* tex, con
 		memcpy(s_shadowLightVPFar, lightViewProjT, sizeof(float) * 16);
 }
 
-// Ronin @feature 10/10/2026 DX9: lighting part 3 - set by W3DLocalLights, called round Flush_Single_Rigid's draws.
+// Ronin @feature 10/10/2026 DX9: lighting part 3 - set by R3DLocalLights, called round Flush_Single_Rigid's draws.
 DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_SunShadeBegin = nullptr;
 DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_SunShadeEnd = nullptr;
-// Ronin @feature 18/10/2026 DX9: the reflections' change mask - W3DTaa's, set by W3DLocalLights, round Draw_Reflective_Rigid's draw.
+// Ronin @feature 18/10/2026 DX9: the reflections' change mask - R3DTaa's, set by R3DLocalLights, round Draw_Reflective_Rigid's draw.
 DX8InstanceManagerClass::ReflectMaskBeginFunc DX8InstanceManagerClass::s_ReflectMaskBegin = nullptr;
 DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_ReflectMaskEnd = nullptr;
 
@@ -646,7 +646,7 @@ void DX8InstanceManagerClass::Set_Shadow_Shade(const float* rgbw)
 		memcpy(s_shadowShade, rgbw, sizeof(float) * 4);
 }
 
-// Ronin @feature 12/10/2026 DX9: lighting step 5 - pushed down by W3DLocalLights each frame. The new cube is taken before the old
+// Ronin @feature 12/10/2026 DX9: lighting step 5 - pushed down by R3DLocalLights each frame. The new cube is taken before the old
 // one is let go, so the same cube passed twice stays alive.
 void DX8InstanceManagerClass::Set_Sky_Reflection(IDirect3DCubeTexture9* cube, float mode)
 {
@@ -658,7 +658,7 @@ void DX8InstanceManagerClass::Set_Sky_Reflection(IDirect3DCubeTexture9* cube, fl
 	s_skyReflectMode = mode;
 }
 
-// Ronin @feature 18/10/2026 DX9: reflections of the ground - pushed down by W3DLocalLights each frame, as the cube is: the ground
+// Ronin @feature 18/10/2026 DX9: reflections of the ground - pushed down by R3DLocalLights each frame, as the cube is: the ground
 // map (held the same way) and c12..c15 - its uv, the knobs, its level light and height.
 void DX8InstanceManagerClass::Set_Reflection_Ground(IDirect3DTexture9* groundMap, const float* c12to15)
 {
@@ -673,7 +673,7 @@ void DX8InstanceManagerClass::Set_Reflection_Ground(IDirect3DTexture9* groundMap
 		memset(s_reflGroundC, 0, sizeof(s_reflGroundC));
 }
 
-// Ronin @feature 18/10/2026 DX9: screen-space reflections - pushed down by W3DLocalLights every frame: TAA's last frame (borrowed
+// Ronin @feature 18/10/2026 DX9: screen-space reflections - pushed down by R3DLocalLights every frame: TAA's last frame (borrowed
 // for the frame) and c16..c21 - its view-projection, where its 3D view sits, the march's settings; the frame before, for the mask.
 void DX8InstanceManagerClass::Set_Screen_Reflection(IDirect3DTexture9* prevColour, IDirect3DTexture9* prevDepth, const float* c16to21,
                                                     IDirect3DTexture9* olderColour, const float* c69to74)

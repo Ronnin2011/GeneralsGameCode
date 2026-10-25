@@ -202,7 +202,7 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/WaterWake.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/WaterWake.pso"
-        # Ronin @build 09/10/2026 Local lights - the screen-space light pass (W3DLocalLights).
+        # Ronin @build 09/10/2026 Local lights - the screen-space light pass (R3DLocalLights).
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/LocalLight.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/LocalLight.pso"

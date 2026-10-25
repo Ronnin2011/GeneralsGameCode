@@ -5,7 +5,7 @@
 
 // Ronin @feature 14/09/2026 DX9: debug panel. A real GameWindow, so it drags and blocks clicks, drawn with a translucent
 // background. docs/Debug_Panel_Design.md.
-// Ronin @feature 28/09/2026 DX9: every readout is built in W3DDebugPanel.cpp now, each behind a `rows` switch.
+// Ronin @feature 28/09/2026 DX9: every readout is built in R3DDebugPanel.cpp now, each behind a `rows` switch.
 #pragma once
 
 #include "Lib/BaseType.h"
@@ -15,7 +15,7 @@
 
 class DisplayString;
 
-class W3DDebugPanel
+class R3DDebugPanel
 {
 public:
 
@@ -34,7 +34,7 @@ public:
 		ROW_RSTATE,		// Ronin @diagnostic 20/09/2026 DX9: device-call counters, off by default
 		ROW_TAA,		// Ronin @diagnostic 20/09/2026 DX9: TAA state; shown whenever TAA is on
 		ROW_WATER,		// Ronin @diagnostic 28/09/2026 DX9: water shader load/use and draws, docs/Water_Work.md §5
-		ROW_LIGHT,		// Ronin @diagnostic 09/10/2026 DX9: local lights drawn in screen space (W3DLocalLights)
+		ROW_LIGHT,		// Ronin @diagnostic 09/10/2026 DX9: local lights drawn in screen space (R3DLocalLights)
 		ROW_LIGHT2,		// Ronin @diagnostic 11/10/2026 DX9: its second row - the lamps and what stands in their light
 		ROW_COUNT
 	};

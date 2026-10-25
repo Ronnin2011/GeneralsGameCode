@@ -47,7 +47,7 @@ float4 g_ViewportRect     : register(c23);   // xy = viewport origin, zw = viewp
 // RigidInstance_ps, and PS constants are global device state, not per-shader.
 float4x4 g_LightViewProjFar : register(c24); // c24..c27, TRANSPOSED
 float4 g_CascadeParams : register(c28);      // x = far bias, y = far texel world size, z = cascade count
-// Ronin @feature 11/10/2026 DX9: what a sun shadow leaves on THIS map, as on terrain and meshes (W3DLocalLights publishMapShadow).
+// Ronin @feature 11/10/2026 DX9: what a sun shadow leaves on THIS map, as on terrain and meshes (R3DLocalLights publishMapShadow).
 float4 g_ShadeColour  : register(c29);       // rgb = the shade's floor, w = how far it is followed (0 = the old 0.45 everywhere)
 
 struct PS_INPUT

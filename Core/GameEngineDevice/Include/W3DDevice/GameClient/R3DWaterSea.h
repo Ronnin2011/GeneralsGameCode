@@ -14,8 +14,8 @@
 #include "Common/GlobalData.h"
 #include "Common/MapObject.h"		// Ronin @bugfix 29/09/2026 DX9: MAP_XY_FACTOR, the height texel size
 #include "GameClient/Water.h"		// Ronin @feature 29/09/2026 DX9: TheWaterTransparency, the map's shore settings
-#include "W3DDevice/GameClient/W3DWaterSeaTuning.h"
-#include "W3DDevice/GameClient/W3DShadowMapState.h"	// Ronin @feature 29/09/2026 DX9: shadows on the water - TheTerrainShadowPass
+#include "W3DDevice/GameClient/R3DWaterSeaTuning.h"
+#include "W3DDevice/GameClient/R3DShadowMapState.h"	// Ronin @feature 29/09/2026 DX9: shadows on the water - TheTerrainShadowPass
 
 enum { WATERSEA_STAGES = 7 };	///< s0 caust, s1 reflection, s2 water, s3 edge, s4 normals (+ foam in alpha), s5 heights, s6 frame copy
 
@@ -48,7 +48,7 @@ struct WaterSeaInputs
 	IDirect3DBaseTexture9 *scene;		///< s6: the frame just before the water, null = the plain alpha blend
 	Real sceneInvW, sceneInvH;			///< 1 / its size, for the pixel's own texel (VPOS)
 	Real mirrorInvW, mirrorInvH;		///< Ronin @feature 08/10/2026 DX9: 1 / the mirror's size, for `mirrorsoft`
-	// Ronin @bugfix 30/09/2026 DX9: the TAA jitter this frame's projection carries (W3DTaa::getJitterNDC), 0 outside TAA.
+	// Ronin @bugfix 30/09/2026 DX9: the TAA jitter this frame's projection carries (R3DTaa::getJitterNDC), 0 outside TAA.
 	Real jitterX, jitterY;
 	// Ronin @feature 02/10/2026 DX9: phase 4 - the WaterKind whose profile this draw takes (sea: a standing polygon reaching
 	// the map's edge, and the sea plane; lake: any other standing polygon; river).
@@ -242,7 +242,7 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 
 	const float bumpEnvMat[4] = { in.bumpScale, 0.0f, 0.0f, in.bumpScale };
 	// ndc -> reflection uv. Ronin @bugfix 30/09/2026 DX9: minus the TAA jitter - the mirror is drawn unjittered. A jitter j
-	// in the projection moves ndc by -j (W3DTaa::getJitterNDC), so uv gains (+0.5 jx, -0.5 jy).
+	// in the projection moves ndc by -j (R3DTaa::getJitterNDC), so uv gains (+0.5 jx, -0.5 jy).
 	const float texProj[4]    = { 0.5f, -0.5f, 0.5f + 0.5f * in.jitterX, 0.5f - 0.5f * in.jitterY };
 	// Ronin @bugfix 01/10/2026 DX9: `water mirror 0` = reflections off - no share, not the last mirror image frozen in place.
 	const float reflect[4]    = { g.mirror ? t.reflect : 0.0f, t.fresnelRipple, 0.0f, 0.0f };

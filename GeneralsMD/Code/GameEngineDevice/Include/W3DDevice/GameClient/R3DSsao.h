@@ -16,7 +16,7 @@
 class CameraClass;
 class SceneClass;
 
-class W3DSsao
+class R3DSsao
 {
 public:
 	// Ronin @diagnostic 07/10/2026 DX9: the panel's `ssao view` corner view: 0 none, 1 scene depth, 2 raw AO recomputed at end of

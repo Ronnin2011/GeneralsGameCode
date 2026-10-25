@@ -187,7 +187,7 @@ public:
 	virtual void enableLetterBox(Bool enable) = 0;						///< forces letter-boxed display on/off
 	virtual Bool isLetterBoxFading() { return FALSE; }	///< returns true while letterbox fades in/out
 	virtual Bool isLetterBoxed() { return FALSE; }	//WST 10/2/2002. Added query interface
-	// Ronin @feature 14/09/2026 DX9: debug panel toggle. Empty here; W3DDisplay routes it to W3DDebugPanel.
+	// Ronin @feature 14/09/2026 DX9: debug panel toggle. Empty here; W3DDisplay routes it to R3DDebugPanel.
 	virtual void toggleDebugPanel() {}
 
 	virtual void setCinematicText( AsciiString string ) { m_cinematicText = string; }

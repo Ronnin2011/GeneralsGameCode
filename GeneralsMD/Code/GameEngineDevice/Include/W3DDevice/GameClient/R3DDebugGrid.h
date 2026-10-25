@@ -20,7 +20,7 @@ struct DebugGridTuning
 };
 extern DebugGridTuning TheDebugGrid;
 
-class W3DDebugGrid
+class R3DDebugGrid
 {
 public:
 

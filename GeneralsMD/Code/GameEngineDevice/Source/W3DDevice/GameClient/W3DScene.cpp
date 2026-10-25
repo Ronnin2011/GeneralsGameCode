@@ -52,11 +52,11 @@
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/GameClient/W3DDynamicLight.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
-#include "W3DDevice/GameClient/W3DShadowMap.h"
-#include "W3DDevice/GameClient/W3DTaa.h"
-#include "W3DDevice/GameClient/W3DSsao.h"
-#include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: local lights drawn in screen space
-#include "W3DDevice/GameClient/W3DShadowMapState.h"
+#include "W3DDevice/GameClient/R3DShadowMap.h"
+#include "W3DDevice/GameClient/R3DTaa.h"
+#include "W3DDevice/GameClient/R3DSsao.h"
+#include "W3DDevice/GameClient/R3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: local lights drawn in screen space
+#include "W3DDevice/GameClient/R3DShadowMapState.h"
 #include "W3DDevice/GameClient/W3DStatusCircle.h"
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 #include "W3DDevice/GameClient/W3DShroud.h"
@@ -399,14 +399,14 @@ Bool RTS3DScene::castRay(RayCollisionTestClass & raytest, Bool testAll, Int coll
 void RTS3DScene::Add_Render_Object(RenderObjClass * obj)
 {
 	SimpleSceneClass::Add_Render_Object(obj);
-	if (W3DShadowMap::isStaticCaster(obj))
-		W3DShadowMap::invalidateStaticCasters();
+	if (R3DShadowMap::isStaticCaster(obj))
+		R3DShadowMap::invalidateStaticCasters();
 }
 
 void RTS3DScene::Remove_Render_Object(RenderObjClass * obj)
 {
-	if (W3DShadowMap::isStaticCaster(obj))
-		W3DShadowMap::invalidateStaticCasters();
+	if (R3DShadowMap::isStaticCaster(obj))
+		R3DShadowMap::invalidateStaticCasters();
 	SimpleSceneClass::Remove_Render_Object(obj);
 }
 
@@ -495,7 +495,7 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 						if (hdi && hdi->m_drawable != nullptr)
 						{
 							const SphereClass &vbs = robj->Get_Bounding_Sphere();
-							W3DShadowMap::noteReceiverTopZ(vbs.Center.Z + vbs.Radius);
+							R3DShadowMap::noteReceiverTopZ(vbs.Center.Z + vbs.Radius);
 						}
 					}
 
@@ -541,11 +541,11 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 						}
 						// Ronin @feature 13/09/2026 DX9: §29i.3. Mark MOVING casters in this split's mask. Static casters (structures,
 						// immobile, client scenery) are left out, and so is anything without a drawable — terrain included.
-						if (isVisible && !W3DShadowMap::isStaticCaster(robj))
+						if (isVisible && !R3DShadowMap::isStaticCaster(robj))
 						{
 							DrawableInfo *mdi = (DrawableInfo *)robj->Get_User_Data();
 							if (mdi != nullptr && mdi->m_drawable != nullptr)
-								W3DShadowMap::noteMovingCaster(bs.Center.X, bs.Center.Y, bs.Center.Z, bs.Radius);
+								R3DShadowMap::noteMovingCaster(bs.Center.X, bs.Center.Y, bs.Center.Z, bs.Radius);
 						}
 					}
 
@@ -768,7 +768,7 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 		tintColor			 = draw->getTintColor();
 		// Ronin @bugfix 09/10/2026 DX9: not while TAA draws the selection flash itself, after its resolve - in the history a
 		// few-frame flash lagged, and hurrying the history cost the object its anti-aliasing (AntiAliasing_Work.md 22b).
-		selectionColor = W3DTaa::ownsSelectionFlash() ? nullptr : draw->getSelectionColor();
+		selectionColor = R3DTaa::ownsSelectionFlash() ? nullptr : draw->getSelectionColor();
 
 		if ( tintColor || selectionColor )
 		{
@@ -888,8 +888,8 @@ void RTS3DScene::renderOneObject(RenderInfoClass &rinfo, RenderObjClass *robj, I
 			}
 		}
 
-    // Ronin @feature 09/10/2026 DX9: not while W3DLocalLights draws these per pixel - they would be added twice.
-    if( draw && draw->getReceivesDynamicLights() && !W3DLocalLights::ownsDynamicLights() )
+    // Ronin @feature 09/10/2026 DX9: not while R3DLocalLights draws these per pixel - they would be added twice.
+    if( draw && draw->getReceivesDynamicLights() && !R3DLocalLights::ownsDynamicLights() )
     {
 		  // dynamic lights
 		  RefRenderObjListIterator dynaLightIt(&m_dynamicLightList);
@@ -990,12 +990,12 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	// Ronin @feature 27/09/2026 DX9: here only without TAA or with `ssao trees 0`; while TAA runs, after them (below).
 	if (!depthPass && !ShaderClass::Is_Backface_Culling_Inverted() && m_customPassMode == SCENE_PASS_DEFAULT &&
 		Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
-		W3DSsao::renderPass(rinfo.Camera, FALSE);
+		R3DSsao::renderPass(rinfo.Camera, FALSE);
 
 	// Ronin @feature 06/10/2026 DX9: SSAO under MSAA. The view prepass holds what the swapped depth holds at this point:
 	// freeze it here, and leave the trees out - under MSAA the AO pass runs before them.
 	if (TheTerrainShadowPass.viewDepthPass)
-		W3DSsao::prepassSolidDone();
+		R3DSsao::prepassSolidDone();
 
 	// Draw the trees last so they alpha blend onto everything correctly.
 	if (!TheTerrainShadowPass.viewDepthPass)
@@ -1005,13 +1005,13 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	// `ssao trees 1`: TAA's history smooths the foliage flicker that moved it before them on 14/09. One site runs.
 	if (!depthPass && !ShaderClass::Is_Backface_Culling_Inverted() && m_customPassMode == SCENE_PASS_DEFAULT &&
 		Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
-		W3DSsao::renderPass(rinfo.Camera, TRUE);
+		R3DSsao::renderPass(rinfo.Camera, TRUE);
 
 	// Ronin @feature 09/10/2026 DX9: local lights, per pixel from the scene depth - over everything solid, trees included, and
 	// before anything see-through. Main pass only, same gate as the SSAO pass above.
 	if (!depthPass && !ShaderClass::Is_Backface_Culling_Inverted() && m_customPassMode == SCENE_PASS_DEFAULT &&
 		Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
-		W3DLocalLights::renderPass(rinfo.Camera, this);
+		R3DLocalLights::renderPass(rinfo.Camera, this);
 
 	//don't draw shadows in this mode because they interfere with destination alpha
 	if (!depthPass && m_customPassMode == SCENE_PASS_DEFAULT && Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
@@ -1026,7 +1026,7 @@ void RTS3DScene::Flush(RenderInfoClass & rinfo)
 	// resolve clamps wherever the final frame differs. Main pass only, same gate as the SSAO pass above.
 	if (!depthPass && !ShaderClass::Is_Backface_Culling_Inverted() && m_customPassMode == SCENE_PASS_DEFAULT &&
 		Get_Extra_Pass_Polygon_Mode() == EXTRA_PASS_DISABLE)
-		W3DTaa::noteOpaqueDone();
+		R3DTaa::noteOpaqueDone();
 
 	{
 		//USE_PERF_TIMER(translucentRender)

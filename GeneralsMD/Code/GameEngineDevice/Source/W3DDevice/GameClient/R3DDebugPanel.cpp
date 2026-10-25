@@ -45,20 +45,20 @@
 #include "GameClient/Mouse.h"
 #include "GameClient/SelectionXlat.h"
 #include "GameClient/View.h"
-#include "W3DDevice/GameClient/W3DDebugGrid.h"
-#include "W3DDevice/GameClient/W3DDebugPanel.h"
+#include "W3DDevice/GameClient/R3DDebugGrid.h"
+#include "W3DDevice/GameClient/R3DDebugPanel.h"
 #include "W3DDevice/GameClient/W3DWater.h"
 #include "WW3D2/dx8wrapper.h"
-#include "W3DDevice/GameClient/W3DTaa.h"
-#include "W3DDevice/GameClient/W3DSsao.h"	// Ronin @feature 26/09/2026 DX9: `ssao` command
-#include "W3DDevice/GameClient/W3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: `lights` command and the [LIGHT] row
-#include "W3DDevice/GameClient/W3DShadowMap.h"	// Ronin @feature 26/09/2026 DX9: `shadows` command
+#include "W3DDevice/GameClient/R3DTaa.h"
+#include "W3DDevice/GameClient/R3DSsao.h"	// Ronin @feature 26/09/2026 DX9: `ssao` command
+#include "W3DDevice/GameClient/R3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: `lights` command and the [LIGHT] row
+#include "W3DDevice/GameClient/R3DShadowMap.h"	// Ronin @feature 26/09/2026 DX9: `shadows` command
 // Ronin @diagnostic 28/09/2026 DX9: [WATER] row - chipset gate and the soft-edge test.
 #include "W3DDevice/GameClient/W3DShaderManager.h"
 #include "GameClient/Water.h"
-#include "W3DDevice/GameClient/W3DWaterSeaTuning.h"	// Ronin @feature 29/09/2026 DX9: the WaterSea look knobs
-#include "W3DDevice/GameClient/W3DWaterSeaIni.h"	// Ronin @feature 04/10/2026 DX9: `water save` / `water load`
-#include "W3DDevice/GameClient/W3DSkyCube.h"		// Ronin @feature 12/10/2026 DX9: `sky`
+#include "W3DDevice/GameClient/R3DWaterSeaTuning.h"	// Ronin @feature 29/09/2026 DX9: the WaterSea look knobs
+#include "W3DDevice/GameClient/R3DWaterSeaIni.h"	// Ronin @feature 04/10/2026 DX9: `water save` / `water load`
+#include "W3DDevice/GameClient/R3DSkyCube.h"		// Ronin @feature 12/10/2026 DX9: `sky`
 #include "GameClient/ParticleSys.h"				// Ronin @diagnostic 15/10/2026 DX9: `glowfx`
 // Ronin @feature 28/09/2026 DX9: the readouts moved in from W3DDisplay.cpp.
 #include "W3DDevice/GameClient/BaseHeightMap.h"
@@ -107,10 +107,10 @@ namespace
 	{
 		const char                 *name;
 		const char                 *help;
-		W3DDebugPanel::CommandFunc  func;
+		R3DDebugPanel::CommandFunc  func;
 	};
 
-	PanelRow       s_rows[W3DDebugPanel::ROW_COUNT] = {};
+	PanelRow       s_rows[R3DDebugPanel::ROW_COUNT] = {};
 	UnsignedInt    s_frame        = 1;
 	Bool           s_available    = FALSE;
 	Bool           s_visible      = false;
@@ -142,11 +142,11 @@ namespace
 
 	// Ronin @feature 28/09/2026 DX9: `rows` switches, defaults as W3DDisplay.cpp's old SHOW_* constants. [DRAW2] shares draw's
 	// name, so one switch drives both.
-	const char    *const ROW_NAMES[W3DDebugPanel::ROW_COUNT] =
+	const char    *const ROW_NAMES[R3DDebugPanel::ROW_COUNT] =
 		{ "sr", "inst", "draw", "draw", "shadow", "perf", "depth", "terrain", "ui", "rstate", "taa", "water", "light", "light" };
-	Bool           s_rowOn[W3DDebugPanel::ROW_COUNT] =
+	Bool           s_rowOn[R3DDebugPanel::ROW_COUNT] =
 		{ TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, TRUE, TRUE };
-	DisplayString *s_rowText[W3DDebugPanel::ROW_COUNT] = {};	// each row's string, made on first use
+	DisplayString *s_rowText[R3DDebugPanel::ROW_COUNT] = {};	// each row's string, made on first use
 	DisplayString *s_noPanel      = nullptr;
 
 	// Ronin @feature 28/09/2026 DX9: [DRAW] and [PERF] read monotonic counters, so they are sampled every frame - hidden,
@@ -379,7 +379,7 @@ namespace
 
 	// Ronin @feature 15/09/2026 DX9: water on/off. `water` prints the switches; `water <flat|mesh> <0|1>` sets one.
 	// Ronin @feature 04/10/2026 DX9: the WaterSea look knobs live in one table, TheWaterProfileKnobs /
-	// TheWaterGlobalKnobs (W3DWaterSeaTuning.h): the water ini reads the same one.
+	// TheWaterGlobalKnobs (R3DWaterSeaTuning.h): the water ini reads the same one.
 
 	// Ronin @feature 03/10/2026 DX9: one column of a panel table (`water`, `lights`) - a group's title and its `name=value` cells.
 	enum { PANEL_COLUMN_ROWS = 17 };	// water's SWELL holds 9, lights' COLOUR 16 (Ronin 23/10/2026: 15 -> 17 for the night's vibrance and contrast)
@@ -479,7 +479,7 @@ namespace
 			return;
 		}
 		Bool ok = (argc == 1);
-		// Ronin @feature 04/10/2026 DX9: the water ini (W3DWaterSeaIni.h): `save` writes every knob as it stands, `load` reads
+		// Ronin @feature 04/10/2026 DX9: the water ini (R3DWaterSeaIni.h): `save` writes every knob as it stands, `load` reads
 		// the file again, `defaults` returns to the built-in look. Each then prints the state below.
 		if (argc == 2)
 		{
@@ -666,7 +666,7 @@ namespace
 		if (argc == 3 && isWholeNumber(argv[2].str()))
 		{
 			const Bool all = (stricmp(argv[1].str(), "all") == 0);
-			for (Int r = 0; r < W3DDebugPanel::ROW_COUNT; ++r)
+			for (Int r = 0; r < R3DDebugPanel::ROW_COUNT; ++r)
 			{
 				if (all || stricmp(argv[1].str(), ROW_NAMES[r]) == 0)
 				{
@@ -681,9 +681,9 @@ namespace
 			return;
 		}
 		AsciiString state("rows:");
-		for (Int r = 0; r < W3DDebugPanel::ROW_COUNT; ++r)
+		for (Int r = 0; r < R3DDebugPanel::ROW_COUNT; ++r)
 		{
-			if (r == W3DDebugPanel::ROW_DRAW2 || r == W3DDebugPanel::ROW_LIGHT2)
+			if (r == R3DDebugPanel::ROW_DRAW2 || r == R3DDebugPanel::ROW_LIGHT2)
 				continue;		// same switch as draw / light
 			AsciiString one;
 			one.format("  %s=%d", ROW_NAMES[r], s_rowOn[r] ? 1 : 0);
@@ -701,28 +701,28 @@ namespace
 		Bool ok = (argc == 1);
 		if (argc == 2 && isWholeNumber(argv[1].str()))
 		{
-			W3DTaa::setEnabled(atoi(argv[1].str()) != 0);
+			R3DTaa::setEnabled(atoi(argv[1].str()) != 0);
 			ok = TRUE;
 		}
 		else if (argc == 3)
 		{
-			if      (stricmp(argv[1].str(), "weight")   == 0) { W3DTaa::setWeight((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "debug")    == 0) { W3DTaa::setDebug(atoi(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "sharpen")  == 0) { W3DTaa::setSharpen((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "mipbias")  == 0) { W3DTaa::setMipBias((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "clamp")    == 0) { W3DTaa::setClamp((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "shadowmask")== 0) { W3DTaa::setShadowMask(atoi(argv[2].str()) != 0); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "maskcap")  == 0) { W3DTaa::setMaskCap(atoi(argv[2].str()) != 0); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "vel")      == 0) { W3DTaa::setVelocity(atoi(argv[2].str()) != 0); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "disocc")   == 0) { W3DTaa::setDisocc(atoi(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "disoccv")  == 0) { W3DTaa::setDisoccV((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "reactive") == 0) { W3DTaa::setReactive((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "autoreact")== 0) { W3DTaa::setAutoReact((float)atof(argv[2].str())); ok = TRUE; }
-			else if (stricmp(argv[1].str(), "autofull") == 0) { W3DTaa::setAutoFull((float)atof(argv[2].str())); ok = TRUE; }
+			if      (stricmp(argv[1].str(), "weight")   == 0) { R3DTaa::setWeight((float)atof(argv[2].str())); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "debug")    == 0) { R3DTaa::setDebug(atoi(argv[2].str())); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "sharpen")  == 0) { R3DTaa::setSharpen((float)atof(argv[2].str())); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "mipbias")  == 0) { R3DTaa::setMipBias((float)atof(argv[2].str())); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "clamp")    == 0) { R3DTaa::setClamp((float)atof(argv[2].str())); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "shadowmask")== 0) { R3DTaa::setShadowMask(atoi(argv[2].str()) != 0); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "maskcap")  == 0) { R3DTaa::setMaskCap(atoi(argv[2].str()) != 0); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "vel")      == 0) { R3DTaa::setVelocity(atoi(argv[2].str()) != 0); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "disocc")   == 0) { R3DTaa::setDisocc(atoi(argv[2].str())); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "disoccv")  == 0) { R3DTaa::setDisoccV((float)atof(argv[2].str())); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "reactive") == 0) { R3DTaa::setReactive((float)atof(argv[2].str())); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "autoreact")== 0) { R3DTaa::setAutoReact((float)atof(argv[2].str())); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "autofull") == 0) { R3DTaa::setAutoFull((float)atof(argv[2].str())); ok = TRUE; }
 			// Ronin @bugfix 29/09/2026 DX9: the water's reactive mask - its polygons in the velocity pass.
-			else if (stricmp(argv[1].str(), "water")    == 0) { W3DTaa::setWaterMask(atoi(argv[2].str()) != 0); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "water")    == 0) { R3DTaa::setWaterMask(atoi(argv[2].str()) != 0); ok = TRUE; }
 			// Ronin @feature 18/10/2026 DX9: the reflections' change mask - a pane marks where its screen-space reflection changed.
-			else if (stricmp(argv[1].str(), "reflmark") == 0) { W3DTaa::setReflMark(atoi(argv[2].str())); ok = TRUE; }
+			else if (stricmp(argv[1].str(), "reflmark") == 0) { R3DTaa::setReflMark(atoi(argv[2].str())); ok = TRUE; }
 		}
 		if (!ok)
 		{
@@ -734,27 +734,27 @@ namespace
 		// Ronin @bugfix 27/09/2026 DX9: three short lines, grouped; one line had grown wider than the screen.
 		AsciiString state;
 		state.format("taa: enabled=%d  running=%d  weight=%.2f  sharpen=%.2f  mipbias=%.2f  debug=%d",
-			W3DTaa::isEnabled() ? 1 : 0, W3DTaa::isActive() ? 1 : 0, W3DTaa::getWeight(), W3DTaa::getSharpen(), W3DTaa::getMipBias(), W3DTaa::getDebug());
+			R3DTaa::isEnabled() ? 1 : 0, R3DTaa::isActive() ? 1 : 0, R3DTaa::getWeight(), R3DTaa::getSharpen(), R3DTaa::getMipBias(), R3DTaa::getDebug());
 		printAscii(state, FALSE);
 		state.format("  clamp=%.2f  shadowmask=%d  maskcap=%d  reactive=%.2f  autoreact=%.2f  autofull=%.2f",
-			W3DTaa::getClamp(), W3DTaa::getShadowMask() ? 1 : 0, W3DTaa::getMaskCap() ? 1 : 0,
-			W3DTaa::getReactive(), W3DTaa::getAutoReact(), W3DTaa::getAutoFull());
+			R3DTaa::getClamp(), R3DTaa::getShadowMask() ? 1 : 0, R3DTaa::getMaskCap() ? 1 : 0,
+			R3DTaa::getReactive(), R3DTaa::getAutoReact(), R3DTaa::getAutoFull());
 		printAscii(state, FALSE);
 		// Ronin @bugfix 03/10/2026 DX9: the water mask's source - "own" = the water marked its pixels as it drew; else the
 		// flat polygons' triangle count (the fallback).
 		AsciiString maskFrom;
-		if (W3DTaa::getWaterMaskDrawn())
+		if (R3DTaa::getWaterMaskDrawn())
 			maskFrom = "own";
 		else
-			maskFrom.format("%d tris", W3DTaa::getWaterMaskTris());
+			maskFrom.format("%d tris", R3DTaa::getWaterMaskTris());
 		state.format("  vel=%d  disocc=%d  disoccv=%.2f  water=%d (%s)  reflmark=%d",
-			W3DTaa::getVelocity() ? 1 : 0, W3DTaa::getDisocc(), W3DTaa::getDisoccV(),
-			W3DTaa::getWaterMask() ? 1 : 0, maskFrom.str(), W3DTaa::getReflMark());
+			R3DTaa::getVelocity() ? 1 : 0, R3DTaa::getDisocc(), R3DTaa::getDisoccV(),
+			R3DTaa::getWaterMask() ? 1 : 0, maskFrom.str(), R3DTaa::getReflMark());
 		printAscii(state, FALSE);
 	}
 
 	// Ronin @feature 26/09/2026 DX9: SSAO quality at runtime, 0 Off .. 3 Ultra - the Options.ini SSAOQuality value, not
-	// saved back. W3DSsao reads it every frame and resizes its targets itself, so no restart.
+	// saved back. R3DSsao reads it every frame and resizes its targets itself, so no restart.
 	void cmdSsao(Int argc, const AsciiString *argv)
 	{
 		if (argc == 2 && TheWritableGlobalData != nullptr && isWholeNumber(argv[1].str()))
@@ -766,23 +766,23 @@ namespace
 		}
 		// Ronin @feature 26/09/2026 DX9: `ssao trees auto|0|1` - AO on trees while TAA runs (auto), never, or always.
 		else if (argc == 3 && stricmp(argv[1].str(), "trees") == 0)
-			W3DSsao::setTrees(stricmp(argv[2].str(), "auto") == 0 ? W3DSsao::TREES_AUTO : ((atoi(argv[2].str()) != 0) ? W3DSsao::TREES_ON : W3DSsao::TREES_OFF));
+			R3DSsao::setTrees(stricmp(argv[2].str(), "auto") == 0 ? R3DSsao::TREES_AUTO : ((atoi(argv[2].str()) != 0) ? R3DSsao::TREES_ON : R3DSsao::TREES_OFF));
 		// Ronin @diagnostic 07/10/2026 DX9: `ssao view 0..3` - corner view: 1 scene depth, 2 raw AO, 3 the blurred AO.
 		else if (argc == 3 && stricmp(argv[1].str(), "view") == 0 && isWholeNumber(argv[2].str()))
-			W3DSsao::setDebugView(atoi(argv[2].str()));
+			R3DSsao::setDebugView(atoi(argv[2].str()));
 		// Ronin @feature 24/10/2026 DX9: `ssao sun|bleed|colour <v>` - the lights table's aosun, aobleed, aocolour; `ssao save` keeps sun.
 		else if (argc == 3 && (stricmp(argv[1].str(), "sun") == 0 || stricmp(argv[1].str(), "bleed") == 0 || stricmp(argv[1].str(), "colour") == 0))
 		{
 			const char *name = (stricmp(argv[1].str(), "sun") == 0) ? "aosun" : ((stricmp(argv[1].str(), "bleed") == 0) ? "aobleed" : "aocolour");
-			const W3DLocalLights::Knob *knob = W3DLocalLights::findKnob(name);
+			const R3DLocalLights::Knob *knob = R3DLocalLights::findKnob(name);
 			if (knob != nullptr)
 				knob->set((float)atof(argv[2].str()));
 		}
 		else if (argc == 2 && stricmp(argv[1].str(), "save") == 0)
 		{
 			char path[512];
-			W3DLocalLights::iniPath(path, (Int)sizeof(path));
-			const Bool saved = W3DLocalLights::saveIni();
+			R3DLocalLights::iniPath(path, (Int)sizeof(path));
+			const Bool saved = R3DLocalLights::saveIni();
 			AsciiString note;
 			note.format(saved ? "ssao: sun saved to %s (with the lights' values)" : "ssao: could not write %s", path);
 			printAscii(note, !saved);
@@ -797,15 +797,15 @@ namespace
 			return;
 		}
 		static const char *names[] = { "off", "normal", "high", "ultra" };
-		const Int q = W3DSsao::getQuality();
+		const Int q = R3DSsao::getQuality();
 		AsciiString state;
 		// Ronin @bugfix 27/09/2026 DX9: no `active` here - it is decided at the next frame start, so it read stale right after
 		// a change. The [DEPTH] row shows whether it actually ran.
-		const Int tm = W3DSsao::getTrees();
+		const Int tm = R3DSsao::getTrees();
 		state.format("ssao: quality=%d (%s)  trees=%s%s  view=%d  sun=%.2f  bleed=%.2f  colour=%.2f", q, names[(q < 0) ? 0 : ((q > 3) ? 3 : q)],
-			(tm == W3DSsao::TREES_AUTO) ? "auto" : ((tm == W3DSsao::TREES_ON) ? "1" : "0"),
-			(tm == W3DSsao::TREES_AUTO) ? (W3DSsao::treesNow() ? " (on: TAA running)" : " (off: TAA not running)") : "",
-			W3DSsao::getDebugView(), W3DLocalLights::getAoSun(), W3DSsao::getBleed(), W3DSsao::getColourAO());
+			(tm == R3DSsao::TREES_AUTO) ? "auto" : ((tm == R3DSsao::TREES_ON) ? "1" : "0"),
+			(tm == R3DSsao::TREES_AUTO) ? (R3DSsao::treesNow() ? " (on: TAA running)" : " (off: TAA not running)") : "",
+			R3DSsao::getDebugView(), R3DLocalLights::getAoSun(), R3DSsao::getBleed(), R3DSsao::getColourAO());
 		printAscii(state, FALSE);
 	}
 
@@ -820,7 +820,7 @@ namespace
 			if (q < 0) q = 0;
 			if (q > 3) q = 3;
 			TheWritableGlobalData->m_shadowMapQuality = q;
-			W3DShadowMap::applyQuality();
+			R3DShadowMap::applyQuality();
 		}
 		else if (argc != 1)
 		{
@@ -828,22 +828,22 @@ namespace
 			return;
 		}
 		static const char *names[] = { "off", "normal", "high", "ultra" };
-		const Int q = W3DShadowMap::getQuality();
+		const Int q = R3DShadowMap::getQuality();
 		AsciiString state;
 		state.format("shadows: quality=%d (%s)  maps=%d", q, names[(q < 0) ? 0 : ((q > 3) ? 3 : q)],
 			TheUseShadowMaps ? 1 : 0);
 		printAscii(state, FALSE);
 	}
 
-	// Ronin @feature 09/10/2026 DX9: `lights` - local lights drawn in screen space (W3DLocalLights). 0 hands them back to
+	// Ronin @feature 09/10/2026 DX9: `lights` - local lights drawn in screen space (R3DLocalLights). 0 hands them back to
 	// the old per-vertex terrain and per-object paths, for an A/B at one spot. The knobs are kept by `lights save` (DX9Lights.ini).
 	// Ronin @feature 19/10/2026 DX9: a `lights` knob's cell by its name, printed as `lights` takes it; placed[] marks the knobs shown.
 	enum { LIGHT_KNOBS_MAX = 128 };
 	void lightCell(PanelColumn &col, const char *name, Bool *placed)
 	{
-		for (Int k = 0; k < W3DLocalLights::knobCount() && k < LIGHT_KNOBS_MAX; ++k)
+		for (Int k = 0; k < R3DLocalLights::knobCount() && k < LIGHT_KNOBS_MAX; ++k)
 		{
-			const W3DLocalLights::Knob *knob = W3DLocalLights::knobAt(k);
+			const R3DLocalLights::Knob *knob = R3DLocalLights::knobAt(k);
 			if (stricmp(knob->name, name) != 0)
 				continue;
 			placed[k] = TRUE;
@@ -865,7 +865,7 @@ namespace
 		Bool ok = (argc == 1);
 		if (argc == 2 && isWholeNumber(argv[1].str()))
 		{
-			W3DLocalLights::setEnabled(atoi(argv[1].str()) != 0);
+			R3DLocalLights::setEnabled(atoi(argv[1].str()) != 0);
 			ok = TRUE;
 		}
 		// Ronin @feature 12/10/2026 DX9: the lights' ini, as the water's: `save` writes every knob as it stands, `load` reads the file
@@ -873,11 +873,11 @@ namespace
 		else if (argc == 2)
 		{
 			char path[512];
-			W3DLocalLights::iniPath(path, (Int)sizeof(path));
+			R3DLocalLights::iniPath(path, (Int)sizeof(path));
 			AsciiString note;
 			if (stricmp(argv[1].str(), "save") == 0)
 			{
-				ok = W3DLocalLights::saveIni();
+				ok = R3DLocalLights::saveIni();
 				note.format(ok ? "lights: saved to %s" : "lights: could not write %s", path);
 				printAscii(note, !ok);
 				if (!ok)
@@ -886,7 +886,7 @@ namespace
 			else if (stricmp(argv[1].str(), "load") == 0)
 			{
 				Int skipped = 0;
-				const Int count = W3DLocalLights::loadIni(&skipped);
+				const Int count = R3DLocalLights::loadIni(&skipped);
 				if (count < 0)
 				{
 					note.format("lights: no file %s", path);
@@ -899,15 +899,15 @@ namespace
 			}
 			else if (stricmp(argv[1].str(), "defaults") == 0)
 			{
-				W3DLocalLights::resetDefaults();
+				R3DLocalLights::resetDefaults();
 				printAscii(AsciiString("lights: the built-in values (the file is untouched; `lights save` to keep them)"), FALSE);
 				ok = TRUE;
 			}
 		}
-		// Ronin @feature 12/10/2026 DX9: every knob by its name (W3DLocalLights' table); what each does: the usage below.
+		// Ronin @feature 12/10/2026 DX9: every knob by its name (R3DLocalLights' table); what each does: the usage below.
 		else if (argc == 3)
 		{
-			const W3DLocalLights::Knob *knob = W3DLocalLights::findKnob(argv[1].str());
+			const R3DLocalLights::Knob *knob = R3DLocalLights::findKnob(argv[1].str());
 			if (knob != nullptr)
 			{
 				knob->set((float)atof(argv[2].str()));
@@ -945,7 +945,7 @@ namespace
 			return;
 		}
 		AsciiString state;
-		state.format("lights: enabled=%d", W3DLocalLights::isEnabled() ? 1 : 0);
+		state.format("lights: enabled=%d", R3DLocalLights::isEnabled() ? 1 : 0);
 		printAscii(state, FALSE);
 		// Ronin @feature 19/10/2026 DX9: the knobs in columns by what they light, as `water` prints its own.
 		// Ronin @feature 23/10/2026 DX9: the lamps' columns first (`locallighting`), then what only the master (`lights`) holds.
@@ -978,9 +978,9 @@ namespace
 		printColumns(cols + 5, 5, shared);
 		// Ronin @feature 19/10/2026 DX9: a knob no group names (one added to the table later) still prints, on a line of its own.
 		AsciiString more, one;
-		for (Int k = 0; k < W3DLocalLights::knobCount() && k < LIGHT_KNOBS_MAX; ++k)
+		for (Int k = 0; k < R3DLocalLights::knobCount() && k < LIGHT_KNOBS_MAX; ++k)
 		{
-			const W3DLocalLights::Knob *knob = W3DLocalLights::knobAt(k);
+			const R3DLocalLights::Knob *knob = R3DLocalLights::knobAt(k);
 			// Ronin @feature 24/10/2026 DX9: SSAO's three are `ssao`'s to show.
 			if (placed[k] || stricmp(knob->name, "aosun") == 0 || stricmp(knob->name, "aobleed") == 0 || stricmp(knob->name, "aocolour") == 0)
 				continue;
@@ -1088,19 +1088,19 @@ namespace
 	void cmdNight(Int argc, const AsciiString *argv)
 	{
 		if (argc == 2)
-			W3DTaa::setNight((atoi(argv[1].str()) != 0) ? TRUE : FALSE);
+			R3DTaa::setNight((atoi(argv[1].str()) != 0) ? TRUE : FALSE);
 		else if (argc == 3 && stricmp(argv[1].str(), "tint") == 0)
-			W3DTaa::setNightTint((float)atof(argv[2].str()));
+			R3DTaa::setNightTint((float)atof(argv[2].str()));
 		else if (argc == 3 && stricmp(argv[1].str(), "lo") == 0)
-			W3DTaa::setNightLo((float)atof(argv[2].str()));
+			R3DTaa::setNightLo((float)atof(argv[2].str()));
 		else if (argc == 3 && stricmp(argv[1].str(), "hi") == 0)
-			W3DTaa::setNightHi((float)atof(argv[2].str()));
+			R3DTaa::setNightHi((float)atof(argv[2].str()));
 		else if (argc == 3 && stricmp(argv[1].str(), "floor") == 0)
-			W3DTaa::setNightFloor((float)atof(argv[2].str()));
+			R3DTaa::setNightFloor((float)atof(argv[2].str()));
 		else if (argc == 3 && stricmp(argv[1].str(), "full") == 0)
-			W3DTaa::setNightFull((float)atof(argv[2].str()));
+			R3DTaa::setNightFull((float)atof(argv[2].str()));
 		else if (argc == 3 && stricmp(argv[1].str(), "lift") == 0)
-			W3DTaa::setNightLift((float)atof(argv[2].str()));
+			R3DTaa::setNightLift((float)atof(argv[2].str()));
 		else if (argc != 1)
 		{
 			printAscii(AsciiString("usage: night [0|1] | night tint <0..1> | night lo <0..1> | night hi <0..1> | night floor <0..1> | night full <0.2..1> | night lift <0.4..1>   (at night; `lights save` keeps them)"), TRUE);
@@ -1111,7 +1111,7 @@ namespace
 			return;
 		}
 		char line[512];
-		W3DTaa::describeNight(line, (Int)sizeof(line));
+		R3DTaa::describeNight(line, (Int)sizeof(line));
 		printAscii(AsciiString(line), FALSE);
 	}
 
@@ -1120,13 +1120,13 @@ namespace
 	void cmdHdr(Int argc, const AsciiString *argv)
 	{
 		if (argc == 2)
-			W3DTaa::setFloatScene((atoi(argv[1].str()) != 0) ? TRUE : FALSE);
+			R3DTaa::setFloatScene((atoi(argv[1].str()) != 0) ? TRUE : FALSE);
 		else if (argc == 3 && stricmp(argv[1].str(), "sun") == 0)
-			W3DTaa::setSunGain((float)atof(argv[2].str()));
+			R3DTaa::setSunGain((float)atof(argv[2].str()));
 		else if (argc == 3 && stricmp(argv[1].str(), "warm") == 0)
-			W3DTaa::setSunWarm((float)atof(argv[2].str()));
+			R3DTaa::setSunWarm((float)atof(argv[2].str()));
 		else if (argc == 3 && stricmp(argv[1].str(), "white") == 0)
-			W3DTaa::setWhite((float)atof(argv[2].str()));
+			R3DTaa::setWhite((float)atof(argv[2].str()));
 		else if (argc != 1)
 		{
 			printAscii(AsciiString("usage: hdr [0|1] | hdr sun <1..4> | hdr warm <0..1> | hdr white <1..2>   (needs MSAA off; the sun lift also needs the lights on and the sun's shadow maps)"), TRUE);
@@ -1135,22 +1135,22 @@ namespace
 			return;
 		}
 		char line[512];
-		W3DTaa::describeScene(line, (Int)sizeof(line));
+		R3DTaa::describeScene(line, (Int)sizeof(line));
 		printAscii(AsciiString(line), FALSE);
 	}
 
-	// Ronin @feature 21/10/2026 DX9: `grade` - the daytime colour in the final pass (W3DTaa): warm tint, saturation, darker mid-tones,
+	// Ronin @feature 21/10/2026 DX9: `grade` - the daytime colour in the final pass (R3DTaa): warm tint, saturation, darker mid-tones,
 	// from the "Zero Hour: Enhanced" shots measured. Never at night - the night look owns it.
 	void cmdGrade(Int argc, const AsciiString *argv)
 	{
 		if (argc == 2)
-			W3DTaa::setGrade((atoi(argv[1].str()) != 0) ? TRUE : FALSE);
+			R3DTaa::setGrade((atoi(argv[1].str()) != 0) ? TRUE : FALSE);
 		else if (argc == 3 && stricmp(argv[1].str(), "warm") == 0)
-			W3DTaa::setGradeWarm((float)atof(argv[2].str()));
+			R3DTaa::setGradeWarm((float)atof(argv[2].str()));
 		else if (argc == 3 && stricmp(argv[1].str(), "sat") == 0)
-			W3DTaa::setGradeSat((float)atof(argv[2].str()));
+			R3DTaa::setGradeSat((float)atof(argv[2].str()));
 		else if (argc == 3 && stricmp(argv[1].str(), "mids") == 0)
-			W3DTaa::setGradeMids((float)atof(argv[2].str()));
+			R3DTaa::setGradeMids((float)atof(argv[2].str()));
 		else if (argc != 1)
 		{
 			printAscii(AsciiString("usage: grade [0|1] | grade warm <0..2> | grade sat <0..2.5> | grade mids <0.5..2>   (by day; `lights save` keeps it in DX9Lights.ini)"), TRUE);
@@ -1158,24 +1158,24 @@ namespace
 			return;
 		}
 		AsciiString line;
-		line.format("grade=%d  warm=%.2f  sat=%.2f  mids=%.2f  (by day only: the night look owns the night)", W3DTaa::getGrade() ? 1 : 0,
-					W3DTaa::getGradeWarm(), W3DTaa::getGradeSat(), W3DTaa::getGradeMids());
+		line.format("grade=%d  warm=%.2f  sat=%.2f  mids=%.2f  (by day only: the night look owns the night)", R3DTaa::getGrade() ? 1 : 0,
+					R3DTaa::getGradeWarm(), R3DTaa::getGradeSat(), R3DTaa::getGradeMids());
 		printAscii(line, FALSE);
 	}
 
-	// Ronin @feature 12/10/2026 DX9: `sky` - the map's sky cube (W3DSkyCube): which sky it was made from, its ground, the six
+	// Ronin @feature 12/10/2026 DX9: `sky` - the map's sky cube (R3DSkyCube): which sky it was made from, its ground, the six
 	// colours an ambient takes from it. `sky rebuild` makes it again; `lights view 5` shows it.
 	void cmdSky(Int argc, const AsciiString *argv)
 	{
 		if (argc == 2 && stricmp(argv[1].str(), "rebuild") == 0)
-			W3DSkyCube::rebuild();
+			R3DSkyCube::rebuild();
 		else if (argc != 1)
 		{
 			printAscii(AsciiString("usage: sky | sky rebuild   (`lights view 5` shows the cube)"), TRUE);
 			return;
 		}
 		char line[512];
-		W3DSkyCube::describe(line, (Int)sizeof(line));
+		R3DSkyCube::describe(line, (Int)sizeof(line));
 		printAscii(AsciiString(line), FALSE);
 	}
 
@@ -2124,7 +2124,7 @@ namespace
 		s_ghostCount    = 0;
 		s_placeID       = -1;
 		s_placeAnchored = FALSE;
-		W3DDebugGrid::hide();
+		R3DDebugGrid::hide();
 	}
 
 	// Ronin @feature 16/09/2026 DX9: where copy `index` of `count` lands. MUST match the grid in GameLogic::onDevSpawnObject
@@ -2295,12 +2295,12 @@ namespace
 		// grid is drawn — lines you cannot land on would be lying.
 		if (snapHeld())
 		{
-			W3DDebugGrid::show(centre, SNAP_CELL, gridRadiusFor(thing, s_ghostCount), spots, s_ghostCount,
+			R3DDebugGrid::show(centre, SNAP_CELL, gridRadiusFor(thing, s_ghostCount), spots, s_ghostCount,
 				thing->getTemplateGeometryInfo().getBoundingCircleRadius());
 		}
 		else
 		{
-			W3DDebugGrid::hide();
+			R3DDebugGrid::hide();
 		}
 
 	}
@@ -3049,11 +3049,11 @@ namespace
 		TheWaterStats.wakeVerts    = 0;
 		TheWaterStats.wakeRipples  = 0;
 		TheWaterStats.wakeTexel    = 0.0f;
-		TheWaterStats.enabled      = (s_rowOn[W3DDebugPanel::ROW_WATER] && s_visible) ? TRUE : FALSE;
+		TheWaterStats.enabled      = (s_rowOn[R3DDebugPanel::ROW_WATER] && s_visible) ? TRUE : FALSE;
 	}
 
 	// Ronin @feature 28/09/2026 DX9: sets the row's text and hands it to the panel for this frame.
-	void putRow(W3DDebugPanel::Row row, const UnicodeString &text, Color color)
+	void putRow(R3DDebugPanel::Row row, const UnicodeString &text, Color color)
 	{
 		if (s_rowText[row] == nullptr && TheDisplayStringManager != nullptr && TheFontLibrary != nullptr)
 		{
@@ -3064,7 +3064,7 @@ namespace
 		if (s_rowText[row] == nullptr)
 			return;
 		s_rowText[row]->setText(text);
-		W3DDebugPanel::setRow(row, s_rowText[row], color);
+		R3DDebugPanel::setRow(row, s_rowText[row], color);
 	}
 
 	// Ronin @diagnostic 28/09/2026 DX9: [WATER] - a water shader's last creation attempt as text.
@@ -3085,16 +3085,16 @@ namespace
 		UnicodeString text;
 
 		// Ronin @diagnostic 21/06/2026 DX9: single-rigid records per frame; draws/frame equals [INST] recs.
-		if (s_rowOn[W3DDebugPanel::ROW_SR])
+		if (s_rowOn[R3DDebugPanel::ROW_SR])
 		{
 			const unsigned draws   = DX8_Get_Single_Rigid_Last_Frame_Draw_Count();
 			const unsigned flushes = DX8_Get_Single_Rigid_Last_Frame_Flush_Count();
 			text.format(L"[SR] draws/frame=%u  flushes=%u  avgBatch=%.1f",
 				draws, flushes, (flushes > 0) ? ((float)draws / (float)flushes) : 0.0f);
-			putRow(W3DDebugPanel::ROW_SR, text, GameMakeColor(255, 255, 0, 255));
+			putRow(R3DDebugPanel::ROW_SR, text, GameMakeColor(255, 255, 0, 255));
 		}
 
-		if (s_rowOn[W3DDebugPanel::ROW_INST])
+		if (s_rowOn[R3DDebugPanel::ROW_INST])
 		{
 			const unsigned runs       = TheDX8InstanceManager.Get_Last_Frame_Instanced_Draw_Calls();
 			const unsigned instMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Meshes();
@@ -3107,12 +3107,12 @@ namespace
 				TheDX8InstanceManager.Get_Last_Frame_Reflective_Draws(),
 				TheDX8InstanceManager.Get_Last_Frame_Instanced_Flushes(),
 				(runs > 0) ? ((float)instMeshes / (float)runs) : 0.0f);
-			putRow(W3DDebugPanel::ROW_INST, text, GameMakeColor(0, 255, 255, 255));
+			putRow(R3DDebugPanel::ROW_INST, text, GameMakeColor(0, 255, 255, 255));
 		}
 
 		// Ronin @diagnostic 02/08/2026 DX9: where the frame's draw calls come from; total includes the programmable rigid path.
 		// sortAdd = draws batchable outside the depth sort (Windowednew.md §19b.1); [DRAW2] splits `other` (§19b.2).
-		if (s_rowOn[W3DDebugPanel::ROW_DRAW])
+		if (s_rowOn[R3DDebugPanel::ROW_DRAW])
 		{
 			text.format(L"[DRAW] total=%u  terr=%u  shroud=%u  sortAdd=%u  sortAlpha=%u  sortOth=%u  shadow=%u  rigid=%u  water=%u  skin=%u",
 				s_drawTotal,
@@ -3125,9 +3125,9 @@ namespace
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_RIGID_PROG],
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_WATER],
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_SKIN]);
-			putRow(W3DDebugPanel::ROW_DRAW, text, GameMakeColor(255, 160, 0, 255));
+			putRow(R3DDebugPanel::ROW_DRAW, text, GameMakeColor(255, 160, 0, 255));
 		}
-		if (s_rowOn[W3DDebugPanel::ROW_DRAW2])
+		if (s_rowOn[R3DDebugPanel::ROW_DRAW2])
 		{
 			text.format(L"[DRAW2] rigidFFP=%u  matpass=%u  fxLine=%u  fxPoint=%u  ui2D=%u  other=%u  shadowMap=%u  shadowRecv=%u  prepass=%u",
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_RIGID_FFP],
@@ -3139,11 +3139,11 @@ namespace
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_SHADOWMAP],
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_SHADOWRECV],
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_PREPASS]);
-			putRow(W3DDebugPanel::ROW_DRAW2, text, GameMakeColor(255, 160, 0, 255));
+			putRow(R3DDebugPanel::ROW_DRAW2, text, GameMakeColor(255, 160, 0, 255));
 		}
 
 		// Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Shadow fit - texel moves with zoom, yaw and sun. No maps, no row.
-		if (s_rowOn[W3DDebugPanel::ROW_SHADOW] && TheUseShadowMaps)
+		if (s_rowOn[R3DDebugPanel::ROW_SHADOW] && TheUseShadowMaps)
 		{
 			// Ronin @diagnostic 09/09/2026 DX9: §29i.3 step 2. PEAK = the worst fit seen while moving; the near split's win is
 			// one quantiser step wide. Starts over on a tier change (`shadows <n>`) or a new match.
@@ -3152,40 +3152,40 @@ namespace
 			static Int         s_peakQuality = -1;
 			static UnsignedInt s_peakFrame   = 0;
 			const UnsignedInt  logicFrame    = (TheGameLogic != nullptr) ? TheGameLogic->getFrame() : 0;
-			if (W3DShadowMap::getQuality() != s_peakQuality || logicFrame < s_peakFrame)
+			if (R3DShadowMap::getQuality() != s_peakQuality || logicFrame < s_peakFrame)
 			{
-				s_peakQuality = W3DShadowMap::getQuality();
+				s_peakQuality = R3DShadowMap::getQuality();
 				s_reqPeak     = 0.0f;
 				s_extPeak     = 0.0f;
 			}
 			s_peakFrame = logicFrame;
 			if (logicFrame > 60)
 			{
-				const Real reqNow = W3DShadowMap::getFitRequired();
-				const Real exX    = W3DShadowMap::getFitExtentX();
-				const Real exY    = W3DShadowMap::getFitExtentY();
+				const Real reqNow = R3DShadowMap::getFitRequired();
+				const Real exX    = R3DShadowMap::getFitExtentX();
+				const Real exY    = R3DShadowMap::getFitExtentY();
 				const Real extNow = (exX > exY) ? exX : exY;
 				if (reqNow > s_reqPeak) s_reqPeak = reqNow;
 				if (extNow > s_extPeak) s_extPeak = extNow;
 			}
 			// Ronin @diagnostic 13/09/2026 DX9: texel is NEAR/FAR, both cascades live at once; at one split far reads 0.00.
 			text.format(L"[SHADOW] texel=%.2f/%.2f ext=%.0fx%.0f req=%.0f box=%.0fx%.0f bare=%.0fx%.0f hdrm=%.0f  PEAK req=%.0f ext=%.0f",
-				W3DShadowMap::getTexelWorldSize(0),
-				(W3DShadowMap::getSplitCount() > 1) ? W3DShadowMap::getTexelWorldSize(1) : 0.0f,
-				W3DShadowMap::getFitExtentX(),
-				W3DShadowMap::getFitExtentY(),
-				W3DShadowMap::getFitRequired(),
-				W3DShadowMap::getFitBoxX(),
-				W3DShadowMap::getFitBoxY(),
-				W3DShadowMap::getFitBareBoxX(),
-				W3DShadowMap::getFitBareBoxY(),
-				W3DShadowMap::getHeadroom(),
+				R3DShadowMap::getTexelWorldSize(0),
+				(R3DShadowMap::getSplitCount() > 1) ? R3DShadowMap::getTexelWorldSize(1) : 0.0f,
+				R3DShadowMap::getFitExtentX(),
+				R3DShadowMap::getFitExtentY(),
+				R3DShadowMap::getFitRequired(),
+				R3DShadowMap::getFitBoxX(),
+				R3DShadowMap::getFitBoxY(),
+				R3DShadowMap::getFitBareBoxX(),
+				R3DShadowMap::getFitBareBoxY(),
+				R3DShadowMap::getHeadroom(),
 				s_reqPeak,
 				s_extPeak);
-			putRow(W3DDebugPanel::ROW_SHADOW, text, GameMakeColor(120, 200, 255, 255));
+			putRow(R3DDebugPanel::ROW_SHADOW, text, GameMakeColor(120, 200, 255, 255));
 		}
 
-		if (s_rowOn[W3DDebugPanel::ROW_PERF])
+		if (s_rowOn[R3DDebugPanel::ROW_PERF])
 		{
 			const double secs    = (s_perfFrames > 0) ? ((double)(s_perfNow - s_perfFirst) / (double)s_perfFreq) : 0.0;
 			const Real   meanFps = (secs > 0.0) ? (Real)((double)s_perfFrames / secs) : 0.0f;
@@ -3193,15 +3193,15 @@ namespace
 			const Real   meanSM  = (s_perfFrames > 0) ? (Real)(s_perfSMSum / (double)s_perfFrames) : 0.0f;
 			text.format(L"[PERF] frames=%u  avgFps=%.1f  avgMs=%.3f  worstMs=%.1f  avgShadowMap=%.0f",
 				s_perfFrames, meanFps, meanMs, s_perfWorstMs, meanSM);
-			putRow(W3DDebugPanel::ROW_PERF, text, GameMakeColor(255, 230, 120, 255));
+			putRow(R3DDebugPanel::ROW_PERF, text, GameMakeColor(255, 230, 120, 255));
 		}
 
 		// Ronin @diagnostic 13/09/2026 DX9: can the card read scene depth, and did this frame use it. aoRes/samples prove a
 		// quality change took effect - the tiers differ subtly by eye.
-		if (s_rowOn[W3DDebugPanel::ROW_DEPTH])
+		if (s_rowOn[R3DDebugPanel::ROW_DEPTH])
 		{
 			Int aoW = 0, aoH = 0;
-			W3DSsao::getTargetSize(&aoW, &aoH);
+			R3DSsao::getTargetSize(&aoW, &aoH);
 			// Ronin @diagnostic 07/10/2026 DX9: bound = samples of the colour target / the depth the 3D views left on the device,
 			// -1 = none. Under MSAA 4x both must read 4: a single-sampled or missing depth lets the trees' second target bind.
 			Int rtSamples = -1, dsSamples = -1;
@@ -3226,19 +3226,19 @@ namespace
 			}
 			// Ronin @diagnostic 06/10/2026 DX9: prepass = this frame's depth came from the MSAA prepass: 1 NULL target, 2 ARGB.
 			text.format(L"[DEPTH] ssao=%d  intz=%d  active=%d  aa=%d  prepass=%d  bound=%d/%d  aoRes=%dx%d  samples=%d",
-				W3DSsao::getQuality(),
-				W3DSsao::isSupported() ? 1 : 0,
-				W3DSsao::isActive() ? 1 : 0,
+				R3DSsao::getQuality(),
+				R3DSsao::isSupported() ? 1 : 0,
+				R3DSsao::isActive() ? 1 : 0,
 				DX8Wrapper::Get_Anti_Aliasing_Level(),
-				W3DSsao::getPrepassTarget(),
+				R3DSsao::getPrepassTarget(),
 				rtSamples, dsSamples,
 				aoW, aoH,
-				W3DSsao::getSampleCount());
-			putRow(W3DDebugPanel::ROW_DEPTH, text, GameMakeColor(140, 255, 140, 255));
+				R3DSsao::getSampleCount());
+			putRow(R3DDebugPanel::ROW_DEPTH, text, GameMakeColor(140, 255, 140, 255));
 		}
 
 		// Ronin @diagnostic 14/09/2026 DX9: §19e.3. Splat bake under channel reuse; droppedCells must be 0.
-		if (s_rowOn[W3DDebugPanel::ROW_TERRAIN] && TheTerrainRenderObject != nullptr && TheTerrainRenderObject->getMap() != nullptr)
+		if (s_rowOn[R3DDebugPanel::ROW_TERRAIN] && TheTerrainRenderObject != nullptr && TheTerrainRenderObject->getMap() != nullptr)
 		{
 			WorldHeightMap *map = TheTerrainRenderObject->getMap();
 			text.format(L"[TERRAIN] materials=%d  channels=%d  droppedCells=%d  pages=%d  maxPerTile=%d",
@@ -3247,12 +3247,12 @@ namespace
 				map->getSplatDroppedCells(),
 				map->getTerrainTexturePageCount(),
 				map->getSplatMaxPerTile());
-			putRow(W3DDebugPanel::ROW_TERRAIN, text, GameMakeColor(255, 255, 255, 255));
+			putRow(R3DDebugPanel::ROW_TERRAIN, text, GameMakeColor(255, 255, 255, 255));
 		}
 
 		// Ronin @diagnostic 15/09/2026 DX9: [UI] - who owns input right now, for "map clicks stop until the options menu opens".
 		// Panel window ids: 7DEB0001 panel, 7DEB0002 command box, 7DEB0003 spawn picker list.
-		if (s_rowOn[W3DDebugPanel::ROW_UI])
+		if (s_rowOn[R3DDebugPanel::ROW_UI])
 		{
 			GameWindow *focus   = TheWindowManager->winGetFocus();
 			GameWindow *grab    = TheWindowManager->winGetGrabWindow();
@@ -3270,57 +3270,57 @@ namespace
 				focus   ? (UnsignedInt)focus->winGetWindowId()   : 0u,
 				grab    ? (UnsignedInt)grab->winGetWindowId()    : 0u,
 				capture ? (UnsignedInt)capture->winGetWindowId() : 0u);
-			putRow(W3DDebugPanel::ROW_UI, text, GameMakeColor(200, 170, 255, 255));
+			putRow(R3DDebugPanel::ROW_UI, text, GameMakeColor(200, 170, 255, 255));
 		}
 
 		// Ronin @diagnostic 20/09/2026 DX9: [RSTATE] - what the bypassed render-state cache costs, off by default. rs is every
 		// Set_DX8_Render_State reaching the device (dx8wrapper.h:1334); rs/draw says whether fixing it is worth the risk.
 		// docs/RenderStateCache.md.
-		if (s_rowOn[W3DDebugPanel::ROW_RSTATE])
+		if (s_rowOn[R3DDebugPanel::ROW_RSTATE])
 		{
 			const DX8FrameStatistics &fs = DX8Wrapper::Get_Last_Frame_Statistics();
 			const Real perDraw = (fs.draw_calls > 0) ? ((Real)fs.render_state_changes / (Real)fs.draw_calls) : 0.0f;
 			text.format(L"[RSTATE] rs=%u  rs/draw=%.1f  tss=%u  tex=%u  mat=%u  vb=%u  draw=%u  dx8=%u",
 				fs.render_state_changes, perDraw, fs.texture_stage_state_changes, fs.texture_changes,
 				fs.material_changes, fs.vertex_buffer_changes, fs.draw_calls, fs.dx8_calls);
-			putRow(W3DDebugPanel::ROW_RSTATE, text, GameMakeColor(120, 220, 255, 255));
+			putRow(R3DDebugPanel::ROW_RSTATE, text, GameMakeColor(120, 220, 255, 255));
 		}
 
 		// Ronin @diagnostic 20/09/2026 DX9: [TAA] - live state while TAA is on. docs/Debug_Panel_Design.md §7 explains each field.
-		if (s_rowOn[W3DDebugPanel::ROW_TAA] && W3DTaa::isEnabled())
+		if (s_rowOn[R3DDebugPanel::ROW_TAA] && R3DTaa::isEnabled())
 		{
 			// moving = meshes given motion vectors / meshes drawn; untracked should stay 0.
 			UnicodeString moving;
-			if (W3DTaa::getVelocity())
-				moving.format(L"%d/%d", W3DTaa::getMoverCount(), W3DTaa::getMeshSeen());
+			if (R3DTaa::getVelocity())
+				moving.format(L"%d/%d", R3DTaa::getMoverCount(), R3DTaa::getMeshSeen());
 			else
 				moving = L"off";
 			// Ronin @diagnostic 27/09/2026 DX9: gpu = TAA's whole GPU time per frame, mask = the moving-shadow pass inside it, with
 			// how many meshes it drew (off = `taa shadowmask 0`, - = nothing moved or no shadow maps).
 			UnicodeString gpu;
 			float gpuTotal = -1.0f, gpuMask = -1.0f;
-			W3DTaa::getGpuMs(&gpuTotal, &gpuMask);
-			const Int maskDraws = W3DTaa::getShadowMaskDraws();
+			R3DTaa::getGpuMs(&gpuTotal, &gpuMask);
+			const Int maskDraws = R3DTaa::getShadowMaskDraws();
 			if (gpuTotal < 0.0f)
 				gpu = L"n/a";
-			else if (!W3DTaa::getShadowMask())
+			else if (!R3DTaa::getShadowMask())
 				gpu.format(L"%.2fms  mask=off", gpuTotal);
 			else if (maskDraws < 0)
 				gpu.format(L"%.2fms  mask=-", gpuTotal);
 			else
 				gpu.format(L"%.2fms  mask=%.2fms/%d", gpuTotal, gpuMask, maskDraws);
 			text.format(L"[TAA] state=%s  weight=%.2f  moving=%s  reactive=%d  skinned=%d  fx-mask=%s  untracked=%d  view=%d  gpu=%s",
-				W3DTaa::isActive() ? L"running" : L"off(MSAA)", W3DTaa::getWeight(),
+				R3DTaa::isActive() ? L"running" : L"off(MSAA)", R3DTaa::getWeight(),
 				moving.str(),
-				W3DTaa::getReactiveCount(), W3DTaa::getSkinDrawCount(), W3DTaa::getOpaqueOK() ? L"on" : L"off",
-				W3DTaa::getTrackMisses(),
-				W3DTaa::getDebug(), gpu.str());
-			putRow(W3DDebugPanel::ROW_TAA, text, GameMakeColor(255, 200, 120, 255));
+				R3DTaa::getReactiveCount(), R3DTaa::getSkinDrawCount(), R3DTaa::getOpaqueOK() ? L"on" : L"off",
+				R3DTaa::getTrackMisses(),
+				R3DTaa::getDebug(), gpu.str());
+			putRow(R3DDebugPanel::ROW_TAA, text, GameMakeColor(255, 200, 120, 255));
 		}
 
 		// Ronin @diagnostic 28/09/2026 DX9: [WATER] - Water_Work.md §5 step 1. flat/river/mesh = draws / draws with the water
 		// shader bound on the device; N/0 = the fixed-function fallback. other = the rest of [DRAW] water (sky, shore waves).
-		if (s_rowOn[W3DDebugPanel::ROW_WATER] && TheWaterRenderObj != nullptr)
+		if (s_rowOn[R3DDebugPanel::ROW_WATER] && TheWaterRenderObj != nullptr)
 		{
 			UnicodeString flatPS, riverPS;
 			formatWaterShader(flatPS, TheWaterStats.flatPSStage, TheWaterStats.flatPSHr);
@@ -3399,28 +3399,28 @@ namespace
 					(all > known) ? (all - known) : 0u,
 					edge ? 1 : 0);
 			}
-			putRow(W3DDebugPanel::ROW_WATER, text, GameMakeColor(110, 190, 255, 255));
+			putRow(R3DDebugPanel::ROW_WATER, text, GameMakeColor(110, 190, 255, 255));
 		}
 
 		// Ronin @diagnostic 09/10/2026 DX9: [LIGHT] - last frame. on = the screen-space pass owns the lights (else the old paths
 		// do); live = enabled lights; drawn = on screen; area = their rectangles in screens; surf = frame-to-surface factor.
 		// Ronin @diagnostic 17/10/2026 DX9: and the lamp glows, pool fills and effect lights (drawn / candidates / glowing).
-		if (s_rowOn[W3DDebugPanel::ROW_LIGHT])
+		if (s_rowOn[R3DDebugPanel::ROW_LIGHT])
 		{
-			W3DLocalLights::Stats ls;
-			W3DLocalLights::getStats(&ls);
+			R3DLocalLights::Stats ls;
+			R3DLocalLights::getStats(&ls);
 			text.format(L"[LIGHT] on=%d  depth=%s  live=%d  drawn=%d  area=%.2f  taamask=%d  surf=%.2f/%.2f/%.2f  sunshade=%d  glows=%d  poolfill=%d  fx=%d/%d/%d",
 				ls.active ? 1 : 0, ls.active ? (ls.ownsDepth ? L"own" : L"shared") : L"none",
 				ls.live, ls.drawn, ls.coverage, ls.masked ? 1 : 0, ls.sceneLight[0], ls.sceneLight[1], ls.sceneLight[2], ls.sunShade,
 				ls.glows, ls.pools, ls.fx, ls.fxCandidates, ls.fxGlowing);
-			putRow(W3DDebugPanel::ROW_LIGHT, text, GameMakeColor(255, 190, 110, 255));
+			putRow(R3DDebugPanel::ROW_LIGHT, text, GameMakeColor(255, 190, 110, 255));
 		}
 		// Ronin @diagnostic 11/10/2026 DX9: [LIGHT2] - the beams as spot lights (art meshes skipped, models read); the lamp shadow
 		// maps: casters = solid meshes drawn, lampmaps = lights with a map, then what was drawn into them.
-		if (s_rowOn[W3DDebugPanel::ROW_LIGHT2])
+		if (s_rowOn[R3DDebugPanel::ROW_LIGHT2])
 		{
-			W3DLocalLights::Stats ls;
-			W3DLocalLights::getStats(&ls);
+			R3DLocalLights::Stats ls;
+			R3DLocalLights::getStats(&ls);
 			text.format(L"[LIGHT2] beams=%d (meshes skipped %d, models %d)  casters=%d  lampmaps=%d (%d point lights, %d with sides; %d draws, %.1fk tris)",
 				ls.beams, ls.beamMeshes, ls.beamModels, ls.casters, ls.lampMaps, ls.lampPoints, ls.lampSides, ls.lampDraws,
 				(float)ls.lampTris / 1000.0f);
@@ -3431,7 +3431,7 @@ namespace
 			else
 				gpu.format(L"  gpu: scene=%.2fms shade=%.2fms lights=%.2fms", ls.gpuScene, ls.gpuShade, ls.gpuLights);
 			text.concat(gpu);
-			putRow(W3DDebugPanel::ROW_LIGHT2, text, GameMakeColor(255, 190, 110, 255));
+			putRow(R3DDebugPanel::ROW_LIGHT2, text, GameMakeColor(255, 190, 110, 255));
 		}
 	}
 
@@ -3469,7 +3469,7 @@ namespace
 			s_title->draw(x + PAD, y + 1, GameMakeColor(220, 220, 220, 255), drop);
 
 		Int rowY = y + TITLE_HEIGHT + PAD;
-		for (Int r = 0; r < W3DDebugPanel::ROW_COUNT; ++r)
+		for (Int r = 0; r < R3DDebugPanel::ROW_COUNT; ++r)
 		{
 			if (!rowIsLive(r))
 				continue;
@@ -3499,7 +3499,7 @@ namespace
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DDebugPanel::update(void)
+void R3DDebugPanel::update(void)
 {
 	++s_frame;
 	s_available = FALSE;
@@ -3755,13 +3755,13 @@ void W3DDebugPanel::update(void)
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DDebugPanel::toggleVisible(void)
+void R3DDebugPanel::toggleVisible(void)
 {
 	s_visible = !s_visible;
 }
 
 //-------------------------------------------------------------------------------------------------
-Bool W3DDebugPanel::setRow(Row row, DisplayString *text, Color color)
+Bool R3DDebugPanel::setRow(Row row, DisplayString *text, Color color)
 {
 	if (!s_available || row < 0 || row >= ROW_COUNT || text == nullptr)
 		return FALSE;
@@ -3773,7 +3773,7 @@ Bool W3DDebugPanel::setRow(Row row, DisplayString *text, Color color)
 }
 
 //-------------------------------------------------------------------------------------------------
-Bool W3DDebugPanel::registerCommand(const char *name, const char *help, CommandFunc func)
+Bool R3DDebugPanel::registerCommand(const char *name, const char *help, CommandFunc func)
 {
 	if (name == nullptr || func == nullptr)
 		return FALSE;
@@ -3796,7 +3796,7 @@ Bool W3DDebugPanel::registerCommand(const char *name, const char *help, CommandF
 }
 
 //-------------------------------------------------------------------------------------------------
-void W3DDebugPanel::print(const UnicodeString &text, Bool isError)
+void R3DDebugPanel::print(const UnicodeString &text, Bool isError)
 {
 	printLine(text, isError);
 }

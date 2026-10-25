@@ -74,7 +74,7 @@
 #include <d3d9.h>  // Native DX9
 
 #include "camera.h"
-#include "W3DDevice/GameClient/W3DTaa.h"	// Ronin @feature 20/09/2026 DX9: TAA jitter
+#include "W3DDevice/GameClient/R3DTaa.h"	// Ronin @feature 20/09/2026 DX9: TAA jitter
 #include "ww3d.h"
 #include "Renderer.h"
 #include "WWMath/matrix4.h"
@@ -766,10 +766,10 @@ void CameraClass::Apply()
 	{
 		// Ronin @diagnostic 24/09/2026 DX9: hand TAA the CLEAN matrices this camera is about to send, before the jitter
 		// goes in - what the scene is actually drawn with, not what the camera holds by the time postRender reads it.
-		W3DTaa::noteCameraApplied(d3dprojection, CameraInvTransform);
+		R3DTaa::noteCameraApplied(d3dprojection, CameraInvTransform);
 
 		float jitterX = 0.0f, jitterY = 0.0f;
-		W3DTaa::getJitterNDC(&jitterX, &jitterY);
+		R3DTaa::getJitterNDC(&jitterX, &jitterY);
 		d3dprojection[0][2] += jitterX;
 		d3dprojection[1][2] += jitterY;
 	}
