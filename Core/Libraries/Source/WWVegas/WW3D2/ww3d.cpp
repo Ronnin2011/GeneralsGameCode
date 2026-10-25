@@ -1170,12 +1170,6 @@ WW3DErrorType WW3D::End_Render(bool flip_frame)
 		Renderer::End_Scene(flip_frame);
 	}
 
-		{
-			WWPROFILE("DX8Wrapper::End_Scene");
-			// @build Ronin 01/11/2025 DX9: Direct DX8Wrapper end scene
-			DX8Wrapper::End_Scene(flip_frame);
-		}
-
 		FrameCount++;
 
 		{
