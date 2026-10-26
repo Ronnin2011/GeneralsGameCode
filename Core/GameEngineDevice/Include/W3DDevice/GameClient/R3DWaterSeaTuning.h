@@ -157,7 +157,7 @@ inline WaterSeaTuning WaterSea_DefaultProfile(WaterKind kind)
 		12.0f,		// foamWidth
 		80.0f,		// foamTile
 		1.0f,		// texture - the map's own
-		0.7f,		// seaFoam
+		0.6f,		// seaFoam
 		4.0f,		// seaFoamDepth - halved: it whitened too much of a shallow sea (Ronin, 29/09)
 		40.0f,		// seaFoamTile
 		TRUE,		// swell

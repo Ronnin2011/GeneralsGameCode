@@ -413,6 +413,45 @@ namespace
 			waterCell(col, name, WaterSea_GetKnob(&g, *k));
 	}
 
+	// Ronin @feature 26/10/2026 DX9: ` | name <lo..hi>` for every knob of a water table - the usage line comes from the tables,
+	// so it lists each knob and its range as the code holds them.
+	void waterUsageKnobs(AsciiString &line, const WaterKnobInfo *table, Int count)
+	{
+		for (Int k = 0; k < count; k++)
+		{
+			AsciiString one;
+			if (table[k].kind == WATER_KNOB_BOOL)
+				one.format(" | %s <0|1>", table[k].name);
+			else
+				one.format(" | %s <%g..%g>", table[k].name, (double)table[k].lo, (double)table[k].hi);
+			line.concat(one);
+		}
+	}
+
+	// Ronin @feature 26/10/2026 DX9: `water` with a word it does not take - the usage, then what each command and knob does,
+	// in the printout's groups (as `lights` does).
+	void waterHelp()
+	{
+		AsciiString usage("usage: water profile sea|lake|river | save | load | defaults | flat|mesh|waves|sea <0|1> | view (alone: the list) | the profile's:");
+		waterUsageKnobs(usage, TheWaterProfileKnobs, TheWaterProfileKnobCount);
+		usage.concat(" | all water's:");
+		waterUsageKnobs(usage, TheWaterGlobalKnobs, TheWaterGlobalKnobCount);
+		printAscii(usage, TRUE);
+		printAscii(AsciiString("  profile: which water the profile's knobs edit - sea (standing water that reaches the map's edge), lake (other standing water), river. save / load / defaults: Data/INI/DX9Water.ini - write every knob, read it back, the built-in look (the file is untouched)"), FALSE);
+		printAscii(AsciiString("  flat / mesh / waves / sea: draw the flat water / the grid mesh (dams) / the 2003 shore-wave sprites at all / the old infinite sea plane instead of the map's water - debug switches; view: one ingredient alone, 0 = the water"), FALSE);
+		printAscii(AsciiString("  REFLECTION - refl: how much the water reflects; fresnel 1: more toward the horizon - f0 looking straight down, fpow how fast it rises, fresnelripple how much the ripples move it; distort: how far the ripples bend the reflection"), FALSE);
+		printAscii(AsciiString("  RIPPLES - normals 0|1: the ripple maps (0 = the old caust ripple); ripple: their strength, 0 = mirror-flat; speed / tile: how fast they move / how big they are (a river's speed is its current); refract: how far they bend the water's own texture; bend: how far they bend the seabed seen through"), FALSE);
+		printAscii(AsciiString("  LIGHT - spec / gloss: the sun's sharp glitter, its strength / tightness; sheen / sheenpow: the broad sun sheen, the same; shade: light and shade the ripples put on the water body; shadow: how much a shadow darkens the water, 0 = no shadows"), FALSE);
+		printAscii(AsciiString("  DEPTH - deep: deep water's brightness, 1 = no darkening; deepdist: the depth it takes full effect by; opacity: how opaque past the shore (ownopacity 1: the map's own see-through instead); shore: the soft edge's width from the waterline; shoredepth: shore effects stop by this depth; texture: how much of the map's water texture shows"), FALSE);
+		printAscii(AsciiString("  FOAM - foam: the shore foam's amount (0 = none, ~4 = a solid band); foamwidth: its reach from the waterline; foamtile: its fleck size; seafoam / seafoamdepth / seafoamtile: the open water's foam - amount, the depth it fades out by, fleck size"), FALSE);
+		printAscii(AsciiString("  whitecaps: foam on the highest crests, 0 = none; whitecapat: how high a crest must be (lower = more foam); breakers 1: the shore foam's wash and incoming front land with each crest of the swell"), FALSE);
+		printAscii(AsciiString("  SWELL - swell 0|1: waves that move the surface (not on rivers); swellheight / swellsize / swellspeed: their height, length and speed; swelldir: the wind, degrees; swelldepth: full height from this depth; swellcell: the grid's cell; swellsharp: 0 round crests .. 1 pointed; swelltint: crests lighter, troughs darker"), FALSE);
+		printAscii(AsciiString("  WAKES (all water) - wakes: the trails moving units leave, their strength, 0 = none; wakefoam: their foam; wakeheight: how high they raise the water; wakesharp: 0 round crests .. 1 pointed; waketint: crests lighter, the hollow darker; wakeshade: how much their slopes catch the light"), FALSE);
+		printAscii(AsciiString("  wakerings: the rings round a unit at rest; wakesurge: the wave that runs on ahead of a unit that stops; oldwakes 1: the 2003 wake sprites too; ride: how much floating units ride the swell, 0 = not"), FALSE);
+		printAscii(AsciiString("  ALL WATER - depth 0: the 2003 flat colour and shore (no depth, no foam); refraction 0|1: the seabed bent by the ripples; oldwaves 1: the 2003 shore-wave sprites beside the shore foam"), FALSE);
+		printAscii(AsciiString("  MIRROR - mirror 0|1: the reflections (Options.ini DX9WaterReflections); mirrorres: 1 the screen's size, 2 half; mirrorclip 1: clipped at the water; mirrorfar: its far plane, x the view's; mirrorsoft: a softer read against crawling edges, 0 = one tap"), FALSE);
+	}
+
 	// Ronin @feature 19/10/2026 DX9: how wide each column must be - at least `width` already holds, so tables printed one under
 	// another can share their widths and line up.
 	void columnWidths(const PanelColumn *cols, Int colCount, Int *width)
@@ -553,7 +592,7 @@ namespace
 		}
 		if (!ok)
 		{
-			printAscii(AsciiString("usage: water profile sea|lake|river | water [normals|fresnel|swell|ownopacity|breakers 0|1] (the profile's) | water [flat|mesh|waves|sea|depth|oldwaves|oldwakes|refraction|mirrorclip|mirror 0|1] | water view <0..14> | water mirrorres <1|2> | water <knob> <value> | water save|load|defaults"), TRUE);
+			waterHelp();	// Ronin @feature 26/10/2026 DX9: every command and knob with what it does
 			return;
 		}
 		// Ronin @feature 03/10/2026 DX9: the global switches, then the selected profile as a table, one column per group - one
