@@ -60,6 +60,7 @@
 #include "W3DDevice/GameClient/Module/W3DModelDraw.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
 #include "W3DDevice/GameClient/R3DShadowMapState.h"
+#include "W3DDevice/GameClient/R3DTaa.h"	// Ronin @bugfix 26/10/2026 DX9: moving decals mark themselves for TAA
 
 /** @todo: We're going to have a pool of a couple rendertargets to use
 in rare cases when dynamic shadows need to be generated.  Maybe we can
@@ -913,6 +914,10 @@ void W3DProjectedShadowManager::queueDecal(W3DProjectedShadow *shadow)
 		boxCorners[1] = right_x + top_y;
 		boxCorners[2] = right_x + bottom_y;
 		boxCorners[3] = left_x + bottom_y;
+		// Ronin @bugfix 26/10/2026 DX9: a decal that moves (the ability rings on the cursor) gives TAA no motion; it marks where it shows.
+		if (shadow->m_type & (SHADOW_ALPHA_DECAL|SHADOW_ADDITIVE_DECAL))
+			R3DTaa::noteMovingDecal(shadow, objPos, boxCorners, shadow->m_shadowTexture[0]->getTexture(),
+				(shadow->m_type & SHADOW_ADDITIVE_DECAL) != 0, robj != nullptr);
 
 		Real min_x,max_x,min_y,max_y;
 		max_x=min_x=boxCorners[0].X;

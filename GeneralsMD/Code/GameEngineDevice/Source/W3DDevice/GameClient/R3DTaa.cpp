@@ -41,6 +41,7 @@
 #include "W3DDevice/GameClient/R3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: which meshes have their beam polygons hidden
 #include "Common/KindOf.h"
 #include "GameLogic/PolygonTrigger.h"			// Ronin @bugfix 29/09/2026 DX9: the water's polygons, for its reactive mask
+#include "GameLogic/TerrainLogic.h"			// Ronin @bugfix 26/10/2026 DX9: the ground under a moving decal's mark
 #include "W3DDevice/GameClient/W3DWater.h"
 
 Bool R3DTaa::s_enabled = FALSE;
@@ -175,6 +176,23 @@ static UnsignedInt  s_bibMovedFrame = 0;	// s_moverFrame when its corners last c
 // Ronin @bugfix 27/09/2026 DX9: flagged only while it MOVES (3 frames: InGameUI refreshes it every other frame). A bib
 // parked on an illegal spot keeps normal TAA; one that just vanished is reset for those frames, clearing its red.
 static inline Bool  cursorBibLive(void) { return s_bibMovedFrame != 0 && (s_moverFrame - s_bibMovedFrame) <= 3; }
+// Ronin @bugfix 26/10/2026 DX9: decals that move - the ability rings on the cursor, a unit's decal. Terrain geometry with no velocity,
+// as the bib: marked for 3 frames after each move, on a grid at the ground's height (a ring is wider than the ground is flat).
+// Ronin @bugfix 27/10/2026 DX9: only where the decal's own texture shows (TaaDecalMark_vs/_ps): its whole square reset half the screen.
+// Ronin @bugfix 27/10/2026 DX9: with their own motion (last frame's corners), and a free decal - the cursor's ring - every frame it
+// shows, so the moving-shadow mask leaves it alone; a unit's decal while it moves.
+enum { TAA_DECAL_MARKS = 64, TAA_DECAL_GRID = 16 };
+struct TaaDecalMark
+{
+	const void *key; Vector3 corner[4]; Vector3 prevCorner[4]; UnsignedInt movedFrame; UnsignedInt seenFrame;
+	TextureClass *texture; Bool additive; Bool attached;
+};
+static IDirect3DVertexShader9 *s_decalMarkVS = NULL;
+static IDirect3DPixelShader9  *s_decalMarkPS = NULL;
+static TaaDecalMark s_decalMarks[TAA_DECAL_MARKS];
+static Int          s_decalMarkCount = 0;
+static inline Bool  decalMarkMoving(const TaaDecalMark &m) { return m.movedFrame != 0 && (s_moverFrame - m.movedFrame) <= 3; }
+static inline Bool  decalMarkDrawn(const TaaDecalMark &m)  { return m.seenFrame == s_moverFrame && (!m.attached || decalMarkMoving(m)); }
 // Ronin @bugfix 29/09/2026 DX9: the water. It animates every frame but the mesh velocity pass never sees it, so it kept
 // full history and smeared: its polygons are flagged reactive in the velocity pass. `taa water`.
 enum { TAA_WATER_MAX_VERTS = 3 * 4096 };
@@ -822,6 +840,69 @@ void  R3DTaa::noteCursorBib(const Vector3 *corners)
 	}
 	if (moved)
 		s_bibMovedFrame = (s_moverFrame != 0) ? s_moverFrame : 1;
+}
+
+void  R3DTaa::noteMovingDecal(const void *key, const Vector3 &centre, const Vector3 *corners, TextureClass *texture, Bool additive,
+							  Bool attached)
+{
+	if (!s_active || corners == NULL || texture == NULL)
+		return;
+	Vector3 world[4];
+	for (Int i = 0; i < 4; ++i)
+		world[i].Set(centre.X + corners[i].X, centre.Y + corners[i].Y, 0.0f);
+	const UnsignedInt now = (s_moverFrame != 0) ? s_moverFrame : 1;
+	TaaDecalMark *mark = NULL;
+	TaaDecalMark *oldest = NULL;
+	for (Int m = 0; m < s_decalMarkCount; ++m)
+	{
+		if (s_decalMarks[m].key == key)
+		{
+			mark = &s_decalMarks[m];
+			break;
+		}
+		if (oldest == NULL || s_decalMarks[m].seenFrame < oldest->seenFrame)
+			oldest = &s_decalMarks[m];
+	}
+	if (mark == NULL)
+	{
+		// One that just appeared has no trail yet. A full table gives up the one unseen longest.
+		if (s_decalMarkCount < TAA_DECAL_MARKS)
+		{
+			mark = &s_decalMarks[s_decalMarkCount++];
+			mark->texture = NULL;
+		}
+		else
+			mark = oldest;
+		mark->key = key;
+		mark->movedFrame = 0;
+		mark->seenFrame = 0;
+		for (Int i = 0; i < 4; ++i)
+			mark->corner[i] = mark->prevCorner[i] = world[i];
+	}
+	// Last frame's corners, once a frame (the mirror draws the decals too).
+	if (mark->seenFrame != now)
+		for (Int i = 0; i < 4; ++i)
+			mark->prevCorner[i] = mark->corner[i];
+	mark->attached = attached;
+	// Held, not borrowed: a mark outlives its decal by up to 3 frames.
+	if (mark->texture != texture)
+	{
+		texture->Add_Ref();
+		REF_PTR_RELEASE(mark->texture);
+		mark->texture = texture;
+	}
+	mark->additive = additive;
+	Bool moved = FALSE;
+	for (Int i = 0; i < 4; ++i)
+		if (fabsf(world[i].X - mark->corner[i].X) > 0.01f || fabsf(world[i].Y - mark->corner[i].Y) > 0.01f)
+			moved = TRUE;
+	if (moved)
+	{
+		for (Int i = 0; i < 4; ++i)
+			mark->corner[i] = world[i];
+		mark->movedFrame = now;
+	}
+	mark->seenFrame = now;
 }
 
 void R3DTaa::setWaterMask(Bool on)   { s_waterMask = on; }
@@ -1821,6 +1902,21 @@ static void ensureShaders(IDirect3DDevice9 *dev)
 			s_velMeshPS = NULL;
 		HeapFree(GetProcessHeap(), 0, blob);
 	}
+	// Ronin @bugfix 27/10/2026 DX9: the moving decals' marks. Missing = no marks (the old trail), never the whole square.
+	blob = readShaderBlob("shaders\\TaaDecalMark.vso");
+	if (blob != NULL)
+	{
+		if (FAILED(dev->CreateVertexShader(blob, &s_decalMarkVS)))
+			s_decalMarkVS = NULL;
+		HeapFree(GetProcessHeap(), 0, blob);
+	}
+	blob = readShaderBlob("shaders\\TaaDecalMark.pso");
+	if (blob != NULL)
+	{
+		if (FAILED(dev->CreatePixelShader(blob, &s_decalMarkPS)))
+			s_decalMarkPS = NULL;
+		HeapFree(GetProcessHeap(), 0, blob);
+	}
 	blob = readShaderBlob("shaders\\TaaDepthStore.pso");
 	if (blob != NULL)
 	{
@@ -2041,6 +2137,12 @@ void R3DTaa::shutdown(void)
 	s_skinScratch    = NULL;
 	s_skinScratchCap = 0;
 	if (s_velMeshPS != NULL) { s_velMeshPS->Release(); s_velMeshPS = NULL; }
+	// Ronin @bugfix 27/10/2026 DX9: the moving decals' marks, and the textures they hold.
+	if (s_decalMarkVS != NULL) { s_decalMarkVS->Release(); s_decalMarkVS = NULL; }
+	if (s_decalMarkPS != NULL) { s_decalMarkPS->Release(); s_decalMarkPS = NULL; }
+	for (Int d = 0; d < s_decalMarkCount; ++d)
+		REF_PTR_RELEASE(s_decalMarks[d].texture);
+	s_decalMarkCount = 0;
 	// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask and the GPU timer.
 	if (s_moverPS != NULL) { s_moverPS->Release(); s_moverPS = NULL; }
 	REF_PTR_RELEASE(s_moverTex);
@@ -2833,7 +2935,11 @@ void R3DTaa::postRender(void)
 		}
 		s_vanishCount = (found <= TAA_MAX_VANISH) ? found : 0;
 	}
-	if (s_velocityOn && (s_meshDrawCount > 0 || cursorBibLive() || s_waterVertCount > 0 || s_waterMaskDrawn || s_vanishCount > 0) && s_velMeshVS != NULL && s_velMeshPS != NULL &&
+	// Ronin @bugfix 27/10/2026 DX9: a decal's mark is reason enough too - with nothing moving (the fog) the pass never ran.
+	Bool anyDecalMark = FALSE;
+	for (Int d = 0; d < s_decalMarkCount && !anyDecalMark; ++d)
+		anyDecalMark = decalMarkDrawn(s_decalMarks[d]);
+	if (s_velocityOn && (s_meshDrawCount > 0 || cursorBibLive() || s_waterVertCount > 0 || s_waterMaskDrawn || s_vanishCount > 0 || anyDecalMark) && s_velMeshVS != NULL && s_velMeshPS != NULL &&
 		depthTex != NULL && s_curViewProjValid && s_prevViewProjValid && ensureVelocity((UnsignedInt)fbW, (UnsignedInt)fbH))
 	{
 		IDirect3DSurface9 *vSurf  = s_velTex->Get_D3D_Surface_Level();
@@ -2900,6 +3006,94 @@ void R3DTaa::postRender(void)
 					dev->SetVertexShaderConstantF(4, (const float *)&bpT, 4);
 					dev->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, 4, 2, bibIdx, D3DFMT_INDEX16,
 												s_bibCorners, sizeof(Vector3));
+				}
+
+				// Ronin @bugfix 27/10/2026 DX9: the decals, in the velocity target with their own motion, only where their texture shows and the
+				// ground under them is what is seen (TaaDecalMark_vs/_ps). A ring keeps its history as it moves; the shadow mask leaves it alone.
+				for (Int d = 0; d < s_decalMarkCount; )
+				{
+					if ((s_moverFrame - s_decalMarks[d].seenFrame) > 3)
+					{
+						REF_PTR_RELEASE(s_decalMarks[d].texture);	// long unseen: its decal is gone
+						s_decalMarks[d] = s_decalMarks[--s_decalMarkCount];
+						s_decalMarks[s_decalMarkCount].texture = NULL;
+						continue;
+					}
+					++d;
+				}
+				Bool decalMarked = FALSE;
+				for (Int d = 0; d < s_decalMarkCount && s_decalMarkVS != NULL && s_decalMarkPS != NULL; ++d)
+				{
+					const TaaDecalMark &dm = s_decalMarks[d];
+					if (!decalMarkDrawn(dm) || dm.texture == NULL || dm.texture->Peek_D3D_Texture() == NULL)
+						continue;
+					enum { G = TAA_DECAL_GRID, GV = (TAA_DECAL_GRID + 1) * (TAA_DECAL_GRID + 1) };
+					static UnsignedShort gridIdx[G * G * 6];
+					static Bool gridIdxReady = FALSE;
+					if (!gridIdxReady)
+					{
+						Int k = 0;
+						for (Int gy = 0; gy < G; ++gy)
+							for (Int gx = 0; gx < G; ++gx)
+							{
+								const UnsignedShort a = (UnsignedShort)(gy * (G + 1) + gx);
+								const UnsignedShort b = (UnsignedShort)(a + G + 1);
+								gridIdx[k++] = a; gridIdx[k++] = (UnsignedShort)(a + 1); gridIdx[k++] = (UnsignedShort)(b + 1);
+								gridIdx[k++] = a; gridIdx[k++] = (UnsignedShort)(b + 1); gridIdx[k++] = b;
+							}
+						gridIdxReady = TRUE;
+					}
+					struct MarkVertex { float x, y, z, u, v, px, py, pz; };
+					static MarkVertex grid[GV];
+					for (Int gy = 0; gy <= G; ++gy)
+					{
+						const Real t = (Real)gy / (Real)G;
+						for (Int gx = 0; gx <= G; ++gx)
+						{
+							// Corners: 0 top-left, 1 top-right, 2 bottom-right, 3 bottom-left - queueDecal's order, UV 0..1 across.
+							const Real s = (Real)gx / (Real)G;
+							const Vector3 p = (dm.corner[0] + (dm.corner[1] - dm.corner[0]) * s) * (1.0f - t) +
+											  (dm.corner[3] + (dm.corner[2] - dm.corner[3]) * s) * t;
+							const Vector3 q = (dm.prevCorner[0] + (dm.prevCorner[1] - dm.prevCorner[0]) * s) * (1.0f - t) +
+											  (dm.prevCorner[3] + (dm.prevCorner[2] - dm.prevCorner[3]) * s) * t;
+							MarkVertex &mv = grid[gy * (G + 1) + gx];
+							// A unit up off the ground the grid lies on: the shader's depth test has room for the ground between points.
+							mv.x = p.X;  mv.y = p.Y;  mv.z = ((TheTerrainLogic != NULL) ? TheTerrainLogic->getGroundHeight(p.X, p.Y) : 0.0f) + 1.0f;
+							mv.px = q.X; mv.py = q.Y; mv.pz = ((TheTerrainLogic != NULL) ? TheTerrainLogic->getGroundHeight(q.X, q.Y) : 0.0f) + 1.0f;
+							mv.u = s;
+							mv.v = t;
+						}
+					}
+					if (!decalMarked)
+					{
+						decalMarked = TRUE;
+						DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_TEX2 | D3DFVF_TEXCOORDSIZE2(0) | D3DFVF_TEXCOORDSIZE3(1), "R3DTaa::decalMark");
+						dev->SetVertexShader(s_decalMarkVS);	// AFTER the layout bind - BindLayoutFVF clears the VS
+						dev->SetPixelShader(s_decalMarkPS);
+						D3DXMATRIX dcT, dpT;
+						D3DXMatrixTranspose(&dcT, &s_curViewProjClean);
+						D3DXMatrixTranspose(&dpT, &s_prevViewProj);
+						dev->SetVertexShaderConstantF(0, (const float *)&dcT, 4);
+						dev->SetVertexShaderConstantF(4, (const float *)&dpT, 4);
+						dev->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+						dev->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+						dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+						dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+						dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+					}
+					// 1 = a mover (moved in the last 3 frames); 0.15 = present, still. Both keep the shadow mask off (it takes alpha < 0.1).
+					const float decalC12[4] = { decalMarkMoving(dm) ? 1.0f : 0.15f, 0.0f, 0.0f, dm.additive ? 1.0f : 0.0f };
+					dev->SetPixelShaderConstantF(12, decalC12, 1);
+					dev->SetTexture(0, dm.texture->Peek_D3D_Texture());
+					dev->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, GV, G * G * 2, gridIdx, D3DFMT_INDEX16, grid, sizeof(MarkVertex));
+				}
+				if (decalMarked)
+				{
+					// Back to the velocity pass's own layout and shaders, for the water and the meshes after.
+					dev->SetTexture(0, NULL);
+					DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ, "R3DTaa::velMesh");
+					dev->SetVertexShader(s_velMeshVS);
+					dev->SetPixelShader(s_velMeshPS);
 				}
 
 				// Ronin @bugfix 29/09/2026 DX9: the water - reactive translucent (one-sided: it writes no depth), zero velocity. Before

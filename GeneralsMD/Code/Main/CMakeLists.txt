@@ -166,6 +166,13 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/TaaVelMesh.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/TaaVelMesh.pso"
+        # Ronin @build 27/10/2026 TAA - the moving decals' marks (ability rings on the cursor).
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TaaDecalMark.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TaaDecalMark.vso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TaaDecalMark.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TaaDecalMark.pso"
         # Ronin @build 26/09/2026 TAA — skinned-mesh velocity (infantry), §14 stage 2.
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/TaaVelSkin.vso"

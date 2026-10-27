@@ -35,6 +35,7 @@ class MeshClass;
 class Matrix3D;
 class Matrix4x4;
 class Vector3;
+class TextureClass;
 
 class R3DTaa
 {
@@ -191,6 +192,10 @@ public:
 	// Ronin @bugfix 26/09/2026 DX9: W3DTerrainVisual::addFactionBibDrawable hands over the build-placement bib's 4 world
 	// corners; TAA flags that quad reactive for a few frames so the bib leaves no trail.
 	static void  noteCursorBib(const Vector3 *corners);
+	// Ronin @bugfix 26/10/2026 DX9: W3DProjectedShadowManager::queueDecal hands over every alpha / additive decal it draws (the
+	// ability rings on the cursor, a unit's decal): centre, 4 corner offsets, texture, and whether it rides a unit.
+	static void  noteMovingDecal(const void *key, const Vector3 &centre, const Vector3 *corners, TextureClass *texture, Bool additive,
+								 Bool attached);
 	// Ronin @bugfix 29/09/2026 DX9: the map's water polygons are flagged reactive in the velocity pass - animated every frame,
 	// drawn by a custom render object neither the mesh pass nor the auto-reactive copy sees. `taa water 0|1`.
 	static void  setWaterMask(Bool on);
