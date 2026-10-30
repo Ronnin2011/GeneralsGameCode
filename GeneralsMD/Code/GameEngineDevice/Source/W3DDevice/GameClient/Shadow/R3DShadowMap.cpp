@@ -1100,7 +1100,9 @@ static void bakeCasterMesh(MeshClass *mesh)
 
 	const int vcount = model->Get_Vertex_Count();
 	const int pcount = model->Get_Polygon_Count();
-	if (vcount <= 0 || pcount <= 0 || vcount > CASTER_CHUNK_VERTS)
+	// Ronin @bugfix 30/10/2026 DX9: the index count too - a 24k-triangle mesh wrapped the chunk's 16-bit index count and
+	// overran its buffer (heap corruption). A mesh that big keeps its own draw in the depth pass.
+	if (vcount <= 0 || pcount <= 0 || vcount > CASTER_CHUNK_VERTS || pcount * 3 > CASTER_CHUNK_IDX)
 		return;
 
 	if (casterSilhouetteNeedsAlpha(model))
