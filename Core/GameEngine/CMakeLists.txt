@@ -130,6 +130,7 @@ set(GAMEENGINE_SRC
     Include/Common/ThingTemplate.h
 #    Include/Common/TunnelTracker.h
     Include/Common/UnicodeString.h
+    Include/Common/UnicodeUtf8.h    # Ronin @feature 30/10/2026 DX9: UTF-8 <-> UnicodeString, for the RmlUi screens
 #    Include/Common/UnitTimings.h
 #    Include/Common/Upgrade.h
     #Include/Common/urllaunch.h # unused
@@ -699,6 +700,7 @@ set(GAMEENGINE_SRC
     Source/Common/System/StreamingArchiveFile.cpp
     Source/Common/System/SubsystemInterface.cpp
     Source/Common/System/UnicodeString.cpp
+    Source/Common/System/UnicodeUtf8.cpp    # Ronin @feature 30/10/2026 DX9: UTF-8 <-> UnicodeString, for the RmlUi screens
 #    Source/Common/System/Upgrade.cpp
     Source/Common/System/Xfer.cpp
     Source/Common/System/XferCRC.cpp

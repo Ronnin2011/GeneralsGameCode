@@ -17,13 +17,14 @@
 */
 
 // Ronin @feature 28/10/2026 DX9: the game's own elements for RmlUi documents. Ported from tintinhamans' GeneralsGameCode fork
-// (arctic/go/feat/rmlui); his <mappreview> and <scrolllog> come when a screen needs them.
+// (arctic/go/feat/rmlui); his <scrolllog> comes when a screen needs it.
 #pragma once
 
 #include <RmlUi/Core/CallbackTexture.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Geometry.h>
 
+class MapMetaData;
 class VideoBuffer;
 struct IDirect3DTexture9;
 
@@ -57,6 +58,27 @@ private:
 
 	bool m_dirty = false;		// rebuilt on update, after the parser has added any children
 	Rml::String m_shownName;	// a data binding sets the name again every update; rebuild only when it changes
+};
+
+// Ronin @feature 30/10/2026 DX9: tintinhamans' <mappreview> (arctic/go/feat/rmlui), as he wrote it: the map's preview
+// art, its supply and tech sites, fitted to the map's own shape.
+class RmlMapPreviewElement : public Rml::Element
+{
+public:
+	explicit RmlMapPreviewElement(const Rml::String &tag);
+	virtual ~RmlMapPreviewElement() override;
+
+protected:
+	virtual void OnAttributeChange(const Rml::ElementAttributes &changed_attributes) override;
+	virtual void OnUpdate() override;
+
+private:
+	void refresh();
+	void fitToAspect(float aspect);
+	void refreshSites(const MapMetaData *md);
+
+	// Rebuilt on update, after the parser has added any children (e.g. a <select> copying an option).
+	bool m_dirty = false;
 };
 
 // Ronin @feature 29/10/2026 DX9: <video source="Name" fit="fill|contain|cover"/>: a movie the game decodes into a VideoBuffer

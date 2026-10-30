@@ -1,0 +1,434 @@
+/*
+**	Command & Conquer Generals Zero Hour(tm)
+**	Copyright 2025 Electronic Arts Inc.
+**
+**	This program is free software: you can redistribute it and/or modify
+**	it under the terms of the GNU General Public License as published by
+**	the Free Software Foundation, either version 3 of the License, or
+**	(at your option) any later version.
+**
+**	This program is distributed in the hope that it will be useful,
+**	but WITHOUT ANY WARRANTY; without even the implied warranty of
+**	MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+**	GNU General Public License for more details.
+**
+**	You should have received a copy of the GNU General Public License
+**	along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+// Ronin @feature 30/10/2026 DX9: tintinhamans' (GeneralsGameCode, arctic/go/feat/rmlui), ported as he wrote it.
+// FILE: SkirmishSetupActions.cpp //////////////////////////////////////////////
+
+#include "PreRTS.h"
+
+#include "GameClient/GUI/GUICallbacks/Menus/SkirmishSetupActions.h"
+
+#include "Common/GameEngine.h"
+#include "Common/Money.h"
+#include "Common/MultiplayerSettings.h"
+#include "Common/RandomValue.h"
+#include "Common/Registry.h"
+#include "Common/SkirmishBattleHonors.h"
+#include "Common/QuotedPrintable.h"
+#include "Common/SkirmishPreferences.h"
+#include "GameClient/MapUtil.h"
+#include "GameClient/ShellHooks.h"
+#include "GameLogic/GameLogic.h"
+
+Int SkirmishSetupActions::getNextSelectablePlayer( GameInfo *game, Int start )
+{
+	if( !game || !game->amIHost() )
+		return -1;
+
+	for( Int j = start; j < MAX_SLOTS; ++j )
+	{
+		GameSlot *slot = game->getSlot( j );
+		if( slot && slot->getStartPos() == -1 && ( j == game->getLocalSlotNum() || slot->isAI() ) )
+			return j;
+	}
+	return -1;
+}
+
+void SkirmishSetupActions::selectPlayerState( GameInfo *game, Int slotIndex, SlotState state, const UnicodeString &name )
+{
+	if( !game )
+		return;
+
+	GameSlot *slot = game->getSlot( slotIndex );
+	// The local player's own slot has no occupant choice (handlePlayerSelection() skips slot 0).
+	// Slot 0 is the skirmish host, so it is also guarded by index: getLocalSlotNum() is -1 once
+	// slot 0 stops being the local human, which would let a stray event keep it Open.
+	if( !slot || slotIndex == 0 || slotIndex == game->getLocalSlotNum() || slot->getState() == state )
+		return;
+	if( state < SLOT_OPEN || state > SLOT_BRUTAL_AI )
+		return;
+
+	slot->setState( state, name );
+}
+
+Bool SkirmishSetupActions::selectColor( GameInfo *game, Int slotIndex, Int color )
+{
+	if( !game )
+		return FALSE;
+
+	GameSlot *slot = game->getSlot( slotIndex );
+	if( !slot )
+		return FALSE;
+
+	if( color == slot->getColor() )
+		return FALSE;
+
+	if( color < -1 || color >= TheMultiplayerSettings->getNumColors() )
+		return FALSE;
+
+	if( color != -1 )
+	{
+		for( Int i = 0; i < MAX_SLOTS; ++i )
+		{
+			GameSlot *checkSlot = game->getSlot( i );
+			if( checkSlot && color == checkSlot->getColor() && slot != checkSlot )
+				return FALSE;
+		}
+	}
+
+	slot->setColor( color );
+	return TRUE;
+}
+
+Bool SkirmishSetupActions::selectPlayerTemplate( GameInfo *game, Int slotIndex, Int playerTemplate )
+{
+	if( !game )
+		return FALSE;
+
+	GameSlot *slot = game->getSlot( slotIndex );
+	if( !slot )
+		return FALSE;
+
+	if( playerTemplate == slot->getPlayerTemplate() )
+		return FALSE;
+
+	slot->setPlayerTemplate( playerTemplate );
+	return TRUE;
+}
+
+Bool SkirmishSetupActions::selectTeam( GameInfo *game, Int slotIndex, Int team )
+{
+	if( !game )
+		return FALSE;
+
+	GameSlot *slot = game->getSlot( slotIndex );
+	if( !slot )
+		return FALSE;
+
+	if( team == slot->getTeamNumber() )
+		return FALSE;
+
+	slot->setTeamNumber( team );
+	return TRUE;
+}
+
+Bool SkirmishSetupActions::selectStartPosition( GameInfo *game, Int slotIndex, Int position )
+{
+	if( !game )
+		return FALSE;
+
+	GameSlot *slot = game->getSlot( slotIndex );
+	if( !slot )
+		return FALSE;
+
+	if( position == slot->getStartPos() )
+		return FALSE;
+
+	if( position < 0 )
+	{
+		slot->setStartPos( position );
+		return TRUE;
+	}
+
+	for( Int i = 0; i < MAX_SLOTS; ++i )
+	{
+		if( i != slotIndex && game->getSlot( i )->getStartPos() == position )
+			return FALSE;
+	}
+
+	slot->setStartPos( position );
+	return TRUE;
+}
+
+void SkirmishSetupActions::handleStartPositionMarkerClick( GameInfo *game, Int position )
+{
+	if( !game )
+		return;
+
+	Int playerIdxInPos = -1;
+	for( Int j = 0; j < MAX_SLOTS; ++j )
+	{
+		GameSlot *slot = game->getSlot( j );
+		if( slot && slot->getStartPos() == position )
+		{
+			playerIdxInPos = j;
+			break;
+		}
+	}
+
+	if( playerIdxInPos >= 0 )
+	{
+		GameSlot *slot = game->getSlot( playerIdxInPos );
+		if( playerIdxInPos == game->getLocalSlotNum() || ( game->amIHost() && slot && slot->isAI() ) )
+		{
+			// it's one of my type. Try to change it.
+			Int nextPlayer = getNextSelectablePlayer( game, playerIdxInPos + 1 );
+			selectStartPosition( game, playerIdxInPos, -1 );
+			if( nextPlayer >= 0 )
+				selectStartPosition( game, nextPlayer, position );
+		}
+	}
+	else
+	{
+		// nobody in the slot - put us in
+		Int nextPlayer = getNextSelectablePlayer( game, 0 );
+		if( nextPlayer < 0 )
+			nextPlayer = game->getLocalSlotNum();
+		selectStartPosition( game, nextPlayer, position );
+	}
+}
+
+void SkirmishSetupActions::handleStartPositionMarkerRightClick( GameInfo *game, Int position )
+{
+	if( !game )
+		return;
+
+	Int playerIdxInPos = -1;
+	for( Int j = 0; j < MAX_SLOTS; ++j )
+	{
+		GameSlot *slot = game->getSlot( j );
+		if( slot && slot->getStartPos() == position )
+		{
+			playerIdxInPos = j;
+			break;
+		}
+	}
+
+	if( playerIdxInPos >= 0 )
+	{
+		GameSlot *slot = game->getSlot( playerIdxInPos );
+		if( playerIdxInPos == game->getLocalSlotNum() || ( game->amIHost() && slot && slot->isAI() ) )
+		{
+			// it's one of my type. Remove it.
+			selectStartPosition( game, playerIdxInPos, -1 );
+		}
+	}
+}
+
+void SkirmishSetupActions::setStartingCash( GameInfo *game, const Money &startingCash )
+{
+	if( game )
+		game->setStartingCash( startingCash );
+}
+
+void SkirmishSetupActions::setSuperweaponRestriction( GameInfo *game, Bool restricted )
+{
+	if( game )
+		game->setSuperweaponRestriction( restricted ? 1 : 0 );
+}
+
+SkirmishSetupActions::StartValidationResult SkirmishSetupActions::validateStart( GameInfo *game )
+{
+	if( !game )
+		return STARTVALIDATION_MAP_NOT_FOUND;
+
+	Int playerCount = game->getNumPlayers();
+	AsciiString lowerMap = game->getMap();
+	lowerMap.toLower();
+	std::map<AsciiString, MapMetaData>::iterator it = TheMapCache->find( lowerMap );
+	if( it == TheMapCache->end() )
+		return STARTVALIDATION_MAP_NOT_FOUND;
+
+	if( playerCount > it->second.m_numPlayers )
+		return STARTVALIDATION_TOO_MANY_PLAYERS;
+
+	return STARTVALIDATION_READY;
+}
+
+void SkirmishSetupActions::startGame( GameInfo *game, Int maxFPS )
+{
+	if( !game )
+		return;
+
+	if( TheGameLogic->isInGame() )
+		TheGameLogic->clearGameData( FALSE );
+
+	TheWritableGlobalData->m_mapName = game->getMap();
+	game->startGame( 0 );
+
+	Bool isSkirmish = TRUE;
+	const MapMetaData *md = TheMapCache->findMap( game->getMap() );
+	if( md )
+		isSkirmish = md->m_isMultiplayer; // we can now select solo campaign maps in Skirmish.
+
+	if( isSkirmish )
+	{
+		InitRandom( game->getSeed() );
+
+		GameMessage *msg = TheMessageStream->appendMessage( GameMessage::MSG_NEW_GAME );
+		msg->appendIntegerArgument( GAME_SKIRMISH );
+		msg->appendIntegerArgument( DIFFICULTY_NORMAL );	// not really used; just specified so we can add the game speed last
+		msg->appendIntegerArgument( 0 );									// not really used; just specified so we can add the game speed last
+		msg->appendIntegerArgument( maxFPS );							// FPS limit
+	}
+	else
+	{
+		InitRandom( 0 );
+
+		GameMessage *msg = TheMessageStream->appendMessage( GameMessage::MSG_NEW_GAME );
+		msg->appendIntegerArgument( GAME_SINGLE_PLAYER );
+		msg->appendIntegerArgument( DIFFICULTY_NORMAL );	// not really used; just specified so we can add the game speed last
+		msg->appendIntegerArgument( 0 );									// not really used; just specified so we can add the game speed last
+		msg->appendIntegerArgument( maxFPS );							// FPS limit
+	}
+}
+
+void SkirmishSetupActions::resetBattleHonors()
+{
+	SkirmishBattleHonors stats;
+	stats.clear();
+	stats.write();
+}
+
+SlotState SkirmishSetupActions::defaultSlot1AIDifficulty()
+{
+	SkirmishBattleHonors honors;
+	if( honors.getWins() > 10 )
+		return SLOT_BRUTAL_AI;
+	if( honors.getWins() > 5 )
+		return SLOT_MED_AI;
+	return SLOT_EASY_AI;
+}
+
+void SkirmishSetupActions::applyPreorderFlag( GameInfo *game, Int slotIndex )
+{
+	if( !game )
+		return;
+
+	UnsignedInt isPreorder = 0;
+	GetUnsignedIntFromRegistry( "", "Preorder", isPreorder );
+	if( isPreorder != 0 )
+		game->markPlayerAsPreorder( slotIndex );
+}
+
+void SkirmishSetupActions::restoreLocalSlot( GameInfo *game, const GameSlot &localSlot )
+{
+	if( !game )
+		return;
+
+	UnsignedInt localIP = game->getLocalIP();
+	GameSlot *hostSlot = game->getSlot( 0 );
+	if( !hostSlot->isHuman() )
+	{
+		GameSlot restored = localSlot;
+		restored.setIP( localIP );
+		game->setSlot( 0, restored );
+	}
+	else
+	{
+		hostSlot->setName( localSlot.getName() );
+		hostSlot->setIP( localIP );
+	}
+}
+
+// See header. Mirrors SkirmishGameOptionsMenuInit()'s non-gadget lines exactly.
+void SkirmishSetupActions::enterSkirmishSetup()
+{
+	if( !TheSkirmishGameInfo )
+	{
+		TheSkirmishGameInfo = NEW SkirmishGameInfo;
+		SignalUIInteraction( SHELL_SCRIPT_HOOK_SKIRMISH_OPENED );
+	}
+	else if( TheSkirmishGameInfo->isInGame() )
+	{
+		TheSkirmishGameInfo->endGame();
+	}
+	else
+	{
+		SignalUIInteraction( SHELL_SCRIPT_HOOK_SKIRMISH_OPENED );
+	}
+
+	TheSkirmishGameInfo->init();
+	TheSkirmishGameInfo->clearSlotList();
+	TheSkirmishGameInfo->reset();
+	TheSkirmishGameInfo->setLocalIP( TheSkirmishGameInfo->getSlot( 0 )->getIP() );
+	TheSkirmishGameInfo->enterGame();
+
+	SkirmishPreferences prefs;
+
+	GameSlot localSlot;
+	localSlot.setName( prefs.getUserName() );
+	localSlot.setState( SLOT_PLAYER, prefs.getUserName() );
+	localSlot.setColor( prefs.getPreferredColor() );
+	localSlot.setPlayerTemplate( prefs.getPreferredFaction() );
+	TheSkirmishGameInfo->setSlot( 0, localSlot );
+
+	GameSlot aiSlot;
+	aiSlot.setState( defaultSlot1AIDifficulty() );
+	TheSkirmishGameInfo->setSlot( 1, aiSlot );
+
+	ParseAsciiStringToGameInfo( TheSkirmishGameInfo, prefs.getSlotList() );
+	restoreLocalSlot( TheSkirmishGameInfo, localSlot );
+	for( Int i = 1; i < MAX_SLOTS; ++i )
+	{
+		GameSlot *slot = TheSkirmishGameInfo->getSlot( i );
+		if( slot && slot->getState() == SLOT_PLAYER )
+			slot->setState( SLOT_OPEN );
+	}
+	TheSkirmishGameInfo->setSeed( GetTickCount() );
+
+	applyPreorderFlag( TheSkirmishGameInfo, 0 );
+
+	TheSkirmishGameInfo->setStartingCash( prefs.getStartingCash() );
+	TheSkirmishGameInfo->setSuperweaponRestriction( prefs.getSuperweaponRestricted() ? 1 : 0 );
+
+	TheSkirmishGameInfo->setMap( prefs.getPreferredMap() );
+	const MapMetaData *md = TheMapCache ? TheMapCache->findMap( TheSkirmishGameInfo->getMap() ) : nullptr;
+	if( md )
+	{
+		TheSkirmishGameInfo->setMapCRC( md->m_CRC );
+		TheSkirmishGameInfo->setMapSize( md->m_filesize );
+	}
+	else
+	{
+		TheSkirmishGameInfo->setMapCRC( 0 );
+		TheSkirmishGameInfo->setMapSize( 0 );
+	}
+}
+
+void SkirmishSetupActions::persistPreferences( Int gameSpeedFPS )
+{
+	// Ronin @feature 30/10/2026 DX9: SkirmishPreferences::write() as it stands, but the speed from here: ours reads the .wnd's
+	// slider, which is not loaded under this screen.
+	SkirmishPreferences prefs;
+	if (TheSkirmishGameInfo == nullptr)
+		return;
+	AsciiString tmp;
+	tmp.format("%d", TheSkirmishGameInfo->getConstSlot(0)->getColor());
+	prefs["Color"] = tmp;
+	tmp.format("%d", TheSkirmishGameInfo->getConstSlot(0)->getPlayerTemplate());
+	prefs["PlayerTemplate"] = tmp;
+	prefs["Map"] = TheSkirmishGameInfo->getMap();
+	prefs["UserName"] = UnicodeStringToQuotedPrintable(TheSkirmishGameInfo->getConstSlot(0)->getName());
+	prefs.setStartingCash( TheSkirmishGameInfo->getStartingCash() );
+	prefs.setSuperweaponRestricted( TheSkirmishGameInfo->getSuperweaponRestriction() != 0 );
+	prefs.setSlotList();
+	prefs.setInt("FPS", gameSpeedFPS);
+	prefs.UserPreferences::write();
+}
+
+void SkirmishSetupActions::leaveSkirmishSetup( Int gameSpeedFPS )
+{
+	if( !TheSkirmishGameInfo )
+		return;
+
+	persistPreferences( gameSpeedFPS );
+
+	delete TheSkirmishGameInfo;
+	TheSkirmishGameInfo = nullptr;
+}

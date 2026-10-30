@@ -94,6 +94,7 @@ private:
 	Rml::ElementInstancer *m_radarInstancer;		// <radar>
 	Rml::ElementInstancer *m_videoInstancer;		// <video>
 	Rml::ElementInstancer *m_mappedImageInstancer;	// <mappedimage>
+	Rml::ElementInstancer *m_mapPreviewInstancer;	// <mappreview> (Ronin @feature 30/10/2026 DX9: his skirmish screens')
 	unsigned short m_pendingHighSurrogate;			// the first half of a WM_CHAR surrogate pair
 	bool m_modernUI;								// Options.ini ModernUI, read once at start
 	int m_width;

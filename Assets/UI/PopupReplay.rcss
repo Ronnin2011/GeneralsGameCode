@@ -1,0 +1,140 @@
+/*
+	PopupReplay.rcss -- the score screen's Save Replay popup (PopupReplay.wnd) on the shared modal card
+	(body.modal, common.rcss): the title behind the accent tick, the saved
+	replays as list rows (the .wnd's colours: a replay from another version grey, a missing map red), the
+	name entry, and Back / Save Replay along the bottom. "Replay Saved" covers the list for a second.
+*/
+
+/* The shared modal card (common.rcss), sized for the list. */
+.pr-card
+{
+	width: 1100dp;
+	height: 780dp;
+}
+
+.pr-body
+{
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	padding-bottom: 22dp;
+	line-height: 1.2;
+}
+
+/* ---- Saved replays ---------------------------------------------------------------------------- */
+.head-name, .pr-name
+{
+	flex: 1 1 0%;
+	min-width: 0;
+}
+
+.head-map, .pr-map
+{
+	flex: 0 0 320dp;
+	margin-left: 14dp;
+}
+
+.head-when, .pr-when
+{
+	flex: 0 0 230dp;
+	margin-left: 14dp;
+	text-align: right;
+}
+
+.pr-list-wrap
+{
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 0%;
+	min-height: 0;
+	position: relative;
+}
+
+.pr-list
+{
+	flex: 1 1 0%;
+	min-height: 0;
+	overflow-y: auto;
+}
+
+.pr-row
+{
+	height: 48dp;
+}
+
+.pr-name
+{
+	font-weight: bold;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pr-map, .pr-when
+{
+	font-size: 17dp;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pr-when
+{
+	color: #A9B1CF;
+}
+
+/* ---- Name --------------------------------------------------------------------------------------- */
+.pr-field
+{
+	flex: 0 0 auto;
+	margin-top: 20dp;
+}
+
+/* ---- Saved ------------------------------------------------------------------------------------- */
+.pr-saved
+{
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	z-index: 10;
+	background-color: #070A1AFA;
+}
+
+.pr-saved-mark
+{
+	display: block;
+	box-sizing: border-box;
+	width: 96dp;
+	height: 96dp;
+	line-height: 90dp;
+	text-align: center;
+	font-size: 56dp;
+	font-weight: bold;
+	color: #36D8B2;
+	border: 3dp #36D8B2;
+}
+
+.pr-saved-text
+{
+	display: block;
+	margin-top: 22dp;
+	font-size: 34dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+	text-transform: uppercase;
+	color: #FFFFFF;
+}
+
+/* ---- 5:4 and 4:3 ------------------------------------------------------------------------------ */
+@media (max-aspect-ratio: 3/2)
+{
+	.pr-card { width: 960dp; }
+	.head-map, .pr-map { flex-basis: 260dp; }
+	.head-when, .pr-when { flex-basis: 200dp; }
+}

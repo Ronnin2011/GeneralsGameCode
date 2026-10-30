@@ -127,6 +127,18 @@ public:
 	Bool isFinished() { return m_isFinished;	}
 	void addBlank();
 	void addText( AsciiString text );
+	// Ronin @feature 30/10/2026 DX9: the lines on screen now, for the RmlUi credits screen, which draws them itself.
+	struct DisplayedLine
+	{
+		Int m_style;
+		UnicodeString m_text;
+		UnicodeString m_secondText;
+		Bool m_useSecond;
+		Int m_y;		///< the line's y, in TheDisplay pixels
+		Color m_color;
+	};
+	Int getDisplayedLineCount() const { return (Int)m_displayedCreditLineList.size(); }
+	void getDisplayedLine( Int index, DisplayedLine *outLine ) const;
 private:
 
 	UnicodeString getUnicodeString(AsciiString str);

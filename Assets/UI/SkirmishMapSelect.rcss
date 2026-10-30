@@ -1,0 +1,252 @@
+/*
+	SkirmishMapSelect.rcss -- the map browser of all three map selects (skirmish, LAN, online) under
+	the .hq-header strip: a toolbar (search, order, player count, official/unofficial, "n of N
+	maps"), a thumbnail grid across the frame, and the selected map's details sliding in from the
+	right.
+
+	Search, order and the player-count filter are the screen's C++ model (entry.visible,
+	visible_count, map_count_text; RmlMapSearch.h); an empty grid says why. maps is a grow-only
+	list, so every tile also checks entry.used.
+*/
+
+/* ---- Toolbar ------------------------------------------------------------------------------------ */
+.screen-header.ms-toolbar
+{
+	padding: 0;
+	margin-bottom: 20dp;
+}
+
+/* Search: the ring of a magnifier (the UI fonts have no icons) in front of a borderless input, one box. */
+.ms-filter-plate.ms-search
+{
+	flex: 0 1 400dp;
+	min-width: 200dp;
+}
+
+.ms-search-box
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 1 1 0%;
+	min-width: 0;
+	height: 42dp;
+	padding-left: 12dp;
+	background-color: #05070FD2;
+	border: 1dp #8080FF3C;
+}
+
+.ms-search-box:hover
+{
+	border-color: #8080FF8C;
+}
+
+.ms-search-mark
+{
+	display: block;
+	flex: 0 0 auto;
+	width: 14dp;
+	height: 14dp;
+	margin-right: 4dp;
+	border: 2dp #8080FF;
+	border-radius: 8dp;
+}
+
+.ms-search-box:hover .ms-search-mark
+{
+	border-color: #D1FD04;
+}
+
+.screen .ms-search-input, .screen .ms-search-input:hover, .screen .ms-search-input:focus
+{
+	flex: 1 1 0%;
+	min-width: 0;
+	height: 40dp;
+	line-height: 38dp;
+	padding: 0 10dp;
+	background-color: transparent;
+	border-width: 0;
+}
+
+.ms-filter-plate
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	margin-right: 16dp;
+	padding: 6dp 8dp 6dp 18dp;
+	background-color: #070A1AD9;
+}
+
+.ms-count
+{
+	flex: 0 0 auto;
+	margin-left: auto;
+	padding: 0 4dp 0 16dp;
+	font-size: 16dp;
+	font-weight: bold;
+	letter-spacing: 1.5dp;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: #B8C0DE;
+	font-effect: glow(1dp 8dp 0dp 1dp #000000F0);
+}
+
+.filter-label
+{
+	margin-right: 14dp;
+}
+
+/* ---- Grid ---------------------------------------------------------------------------------------- */
+.browser
+{
+	display: flex;
+	flex-direction: column;
+	padding: 20dp 6dp 0 20dp;
+}
+
+.grid
+{
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-content: flex-start;
+	flex: 1 1 0%;
+	min-height: 0;
+	overflow-y: auto;
+}
+
+.map-tile
+{
+	display: block;
+	box-sizing: border-box;
+	width: 214dp;
+	margin: 0 14dp 18dp 0;
+	padding: 4dp;
+	border: 1dp transparent;
+	background-color: #05070FB4;
+	transition: background-color border-color 0.12s cubic-out;
+}
+
+.map-tile:hover
+{
+	background-color: #2F37A860;
+	border-color: #8080FF8C;
+}
+
+.map-tile.selected, .map-tile.selected:hover
+{
+	background-color: #2F37A8B4;
+	border-color: #D1FD04;
+}
+
+.thumb
+{
+	display: block;
+	position: relative;
+	width: 202dp;
+	height: 202dp;
+	background-color: #05070F;
+}
+
+.thumb-image
+{
+	display: block;
+	width: 202dp;
+	height: 202dp;
+	opacity: 0.85;
+	transition: opacity 0.12s cubic-out;
+}
+
+.map-tile:hover .thumb-image, .map-tile.selected .thumb-image
+{
+	opacity: 1;
+}
+
+.thumb-star
+{
+	position: absolute;
+	top: 8dp;
+	left: 8dp;
+	width: 25dp;
+	height: 25dp;
+}
+
+.thumb-players
+{
+	display: block;
+	position: absolute;
+	top: 8dp;
+	right: 8dp;
+	min-width: 28dp;
+	height: 28dp;
+	line-height: 28dp;
+	padding: 0 4dp;
+	text-align: center;
+	font-size: 18dp;
+	font-weight: bold;
+	color: #FFFFFF;
+	background-color: #05070FC8;
+}
+
+.map-tile-name
+{
+	display: block;
+	height: 40dp;
+	line-height: 40dp;
+	padding: 0 4dp;
+	font-size: 19dp;
+	color: #D7DCF0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.map-tile.selected .map-tile-name
+{
+	color: #FFFFFF;
+	font-weight: bold;
+}
+
+.grid .empty-state
+{
+	width: 100%;
+}
+
+/* ---- Selected map details, sliding in from the right --------------------------------------------- */
+.detail-col
+{
+	width: 460dp;
+	animation: 0.22s cubic-out detail-in;
+}
+
+@keyframes detail-in
+{
+	from { opacity: 0; margin-right: -60dp; }
+	to { opacity: 1; margin-right: 0dp; }
+}
+
+.detail
+{
+	border-top: 2dp #6170FA;
+}
+
+.detail .map-frame
+{
+	width: 420dp;
+	height: 420dp;
+}
+
+@media (max-aspect-ratio: 3/2)
+{
+	.filter-label { display: none; }
+	.ms-filter-plate { padding-left: 8dp; margin-right: 10dp; }
+	.screen .ms-toolbar .seg button.seg-item { padding: 0 9dp; font-size: 16dp; }
+	.ms-filter-plate.ms-search { flex-basis: 240dp; min-width: 150dp; }
+	.detail-col { width: 360dp; }
+	.detail .map-frame { width: 320dp; height: 320dp; }
+	.map-tile { width: 162dp; margin-right: 12dp; }
+	.thumb, .thumb-image { width: 150dp; height: 150dp; }
+	.map-tile-name { height: 34dp; line-height: 34dp; font-size: 17dp; }
+}

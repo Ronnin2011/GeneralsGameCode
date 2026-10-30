@@ -184,6 +184,19 @@ set(GAMEENGINE_SRC
 #    Include/GameClient/GraphDraw.h
     Include/GameClient/GUICallbacks.h
     Include/GameClient/GUI/GUICallbacks/Menus/OptionsValues.h    # Ronin @feature 29/10/2026 DX9: the RmlUi Options' logic
+    # Ronin @feature 30/10/2026 DX9: tintinhamans' single-player RmlUi screens and their logic (docs/UI_Work.md)
+    Include/GameClient/GUI/GUICallbacks/Menus/ChallengeMenuActions.h
+    Include/GameClient/GUI/GUICallbacks/Menus/ChallengeMenuData.h
+    Include/GameClient/GUI/GUICallbacks/Menus/GameSetupData.h
+    Include/GameClient/GUI/GUICallbacks/Menus/MapSelectActions.h
+    Include/GameClient/GUI/GUICallbacks/Menus/PopupReplayActions.h
+    Include/GameClient/GUI/GUICallbacks/Menus/PopupReplayData.h
+    Include/GameClient/GUI/GUICallbacks/Menus/ReplayListData.h
+    Include/GameClient/GUI/GUICallbacks/Menus/ReplayMenuActions.h
+    Include/GameClient/GUI/GUICallbacks/Menus/ReplayMenuData.h
+    Include/GameClient/GUI/GUICallbacks/Menus/SaveLoadActions.h
+    Include/GameClient/GUI/GUICallbacks/Menus/SaveLoadData.h
+    Include/GameClient/GUI/GUICallbacks/Menus/SkirmishSetupActions.h
 #    Include/GameClient/GUICommandTranslator.h
 #    Include/GameClient/HeaderTemplate.h
 #    Include/GameClient/HintSpy.h
@@ -752,6 +765,19 @@ set(GAMEENGINE_SRC
     Source/GameClient/GUI/GUICallbacks/Menus/NetworkDirectConnect.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/OptionsMenu.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/OptionsValues.cpp    # Ronin @feature 29/10/2026 DX9: the RmlUi Options' logic
+    # Ronin @feature 30/10/2026 DX9: tintinhamans' single-player RmlUi screens and their logic (docs/UI_Work.md)
+    Source/GameClient/GUI/GUICallbacks/Menus/ChallengeMenuActions.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/ChallengeMenuData.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/GameSetupData.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/MapSelectActions.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/PopupReplayActions.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/PopupReplayData.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/ReplayListData.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/ReplayMenuActions.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/ReplayMenuData.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/SaveLoadActions.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/SaveLoadData.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/SkirmishSetupActions.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/PopupCommunicator.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/PopupHostGame.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/PopupJoinGame.cpp

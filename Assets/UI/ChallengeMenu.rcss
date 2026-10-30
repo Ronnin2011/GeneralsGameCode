@@ -1,0 +1,327 @@
+/*
+	ChallengeMenu.rcss -- the Generals Challenge general select (ChallengeMenu.wnd), on the screen
+	template of common.rcss over the command room of ChallengeMap.rcss.
+
+	Everything below the header sits on the map, in percent of its theatre (RmlChallengeMenuScreen
+	places it): each general's medallion at their home region, as the .wnd's medallion buttons were,
+	the roster of portraits along two staggered rows ordered west to east, and a wire from pin down to
+	the general's bus line, along it and down into the tile, lit for the general under the cursor
+	(blue) and the chosen one (accent). The dossier of the one under the cursor, else the chosen one,
+	is typed out on the right; Play once one is chosen.
+
+	The accent reaches the pins, wires and tile bars through .chip-label.accent (common.rcss), which
+	the view sets on the chosen general's pieces; the rules here only reshape them.
+*/
+
+.ch-frame, .ch-stage
+{
+	animation: 0.4s linear-in-out 1 ch-fade-in; /* ChallengeMenuFade */
+}
+
+@keyframes ch-fade-in
+{
+	from { opacity: 0; }
+	to { opacity: 1; }
+}
+
+/* The stage covers the map; only its pins, tiles and dossier take the mouse, so the action bar under
+   it stays clickable. */
+.ch-stage
+{
+	pointer-events: none;
+}
+
+.ch-stage button, .ch-dossier
+{
+	pointer-events: auto;
+}
+
+/* ---- Wires ------------------------------------------------------------------------------------ */
+.ch-wires
+{
+	display: block;
+}
+
+.ch-wire
+{
+	background-color: #8080FF;
+}
+
+.ch-stage .ch-wire
+{
+	display: block;
+	position: absolute;
+	padding: 0;
+	font-size: 0;
+}
+
+.ch-stage .ch-drop, .ch-stage .ch-feed
+{
+	width: 2dp;
+	margin-left: -1dp;
+}
+
+.ch-stage .ch-rail
+{
+	height: 2dp;
+	margin-top: -1dp;
+}
+
+/* ---- Pins: the general's medallion on a ring; the ring takes the accent once chosen ---------- */
+.ch-stage button.ch-pin
+{
+	display: block;
+	position: absolute;
+	width: 30dp;
+	height: 30dp;
+	margin-left: -15dp;
+	margin-top: -15dp;
+	padding: 0;
+	line-height: 30dp;
+	background-color: transparent;
+	border-width: 0;
+}
+
+.ch-stage button.ch-pin.lit
+{
+	z-index: 2;
+}
+
+.ch-pin-ring
+{
+	background-color: #05070FC8;
+}
+
+.ch-pin .ch-pin-ring
+{
+	display: block;
+	position: absolute;
+	box-sizing: border-box;
+	left: -6dp;
+	top: -6dp;
+	width: 42dp;
+	height: 42dp;
+	padding: 0;
+	font-size: 0;
+	border-radius: 21dp;
+	border: 2dp #8080FF50;
+}
+
+.ch-pin.lit .ch-pin-ring
+{
+	border-color: #FFFFFF;
+}
+
+.ch-pin-medal
+{
+	display: block;
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 30dp;
+	height: 30dp;
+}
+
+/* ---- Roster tiles ------------------------------------------------------------------------------ */
+.ch-stage button.ch-tile
+{
+	display: block;
+	position: absolute;
+	box-sizing: border-box;
+	width: 150dp;
+	height: auto;
+	margin-left: -75dp;
+	padding: 0;
+	line-height: 20dp;
+	text-align: center;
+	letter-spacing: 0;
+	background-color: #070A1AE6;
+	border: 1dp #8080FF28;
+}
+
+.ch-stage button.ch-tile.lit
+{
+	background-color: #141A3EF0;
+	border-color: #8080FF;
+}
+
+.ch-stage button.ch-tile.selected
+{
+	background-color: #2F37A8C8;
+	border-color: #8080FF;
+}
+
+/* Where the wire comes in: dim, blue under the cursor, the accent once chosen. */
+.ch-tile-bar
+{
+	background-color: #8080FF46;
+}
+
+.ch-tile .ch-tile-bar
+{
+	display: block;
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 4dp;
+	padding: 0;
+	font-size: 0;
+}
+
+.ch-tile.lit .ch-tile-bar
+{
+	background-color: #8080FF;
+}
+
+.ch-portrait
+{
+	display: block;
+	width: 148dp;
+	height: 148dp;
+	background-color: #05070F;
+}
+
+.ch-portrait mappedimage
+{
+	display: block;
+	width: 148dp;
+	height: 148dp;
+	opacity: 0.8;
+	transition: opacity 0.12s cubic-out;
+}
+
+.ch-tile.lit .ch-portrait mappedimage, .ch-tile.selected .ch-portrait mappedimage
+{
+	opacity: 1;
+}
+
+.ch-name
+{
+	display: block;
+	padding: 7dp 6dp;
+	font-size: 17dp;
+	line-height: 20dp;
+	font-weight: bold;
+	text-transform: none;
+	color: #D7DCF0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.ch-tile.lit .ch-name, .ch-tile.selected .ch-name
+{
+	color: #FFFFFF;
+}
+
+/* ---- Dossier ---------------------------------------------------------------------------------- */
+.ch-stage .surface.ch-dossier
+{
+	position: absolute;
+	box-sizing: border-box;
+	left: 62%;
+	top: 44%;
+	width: 30%;
+	padding: 18dp 22dp 22dp 22dp;
+	border-top: 2dp #8080FF46;
+}
+
+.ch-dossier-head
+{
+	display: flex;
+	flex-direction: row;
+	margin-top: 12dp;
+}
+
+.ch-bio-portrait
+{
+	display: block;
+	flex: 0 0 auto;
+	width: 150dp;
+	height: 150dp;
+	margin-right: 18dp;
+	background-color: #05070F;
+	border: 1dp #8080FF46;
+}
+
+.ch-bio-portrait mappedimage
+{
+	display: block;
+	width: 150dp;
+	height: 150dp;
+}
+
+.ch-bio-empty
+{
+	display: block;
+	line-height: 150dp;
+	text-align: center;
+	font-size: 80dp;
+	font-weight: bold;
+	color: #8080FF28;
+}
+
+.ch-dossier-id
+{
+	display: block;
+	flex: 1 1 0%;
+	min-width: 0;
+}
+
+.ch-bio-hint
+{
+	display: block;
+	font-size: 18dp;
+	line-height: 25dp;
+	color: #A9B1CF;
+}
+
+.ch-bio-name
+{
+	display: block;
+	min-height: 36dp;
+	margin-bottom: 12dp;
+	font-size: 30dp;
+	line-height: 36dp;
+	font-weight: bold;
+	color: #FFFFFF;
+}
+
+.ch-dossier .fact-value
+{
+	min-height: 26dp;
+	line-height: 26dp;
+}
+
+.ch-dossier-facts
+{
+	display: block;
+	margin-top: 16dp;
+	padding-top: 14dp;
+	border-top: 1dp #8080FF28;
+}
+
+.ch-dossier-facts .fact + .fact
+{
+	margin-top: 12dp;
+}
+
+/* ---- 5:4 and 4:3: the theatre is a little narrower, so are the tiles --------------------------- */
+@media (max-aspect-ratio: 1383/1000)
+{
+	.ch-stage button.ch-tile { width: 136dp; margin-left: -68dp; }
+	.ch-portrait, .ch-portrait mappedimage { width: 134dp; height: 134dp; }
+	.ch-name { font-size: 15dp; }
+	.ch-bio-portrait, .ch-bio-portrait mappedimage { width: 128dp; height: 128dp; }
+	.ch-bio-empty { line-height: 128dp; }
+	.ch-bio-name { font-size: 26dp; line-height: 32dp; min-height: 32dp; }
+}
+
+/* Right to left: the stage is a map, its pins and tiles placed where the world map puts them, so
+   the general's dossier keeps its place beside them rather than mirroring onto them. */
+body[dir=rtl] .ch-stage .surface.ch-dossier
+{
+	left: 62%;
+	right: auto;
+}

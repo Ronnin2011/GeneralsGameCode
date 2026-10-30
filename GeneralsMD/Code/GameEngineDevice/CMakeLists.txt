@@ -83,6 +83,16 @@ set(GAMEENGINEDEVICE_SRC
     Include/W3DDevice/GameClient/RmlUi/RmlMainMenuScreen.h
     Include/W3DDevice/GameClient/RmlUi/RmlQuitMenuScreen.h
     Include/W3DDevice/GameClient/RmlUi/RmlOptionsScreen.h
+    # Ronin @feature 30/10/2026 DX9: tintinhamans' single-player RmlUi screens and their logic (docs/UI_Work.md)
+    Include/W3DDevice/GameClient/RmlUi/RmlChallengeMenuScreen.h
+    Include/W3DDevice/GameClient/RmlUi/RmlCreditsScreen.h
+    Include/W3DDevice/GameClient/RmlUi/RmlGrowOnlyList.h
+    Include/W3DDevice/GameClient/RmlUi/RmlMapSearch.h
+    Include/W3DDevice/GameClient/RmlUi/RmlPopupReplayScreen.h
+    Include/W3DDevice/GameClient/RmlUi/RmlReplayMenuScreen.h
+    Include/W3DDevice/GameClient/RmlUi/RmlSaveLoadScreen.h
+    Include/W3DDevice/GameClient/RmlUi/RmlSkirmishMapSelectScreen.h
+    Include/W3DDevice/GameClient/RmlUi/RmlSkirmishSetupScreen.h
 #    Include/W3DDevice/GameClient/W3DSmudge.h
 #    Include/W3DDevice/GameClient/W3DSnow.h
     Include/W3DDevice/GameClient/W3DStatusCircle.h
@@ -202,6 +212,14 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/RmlUi/RmlMainMenuScreen.cpp
     Source/W3DDevice/GameClient/RmlUi/RmlQuitMenuScreen.cpp
     Source/W3DDevice/GameClient/RmlUi/RmlOptionsScreen.cpp
+    # Ronin @feature 30/10/2026 DX9: tintinhamans' single-player RmlUi screens and their logic (docs/UI_Work.md)
+    Source/W3DDevice/GameClient/RmlUi/RmlChallengeMenuScreen.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlCreditsScreen.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlPopupReplayScreen.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlReplayMenuScreen.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlSaveLoadScreen.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlSkirmishMapSelectScreen.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlSkirmishSetupScreen.cpp
 #    Source/W3DDevice/GameClient/W3DSmudge.cpp
 #    Source/W3DDevice/GameClient/W3DSnow.cpp
     Source/W3DDevice/GameClient/W3DStatusCircle.cpp

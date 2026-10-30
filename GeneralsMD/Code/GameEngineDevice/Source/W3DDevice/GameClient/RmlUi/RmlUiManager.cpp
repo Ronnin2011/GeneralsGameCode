@@ -36,10 +36,17 @@
 #include "GameLogic/GameLogic.h"
 #include "GameClient/Mouse.h"
 #include "W3DDevice/GameClient/R3DDebugPanel.h"
+#include "W3DDevice/GameClient/RmlUi/RmlChallengeMenuScreen.h"
 #include "W3DDevice/GameClient/RmlUi/RmlControlBarScreen.h"
+#include "W3DDevice/GameClient/RmlUi/RmlCreditsScreen.h"
 #include "W3DDevice/GameClient/RmlUi/RmlMainMenuScreen.h"
 #include "W3DDevice/GameClient/RmlUi/RmlOptionsScreen.h"
+#include "W3DDevice/GameClient/RmlUi/RmlPopupReplayScreen.h"
 #include "W3DDevice/GameClient/RmlUi/RmlQuitMenuScreen.h"
+#include "W3DDevice/GameClient/RmlUi/RmlReplayMenuScreen.h"
+#include "W3DDevice/GameClient/RmlUi/RmlSaveLoadScreen.h"
+#include "W3DDevice/GameClient/RmlUi/RmlSkirmishMapSelectScreen.h"
+#include "W3DDevice/GameClient/RmlUi/RmlSkirmishSetupScreen.h"
 #include "W3DDevice/GameClient/RmlUi/RmlRulerDecorator.h"
 #include "W3DDevice/GameClient/RmlUi/RmlTransitionSounds.h"
 #include "W3DDevice/GameClient/RmlUi/RmlUiElements.h"
@@ -199,6 +206,7 @@ void RmlUiManager::destroyInstance()
 RmlUiManager::RmlUiManager()
 	: m_context(nullptr), m_testDocument(nullptr), m_gameTextInstancer(nullptr), m_radarInstancer(nullptr), m_videoInstancer(nullptr),
 	m_mappedImageInstancer(nullptr),
+	m_mapPreviewInstancer(nullptr),
 	m_pendingHighSurrogate(0), m_modernUI(false), m_width(0), m_height(0), m_initialized(false), m_debuggerInitialized(false),
 	m_debuggerVisible(false)
 {
@@ -234,6 +242,8 @@ void RmlUiManager::init(int width, int height)
 	Rml::Factory::RegisterElementInstancer("video", m_videoInstancer);
 	m_mappedImageInstancer = new Rml::ElementInstancerGeneric<RmlMappedImageElement>();	// Ronin @feature 29/10/2026 DX9: the shell screens'
 	Rml::Factory::RegisterElementInstancer("mappedimage", m_mappedImageInstancer);
+	m_mapPreviewInstancer = new Rml::ElementInstancerGeneric<RmlMapPreviewElement>();	// Ronin @feature 30/10/2026 DX9: his skirmish screens'
+	Rml::Factory::RegisterElementInstancer("mappreview", m_mapPreviewInstancer);
 	RmlRulerTicksInstancer::registerWithRml();	// ruler-ticks: the shell screens' frame
 
 	// ModernUI = yes|no (1|0 too): the modern control bar. No while it is being built; the 2003 bar stays behind no.
@@ -299,6 +309,55 @@ void RmlUiManager::registerScreens()
 	game.isVisible = [] { return RmlQuitMenuScreen::instance().isVisible(); };
 	game.back = [] { RmlQuitMenuScreen::instance().back(); };
 	RmlUiScreenRegistry::registerScreen("Menus/QuitMenu.wnd", game);
+
+	// Ronin @feature 30/10/2026 DX9: his single-player screens, as his manager registers them (each opens and closes itself).
+	RmlUiScreenHooks skirmish;
+	skirmish.open = &OpenRmlSkirmishSetupScreen;
+	skirmish.close = &CloseRmlSkirmishSetupScreen;
+	skirmish.isVisible = [] { return RmlSkirmishSetupScreen::instance().isVisible(); };
+	skirmish.back = [] { RmlSkirmishSetupScreen::instance().onBack(); };
+	RmlUiScreenRegistry::registerScreen("Menus/SkirmishGameOptionsMenu.wnd", skirmish);
+
+	RmlUiScreenHooks mapSelect;
+	mapSelect.open = &OpenRmlSkirmishMapSelectScreen;
+	mapSelect.close = &CloseRmlSkirmishMapSelectScreen;
+	mapSelect.isVisible = [] { return RmlSkirmishMapSelectScreen::instance().isVisible(); };
+	mapSelect.back = [] { RmlSkirmishMapSelectScreen::instance().back(); };
+	RmlUiScreenRegistry::registerScreen("Menus/SkirmishMapSelectMenu.wnd", mapSelect);
+
+	RmlUiScreenHooks credits;
+	credits.open = &OpenRmlCreditsScreen;
+	credits.close = &CloseRmlCreditsScreen;
+	credits.isVisible = [] { return RmlCreditsScreen::instance().isVisible(); };
+	credits.back = [] { RmlCreditsScreen::instance().onBack(); };
+	RmlUiScreenRegistry::registerScreen("Menus/CreditsMenu.wnd", credits);
+
+	RmlUiScreenHooks saveLoad;
+	saveLoad.open = &OpenRmlSaveLoadScreen;
+	saveLoad.close = &CloseRmlSaveLoadScreen;
+	saveLoad.isVisible = [] { return RmlSaveLoadScreen::instance().isVisible(); };
+	saveLoad.back = [] { RmlSaveLoadScreen::instance().back(); };
+	RmlUiScreenRegistry::registerScreen("Menus/SaveLoad.wnd", saveLoad);
+
+	RmlUiScreenHooks popupSaveLoad = saveLoad;
+	popupSaveLoad.open = &OpenRmlPopupSaveLoadScreen;
+	popupSaveLoad.close = &CloseRmlPopupSaveLoadScreen;
+	RmlUiScreenRegistry::registerScreen("Menus/PopupSaveLoad.wnd", popupSaveLoad);
+
+	RmlUiScreenHooks replays;
+	replays.open = &OpenRmlReplayMenuScreen;
+	replays.close = &CloseRmlReplayMenuScreen;
+	replays.isVisible = [] { return RmlReplayMenuScreen::instance().isVisible(); };
+	replays.back = [] { RmlReplayMenuScreen::instance().back(); };
+	RmlUiScreenRegistry::registerScreen("Menus/ReplayMenu.wnd", replays);
+
+	RmlUiScreenHooks challenge;
+	challenge.open = &OpenRmlChallengeMenuScreen;
+	challenge.close = &CloseRmlChallengeMenuScreen;
+	challenge.isVisible = [] { return RmlChallengeMenuScreen::instance().isVisible(); };
+	challenge.back = [] { RmlChallengeMenuScreen::instance().back(); };
+	RmlUiScreenRegistry::registerScreen("Menus/ChallengeMenu.wnd", challenge);
+	// PopupReplay.wnd waits for the RmlUi score screen it opens over: the layer draws under the 2003 windows.
 }
 
 Rml::ElementDocument *RmlUiManager::loadScreen(const char *path)
@@ -350,6 +409,13 @@ void RmlUiManager::shutdown()
 	RmlUiScreenRegistry::unregisterAll();
 	for (int i = 0; i < kShellScreenCount; ++i)
 		shellScreen(i)->release();
+	RmlSkirmishSetupScreen::instance().releaseRml();	// Ronin @feature 30/10/2026 DX9: his screens, likewise
+	RmlSkirmishMapSelectScreen::instance().releaseRml();
+	RmlCreditsScreen::instance().releaseRml();
+	RmlSaveLoadScreen::instance().releaseRml();
+	RmlReplayMenuScreen::instance().releaseRml();
+	RmlChallengeMenuScreen::instance().releaseRml();
+	RmlPopupReplayScreen::instance().releaseRml();
 	if (m_context)
 	{
 		Rml::RemoveContext(m_context->GetName());
@@ -368,6 +434,8 @@ void RmlUiManager::shutdown()
 	m_videoInstancer = nullptr;
 	delete m_mappedImageInstancer;
 	m_mappedImageInstancer = nullptr;
+	delete m_mapPreviewInstancer;
+	m_mapPreviewInstancer = nullptr;
 	m_renderInterface.releaseAll();
 	m_initialized = false;
 }
@@ -380,6 +448,12 @@ void RmlUiManager::update()
 		return;
 	RmlControlBarScreen::tick();	// shows or hides the bar with ControlBarParent, so it runs while nothing is up
 	TransitionSounds::update();		// Ronin @feature 30/10/2026 DX9: the menus' transition sounds that are due, menu shown or not
+	RmlReplayMenuScreen::tick();	// Ronin @feature 30/10/2026 DX9: his screens' own ticks and updates, as his manager runs them
+	RmlChallengeMenuScreen::tick();
+	if (RmlCreditsScreen::instance().isVisible())
+		RmlCreditsScreen::instance().update();
+	if (RmlSkirmishSetupScreen::instance().isVisible())
+		RmlSkirmishSetupScreen::instance().update();
 	if (!hasVisibleDocument() && !m_debuggerVisible)
 		return;
 	for (int i = 0; i < kShellScreenCount; ++i)

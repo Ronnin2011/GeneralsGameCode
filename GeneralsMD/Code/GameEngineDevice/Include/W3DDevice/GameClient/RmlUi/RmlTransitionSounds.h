@@ -72,6 +72,15 @@ namespace TransitionSounds
 	}
 
 	// Once a frame: fires the sounds that are due.
+	// Ronin @feature 30/10/2026 DX9: drops a group's sounds still waiting, as his stop() does.
+	inline void stop(const char *group)
+	{
+		std::vector<PendingSound> &list = pending();
+		for (size_t i = list.size(); i > 0; --i)
+			if (list[i - 1].m_group.compareNoCase(group) == 0)
+				list.erase(list.begin() + (i - 1));
+	}
+
 	inline void update()
 	{
 		std::vector<PendingSound> &list = pending();

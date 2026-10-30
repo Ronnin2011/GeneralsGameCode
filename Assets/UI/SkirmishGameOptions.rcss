@@ -1,0 +1,44 @@
+/*
+	SkirmishGameOptions.rcss -- skirmish setup: the game setup flow of common.rcss (01 map, 02
+	players, 03 rules, readiness by Start) under the .hq-header strip; the battle honors sit under
+	the rules.
+
+	Every select keeps an option matching its bound value (the hidden SLOT_PLAYER occupant on human
+	slots, Random in the army list): RmlUi fires a phantom "change" for an unmatched value.
+	x_style/y_style of a start marker are pre-formatted CSS lengths ("12.500%"); start_markers is
+	always MAX_SLOTS entries, unused ones hidden with data-if="marker.used".
+*/
+
+/* ---- Battle honors under the rules ---------------------------------------------------------------- */
+.honor-grid
+{
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	margin-top: 10dp;
+}
+
+.honor-grid .stat
+{
+	flex: 0 0 50%;
+	box-sizing: border-box;
+	padding: 8dp 8dp 8dp 0;
+}
+
+.honor-grid .stat-value
+{
+	font-size: 28dp;
+	line-height: 32dp;
+}
+
+.honor-grid .stat-label
+{
+	font-size: 13dp;
+	letter-spacing: 0.5dp;
+}
+
+@media (max-aspect-ratio: 3/2)
+{
+	.honor-grid .stat-value { font-size: 24dp; line-height: 28dp; }
+	.honor-grid .stat-label { font-size: 12dp; letter-spacing: 0; }
+}

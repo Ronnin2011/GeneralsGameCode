@@ -1195,6 +1195,17 @@ static void addGameToAvailableList( AsciiString filename, void *userData )
 }
 
 // ------------------------------------------------------------------------------------------------
+// Ronin @feature 30/10/2026 DX9: the save folder rescanned into the available games list, for the RmlUi save / load screen,
+// as populateSaveGameListbox() does before it fills its listbox.
+// ------------------------------------------------------------------------------------------------
+AvailableGameInfo *GameState::refreshAvailableGames()
+{
+	clearAvailableGames();
+	iterateSaveFiles( addGameToAvailableList, &m_availableGames );
+	return m_availableGames;
+}
+
+// ------------------------------------------------------------------------------------------------
 /** Populate the listbox passed in with a list of the save games present on the hard drive */
 // ------------------------------------------------------------------------------------------------
 void GameState::populateSaveGameListbox( GameWindow *listbox, SaveLoadLayoutType layoutType )
