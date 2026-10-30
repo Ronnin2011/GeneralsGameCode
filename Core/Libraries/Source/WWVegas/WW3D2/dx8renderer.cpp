@@ -472,6 +472,13 @@ TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture)
 		const int dotIndex = static_cast<int>(dotPtr - baseName.str());
 		baseName.Erase(dotIndex, baseName.Get_Length() - dotIndex);
 	}
+	// Ronin @feature 30/10/2026 DX9: a team-coloured copy is named "#<colour>#<name>" (W3DAssetManager); its normal map is the
+	// original's.
+	if (baseName.Get_Length() > 0 && baseName.str()[0] == '#') {
+		const char* second = strchr(baseName.str() + 1, '#');
+		if (second != nullptr)
+			baseName.Erase(0, static_cast<int>(second - baseName.str()) + 1);
+	}
 
 	TextureClass* normalTex = nullptr;
 	WW3DAssetManager* am = WW3DAssetManager::Get_Instance();
