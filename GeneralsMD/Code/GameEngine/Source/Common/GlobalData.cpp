@@ -1280,6 +1280,8 @@ void GlobalData::parseGameDataDefinition( INI* ini )
 	TheWritableGlobalData->m_taaMipBias = optionPref.getTAAMipBias(TheGlobalData->m_taaMipBias);
 	// Ronin @feature 04/10/2026 DX9: water reflections. Same rule.
 	TheWritableGlobalData->m_waterReflections = optionPref.getWaterReflections(TheGlobalData->m_waterReflections);
+	// Ronin @feature 30/10/2026 DX9: the new water or the stock one (Options.ini DX9Water). Same rule.
+	TheWritableGlobalData->m_waterType = optionPref.getWaterType(TheGlobalData->m_waterType);
 	// Ronin @feature 23/10/2026 DX9: the new lighting and its lamps. Same rule.
 	TheWritableGlobalData->m_lighting = optionPref.getLighting(TheGlobalData->m_lighting);
 	TheWritableGlobalData->m_lightEffects = optionPref.getLightEffects(TheGlobalData->m_lightEffects);

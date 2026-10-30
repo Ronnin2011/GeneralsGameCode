@@ -129,6 +129,7 @@ public:
 	Int init(Real waterLevel, Real dx, Real dy, SceneClass *parentScene, WaterType type);
 	void reset();  ///< reset any resources we need to
 	void load();	///< load/setup any map dependent features
+	void setWaterType(WaterType type);	///< Ronin @feature 30/10/2026 DX9: the new water on / off while running (Options)
 	void update(); ///< update phase of the water
 	void enableWaterGrid(Bool state);	///< used to active custom water for special maps. (i.e DAM).
 	void updateMapOverrides();	///< used to update any map specific map overrides for water appearance.
@@ -282,6 +283,8 @@ protected:
 	Int m_heightTexW, m_heightTexH, m_heightBorder;
 	Bool m_heightVTF;			///< Ronin @feature 29/09/2026 DX9: phase 2 - R32F the vertex shader can read (else L8, no swell)
 	void buildHeightTexture();	///< from TheTerrainRenderObject's height map; releases any previous one
+	void loadSeaTextures();		///< Ronin @feature 30/10/2026 DX9: WaterType 2's caust frames and normal maps; skips what is loaded
+	void loadSeaMap();			///< Ronin @feature 30/10/2026 DX9: WaterType 2's per-map part: the map's water level and depths
 	// Ronin @feature 29/09/2026 DX9: phase 3 - the frame just before the flat water draws, for its refraction.
 	TextureClass *m_refractionTexture;	///< POOL_DEFAULT render target, the size of the current target
 	UnsignedInt m_refractionW, m_refractionH;

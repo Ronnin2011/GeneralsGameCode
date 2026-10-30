@@ -1130,45 +1130,135 @@ void WaterRenderObjClass::load()
 	if (m_waterTrackSystem)
 		m_waterTrackSystem->loadTracks();
 
-	// Ronin @feature 28/09/2026 DX9: WaterType 2 - the mirror plane sits at the map's own water height (the largest standing
-	// area, else the largest river; point 0's z as the logic reads it), not GameData's WaterPositionZ.
 	if (m_waterType == WATER_TYPE_2_PVSHADER)
+		loadSeaMap();
+}
+
+// Ronin @feature 30/10/2026 DX9: the new water on / off while running: the device-reset path with the other type, then what
+// init and load() add for type 2. Back to 0: GameData's level, and the depths freed.
+void WaterRenderObjClass::setWaterType(WaterType type)
+{
+	if (type == m_waterType)
+		return;
+	ReleaseResources();
+	m_waterType = type;
+	ReAcquireResources();
+	if (type == WATER_TYPE_2_PVSHADER)
 	{
-		Real bestArea[2]  = { 0.0f, 0.0f };	// [0] standing water, [1] rivers
-		Real bestLevel[2] = { 0.0f, 0.0f };
-		for (PolygonTrigger *pTrig = PolygonTrigger::getFirstPolygonTrigger(); pTrig; pTrig = pTrig->getNext())
-		{
-			if (!pTrig->isWaterArea() || pTrig->getNumPoints() < 3)
-				continue;
-			Real area = 0.0f;	// shoelace
-			for (Int k = 0; k < pTrig->getNumPoints(); k++)
-			{
-				const ICoord3D *a = pTrig->getPoint(k);
-				const ICoord3D *b = pTrig->getPoint((k + 1) % pTrig->getNumPoints());
-				area += (Real)a->x * (Real)b->y - (Real)b->x * (Real)a->y;
-			}
-			if (area < 0.0f)
-				area = -area;
-			const Int kind = pTrig->isRiver() ? 1 : 0;
-			if (area > bestArea[kind])
-			{
-				bestArea[kind]  = area;
-				bestLevel[kind] = (Real)pTrig->getPoint(0)->z;
-			}
-		}
-		const Int  pick    = (bestArea[0] > 0.0f) ? 0 : 1;
-		const Bool fromMap = (bestArea[pick] > 0.0f);
-		const Real level   = fromMap ? bestLevel[pick] : TheGlobalData->m_waterPositionZ;
-
-		m_level = level;
-		m_planeDistance = level;
-		generateVertexBuffer(PATCH_SIZE, PATCH_SIZE, sizeof(SEA_PATCH_VERTEX), true);	// the patch vertices carry the height
-		// Ronin @diagnostic 28/09/2026 DX9: [WATER] row - the level used and where it came from.
-		TheWaterStats.seaLevel = level;
-		TheWaterStats.seaLevelFromMap = fromMap;
-
-		buildHeightTexture();	// Ronin @feature 29/09/2026 DX9: phase 1 - depth under the water
+		loadSeaTextures();
+		loadSeaMap();
 	}
+	else
+	{
+		m_level = m_planeDistance = TheGlobalData->m_waterPositionZ;
+		SAFE_RELEASE(m_heightTexture);
+		m_heightTexW = m_heightTexH = m_heightBorder = 0;
+		m_heightVTF = FALSE;
+	}
+}
+
+// Ronin @feature 28/09/2026 DX9: WaterType 2 port. The caust frames ship in the base Generals Textures.big; the causts set
+// (m_pBumpTexture2) was never sampled, so it is not built. Each piece loads once (setWaterType can call this again).
+void WaterRenderObjClass::loadSeaTextures()
+{
+	//geforce3 specific water requires some extra D3D assets
+	m_pDev=DX8Wrapper::_Get_D3D_Device8();
+	//save previous thumbnail mode
+	bool thumbnails_enabled = WW3D::Get_Thumbnail_Enabled();
+	WW3D::Set_Thumbnail_Enabled(false);
+
+	//load bump map textures off disk
+	TextureClass *pBumpSource;	//temporary textures in a format W3D understands
+	Int i;
+	i=NUM_BUMP_FRAMES;
+	while (i--)
+	{
+		if (m_pBumpTexture[i] != nullptr)
+			continue;
+		char bump_name[128];
+
+		sprintf(bump_name,"caust%.2d.tga",i);
+		// Ronin @feature 28/09/2026 DX9: 32-bit, uncompressed, unreduced - initBumpMap reads 4 bytes a pixel or skips.
+		pBumpSource=WW3DAssetManager::Get_Instance()->Get_Texture(bump_name, MIP_LEVELS_ALL, WW3D_FORMAT_A8R8G8B8, false,
+			TextureBaseClass::TEX_REGULAR, false);
+		if (pBumpSource == nullptr)
+			continue;
+		if (!pBumpSource->Is_Initialized())
+			pBumpSource->Init();	// textures load lazily; initBumpMap reads the D3D texture now
+		initBumpMap(m_pBumpTexture+i, pBumpSource);
+		WW3DAssetManager::Get_Instance()->Release_Texture(pBumpSource);
+		REF_PTR_RELEASE(pBumpSource);
+	}
+	//restore previous thumpnail mode
+	WW3D::Set_Thumbnail_Enabled(thumbnails_enabled);
+
+	// Ronin @diagnostic 28/09/2026 DX9: [WATER] row - how many frames initBumpMap actually built.
+	TheWaterStats.bumpFrames = 0;
+	for (i = 0; i < NUM_BUMP_FRAMES; i++)
+		if (m_pBumpTexture[i] != nullptr)
+			TheWaterStats.bumpFrames++;
+
+	// Ronin @feature 28/09/2026 DX9: the WaterSea surface normals (scripts/water/GenWaterNormal.ps1, deployed to
+	// Art/Textures). Uncompressed: DXT would band the normals.
+	if (m_waterNormalTexture == nullptr)
+		m_waterNormalTexture = WW3DAssetManager::Get_Instance()->Get_Texture("WaterNormal.tga", MIP_LEVELS_ALL, WW3D_FORMAT_A8R8G8B8, false);
+	if (m_waterNormalTexture != nullptr && !m_waterNormalTexture->Is_Initialized())
+		m_waterNormalTexture->Init();
+	// Ronin @diagnostic 28/09/2026 DX9: [WATER] row - 2 loaded, 1 missing (WW3D's placeholder), 0 none.
+	TheWaterStats.normalMap = (m_waterNormalTexture == nullptr) ? 0 : (m_waterNormalTexture->Is_Missing_Texture() ? 1 : 2);
+	// Ronin @feature 02/10/2026 DX9: phase 4 - the lake's calm ripples (GenWaterNormal.ps1, its lake recipe). Missing = the
+	// lake takes the sea's map (bindWaterSea).
+	if (m_waterNormalLake == nullptr)
+		m_waterNormalLake = WW3DAssetManager::Get_Instance()->Get_Texture("WaterNormalLake.tga", MIP_LEVELS_ALL, WW3D_FORMAT_A8R8G8B8, false);
+	if (m_waterNormalLake != nullptr && !m_waterNormalLake->Is_Initialized())
+		m_waterNormalLake->Init();
+	TheWaterStats.normalMapLake = (m_waterNormalLake == nullptr) ? 0 : (m_waterNormalLake->Is_Missing_Texture() ? 1 : 2);
+	// Ronin @feature 02/10/2026 DX9: phase 4 - the river's streaks (GenWaterNormal.ps1, its river recipe), in river space.
+	if (m_waterNormalRiver == nullptr)
+		m_waterNormalRiver = WW3DAssetManager::Get_Instance()->Get_Texture("WaterNormalRiver.tga", MIP_LEVELS_ALL, WW3D_FORMAT_A8R8G8B8, false);
+	if (m_waterNormalRiver != nullptr && !m_waterNormalRiver->Is_Initialized())
+		m_waterNormalRiver->Init();
+	TheWaterStats.normalMapRiver = (m_waterNormalRiver == nullptr) ? 0 : (m_waterNormalRiver->Is_Missing_Texture() ? 1 : 2);
+}
+
+// Ronin @feature 28/09/2026 DX9: WaterType 2 - the mirror plane sits at the map's own water height (the largest standing
+// area, else the largest river; point 0's z as the logic reads it), not GameData's WaterPositionZ.
+void WaterRenderObjClass::loadSeaMap()
+{
+	Real bestArea[2]  = { 0.0f, 0.0f };	// [0] standing water, [1] rivers
+	Real bestLevel[2] = { 0.0f, 0.0f };
+	for (PolygonTrigger *pTrig = PolygonTrigger::getFirstPolygonTrigger(); pTrig; pTrig = pTrig->getNext())
+	{
+		if (!pTrig->isWaterArea() || pTrig->getNumPoints() < 3)
+			continue;
+		Real area = 0.0f;	// shoelace
+		for (Int k = 0; k < pTrig->getNumPoints(); k++)
+		{
+			const ICoord3D *a = pTrig->getPoint(k);
+			const ICoord3D *b = pTrig->getPoint((k + 1) % pTrig->getNumPoints());
+			area += (Real)a->x * (Real)b->y - (Real)b->x * (Real)a->y;
+		}
+		if (area < 0.0f)
+			area = -area;
+		const Int kind = pTrig->isRiver() ? 1 : 0;
+		if (area > bestArea[kind])
+		{
+			bestArea[kind]  = area;
+			bestLevel[kind] = (Real)pTrig->getPoint(0)->z;
+		}
+	}
+	const Int  pick    = (bestArea[0] > 0.0f) ? 0 : 1;
+	const Bool fromMap = (bestArea[pick] > 0.0f);
+	const Real level   = fromMap ? bestLevel[pick] : TheGlobalData->m_waterPositionZ;
+
+	m_level = level;
+	m_planeDistance = level;
+	generateVertexBuffer(PATCH_SIZE, PATCH_SIZE, sizeof(SEA_PATCH_VERTEX), true);	// the patch vertices carry the height
+	// Ronin @diagnostic 28/09/2026 DX9: [WATER] row - the level used and where it came from.
+	TheWaterStats.seaLevel = level;
+	TheWaterStats.seaLevelFromMap = fromMap;
+
+	buildHeightTexture();	// Ronin @feature 29/09/2026 DX9: phase 1 - depth under the water
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1238,64 +1328,8 @@ Int WaterRenderObjClass::init(Real waterLevel, Real dx, Real dy, SceneClass *par
 	Set_Force_Visible(TRUE);	//water is always visible since it's a composite object made of multiple planes all over the map.
 
 	ReAcquireResources();
-	// Ronin @feature 28/09/2026 DX9: WaterType 2 port. The caust frames ship in the base Generals Textures.big. Loaded for
-	// type 2 only; the causts set (m_pBumpTexture2) was never sampled, so it is not built.
 	if (type == WATER_TYPE_2_PVSHADER)
-	{
-		//geforce3 specific water requires some extra D3D assets
-		m_pDev=DX8Wrapper::_Get_D3D_Device8();
-		//save previous thumbnail mode
-		bool thumbnails_enabled = WW3D::Get_Thumbnail_Enabled();
-		WW3D::Set_Thumbnail_Enabled(false);
-
-		//load bump map textures off disk
-		TextureClass *pBumpSource;	//temporary textures in a format W3D understands
-		Int i;
-		i=NUM_BUMP_FRAMES;
-		while (i--)
-		{
-			char bump_name[128];
-
-			sprintf(bump_name,"caust%.2d.tga",i);
-			// Ronin @feature 28/09/2026 DX9: 32-bit, uncompressed, unreduced - initBumpMap reads 4 bytes a pixel or skips.
-			pBumpSource=WW3DAssetManager::Get_Instance()->Get_Texture(bump_name, MIP_LEVELS_ALL, WW3D_FORMAT_A8R8G8B8, false,
-				TextureBaseClass::TEX_REGULAR, false);
-			if (pBumpSource == nullptr)
-				continue;
-			if (!pBumpSource->Is_Initialized())
-				pBumpSource->Init();	// textures load lazily; initBumpMap reads the D3D texture now
-			initBumpMap(m_pBumpTexture+i, pBumpSource);
-			WW3DAssetManager::Get_Instance()->Release_Texture(pBumpSource);
-			REF_PTR_RELEASE(pBumpSource);
-		}
-		//restore previous thumpnail mode
-		WW3D::Set_Thumbnail_Enabled(thumbnails_enabled);
-
-		// Ronin @diagnostic 28/09/2026 DX9: [WATER] row - how many frames initBumpMap actually built.
-		TheWaterStats.bumpFrames = 0;
-		for (i = 0; i < NUM_BUMP_FRAMES; i++)
-			if (m_pBumpTexture[i] != nullptr)
-				TheWaterStats.bumpFrames++;
-
-		// Ronin @feature 28/09/2026 DX9: the WaterSea surface normals (scripts/water/GenWaterNormal.ps1, deployed to
-		// Art/Textures). Uncompressed: DXT would band the normals.
-		m_waterNormalTexture = WW3DAssetManager::Get_Instance()->Get_Texture("WaterNormal.tga", MIP_LEVELS_ALL, WW3D_FORMAT_A8R8G8B8, false);
-		if (m_waterNormalTexture != nullptr && !m_waterNormalTexture->Is_Initialized())
-			m_waterNormalTexture->Init();
-		// Ronin @diagnostic 28/09/2026 DX9: [WATER] row - 2 loaded, 1 missing (WW3D's placeholder), 0 none.
-		TheWaterStats.normalMap = (m_waterNormalTexture == nullptr) ? 0 : (m_waterNormalTexture->Is_Missing_Texture() ? 1 : 2);
-		// Ronin @feature 02/10/2026 DX9: phase 4 - the lake's calm ripples (GenWaterNormal.ps1, its lake recipe). Missing = the
-		// lake takes the sea's map (bindWaterSea).
-		m_waterNormalLake = WW3DAssetManager::Get_Instance()->Get_Texture("WaterNormalLake.tga", MIP_LEVELS_ALL, WW3D_FORMAT_A8R8G8B8, false);
-		if (m_waterNormalLake != nullptr && !m_waterNormalLake->Is_Initialized())
-			m_waterNormalLake->Init();
-		TheWaterStats.normalMapLake = (m_waterNormalLake == nullptr) ? 0 : (m_waterNormalLake->Is_Missing_Texture() ? 1 : 2);
-		// Ronin @feature 02/10/2026 DX9: phase 4 - the river's streaks (GenWaterNormal.ps1, its river recipe), in river space.
-		m_waterNormalRiver = WW3DAssetManager::Get_Instance()->Get_Texture("WaterNormalRiver.tga", MIP_LEVELS_ALL, WW3D_FORMAT_A8R8G8B8, false);
-		if (m_waterNormalRiver != nullptr && !m_waterNormalRiver->Is_Initialized())
-			m_waterNormalRiver->Init();
-		TheWaterStats.normalMapRiver = (m_waterNormalRiver == nullptr) ? 0 : (m_waterNormalRiver->Is_Missing_Texture() ? 1 : 2);
-	}
+		loadSeaTextures();
 
 	//Setup material for regular water
 	m_vertexMaterialClass=VertexMaterialClass::Get_Preset(VertexMaterialClass::PRELIT_DIFFUSE);
@@ -1441,6 +1475,10 @@ void WaterRenderObjClass::enableWaterGrid(Bool state)
 // ------------------------------------------------------------------------------------------------
 void WaterRenderObjClass::update()
 {
+	// Ronin @feature 30/10/2026 DX9: the new water keeps Smooth Water Borders on, whichever preset or menu turned them off.
+	if (m_waterType == WATER_TYPE_2_PVSHADER && TheWritableGlobalData != nullptr && !TheGlobalData->m_showSoftWaterEdge)
+		TheWritableGlobalData->m_showSoftWaterEdge = TRUE;
+
 	// TheSuperHackers @tweak The water movement time step is now decoupled from the render update.
 	const Real timeScale = TheFramePacer->getActualLogicTimeScaleOverFpsRatio();
 

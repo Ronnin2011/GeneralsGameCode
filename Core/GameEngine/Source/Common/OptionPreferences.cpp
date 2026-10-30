@@ -805,6 +805,16 @@ Bool OptionPreferences::getWaterReflections(Bool dflt) const
 	return (stricmp(it->second.str(), "yes") == 0 || atoi(it->second.str()) != 0) ? TRUE : FALSE;
 }
 
+// Ronin @feature 30/10/2026 DX9: DX9Water = yes|no (1|0 too): WaterType 2, the new water, or 0, the stock one. Absent returns `dflt`,
+// GameData.ini's type. Options switches it while running (WaterRenderObjClass::setWaterType).
+Int OptionPreferences::getWaterType(Int dflt) const
+{
+	OptionPreferences::const_iterator it = find("DX9Water");
+	if (it == end())
+		return dflt;
+	return (stricmp(it->second.str(), "yes") == 0 || atoi(it->second.str()) != 0) ? 2 : 0;
+}
+
 // Ronin @feature 23/10/2026 DX9: DX9Lighting = yes|no (1|0 too) - all the new lighting, HDR included. Absent returns `dflt`.
 Bool OptionPreferences::getLighting(Bool dflt) const
 {

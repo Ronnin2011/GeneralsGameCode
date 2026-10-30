@@ -133,6 +133,8 @@ public:
 	Real getTAAMipBias(Real dflt) const;
 	// Ronin @feature 04/10/2026 DX9: DX9WaterReflections = yes|no, or `dflt` when absent.
 	Bool getWaterReflections(Bool dflt) const;
+	// Ronin @feature 30/10/2026 DX9: DX9Water = yes|no: the water type, 2 (the new water) or 0 (stock), or `dflt` when absent.
+	Int getWaterType(Int dflt) const;
 	// Ronin @feature 23/10/2026 DX9: DX9Lighting = yes|no (all the new lighting, HDR too) and DX9LightEffects = yes|no (the lamps),
 	// each `dflt` when absent.
 	Bool getLighting(Bool dflt) const;
