@@ -1,0 +1,18 @@
+/* Ronin @feature 28/10/2026 DX9: the shared style sheet of the RmlUi layer (docs/UI_Work.md). RmlUi has no built-in
+   sheet, so block elements are named here. Loaded through RmlUiFileInterface, it gains every INI MappedImage as a sprite. */
+
+body, div, p, h1, h2, h3
+{
+	display: block;
+}
+
+/* Ronin @feature 29/10/2026 DX9: the main menu without the shell map (-noshellmap): the shell's black window is hidden for it. */
+body.backdrop { background-color: #0b0f13; }
+
+body
+{
+	font-family: "Noto Sans";
+	font-weight: normal;
+	font-size: 16dp;
+	color: #e6e9ea;
+}

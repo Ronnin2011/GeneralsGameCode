@@ -55,6 +55,7 @@
 #include "GameClient/WindowXlat.h"
 #include "GameClient/Shell.h"
 #include "GameClient/Display.h"
+#include "GameClient/RmlUiInputHook.h"	// Ronin @feature 28/10/2026 DX9: the RmlUi layer's input
 
 
 // DEFINES ////////////////////////////////////////////////////////////////////
@@ -64,6 +65,7 @@
 // PRIVATE DATA ///////////////////////////////////////////////////////////////
 
 // PUBLIC DATA ////////////////////////////////////////////////////////////////
+RmlUiInputHook *TheRmlUiInputHook = nullptr;	// Ronin @feature 28/10/2026 DX9: the RmlUi layer, while it is up
 
 // PRIVATE PROTOTYPES /////////////////////////////////////////////////////////
 
@@ -171,6 +173,90 @@ GameMessageDisposition WindowTranslator::translateGameMessage(const GameMessage 
 	GameMessageDisposition disp = KEEP_MESSAGE;
 	Bool forceKeepMessage = FALSE;
 	WinInputReturnCode returnCode = WIN_INPUT_NOT_USED;
+
+	// Ronin @feature 28/10/2026 DX9: the RmlUi layer takes the mouse over its own elements, and keys while a text field has
+	// focus, before the window manager. Ported from tintinhamans' fork (arctic/go/feat/rmlui); the hook is null until RmlUi is up.
+	if (TheRmlUiInputHook)
+	{
+		switch (msg->getType())
+		{
+			case GameMessage::MSG_RAW_MOUSE_POSITION:
+			case GameMessage::MSG_RAW_MOUSE_LEFT_BUTTON_DOWN:
+			case GameMessage::MSG_RAW_MOUSE_LEFT_BUTTON_UP:
+			case GameMessage::MSG_RAW_MOUSE_LEFT_DOUBLE_CLICK:
+			case GameMessage::MSG_RAW_MOUSE_LEFT_DRAG:
+			case GameMessage::MSG_RAW_MOUSE_MIDDLE_BUTTON_DOWN:
+			case GameMessage::MSG_RAW_MOUSE_MIDDLE_BUTTON_UP:
+			case GameMessage::MSG_RAW_MOUSE_MIDDLE_DOUBLE_CLICK:
+			case GameMessage::MSG_RAW_MOUSE_MIDDLE_DRAG:
+			case GameMessage::MSG_RAW_MOUSE_RIGHT_BUTTON_DOWN:
+			case GameMessage::MSG_RAW_MOUSE_RIGHT_BUTTON_UP:
+			case GameMessage::MSG_RAW_MOUSE_RIGHT_DOUBLE_CLICK:
+			case GameMessage::MSG_RAW_MOUSE_RIGHT_DRAG:
+			case GameMessage::MSG_RAW_MOUSE_WHEEL:
+			{
+				const GameMessage::Type type = msg->getType();
+				const ICoord2D mousePos = msg->getArgument( 0 )->pixel;
+				// While the world holds the mouse (drag-select, scrolling) the layer leaves it alone, as the window manager below
+				// does; only a left click while scrolling reaches it.
+				const Bool leftClick = type == GameMessage::MSG_RAW_MOUSE_LEFT_BUTTON_DOWN || type == GameMessage::MSG_RAW_MOUSE_LEFT_BUTTON_UP;
+				const Bool worldHasMouse = TheTacticalView && TheTacticalView->isMouseLocked() && !(TheInGameUI && TheInGameUI->isScrolling() && leftClick);
+				const Bool middleOrWheel = type == GameMessage::MSG_RAW_MOUSE_MIDDLE_BUTTON_DOWN || type == GameMessage::MSG_RAW_MOUSE_MIDDLE_BUTTON_UP
+					|| type == GameMessage::MSG_RAW_MOUSE_MIDDLE_DOUBLE_CLICK || type == GameMessage::MSG_RAW_MOUSE_MIDDLE_DRAG || type == GameMessage::MSG_RAW_MOUSE_WHEEL;
+				if( middleOrWheel && TheRmlUiInputHook->leavesMiddleToWorld( mousePos.x, mousePos.y ) )
+					break;
+				if( TheRmlUiInputHook->wantsMouseInput( mousePos.x, mousePos.y ) && (!worldHasMouse || TheRmlUiInputHook->capturesInput()) )
+				{
+					switch( type )
+					{
+						case GameMessage::MSG_RAW_MOUSE_LEFT_BUTTON_DOWN:
+						case GameMessage::MSG_RAW_MOUSE_LEFT_DOUBLE_CLICK:
+							TheRmlUiInputHook->processMouseButton( 0, true );
+							break;
+						case GameMessage::MSG_RAW_MOUSE_LEFT_BUTTON_UP:
+							TheRmlUiInputHook->processMouseButton( 0, false );
+							break;
+						case GameMessage::MSG_RAW_MOUSE_RIGHT_BUTTON_DOWN:
+						case GameMessage::MSG_RAW_MOUSE_RIGHT_DOUBLE_CLICK:
+							TheRmlUiInputHook->processMouseButton( 1, true );
+							break;
+						case GameMessage::MSG_RAW_MOUSE_RIGHT_BUTTON_UP:
+							TheRmlUiInputHook->processMouseButton( 1, false );
+							break;
+						case GameMessage::MSG_RAW_MOUSE_MIDDLE_BUTTON_DOWN:
+						case GameMessage::MSG_RAW_MOUSE_MIDDLE_DOUBLE_CLICK:
+							TheRmlUiInputHook->processMouseButton( 2, true );
+							break;
+						case GameMessage::MSG_RAW_MOUSE_MIDDLE_BUTTON_UP:
+							TheRmlUiInputHook->processMouseButton( 2, false );
+							break;
+						case GameMessage::MSG_RAW_MOUSE_WHEEL:
+							TheRmlUiInputHook->processMouseWheel( msg->getArgument( 1 )->real );
+							break;
+						default:	// the position and the drags
+							TheRmlUiInputHook->processMouseMove( mousePos.x, mousePos.y );
+							break;
+					}
+					return DESTROY_MESSAGE;
+				}
+				break;
+			}
+
+			case GameMessage::MSG_RAW_KEY_DOWN:
+			case GameMessage::MSG_RAW_KEY_UP:
+				if( TheRmlUiInputHook->wantsKeyboardInput() )
+				{
+					const UnsignedByte key = (UnsignedByte)msg->getArgument( 0 )->integer;
+					const UnsignedShort state = (UnsignedShort)msg->getArgument( 1 )->integer;	// 16 bits: KEY_STATE_AUTOREPEAT is 0x100
+					if( TheRmlUiInputHook->processKey( key, state ) )
+						return DESTROY_MESSAGE;
+				}
+				break;
+
+			default:
+				break;
+		}
+	}
 
 	if (TheTacticalView && TheTacticalView->isMouseLocked())
 	{

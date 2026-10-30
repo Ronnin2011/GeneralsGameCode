@@ -143,6 +143,27 @@ Transition *getTransitionForStyle( Int style )
 	return nullptr;
 }
 
+// Ronin @feature 30/10/2026 DX9: the sound each style fires in GameWindowTransitionsStyles.cpp: its frame, and whether it
+// fires reversed too. tintinhamans' (arctic/go/feat/rmlui).
+struct TransitionStyleSound
+{
+	Int m_style;
+	const char *m_sound;
+	Int m_frame;
+	Bool m_whenReversed;
+};
+
+static const TransitionStyleSound s_transitionStyleSounds[] =
+{
+	{ TRANSITION_FLASH, "GUIBoarderFadeIn", 1, FALSE },
+	{ BUTTON_TRANSITION_FLASH, "GUIButtonsFadeIn", 1, FALSE },
+	{ WIN_SCALE_UP_TRANSITION, "GUILogoMouseOver", 1, FALSE },
+	{ MAINMENU_SCALE_UP_TRANSITION, "GUILogoSelect", 1, TRUE },
+	{ MAINMENU_MEDIUM_SCALE_UP_TRANSITION, "GUILogoMouseOver", 1, FALSE },
+	{ SCORE_SCALE_UP_TRANSITION, "GUIScoreScreenPictures", 1, FALSE },
+	{ REVERSE_SOUND_TRANSITION, "GUITransitionFade", 1, TRUE },
+};
+
 TransitionWindow::TransitionWindow()
 {
 	m_currentFrameDelay = m_frameDelay = 0;
@@ -374,6 +395,41 @@ void TransitionGroup::draw ()
 	}
 }
 
+// Ronin @feature 30/10/2026 DX9: see GameWindowTransitionsHandler::getGroupSounds().
+Int TransitionGroup::getSoundCues( Bool reversed, TransitionSoundCues &cues )
+{
+	Int totalFrames = 0;
+	for (TransitionWindowList::iterator it = m_transitionWindowList.begin(); it != m_transitionWindowList.end(); ++it)
+	{
+		TransitionWindow *tWin = *it;
+		Transition *transition = getTransitionForStyle( tWin->m_style );
+		if (!transition)
+			continue;
+		const Int windowFrames = tWin->m_frameDelay + transition->getFrameLength();
+		delete transition;
+		if (windowFrames > totalFrames)
+			totalFrames = windowFrames;
+	}
+
+	for (TransitionWindowList::iterator it = m_transitionWindowList.begin(); it != m_transitionWindowList.end(); ++it)
+	{
+		TransitionWindow *tWin = *it;
+		for (size_t i = 0; i < ARRAY_SIZE(s_transitionStyleSounds); ++i)
+		{
+			const TransitionStyleSound &sound = s_transitionStyleSounds[i];
+			if (sound.m_style != tWin->m_style || (reversed && !sound.m_whenReversed))
+				continue;
+
+			const Int frame = tWin->m_frameDelay + sound.m_frame;
+			TransitionSoundCue cue;
+			cue.m_sound = sound.m_sound;
+			cue.m_frame = reversed ? totalFrames - frame : frame;
+			cues.push_back(cue);
+		}
+	}
+	return totalFrames;
+}
+
 void TransitionGroup::addWindow( TransitionWindow *transWin )
 {
 	if(!transWin)
@@ -571,6 +627,13 @@ TransitionGroup *GameWindowTransitionsHandler::getNewGroup( AsciiString name )
 	g->setName(name);
 	m_transitionGroupList.push_back(g);
 	return g;
+}
+
+// Ronin @feature 30/10/2026 DX9: the group's sounds with their frames, for the RmlUi menus (tintinhamans').
+Int GameWindowTransitionsHandler::getGroupSounds( AsciiString groupName, Bool reversed, TransitionSoundCues &cues )
+{
+	TransitionGroup *group = findGroup(groupName);
+	return group ? group->getSoundCues(reversed, cues) : 0;
 }
 
 Bool GameWindowTransitionsHandler::isFinished()

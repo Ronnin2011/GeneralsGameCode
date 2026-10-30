@@ -81,6 +81,7 @@ static void drawFramerateBar();
 #include "W3DDevice/GameClient/R3DSsao.h"
 #include "W3DDevice/GameClient/R3DTaa.h"
 #include "W3DDevice/GameClient/R3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: local lights drawn in screen space
+#include "W3DDevice/GameClient/RmlUi/RmlUiManager.h"	// Ronin @feature 28/10/2026 DX9: the RmlUi layer
 #include "W3DDevice/GameClient/HeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "W3DDevice/GameClient/W3DScene.h"
@@ -496,6 +497,7 @@ W3DDisplay::~W3DDisplay()
 		R3DSsao::shutdown();	// Ronin @feature 13/09/2026 DX9: SSAO step 1 — its shader, while the device exists
 		R3DTaa::shutdown();		// Ronin @feature 20/09/2026 DX9: TAA — resolve shader and history targets, likewise
 		R3DLocalLights::shutdown();	// Ronin @feature 09/10/2026 DX9: its shaders and frame copy, likewise
+		RmlUiManager::destroyInstance();	// Ronin @feature 28/10/2026 DX9: the RmlUi layer's buffers and textures, likewise
 	}
 	m_assetManager->Free_Assets();
 	delete m_assetManager;
@@ -994,6 +996,10 @@ void W3DDisplay::init()
 		}
 
 		DX8WebBrowser::Initialize();
+
+		// Ronin @feature 28/10/2026 DX9: the RmlUi layer, once the device and the display exist.
+		RmlUiManager::createInstance();
+		TheRmlUiManager->init(getWidth(), getHeight());
 	}
 
 	// we're now online

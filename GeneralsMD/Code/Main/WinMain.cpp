@@ -61,6 +61,7 @@
 #include "GameLogic/GameLogic.h"  ///< @todo for demo, remove
 #include "GameClient/Mouse.h"
 #include "GameClient/IMEManager.h"
+#include "GameClient/RmlUiInputHook.h"	// Ronin @feature 29/10/2026 DX9: typing in RmlUi text fields
 #include "Win32Device/GameClient/Win32Mouse.h"
 #include "Win32Device/Common/Win32GameEngine.h"
 #include "Common/version.h"
@@ -325,6 +326,23 @@ LRESULT CALLBACK WndProc( HWND hWnd, UINT message,
 				// Prevent the user from selecting the menu in fullscreen mode
 				if( !TheGlobalData->m_windowed )
 					return HTCLIENT;
+				break;
+
+			//-------------------------------------------------------------------------
+			// Ronin @feature 29/10/2026 DX9: a focused RmlUi text field (the beacon's) types from WM_CHAR - DirectInput gives keys,
+			// not characters. An ANSI window's character is in the code page: it goes to UTF-16 first.
+			case WM_CHAR:
+				if( TheRmlUiInputHook && TheRmlUiInputHook->wantsKeyboardInput() )
+				{
+					WCHAR wide = (WCHAR)wParam;
+					if( !IsWindowUnicode( hWnd ) )
+					{
+						const char narrow = (char)wParam;
+						MultiByteToWideChar( CP_ACP, 0, &narrow, 1, &wide, 1 );
+					}
+					TheRmlUiInputHook->processTextInput( (unsigned short)wide );
+					return 0;
+				}
 				break;
 
 			//-------------------------------------------------------------------------

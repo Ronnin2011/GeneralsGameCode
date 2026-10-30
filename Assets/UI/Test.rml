@@ -1,0 +1,133 @@
+<rml>
+<head>
+	<title>RmlUi test panel</title>
+	<!-- Ronin @feature 28/10/2026 DX9: the first RmlUi layer test (`ui test`): fonts, cameo sprites, hover, clicks, clipping.
+	     Bottom right, where the G2-style command card will sit. -->
+	<link type="text/rcss" href="common.rcss"/>
+	<style>
+		body
+		{
+			position: absolute;
+			left: 0;
+			top: 0;
+			width: 100%;
+			height: 100%;
+			pointer-events: none;	/* the map beside the panel keeps its clicks */
+		}
+
+		#card
+		{
+			position: absolute;
+			right: 16dp;
+			bottom: 16dp;
+			padding: 10dp;
+			pointer-events: auto;
+			decorator: vertical-gradient(#1b232ae6 #0b0f13e6);
+			border: 1dp #8fa3ad70;
+			border-radius: 3dp;
+		}
+
+		#row
+		{
+			display: flex;
+			flex-direction: row;
+		}
+
+		#portrait
+		{
+			width: 180dp;
+			height: 144dp;
+			decorator: image(SACDozer_L);
+			border: 1dp #8fa3ad50;
+		}
+
+		#plate
+		{
+			margin-top: 4dp;
+			padding: 3dp 8dp;
+			width: 164dp;
+			background-color: #00000080;
+			font-family: "Exo 2";
+			font-weight: bold;
+			font-size: 18dp;
+			color: #f2f4f5;
+			font-effect: shadow(1dp 1dp #000000c0);
+		}
+
+		#grid
+		{
+			display: flex;
+			flex-direction: row;
+			flex-wrap: wrap;
+			width: 408dp;	/* six cameos of 62 + 2 border + 4 gap */
+			margin-left: 10dp;
+		}
+
+		.cameo
+		{
+			position: relative;
+			width: 62dp;
+			height: 50dp;
+			margin: 0 4dp 4dp 0;
+			border: 1dp #8fa3ad60;
+			background-color: #0b0f1380;
+		}
+		.cameo:hover { border-color: #e8f4f8; }
+		.cameo:active { border-color: #7fe07f; }
+
+		.dozer { decorator: image(SACDozer); }
+		.tank { decorator: image(SACLeopard); }
+		.ranger { decorator: image(SARanger); }
+		.factory { decorator: image(SACWeaponsfact); }
+
+		.key
+		{
+			position: absolute;
+			left: 2dp;
+			top: 1dp;
+			padding: 0 3dp;
+			background-color: #000000b0;
+			font-family: "Exo 2";
+			font-weight: bold;
+			font-size: 12dp;
+			color: #ffd84a;
+		}
+
+		#note
+		{
+			margin-top: 6dp;
+			width: 404dp;
+			height: 36dp;
+			overflow: hidden;		/* two lines of 18dp show; the third is the clipping test */
+			font-size: 13dp;
+			line-height: 18dp;
+			color: #b9c4c9;
+		}
+	</style>
+</head>
+<body>
+	<div id="card">
+		<div id="row">
+			<div>
+				<div id="portrait"></div>
+				<div id="plate">Bulldozer</div>
+			</div>
+			<div id="grid">
+				<div id="dozer" class="cameo dozer"><span class="key">D</span></div>
+				<div id="tank" class="cameo tank"><span class="key">C</span></div>
+				<div id="ranger" class="cameo ranger"><span class="key">R</span></div>
+				<div id="factory" class="cameo factory"><span class="key">W</span></div>
+				<div id="slot5" class="cameo"></div>
+				<div id="slot6" class="cameo"></div>
+				<div id="slot7" class="cameo"></div>
+				<div id="slot8" class="cameo"></div>
+				<div id="slot9" class="cameo"></div>
+				<div id="slot10" class="cameo"></div>
+				<div id="slot11" class="cameo"></div>
+				<div id="slot12" class="cameo"></div>
+				<div id="note">Click a button: the debug panel names it.<br/>A click beside this card reaches the map.<br/>If this third line shows, clipping failed.</div>
+			</div>
+		</div>
+	</div>
+</body>
+</rml>

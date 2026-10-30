@@ -69,6 +69,20 @@ set(GAMEENGINEDEVICE_SRC
     Include/W3DDevice/GameClient/R3DSsao.h
     Include/W3DDevice/GameClient/R3DTaa.h
     Include/W3DDevice/GameClient/R3DTreeFire.h
+    # Ronin @feature 28/10/2026 DX9: the RmlUi layer (docs/UI_Work.md)
+    Include/W3DDevice/GameClient/RmlUi/RmlUiFileInterface.h
+    Include/W3DDevice/GameClient/RmlUi/RmlUiManager.h
+    Include/W3DDevice/GameClient/RmlUi/RmlUiRenderInterface.h
+    Include/W3DDevice/GameClient/RmlUi/RmlUiSystemInterface.h
+    Include/W3DDevice/GameClient/RmlUi/RmlControlBarScreen.h
+    Include/W3DDevice/GameClient/RmlUi/RmlUiElements.h
+    Include/W3DDevice/GameClient/RmlUi/RmlUiText.h
+    Include/W3DDevice/GameClient/RmlUi/RmlHudPanels.h
+    # Ronin @feature 29/10/2026 DX9: the shell screens: main menu, game menu, Options
+    Include/W3DDevice/GameClient/RmlUi/RmlScreen.h
+    Include/W3DDevice/GameClient/RmlUi/RmlMainMenuScreen.h
+    Include/W3DDevice/GameClient/RmlUi/RmlQuitMenuScreen.h
+    Include/W3DDevice/GameClient/RmlUi/RmlOptionsScreen.h
 #    Include/W3DDevice/GameClient/W3DSmudge.h
 #    Include/W3DDevice/GameClient/W3DSnow.h
     Include/W3DDevice/GameClient/W3DStatusCircle.h
@@ -176,6 +190,18 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/R3DSsao.cpp
     Source/W3DDevice/GameClient/R3DTaa.cpp
     Source/W3DDevice/GameClient/R3DTreeFire.cpp
+    # Ronin @feature 28/10/2026 DX9: the RmlUi layer 
+    Source/W3DDevice/GameClient/RmlUi/RmlUiFileInterface.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlUiManager.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlUiRenderInterface.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlUiSystemInterface.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlControlBarScreen.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlUiElements.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlHudPanels.cpp
+    # Ronin @feature 29/10/2026 DX9: the shell screens: main menu, game menu, Options
+    Source/W3DDevice/GameClient/RmlUi/RmlMainMenuScreen.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlQuitMenuScreen.cpp
+    Source/W3DDevice/GameClient/RmlUi/RmlOptionsScreen.cpp
 #    Source/W3DDevice/GameClient/W3DSmudge.cpp
 #    Source/W3DDevice/GameClient/W3DSnow.cpp
     Source/W3DDevice/GameClient/W3DStatusCircle.cpp
@@ -223,6 +249,7 @@ target_link_libraries(z_gameenginedevice PRIVATE
     corei_gameenginedevice_private
     zi_always
     zi_main
+    RmlUi::RmlUi    # Ronin @feature 28/10/2026 DX9: the RmlUi layer of the modern control bar
 )
 
 target_link_libraries(z_gameenginedevice PUBLIC

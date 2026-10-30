@@ -82,6 +82,7 @@
 GameWindow::GameWindow()
 {
 	m_status = WIN_STATUS_NONE;
+	m_headless = FALSE;	// Ronin @feature 28/10/2026 DX9: see winSetHeadless()
 
 	m_size.x = 0;
 	m_size.y = 0;

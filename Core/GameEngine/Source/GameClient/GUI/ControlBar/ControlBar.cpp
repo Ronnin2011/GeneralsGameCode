@@ -81,6 +81,7 @@
 #include "GameClient/HotKey.h"
 #include "GameClient/GameWindowTransitions.h"
 #include "GameClient/GUICallbacks.h"
+#include "GameClient/RmlUiInputHook.h"	// Ronin @feature 28/10/2026 DX9: the modern control bar
 
 #include "GameNetwork/GameInfo.h"
 
@@ -974,6 +975,8 @@ ControlBar::ControlBar()
 	m_radarAttackGlowOn = FALSE;
 	m_remainingRadarAttackGlowFrames = 0;
 	m_radarAttackGlowWindow = nullptr;
+	m_headless = FALSE;	// Ronin @feature 28/10/2026 DX9: the modern control bar
+	m_portraitThing = nullptr;
 
 #if defined(RTS_DEBUG)
 	m_lastFrameMarkedDirty = 0;
@@ -1090,10 +1093,15 @@ void ControlBar::init()
 		NameKeyType id;
 		id = TheNameKeyGenerator->nameToKey( "ControlBar.wnd:ControlBarParent" );
 		m_contextParent[ CP_MASTER ] = TheWindowManager->winGetWindowFromId( nullptr, id );
+		// Ronin @feature 28/10/2026 DX9: with the modern bar on (Options.ini ModernUI), RmlUi draws the bar over these windows, headless.
+		m_headless = TheRmlUiInputHook != nullptr && TheRmlUiInputHook->drawsControlBar();
+		makeHeadless( m_contextParent[ CP_MASTER ] );
+		makeHeadless( TheWindowManager->winGetWindowFromId( nullptr, TheNameKeyGenerator->nameToKey( "ReplayControl.wnd:ParentReplayControl" ) ) );
 	m_contextParent[ CP_MASTER ]->winGetPosition(&m_defaultControlBarPosition.x, &m_defaultControlBarPosition.y);
 
 		m_scienceLayout = TheWindowManager->winCreateLayout("GeneralsExpPoints.wnd");
 		m_scienceLayout->hide(TRUE);
+		makeHeadless( m_scienceLayout->getFirstWindow() );	// Ronin @feature 28/10/2026 DX9: the modern bar draws the promotions
 		id = TheNameKeyGenerator->nameToKey( "GeneralsExpPoints.wnd:GenExpParent" );
 
 		m_contextParent[ CP_PURCHASE_SCIENCE ] = TheWindowManager->winGetWindowFromId( nullptr, id );//m_scienceLayout->getFirstWindow();
@@ -1277,6 +1285,7 @@ void ControlBar::init()
 		{
 			m_buildToolTipLayout->hide(TRUE);
 			m_buildToolTipLayout->setUpdate(ControlBarPopupDescriptionUpdateFunc);
+			makeHeadless( m_buildToolTipLayout->getFirstWindow() );	// Ronin @feature 28/10/2026 DX9: the modern bar draws the tooltip
 		}
 
 		m_genStarOn = TheMappedImageCollection ? (Image *)TheMappedImageCollection->findImageByName("BarButtonGenStarON") : nullptr;
@@ -1711,7 +1720,7 @@ void ControlBar::onPlayerRankChanged(const Player *p)
 
 	if(!(m_lastFlashedAtPointValue > ThePlayerList->getLocalPlayer()->getSciencePurchasePoints()))
 	{
-		if(TheTransitionHandler && TheInGameUI->getInputEnabled())
+		if(TheTransitionHandler && TheInGameUI->getInputEnabled() && !m_headless)	// Ronin @feature 28/10/2026 DX9: no .wnd arrow under the modern bar
 			TheTransitionHandler->setGroup("ControlBarArrow");
 	}
 //	populateSpecialPowerShortcut((Player *)p);
@@ -1728,7 +1737,7 @@ void ControlBar::onPlayerSciencePurchasePointsChanged(const Player *p)
 		return;
 	if(!(m_lastFlashedAtPointValue > ThePlayerList->getLocalPlayer()->getSciencePurchasePoints()))
 	{
-		if(TheTransitionHandler && TheInGameUI->getInputEnabled())
+		if(TheTransitionHandler && TheInGameUI->getInputEnabled() && !m_headless)	// Ronin @feature 28/10/2026 DX9: no .wnd arrow under the modern bar
 			TheTransitionHandler->setGroup("ControlBarArrow");
 	}
 //	populateSpecialPowerShortcut((Player *)p);
@@ -2655,6 +2664,7 @@ void ControlBar::setPortraitByObject( Object *obj )
 		}
 
 		const Image* portrait = thing->getSelectedPortraitImage();
+		m_portraitThing = thing;	// Ronin @feature 28/10/2026 DX9: the modern bar names the portrait's thing
 
 		m_rightHUDUnitSelectParent->winHide(FALSE);
 		// enable the window window as an image window and set the image
@@ -2706,6 +2716,7 @@ void ControlBar::setPortraitByObject( Object *obj )
 	}
 	else
 	{
+		m_portraitThing = nullptr;	// Ronin @feature 28/10/2026 DX9: the modern bar names the portrait's thing
 		m_rightHUDUnitSelectParent->winHide(TRUE);
 		m_rightHUDWindow->winSetStatus( WIN_STATUS_IMAGE );
 		m_rightHUDCameoWindow->winClearStatus( WIN_STATUS_IMAGE );
@@ -2979,7 +2990,7 @@ void ControlBar::showPurchaseScience()
 		return;
 	//switchToContext(CB_CONTEXT_PURCHASE_SCIENCE, nullptr);
 	m_contextParent[ CP_PURCHASE_SCIENCE ]->winHide(FALSE);
-	if (TheGlobalData->m_animateWindows)
+	if (TheGlobalData->m_animateWindows && !m_headless)	// Ronin @feature 28/10/2026 DX9: no .wnd fade under the modern bar
 		TheTransitionHandler->setGroup("GenExpFade");
 		//m_generalsScreenAnimate->registerGameWindow( m_contextParent[ CP_PURCHASE_SCIENCE ], WIN_ANIMATION_SLIDE_TOP, TRUE, 200 );
 
@@ -3275,6 +3286,7 @@ void ControlBar::initSpecialPowershortcutBar( Player *player)
 	layoutName = pt->getSpecialPowerShortcutWinName();
 	m_specialPowerLayout = TheWindowManager->winCreateLayout(layoutName);
 	m_specialPowerLayout->hide(TRUE);
+	makeHeadless( m_specialPowerLayout->getFirstWindow() );	// Ronin @feature 28/10/2026 DX9: the modern bar draws the powers
 
 	tempName = layoutName;
 	tempName.concat(":GenPowersShortcutBarParent");
@@ -3827,5 +3839,18 @@ void ControlBar::setFullViewportHeight()
 
 void ControlBar::setScaledViewportHeight()
 {
+	// Ronin @feature 28/10/2026 DX9: the modern bar floats over the world instead of standing under it.
+	if (m_headless)
+	{
+		setFullViewportHeight();
+		return;
+	}
 	TheTacticalView->setHeight(TheDisplay->getHeight() * TheGlobalData->m_viewportHeightScale);
+}
+
+// Ronin @feature 28/10/2026 DX9: a headless window and everything in it is updated but neither drawn nor hit.
+void ControlBar::makeHeadless( GameWindow *root )
+{
+	if( m_headless && root )
+		root->winSetHeadless( TRUE );
 }

@@ -48,6 +48,7 @@
 #include "W3DDevice/GameClient/W3DGUICallbacks.h"
 #include "W3DDevice/GameClient/W3DInGameUI.h"
 #include "W3DDevice/GameClient/W3DDisplay.h"
+#include "W3DDevice/GameClient/RmlUi/RmlUiManager.h"	// Ronin @feature 28/10/2026 DX9: the RmlUi layer
 #include "W3DDevice/GameClient/W3DScene.h"
 #include "W3DDevice/Common/W3DConvert.h"
 #include "WW3D2/ww3d.h"
@@ -434,6 +435,13 @@ void W3DInGameUI::draw()
 #endif
 
 	postDraw();
+
+	// Ronin @feature 28/10/2026 DX9: the RmlUi layer, under the 2003 windows painted next (menus, popups, the debug panel).
+	if (TheRmlUiManager)
+	{
+		TheRmlUiManager->update();
+		TheRmlUiManager->render();
+	}
 
 	TheWindowManager->winRepaint();
 

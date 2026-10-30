@@ -61,7 +61,9 @@ void ControlBar::populateBeacon( Object *beacon )
 		{
 			textEntryWin->winHide(FALSE);
 			GadgetTextEntrySetText( textEntryWin, beacon->getDrawable()->getCaptionText() );
-			TheWindowManager->winSetFocus( textEntryWin );
+			// Ronin @feature 28/10/2026 DX9: the modern bar focuses its own entry instead of the headless one.
+			if( !m_headless )
+				TheWindowManager->winSetFocus( textEntryWin );
 		}
 
 		if (staticTextWin)

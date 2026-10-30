@@ -56,6 +56,7 @@
 #include "Common/FunctionLexicon.h"
 #include "GameClient/Display.h"
 #include "GameClient/WindowLayout.h"
+#include "GameClient/RmlUiScreenRegistry.h"	// Ronin @feature 29/10/2026 DX9: the screens RmlUi draws
 #include "GameClient/Gadget.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/GameWindowGlobal.h"
@@ -2679,6 +2680,11 @@ Bool parseLayoutBlock( File *inFile, char *buffer, UnsignedInt version, WindowLa
 WindowLayout *GameWindowManager::winCreateLayout( AsciiString filename )
 {
 	WindowLayout *layout;
+
+	// Ronin @feature 29/10/2026 DX9: a screen RmlUi draws (ModernUI) gets a placeholder layout in place of its .wnd, so the shell's
+	// push and pop and the menus' runInit / hide / destroy work unchanged.
+	if( RmlUiScreenRegistry::isRegistered( filename ) )
+		return RmlUiScreenRegistry::createLayout( filename );
 
 	// allocate a new window layout
 	layout = newInstance(WindowLayout);

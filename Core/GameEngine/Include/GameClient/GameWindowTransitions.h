@@ -47,6 +47,8 @@
 
 #include "Common/GameCommon.h"
 
+#include <vector>	// Ronin @feature 30/10/2026 DX9: the sound cues below
+
 //-----------------------------------------------------------------------------
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 //-----------------------------------------------------------------------------
@@ -595,6 +597,16 @@ protected:
 };
 
 //-----------------------------------------------------------------------------
+// Ronin @feature 30/10/2026 DX9: a sound a transition group fires, and the frame it fires on (30 a second at normal speed), for
+// the RmlUi menus, which run no transitions. tintinhamans' (GeneralsGameCode, arctic/go/feat/rmlui).
+struct TransitionSoundCue
+{
+	AsciiString m_sound;
+	Int m_frame;
+};
+typedef std::vector<TransitionSoundCue> TransitionSoundCues;
+
+//-----------------------------------------------------------------------------
 class TransitionWindow
 {
 public:
@@ -642,6 +654,7 @@ public:
 	void addWindow( TransitionWindow *transWin );
 	Bool isReversed();
 	Bool isFireOnce() { return m_fireOnce; }
+	Int getSoundCues( Bool reversed, TransitionSoundCues &cues );	// Ronin @feature 30/10/2026 DX9: see getGroupSounds()
 	Bool m_fireOnce;
 private:
 	typedef std::list<TransitionWindow *> TransitionWindowList;
@@ -672,6 +685,10 @@ public:
 	void reverse( AsciiString groupName );// reverse the animations for the current group.
 	void remove( AsciiString groupName, Bool skipPending = FALSE );// remove the animation from the current or pending groups.
 	TransitionGroup *getNewGroup( AsciiString name );
+
+	// Ronin @feature 30/10/2026 DX9: the sounds the group's styles fire, forward or reversed, with their frames (a reversed
+	// group runs from its last frame down); returns its length in frames, 0 for no such group. Typing and count-up ticks are not listed.
+	Int getGroupSounds( AsciiString groupName, Bool reversed, TransitionSoundCues &cues );
 private:
 	TransitionGroup *findGroup( AsciiString groupName );
 	typedef std::list<TransitionGroup *> TransitionGroupList;

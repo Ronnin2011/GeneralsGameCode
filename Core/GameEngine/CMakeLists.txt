@@ -152,6 +152,11 @@ set(GAMEENGINE_SRC
     Include/GameClient/Color.h
     Include/GameClient/CommandXlat.h
     Include/GameClient/ControlBar.h
+    # Ronin @feature 28/10/2026 DX9: the modern control bar's snapshot and input (docs/UI_Work.md)
+    Include/GameClient/ControlBarActions.h
+    Include/GameClient/ControlBarData.h
+    Include/GameClient/RmlUiInputHook.h
+    Include/GameClient/RmlUiScreenRegistry.h    # Ronin @feature 29/10/2026 DX9: the shell screens RmlUi draws
     Include/GameClient/ControlBarResizer.h
     Include/GameClient/ControlBarScheme.h
     Include/GameClient/Credits.h
@@ -731,6 +736,9 @@ set(GAMEENGINE_SRC
     Source/GameClient/GUI/AnimateWindowManager.cpp
     Source/GameClient/GUI/ChallengeGenerals.cpp
     Source/GameClient/GUI/ControlBar/ControlBar.cpp
+    # Ronin @feature 28/10/2026 DX9: the modern control bar's snapshot and input (docs/UI_Work.md)
+    Source/GameClient/GUI/ControlBar/ControlBarActions.cpp
+    Source/GameClient/GUI/ControlBar/ControlBarData.cpp
     Source/GameClient/GUI/ControlBar/ControlBarBeacon.cpp
     Source/GameClient/GUI/ControlBar/ControlBarCommand.cpp
     Source/GameClient/GUI/ControlBar/ControlBarCommandProcessing.cpp
@@ -820,6 +828,7 @@ set(GAMEENGINE_SRC
     Source/GameClient/GUI/ProcessAnimateWindow.cpp
     Source/GameClient/GUI/Shell/Shell.cpp
     Source/GameClient/GUI/Shell/ShellMenuScheme.cpp
+    Source/GameClient/GUI/RmlUiScreenRegistry.cpp    # Ronin @feature 29/10/2026 DX9: the shell screens RmlUi draws
     Source/GameClient/GUI/WindowLayout.cpp
     Source/GameClient/GUI/WindowVideoManager.cpp
     Source/GameClient/GUI/WinInstanceData.cpp

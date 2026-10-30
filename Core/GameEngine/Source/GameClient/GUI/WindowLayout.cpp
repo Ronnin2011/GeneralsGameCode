@@ -33,6 +33,7 @@
 #include "GameClient/WindowLayout.h"
 #include "GameClient/Shell.h"
 #include "GameClient/GameWindowManager.h"
+#include "GameClient/RmlUiScreenRegistry.h"	// Ronin @feature 29/10/2026 DX9: layouts for the screens RmlUi draws
 
 // PUBLIC FUNCTIONS ///////////////////////////////////////////////////////////////////////////////
 //-------------------------------------------------------------------------------------------------
@@ -46,6 +47,7 @@ WindowLayout::WindowLayout()
 	m_windowCount = 0;
 
 	m_hidden = FALSE;
+	m_rmlUiRouted = FALSE;
 
 	m_init = nullptr;
 	m_update = nullptr;
@@ -75,6 +77,17 @@ void WindowLayout::hide( Bool hide )
 {
 	GameWindow *window;
 
+	// Ronin @feature 29/10/2026 DX9: a routed layout holds only a hidden placeholder: open or close its RmlUi screen instead.
+	if( m_rmlUiRouted )
+	{
+		if( hide )
+			RmlUiScreenRegistry::close( m_filenameString );
+		else
+			RmlUiScreenRegistry::open( m_filenameString );
+		m_hidden = hide;
+		return;
+	}
+
 	// hide or unhide all windows in this layout
 	for( window = m_windowList; window; window = window->winGetNextInLayout() )
 	{
@@ -86,6 +99,14 @@ void WindowLayout::hide( Bool hide )
 	// save the new visible state of the system
 	m_hidden = hide;
 
+}
+
+//-------------------------------------------------------------------------------------------------
+/** Ronin @feature 29/10/2026 DX9: see RmlUiScreenRegistry::createLayout() */
+//-------------------------------------------------------------------------------------------------
+void WindowLayout::routeToRmlUi( Bool routed )
+{
+	m_rmlUiRouted = routed;
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -252,10 +273,29 @@ Bool WindowLayout::load( AsciiString filename )
 }
 
 //-------------------------------------------------------------------------------------------------
+/** Ronin @feature 29/10/2026 DX9: no .wnd and no windows, for a screen drawn elsewhere (RmlUi); the caller sets
+	* the callbacks */
+//-------------------------------------------------------------------------------------------------
+Bool WindowLayout::loadEmpty( AsciiString filename )
+{
+	if( filename.isEmpty() )
+		return FALSE;
+
+	m_filenameString = filename;
+	return TRUE;
+}
+
+//-------------------------------------------------------------------------------------------------
 /** Bring all windows in this layout forward */
 //-------------------------------------------------------------------------------------------------
 void WindowLayout::bringForward()
 {
+	// Ronin @feature 29/10/2026 DX9: a routed layout has no windows to raise: its RmlUi screen comes forward, opening if closed.
+	if( m_rmlUiRouted )
+	{
+		RmlUiScreenRegistry::open( m_filenameString );
+		return;
+	}
 
 	//
 	// loop through all our windows and bring each of them to the top of

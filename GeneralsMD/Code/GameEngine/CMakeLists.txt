@@ -183,6 +183,7 @@ set(GAMEENGINE_SRC
 #    Include/GameClient/GlobalLanguage.h
 #    Include/GameClient/GraphDraw.h
     Include/GameClient/GUICallbacks.h
+    Include/GameClient/GUI/GUICallbacks/Menus/OptionsValues.h    # Ronin @feature 29/10/2026 DX9: the RmlUi Options' logic
 #    Include/GameClient/GUICommandTranslator.h
 #    Include/GameClient/HeaderTemplate.h
 #    Include/GameClient/HintSpy.h
@@ -750,6 +751,7 @@ set(GAMEENGINE_SRC
     Source/GameClient/GUI/GUICallbacks/Menus/MapSelectMenu.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/NetworkDirectConnect.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/OptionsMenu.cpp
+    Source/GameClient/GUI/GUICallbacks/Menus/OptionsValues.cpp    # Ronin @feature 29/10/2026 DX9: the RmlUi Options' logic
     Source/GameClient/GUI/GUICallbacks/Menus/PopupCommunicator.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/PopupHostGame.cpp
     Source/GameClient/GUI/GUICallbacks/Menus/PopupJoinGame.cpp

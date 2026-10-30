@@ -228,6 +228,10 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/Textures/WaterNormalRiver.tga"
             "${ZEROHOUR_INSTALL_PATH}/Art/Textures/WaterNormalRiver.tga"
+        # Ronin @build 28/10/2026 The RmlUi layer's documents, style sheets and fonts: Assets/UI to the game's Data/UI.
+        COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
+            "${CMAKE_SOURCE_DIR}/Assets/UI"
+            "${ZEROHOUR_INSTALL_PATH}/Data/UI"
         COMMENT "Auto-deploying to Zero Hour installation folder"
 
 

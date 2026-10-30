@@ -57,6 +57,8 @@ class UpgradeTemplate;
 class ControlBarResizer;
 class GameWindowTransitionsHandler;
 class DisplayString;
+struct ControlBarData;		// Ronin @feature 28/10/2026 DX9: the modern control bar's snapshot
+struct ControlBarButtonId;
 
 enum ProductionID CPP_11(: Int);
 
@@ -789,7 +791,16 @@ public:
 
 	void drawSpecialPowerShortcutMultiplierText();
 
+	// Ronin @feature 28/10/2026 DX9: with the modern bar on, RmlUi draws the bar over these windows, headless (updated, never
+	// drawn), and the tactical view keeps the full screen height. Decided once in init(); see ControlBarData.h.
+	Bool isHeadless() const { return m_headless; }
+	void fillData( ControlBarData &data );	///< what the headless windows show, for the view
+	GameWindow *getButtonWindow( const ControlBarButtonId &id );	///< the .wnd button behind a view's button; null if none
+	GameWindow *getRadarWindow();	///< LeftHUD: the radar's window, whose rect the radar logic works in
+	ControlBarStages getControlBarStage() const { return m_currentControlBarStage; }
+
 protected:
+	void makeHeadless( GameWindow *root );	// Ronin @feature 28/10/2026 DX9: no-op unless isHeadless()
 	void updateRadarAttackGlow ();
 
 	void setDefaultControlBarConfig();
@@ -1037,6 +1048,10 @@ private:
 
 	ICoord2D m_controlBarForegroundMarkerPos;
 	ICoord2D m_controlBarBackgroundMarkerPos;
+
+	// Ronin @feature 28/10/2026 DX9: the modern control bar
+	Bool m_headless;											///< see isHeadless()
+	const ThingTemplate *m_portraitThing;				///< the thing whose portrait setPortraitByObject() shows
 
 	Bool m_radarAttackGlowOn;
 	Int m_remainingRadarAttackGlowFrames;

@@ -1,0 +1,502 @@
+/* Ronin @feature 28/10/2026 DX9: the modern control bar's look - one neutral style for every side (docs/UI_Work.md).
+   Sizes in dp, a pixel at 1080 lines. Placement after the cancelled Generals 2; `ui reload` reads this again in game. */
+
+body
+{
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	pointer-events: none;	/* the battlefield between the panels keeps its clicks */
+	font-family: "Noto Sans";
+	font-size: 14dp;
+	color: #e6e9ea;
+}
+
+.panel
+{
+	position: absolute;
+	padding: 6dp;
+	pointer-events: auto;
+	decorator: vertical-gradient(#1b232ab8 #0b0f13c4);	/* 72% to 77%: the battlefield shows through */
+	border: 1dp #8fa3ad60;
+	border-radius: 2dp;
+}
+
+body.low #cb-map, body.low #cb-general, body.low #cb-card, body.low #cb-left, body.low #cb-tip, body.low #cb-factories { display: none; }
+
+/* ---- a button: icon sprite, veterancy, clock, shade, hotkey, count ---- */
+.slot
+{
+	position: relative;
+	width: 60dp;
+	height: 48dp;
+	border: 1dp #8fa3ad40;
+	background-color: #05080a60;
+}
+.slot.live:hover { border-color: #e8f4f8; }
+.slot.live:active { border-color: #ffd84a; }
+.slot.checked { border-color: #7fe07f; }
+.slot.flash { animation: 0.45s cubic-in-out infinite alternate cb-flash; }
+@keyframes cb-flash
+{
+	from { border-color: #8fa3ad40; }
+	to { border-color: #ffd84a; }
+}
+
+.slot .art, .slot .shade
+{
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+}
+.slot.off .shade { background-color: #000000a0; }
+.slot.poor .shade { background-color: #5a000070; }
+
+.vet
+{
+	position: absolute;
+	right: 1dp;
+	top: 1dp;
+	width: 18dp;
+	height: 14dp;
+}
+
+.slot .clock	/* the dark part: what is still to go */
+{
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	background-color: #000000b0;
+}
+
+.key
+{
+	position: absolute;
+	left: 1dp;
+	top: 1dp;
+	padding: 0 3dp;
+	background-color: #000000b8;
+	font-family: "Exo 2";
+	font-weight: bold;
+	font-size: 12dp;
+	line-height: 14dp;
+	color: #ffd84a;
+}
+
+.count
+{
+	position: absolute;
+	right: 3dp;
+	bottom: 1dp;
+	font-family: "Exo 2";
+	font-weight: bold;
+	font-size: 13dp;
+	color: #ffffff;
+	font-effect: shadow(1dp 1dp #000000);
+}
+
+.badge
+{
+	margin-left: 5dp;
+	padding: 0 4dp;
+	background-color: #ffd84a;
+	color: #101418;
+	font-weight: bold;
+}
+
+.textbtn, .sidebtn
+{
+	padding: 3dp 10dp;
+	border: 1dp #8fa3ad50;
+	background-color: #ffffff12;
+	font-family: "Exo 2";
+	font-weight: bold;
+	font-size: 13dp;
+	color: #e6e9ea;
+}
+.textbtn:hover, .sidebtn:hover { border-color: #e8f4f8; background-color: #ffffff22; }
+.textbtn.off, .sidebtn.off { color: #6c7478; }
+
+/* ---- top centre: the menu strip (the top left holds the frame rate and the clock) ---- */
+#cb-side
+{
+	left: 50%;
+	margin-left: -200dp;
+	top: 6dp;
+	padding: 3dp;
+	display: flex;
+	flex-direction: row;
+}
+#cb-side .sidebtn { margin-right: 3dp; }
+#cb-side .replay { padding: 3dp 10dp; color: #ffd84a; font-family: "Exo 2"; font-weight: bold; font-size: 13dp; }
+
+/* ---- bottom left: money and power over the minimap ---- */
+#cb-map
+{
+	left: 10dp;
+	bottom: 10dp;
+	width: 240dp;
+}
+#cb-economy
+{
+	display: flex;
+	flex-direction: row;
+	justify-content: space-between;
+	height: 30dp;
+}
+#cb-economy .money
+{
+	font-family: "Exo 2";
+	font-weight: bold;
+	font-size: 18dp;
+	color: #f2f4f5;
+	font-effect: shadow(1dp 1dp #000000c0);
+}
+#cb-economy .power { width: 110dp; }
+.power-text { font-size: 12dp; color: #9fe39f; }
+.power.lowpower .power-text { color: #ffd84a; }
+.power.nopower .power-text { color: #ff6a50; }
+.power-bar
+{
+	position: relative;
+	height: 5dp;
+	margin-top: 2dp;
+	background-color: #00000090;
+}
+.power-fill { height: 100%; background-color: #6fcf6f; }
+.power.lowpower .power-fill { background-color: #ffd84a; }
+.power.nopower .power-fill { background-color: #ff6a50; }
+.power-needle
+{
+	position: absolute;
+	top: -2dp;
+	width: 2dp;
+	height: 9dp;
+	background-color: #ffffff;
+}
+#cb-radar-frame
+{
+	width: 240dp;
+	height: 240dp;
+	border: 1dp #8fa3ad60;
+	background-color: #000000;
+}
+#cb-radar-frame.alert { animation: 0.4s infinite alternate cb-alert; }
+@keyframes cb-alert
+{
+	from { border-color: #8fa3ad60; }
+	to { border-color: #ff4030; }
+}
+#cb-radar { display: block; width: 100%; height: 100%; }
+
+/* ---- beside it: the general's powers and the rank bar ---- */
+#cb-general
+{
+	left: 272dp;	/* the minimap panel ends at 264 */
+	bottom: 10dp;
+	min-width: 435dp;	/* + padding = the ten group tabs' 447 */
+}
+#cb-groups	/* the control groups: ten tabs on the panel's top edge, outside it (G2); 1..9 then 0; a click is the key */
+{
+	position: absolute;
+	left: 0;
+	bottom: 100%;
+	margin-bottom: 2dp;	/* just over the panel's border, not on it */
+	width: 447dp;		/* ten tabs of 42 at a 45 pitch */
+	height: 32dp;
+}
+.grp
+{
+	position: absolute;
+	top: 0;
+	width: 40dp;
+	height: 30dp;
+	border: 1dp #8fa3ad60;
+	background-color: #0b0f13d0;
+}
+.grp:hover { border-color: #e8f4f8; }
+.grp.empty { border-color: #8fa3ad30; background-color: #0b0f13a0; }
+.grp.empty:hover { border-color: #8fa3ad30; }
+.gnum	/* an empty group's number, faint, marking its place */
+{
+	display: block;
+	text-align: center;
+	font-size: 12dp;
+	line-height: 30dp;
+	color: #8fa3ad70;
+}
+#cb-powers
+{
+	display: flex;
+	flex-direction: row;
+	margin-bottom: 5dp;
+}
+.power-slot { display: none; margin-right: 4dp; }
+.power-slot.live { display: block; }
+#cb-rank
+{
+	display: flex;
+	flex-direction: row;
+	height: 18dp;
+}
+#cb-rank .general
+{
+	width: 46dp;
+	margin-right: 5dp;
+	border: 1dp #8fa3ad50;
+	background-color: #ffffff12;
+	text-align: center;
+	font-family: "Exo 2";
+	font-weight: bold;
+	font-size: 13dp;
+	line-height: 16dp;
+	color: #ffd84a;
+}
+#cb-rank .general:hover { border-color: #e8f4f8; }
+#cb-rank .general.lit { animation: 0.6s infinite alternate cb-flash; }
+#cb-rank .general .badge { margin-left: 3dp; padding: 0 3dp; font-size: 11dp; }
+.xp
+{
+	width: 300dp;
+	margin-top: 5dp;
+	height: 8dp;
+	background-color: #00000090;
+	border: 1dp #8fa3ad40;
+}
+.xp-fill { height: 100%; background-color: #e2c23a; }
+
+/* ---- bottom right: the command card, 7 x 2 as the CommandSets are laid out ---- */
+#cb-card
+{
+	right: 10dp;
+	bottom: 66dp;	/* over the factory tabs' strip: 10 + 50 + a gap of 6 */
+	padding: 8dp;
+}
+
+/* ---- under the card: the factory tabs (G2) - builders, barracks, war factories, airfields; at most four, packed against
+   the card's right edge ---- */
+#cb-factories
+{
+	position: absolute;
+	right: 10dp;
+	bottom: 10dp;
+	width: 476dp;	/* the card's */
+	height: 50dp;
+	display: flex;
+	flex-direction: row;
+	justify-content: flex-end;
+	pointer-events: none;	/* only the tabs take the mouse */
+}
+.fac	/* G2's production buttons are 70 x 46: a pixel for a pixel at 1080 lines */
+{
+	position: relative;
+	width: 70dp;
+	height: 46dp;
+	margin: 2dp 0 0 5dp;	/* the gap on the left: the last tab ends on the card's edge */
+	border: 1dp #6fd3e850;
+	background-color: #0b1a20c8;
+	pointer-events: auto;
+}
+.fac:hover { border-color: #e8f4f8; }
+.fac .art { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+#cb-grid
+{
+	position: relative;
+	width: 458dp;	/* 7 slots of 62 at a 66 pitch */
+	height: 104dp;	/* 2 rows of 50 at a 54 pitch */
+}
+#cb-grid .slot { position: absolute; }
+#cb-task, #cb-beacon
+{
+	display: flex;
+	flex-direction: row;
+	margin-top: 6dp;
+	width: 458dp;
+}
+.task-slot { display: none; margin-right: 8dp; }
+.task-slot.live { display: block; }
+.task-info { width: 380dp; }
+.task-text { font-size: 13dp; }
+.task-bar { height: 8dp; margin-top: 4dp; background-color: #00000090; border: 1dp #8fa3ad40; }
+.task-fill { height: 100%; background-color: #6fd3e8; }
+#cb-beacon .textbtn { margin-right: 6dp; }
+#cb-beacon-text
+{
+	width: 220dp;
+	margin-right: 6dp;
+	padding: 3dp 6dp;
+	border: 1dp #8fa3ad60;
+	background-color: #00000090;
+	color: #ffffff;
+}
+
+/* ---- left of the card: the build queue or the portrait and name, right-aligned to the card ---- */
+#cb-left	/* on the card's bottom line: whichever panel shows alone shares it */
+{
+	position: absolute;
+	right: 494dp;	/* the card's 476 + 10 + a gap */
+	bottom: 66dp;
+	width: 280dp;	/* the selection's 6 x 3; the narrower panels hug the card's side */
+}
+#cb-left .panel { position: relative; margin-left: auto; }
+#cb-queue { width: 167dp; }	/* 10% larger than the first cut (28/10), so the item in work reads at a glance */
+.queue-head { display: flex; flex-direction: row; }
+.queue-head .slot { width: 66dp; height: 53dp; }	/* the item in work */
+.queue-progress { width: 95dp; margin-left: 6dp; }
+.queue-label { font-size: 13dp; color: #9fdcec; margin-top: 9dp; }
+.queue-bar { position: relative; height: 11dp; margin-top: 4dp; background-color: #6fd3e8; }
+.queue-left { position: absolute; right: 0; top: 0; height: 100%; background-color: #0b1a20; }	/* what is still to go */
+.queue-rest	/* queue items 2-9, 2 x 4 at a 42 x 34 pitch, each slot placed: a wrapped row loses cells to rounded borders */
+{
+	position: relative;
+	width: 167dp;
+	height: 66dp;
+	margin-top: 6dp;
+}
+.queue-slot { position: absolute; display: none; width: 37dp; height: 30dp; }
+.qnum	/* an empty slot's place in the queue, as G2 shows it */
+{
+	display: block;
+	text-align: center;
+	font-size: 13dp;
+	line-height: 30dp;
+	color: #8fa3ad70;
+}
+.queue-slot.live { display: block; }
+.queue-slot .key { display: none; }
+/* two or more selected: 18 boxes, 6 x 3 at a 44 x 36 pitch, each placed; past 18 a box is a type (or a kind) with a count */
+#cb-select { width: 262dp; padding: 8dp; }
+.sel-label	/* the hovered box's name, or the count: just over the panel */
+{
+	position: absolute;
+	left: 0;
+	bottom: 100%;
+	margin-bottom: 3dp;
+	padding: 1dp 6dp;
+	background-color: #0b0f13c0;
+	font-size: 12dp;
+	color: #e6e9ea;
+	white-space: nowrap;
+}
+.sel-grid { position: relative; width: 262dp; height: 106dp; }
+.sel
+{
+	position: absolute;
+	width: 40dp;
+	height: 32dp;
+	border: 1dp #8fa3ad40;
+	background-color: #05080a60;
+}
+.sel:hover { border-color: #e8f4f8; }
+.sel.group { border-color: #ffd84a90; }		/* a type: opens into the boxes */
+.sel.kindbox { border-color: #6fd3e8a0; }	/* a kind: opens into its types */
+.sel .art, .grp .art { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.hp { position: absolute; left: 2dp; right: 2dp; bottom: 2dp; height: 3dp; background-color: #000000b0; }
+.hp-fill { height: 100%; background-color: #5fd35f; }
+.hp-fill.mid { background-color: #ffd84a; }
+.hp-fill.low { background-color: #ff5a40; }
+.cnt
+{
+	position: absolute;
+	right: 2dp;
+	top: 0;
+	font-family: "Exo 2";
+	font-weight: bold;
+	font-size: 12dp;
+	color: #ffffff;
+	font-effect: shadow(1dp 1dp #000000);
+}
+.navtext { display: block; text-align: center; line-height: 32dp; font-family: "Exo 2"; font-weight: bold; font-size: 11dp; color: #9fdcec; }
+
+#cb-unit { width: 152dp; margin-top: 6dp; }	/* the gap goes above it: whichever shows alone sits on the card's line */
+#cb-movie { width: 152dp; margin-top: 6dp; }	/* a script's portrait movie, in the portrait's place */
+#cb-movie-video { display: block; width: 150dp; height: 120dp; border: 1dp #8fa3ad50; }
+#cb-portrait
+{
+	position: relative;
+	width: 150dp;
+	height: 120dp;
+	border: 1dp #8fa3ad50;
+}
+#cb-portrait .vet { width: 24dp; height: 19dp; }
+.unit-hp	/* "250/250" on the portrait's lower right, just over the name, as G2 shows it */
+{
+	position: absolute;
+	right: 3dp;
+	bottom: 3dp;
+	padding: 0 4dp;
+	background-color: #000000a8;
+	font-family: "Exo 2";
+	font-weight: bold;
+	font-size: 13dp;
+	color: #7fe07f;
+}
+.unit-hp.mid { color: #ffd84a; }
+.unit-hp.low { color: #ff5a40; }
+#cb-plate
+{
+	margin-top: 4dp;
+	padding: 3dp 6dp;
+	width: 140dp;	/* no fill of its own: the panel's shows through */
+	font-family: "Exo 2";
+	font-weight: bold;
+	font-size: 15dp;
+	color: #f2f4f5;
+	font-effect: shadow(1dp 1dp #000000c0);
+}
+#cb-plate .many { color: #9fb0b8; font-size: 13dp; }
+#cb-upgrades { display: flex; flex-direction: row; margin-top: 4dp; height: 24dp; }	/* kept with none, so the panel's top stays put */
+.upgrade { position: relative; width: 28dp; height: 22dp; margin-right: 2dp; border: 1dp #8fa3ad40; }
+.upgrade .art { position: absolute; left: 0; top: 0; width: 100%; height: 100%; opacity: 0.35; }
+.upgrade.owned .art { opacity: 1; }
+#cb-observer .obs-player { padding: 2dp 4dp; }
+#cb-observer .obs-player:hover { background-color: #ffffff18; }
+#cb-observer .obs-title { font-family: "Exo 2"; font-weight: bold; font-size: 15dp; }
+#cb-observer .obs-line { font-size: 13dp; }
+
+/* ---- above the card: the tooltip ---- */
+#cb-tip	/* just over the card and as wide; its least height makes its top meet the portrait panel's */
+{
+	right: 10dp;
+	bottom: 194dp;	/* the card's 122 + its 66 + a gap of 6 */
+	width: 458dp;
+	min-height: 46dp;
+	padding: 8dp;
+	pointer-events: none;
+}
+#cb-tip.left	/* the powers, promotions, rank, money and power: over the minimap panel, which ends 296 up */
+{
+	right: auto;
+	left: 10dp;
+	bottom: 304dp;
+	width: 400dp;
+}
+.tip-top { display: flex; flex-direction: row; }	/* G2's: the picture, the name and its lines, the cost on the right */
+.tip-icon { width: 60dp; height: 48dp; margin-right: 8dp; border: 1dp #8fa3ad60; flex-shrink: 0; }
+.tip-lines { flex: 1; }
+.tip-name { font-family: "Exo 2"; font-weight: bold; font-size: 16dp; color: #9fe3a0; }
+.tip-line { font-size: 12dp; color: #c8d2d6; }
+.tip-keyv { padding: 0 4dp; background-color: #000000b8; color: #ffd84a; font-family: "Exo 2"; font-weight: bold; }
+.tip-cost { margin-left: 10dp; font-family: "Exo 2"; font-weight: bold; font-size: 15dp; color: #f2d36a; }
+.tip-text { margin-top: 6dp; font-size: 13dp; color: #d7dde0; }
+
+/* ---- the promotions panel ---- */
+#cb-science
+{
+	left: 50%;
+	margin-left: -340dp;
+	bottom: 230dp;
+	width: 668dp;
+	padding: 10dp;
+}
+.sci-title { font-family: "Exo 2"; font-weight: bold; font-size: 18dp; color: #ffd84a; margin-bottom: 4dp; }
+.sci-label { font-size: 12dp; color: #9fb0b8; margin-top: 4dp; }
+.sci-row { display: flex; flex-direction: row; flex-wrap: wrap; }
+.sci-slot { display: none; margin: 0 4dp 4dp 0; }
+.sci-slot.live { display: block; }
+.sci-done { margin-top: 6dp; width: 80dp; text-align: center; }

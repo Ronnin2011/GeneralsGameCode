@@ -73,6 +73,8 @@ else()
 endif()
 include(cmake/lzhl.cmake)
 include(cmake/stb.cmake)
+# Ronin @feature 28/10/2026 DX9: RmlUi for the modern control bar (docs/UI_Work.md); fetched and built when vcpkg has none.
+include(cmake/rmlui.cmake)
 
 if(RTS_BUILD_OPTION_PROFILE_TRACY)
     include(cmake/tracy.cmake)

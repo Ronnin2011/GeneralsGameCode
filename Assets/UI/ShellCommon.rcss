@@ -1,0 +1,4570 @@
+/*
+	common.rcss -- shared look for every RmlUi shell screen.
+
+	Palette, taken from the original .wnd menus (Data/Window/Menus/*.wnd) so RmlUi screens
+	keep the native Generals look:
+		panel background   rgba(2, 2, 2, 191)     -- ~75% alpha dark panel
+		panel border       #2F37A8                -- thin blue border (47 55 168)
+		text               #FFFFFF                -- white
+		hilite / focus     #8080FF                -- hilite blue (128 128 255)
+		button hilite      #BAFF0C                -- PUSHBUTTON hilite text (186 255 12)
+		muted text         #C0C0C0                -- disabled grey (192 192 192)
+		disabled text      #7C7E99                -- text of a disabled control
+
+	Sizing uses RmlUi's dp unit throughout; RmlUiManager sets the context's
+	density-independent-pixel ratio to screen height / 1080 so 1dp keeps the same apparent
+	size (and the same relative layout) at any resolution/aspect ratio -- no per-callsite
+	scaling math needed in the RML itself.
+
+	Design tokens. RCSS has no variables, so these values are the contract: screen sheets use
+	them (or the classes that carry them) instead of one-off sizes.
+	  Type scale     display  40dp bold       splash text only: load screen titles and names, challenge title
+	                 title    26dp bold       .title-bar, .shell-title-bar, .t-title
+	                 section  18dp bold       .section-title, .slot-header, .t-section
+	                 body     16dp            body, .t-body
+	                 small    13dp            .t-small (versions, hints, map marker labels)
+	  Controls       control height 32dp      select, .text-input, .chat-input, .btn-inline, .icon-btn
+	                 row height 40dp          .slot-row; list rows (.list-row) are 30dp
+	  Buttons        primary   48dp tall, 20dp text, at least 180dp wide   .btn-primary (= .button-lg)
+	                 secondary 34dp tall, 16dp text                        button
+	                 inline    32dp tall, 14dp text                        .btn-inline
+	                 icon      32dp square                                 .icon-btn
+	                 button text is always upper case
+	  Spacing        4 / 8 / 12 / 16 / 24dp   (xs / s / m / l / xl)
+	  Panels         frame padding 16dp, sub-panel padding 12dp, 1dp #2F37A8 separators
+
+	Shared components. Every screen links this sheet, so mods restyle a component here once
+	instead of per screen (screen sheets only hold what is unique to that screen; GameSetup.rcss
+	adds the setup-screen pieces):
+
+	  Frames        .frame, .title-bar             centered dialog panel and its heading
+	                .shell-frame, .shell-title-bar, .shell-background
+	                                               full-screen blueprint panel; put class="shell" on <body>
+	                .panel-box                     bordered sub-panel inside a frame
+	  Layout        .row > .label + .control       label/control grid: label 40%, control the rest;
+	                                               wrap a checkbox in <div class="control"> to keep the grid
+	                .tabs > .tab(.selected)        tab strip
+	                .footer, .footer-split         button row along the bottom edge
+	                .spacer                        pushes what follows to the far end of a flex row
+	                .section-title                 underlined heading over a column or list
+	  Controls      .btn-primary/.button-lg, button, .btn-inline, .icon-btn, button.active (toggle on)
+	                select (drop-down arrow from the .wnd combo box art), .color-swatch,
+	                input.range, input.checkbox, .text-input
+	  Lists         .list-box (+ .opaque)          bordered pane; combine with .scroll-container
+	                .list-row (+ .flex, .compact, .selected)
+	                                               one entry of a .list-box; block by default, .flex for cells
+	                .text-list, .text-line         bordered pane of plain text lines (status feed, MOTD)
+	  Chat          .chat > .chat-log > .chat-line       fixed-height block: scrolling lines ...
+	                     > .chat-entry > .chat-input + .icon-btn   ... over the entry row
+	                .send-row > .chat-input + button.chat-send     redesigned screens: the input and an
+	                                               accent send arrow as one control (see Chat entry)
+	                <scrolllog>                    scrolling pane that stays at its newest line unless
+	                                               the user scrolled up; use it for .chat-log and log-style
+	                                               .text-list panes (plain <div> for ones that start at the top)
+	  Rank cluster  .rank-column, .rank-border, .rank-image-wrap, .rank-image, .faction-image,
+	                .rank-progress(-fill), .rank-label   rank portrait, faction badge, progress, name
+	  Popups        .context-menu(-backdrop/-item) right-click menu placed at the cursor
+
+	A bare <div data-for="..."> wrapping a row is inline unless it is a direct child of a .list-box or
+	.text-list (which makes it a block); a row that is a data-for element itself needs display:block,
+	which .list-row and .chat-line/.text-line already give it.
+
+	The components above are the legacy .shell look. Every redesigned screen opts into the screen
+	template (body.screen) further down: its design language and skeleton, then the shared components
+	(player card, stat card, tile, tab rail, progress, chips, persona, facts, modal) and the gotchas of
+	this RmlUi build, each documented where it is defined.
+
+	On top of the template, every shell screen speaks the main menu's HQ terminal language (last
+	section of this sheet): the .hq-header strip (logo, crumb and title, online status, clock) in the
+	frame's top band, in place of the title plate, .hq-brackets (green corner brackets and a scan line) on primary rows and tiles,
+	.hq-card art cards with a green top edge, and the .hq-ticker news strip.
+	Its status comes from RmlHqStatus in the device layer, bound into each screen's data model.
+*/
+
+body
+{
+	font-family: "Noto Sans";
+	font-size: 16dp;
+	color: #FFFFFF;
+}
+
+/* ---- Type scale ------------------------------------------------------------------------ */
+.t-title { font-size: 26dp; font-weight: bold; }
+.t-section { font-size: 18dp; font-weight: bold; }
+.t-body { font-size: 16dp; }
+.t-small { font-size: 13dp; }
+.t-muted { color: #C0C0C0; }
+
+/* ---- Frame: the translucent bordered panel every screen is drawn on ------------------- */
+.frame
+{
+	background-color: rgba(2, 2, 2, 191);
+	border: 2dp #2F37A8;
+	padding: 16dp;
+}
+
+.title-bar
+{
+	font-size: 26dp;
+	font-weight: bold;
+	color: #FFFFFF;
+	text-align: center;
+	padding-bottom: 8dp;
+	border-bottom: 1dp #2F37A8;
+	margin-bottom: 12dp;
+}
+
+/* Bordered sub-panel inside a frame (option groups, honors, stats). */
+.panel-box
+{
+	border: 1dp #2F37A8;
+	background-color: rgba(2, 2, 2, 140);
+	padding: 12dp;
+}
+
+/* ---- Tabs -------------------------------------------------------------------------- */
+.tabs
+{
+	display: flex;
+	flex-direction: row;
+	margin-bottom: 12dp;
+}
+
+.tab
+{
+	flex: 1 1 0%;
+	box-sizing: border-box;
+	height: 34dp;
+	line-height: 32dp;
+	text-align: center;
+	font-size: 16dp;
+	font-weight: bold;
+	color: #C0C0C0;
+	background-color: rgba(2, 2, 2, 140);
+	border: 1dp #2F37A8;
+	margin-right: 4dp;
+}
+
+.tab:last-child
+{
+	margin-right: 0;
+}
+
+.tab:hover
+{
+	color: #FFFFFF;
+	border-color: #8080FF;
+}
+
+.tab.selected
+{
+	color: #FFFFFF;
+	background-color: rgba(47, 55, 168, 140);
+	border: 1dp #8080FF;
+}
+
+/* ---- Rows: label/control grid ------------------------------------------------------------
+   The label takes 40% of the row and the control the rest, so every control of a panel starts
+   at the same x. A checkbox goes inside <div class="control"> so it sits at that x too. */
+.row
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	min-height: 32dp;
+	margin-bottom: 8dp;
+}
+
+.row > .label
+{
+	flex: 0 0 40%;
+	box-sizing: border-box;
+	padding-right: 12dp;
+	color: #FFFFFF;
+}
+
+.row > .control
+{
+	flex: 1 1 0%;
+	min-width: 0;
+}
+
+.row > .control.checkbox
+{
+	flex: 0 0 auto;
+}
+
+.row.disabled > .label,
+.row.disabled > .control
+{
+	color: #C0C0C0;
+}
+
+/* ---- Buttons -------------------------------------------------------------------------
+   The engine's own capsule button art (the Buttons, Buttons-HiLite, Buttons-Pushed and
+   Buttons-Disabled Left/Middle/Right mapped images, exposed as sprites by RmlUiFileInterface):
+   fixed end caps scaled to the button height, stretched middle. Text colours and the 1dp dark shadow follow
+   the .wnd PUSHBUTTON text colours (white / 186,255,12 hilite / 62,64,92 disabled).
+   Three sizes with fixed heights and one line of centred, upper case text: button (secondary),
+   .btn-primary/.button-lg (footer and menu actions) and .btn-inline (next to a 32dp control). */
+button, .button
+{
+	display: inline-block;
+	box-sizing: border-box;
+	decorator: tiled-horizontal(Buttons-Left, Buttons-Middle, Buttons-Right);
+	color: #FFFFFF;
+	font-effect: shadow(1dp 1dp #000000);
+	height: 34dp;
+	line-height: 34dp;
+	padding: 0 18dp;
+	font-size: 16dp;
+	font-weight: bold;
+	text-align: center;
+	text-transform: uppercase;
+	white-space: nowrap;
+}
+
+.btn-primary, .button-lg
+{
+	height: 48dp;
+	line-height: 48dp;
+	padding: 0 32dp;
+	min-width: 180dp;
+	font-size: 20dp;
+}
+
+.btn-inline
+{
+	height: 32dp;
+	line-height: 32dp;
+	padding: 0 12dp;
+	font-size: 14dp;
+}
+
+button:hover, .button:hover
+{
+	decorator: tiled-horizontal(Buttons-HiLite-Left, Buttons-HiLite-Middle, Buttons-HiLite-Right);
+	color: #BAFF0C;
+}
+
+button:active, .button:active
+{
+	decorator: tiled-horizontal(Buttons-Pushed-Left, Buttons-Pushed-Middle, Buttons-Pushed-Right);
+	color: #BAFF0C;
+}
+
+/* A toggle button that is on (sort/filter/tab buttons): drawn lit like a hovered button. */
+button.active
+{
+	decorator: tiled-horizontal(Buttons-HiLite-Left, Buttons-HiLite-Middle, Buttons-HiLite-Right);
+	color: #BAFF0C;
+}
+
+/* <button> never gets :disabled in RmlUi; match the disabled attribute that data-attrif-disabled sets.
+   Listed after :hover/:active (and repeated with them) so a disabled button never lights up. */
+button:disabled, button[disabled], .button.disabled, button.disabled,
+button[disabled]:hover, button.disabled:hover, .button.disabled:hover,
+button[disabled]:active, button.disabled:active, .button.disabled:active
+{
+	decorator: tiled-horizontal(Buttons-Disabled-Left, Buttons-Disabled-Middle, Buttons-Disabled-Right);
+	color: #3E405C;
+	font-effect: shadow(1dp 1dp #1F202F);
+}
+
+/* Square glyph/icon buttons are too small for the capsule end caps: keep the plain bordered box. */
+.icon-btn, .joingame-close,
+.icon-btn:hover, .joingame-close:hover,
+.icon-btn:active, .joingame-close:active
+{
+	decorator: none;
+	font-effect: none;
+	background-color: rgba(2, 2, 2, 191);
+	border: 1dp #2F37A8;
+}
+
+.icon-btn:hover, .joingame-close:hover
+{
+	border-color: #8080FF;
+	color: #8080FF;
+}
+
+/* Fixed 32dp square (the control height) holding a <mappedimage> glyph (chat send/emote, list
+   refresh). The art isn't always perfectly square, so both the button and the image clip instead of
+   overflowing. The doubled class outranks a screen's "<container> button { padding }" rule. */
+.icon-btn.icon-btn
+{
+	width: 32dp;
+	height: 32dp;
+	min-width: 0;
+	line-height: 30dp;
+	padding: 3dp;
+	text-align: center;
+	overflow: hidden;
+}
+
+.icon-btn mappedimage
+{
+	display: block;
+	width: 100%;
+	height: 100%;
+	overflow: hidden;
+}
+
+/* ---- Dropdown (select) ---------------------------------------------------------------
+   32dp control with the .wnd combo box's drop-down button art on the right
+   (COMBOBOXDROPDOWNBUTTON*DRAWDATA: VSliderDownButtonEnabled/-Hilite/-HiliteSelected/-Disabled).
+   The open list is opaque, scrolls past ten rows and lights the hovered row. */
+select
+{
+	display: inline-block;
+	box-sizing: border-box;
+	height: 32dp;
+	background-color: rgba(2, 2, 2, 220);
+	border: 1dp #2F37A8;
+	color: #FFFFFF;
+	font-size: 16dp;
+	vertical-align: middle;
+}
+
+select selectvalue
+{
+	height: 30dp;
+	line-height: 30dp;
+	margin-right: 32dp;
+	padding: 0 8dp;
+	white-space: nowrap;
+	overflow: hidden;
+}
+
+select selectarrow
+{
+	width: 30dp;
+	height: 30dp;
+	decorator: image(VSliderDownButtonEnabled);
+}
+
+select:hover, select:focus
+{
+	border-color: #8080FF;
+}
+
+select:hover selectarrow
+{
+	decorator: image(VSliderDownButtonHilite);
+}
+
+select:checked selectarrow
+{
+	decorator: image(VSliderDownButtonHiliteSelected);
+}
+
+select[disabled], select[disabled]:hover
+{
+	border-color: rgba(47, 55, 168, 110);
+	background-color: rgba(2, 2, 2, 120);
+	color: #7C7E99;
+}
+
+select[disabled] selectarrow, select[disabled]:hover selectarrow
+{
+	decorator: image(VSliderDownButtonDisabled);
+	opacity: 0.6;
+}
+
+/* The option list is created by RmlUi as a child of the select, so a select sitting in a flex row
+   (a header strip, a setup row) would otherwise lay its options out along that row. It is always a
+   vertical list of full-width rows, scrolling once it is taller than max-height. */
+select selectbox
+{
+	display: flex;
+	flex-direction: column;
+	box-sizing: border-box;
+	background-color: #06061A;
+	border: 1dp #8080FF;
+	padding: 2dp 0;
+	max-height: 320dp;
+	overflow-y: auto;
+	z-index: 100;
+}
+
+select selectbox option
+{
+	flex: 0 0 auto;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	height: 30dp;
+	line-height: 30dp;
+	padding: 0 10dp;
+	white-space: nowrap;
+	color: #FFFFFF;
+}
+
+select selectbox option:hover
+{
+	background-color: rgba(47, 55, 168, 220);
+}
+
+select selectbox option:checked
+{
+	color: #BAFF0C;
+}
+
+/* Colour choice: a swatch in front of the colour's name (a hollow swatch for Random). */
+.color-swatch
+{
+	display: inline-block;
+	width: 14dp;
+	height: 14dp;
+	margin-right: 8dp;
+	border: 1dp rgba(255, 255, 255, 160);
+	vertical-align: middle;
+}
+
+/* ---- Slider (input type=range) ------------------------------------------------------- */
+input.range
+{
+	height: 20dp;
+}
+
+input.range slidertrack
+{
+	margin-top: 7dp;
+	height: 6dp;
+	background-color: rgba(2, 2, 2, 191);
+	border: 1dp #2F37A8;
+}
+
+input.range sliderbar
+{
+	width: 12dp;
+	height: 20dp;
+	background-color: #8080FF;
+	border: 1dp #2F37A8;
+}
+
+input.range sliderbar:hover
+{
+	background-color: #BAFF0C;
+}
+
+input.range[disabled] sliderbar
+{
+	background-color: #3E405C;
+}
+
+/* ---- Checkbox -------------------------------------------------------------------------
+   The .wnd checkbox art (CHECKBOX draw data: Active-Unchecked/-HiLighted/-Checked and
+   Disabled-Unchecked/-Checked). */
+input.checkbox
+{
+	width: 20dp;
+	height: 20dp;
+	decorator: image(Active-Unchecked);
+}
+
+input.checkbox:hover
+{
+	decorator: image(Active-HiLighted);
+}
+
+input.checkbox:checked, input.checkbox:checked:hover
+{
+	decorator: image(Active-Checked);
+}
+
+input.checkbox[disabled], input.checkbox[disabled]:hover
+{
+	decorator: image(Disabled-Unchecked);
+}
+
+input.checkbox[disabled]:checked
+{
+	decorator: image(Disabled-Checked);
+}
+
+/* ---- Scroll container ------------------------------------------------------------------ */
+/* min-height: 0 lets the box shrink to its frame; without it a flex item never goes below its
+   content height, so a long list grows past the frame instead of scrolling. */
+.scroll-container
+{
+	overflow-y: auto;
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+/* Scrollbar must be sized explicitly: unstyled, RmlUi gives it the container's full width, so as
+   soon as a list needs to scroll its content width collapses to ~0 (one word per line). */
+scrollbarvertical
+{
+	width: 12dp;
+}
+
+scrollbarvertical slidertrack
+{
+	width: 12dp;
+	background-color: rgba(2, 2, 2, 191);
+	border-left: 1dp rgba(47, 55, 168, 110);
+	border-right: 1dp rgba(47, 55, 168, 60);
+}
+
+/* Bevelled like the .wnd's slider thumb art: lit top and left edge, dark bottom and right. */
+scrollbarvertical sliderbar
+{
+	box-sizing: border-box;
+	width: 12dp;
+	min-height: 32dp;
+	border-top: 1dp #8080FF;
+	border-left: 1dp #4A55D8;
+	border-bottom: 1dp #0B1030;
+	border-right: 1dp #1E246E;
+	decorator: horizontal-gradient(#3A46D0 #2A33A0);
+}
+
+scrollbarvertical sliderbar:hover
+{
+	border-top-color: #C0C4FF;
+	decorator: horizontal-gradient(#5560E8 #3A46D0);
+}
+
+scrollbarvertical sliderbar:active
+{
+	border-top-color: #FFFFFF;
+	decorator: horizontal-gradient(#8080FF #5560E8);
+}
+
+scrollbarvertical sliderarrowdec, scrollbarvertical sliderarrowinc
+{
+	width: 0dp;
+	height: 0dp;
+}
+
+/* ---- Text input -------------------------------------------------------------------------- */
+.text-input, .chat-input
+{
+	box-sizing: border-box;
+	height: 32dp;
+	line-height: 30dp;
+	background-color: rgba(2, 2, 2, 220);
+	border: 1dp #2F37A8;
+	color: #FFFFFF;
+	padding: 0 8dp;
+}
+
+.text-input:hover, .chat-input:hover
+{
+	border-color: #5A5FD0;
+}
+
+.text-input[disabled]
+{
+	color: #7C7E99;
+	border-color: rgba(47, 55, 168, 110);
+}
+
+.text-input:focus, .chat-input:focus
+{
+	border-color: #8080FF;
+}
+
+/* ---- Small layout helpers -------------------------------------------------------------- */
+/* Pushes whatever follows it to the far end of a flex row. */
+.spacer
+{
+	flex: 1 1 auto;
+}
+
+/* Underlined heading over a column or list. */
+.section-title
+{
+	font-size: 18dp;
+	font-weight: bold;
+	color: #FFFFFF;
+	padding-bottom: 4dp;
+	border-bottom: 1dp #2F37A8;
+	margin-bottom: 8dp;
+	flex: 0 0 auto;
+}
+
+/* <scrolllog> is a scrolling block that keeps itself at its newest line (C++ RmlScrollLogElement). */
+scrolllog
+{
+	display: block;
+	overflow-y: auto;
+}
+
+/* ---- Boxed lists -------------------------------------------------------------------------
+   Combine with .scroll-container. .list-box is the bordered pane around a list of .list-row
+   entries, .text-list the same pane for plain text lines (status feed, message of the day), and
+   .chat-log the darker, tail-following variant a .chat uses. */
+.list-box, .text-list, .chat-log
+{
+	border: 1dp #2F37A8;
+	background-color: rgba(2, 2, 2, 140);
+}
+
+.list-box.opaque
+{
+	background-color: rgba(2, 2, 2, 191);
+}
+
+.text-list, .chat-log
+{
+	padding: 4dp 6dp;
+}
+
+/* The bare <div data-for="..."> wrapping each row is display:inline (no UA stylesheet), and a block
+   inside an inline wrapper gets no reliable width; make the wrapper a real block. */
+.list-box > div, .text-list > div
+{
+	display: block;
+}
+
+/* One line inside a .text-list. */
+.text-line
+{
+	display: block;
+	padding: 1dp 0;
+}
+
+/* ---- List row -----------------------------------------------------------------------------
+   One entry of a .list-box. Block by default: RmlUi lays out data-for children as inline unless told
+   otherwise, so every row needs the display. Add .flex for a row of cells (icon, name, count), and
+   .compact for the tighter padding. .selected marks the chosen row, hover lights it. */
+.list-row
+{
+	display: block;
+	box-sizing: border-box;
+	min-height: 30dp;
+	padding: 5dp 8dp;
+	border-bottom: 1dp rgba(47, 55, 168, 80);
+}
+
+.list-row.flex
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+}
+
+.list-row.compact
+{
+	min-height: 26dp;
+	padding: 2dp 8dp;
+}
+
+.list-row:hover
+{
+	background-color: rgba(47, 55, 168, 60);
+}
+
+.list-row.selected
+{
+	background-color: rgba(47, 55, 168, 120);
+	border: 1dp #8080FF;
+}
+
+/* ---- Chat ---------------------------------------------------------------------------------
+   <div class="chat"> is the fixed-height block at the bottom of a screen: a .chat-log (scrolling
+   lines, one .chat-line each) over a .chat-entry row (a .chat-input and one or two .icon-btn). */
+.chat
+{
+	display: flex;
+	flex-direction: column;
+	margin-top: 12dp;
+	height: 160dp;
+}
+
+.chat-log
+{
+	flex: 1 1 0%;
+	min-height: 0;
+	background-color: rgba(2, 2, 2, 191);
+}
+
+.chat-line
+{
+	display: block;
+}
+
+.chat-entry
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	margin-top: 8dp;
+}
+
+.chat-input
+{
+	flex: 1 1 auto;
+	margin-right: 8dp;
+}
+
+/* ---- Rank cluster --------------------------------------------------------------------------
+   Rank portrait, faction badge, progress bar and rank name (online welcome, player info, quick
+   match stats). Uses fixed dp sizes (matching WOLWelcomeMenu.wnd's RankBorder/WinRank/FactionImage
+   1:1) instead of percentages -- dp already scales with screen height (see common.rcss header
+   comment), so this still scales consistently across resolutions, just not stretched
+   independently like the .wnd's own non-uniform 800x600 stretch. mappedimage itself does resolve
+   percentage width/height fine (its inner <img> is always 100%x100% of it); fixed dp is used here
+   only because the whole rank-column is a fixed-width column, not a mappedimage limitation. */
+.rank-column
+{
+	display: flex;
+	flex-direction: column;
+	flex: 0 0 auto;
+	width: 128dp;
+	margin-right: 12dp;
+}
+
+.rank-border
+{
+	position: relative;
+	box-sizing: border-box; /* declared width/height must include the border, or this (and its
+		border-box child .rank-progress below) overflow rank-column by the border width
+		(audit: OVERFLOW div.rank-border / div.rank-progress) */
+	width: 128dp;
+	height: 156dp;
+	background-color: #020280;
+	border: 1dp #2F37A8;
+}
+
+.rank-image-wrap
+{
+	display: block;
+	position: relative;
+	box-sizing: border-box;
+	width: 100%; /* fill rank-border's content box exactly, instead of duplicating its 128dp and
+		overflowing once rank-border switched to box-sizing:border-box */
+	height: 128dp;
+	border-bottom: 1dp #2E37A8;
+}
+
+.rank-image
+{
+	display: block;
+	width: 100%;
+	height: 128dp;
+}
+
+.faction-image
+{
+	display: block;
+	position: absolute;
+	right: 0dp;
+	bottom: 0dp;
+	width: 48dp;
+	height: 48dp;
+}
+
+/* Progress bars share one look: a recessed dark track with a blue edge, the fill a lit tube (light top,
+   dark bottom) ending in a bright cap. Rank progress fills with the accent. A fill needs display: block
+   or its width is ignored. */
+.rank-progress
+{
+	display: block;
+	position: absolute;
+	box-sizing: border-box;
+	left: 0;
+	bottom: 0;
+	width: 100%; /* fill rank-border's content box exactly, see .rank-image-wrap above */
+	height: 24dp;
+	padding: 3dp;
+	background-color: #05070FE6;
+	border: 1dp #3A46D0;
+	border-top-color: #1E246E;
+}
+
+.rank-progress-fill
+{
+	display: block;
+	box-sizing: border-box;
+	height: 100%;
+	background-color: #D1FD04;
+	decorator: vertical-gradient(#E6FF6A #8FB000);
+	border-right: 2dp #F4FFC0;
+}
+
+.rank-label
+{
+	margin-top: 4dp;
+	text-align: center;
+	flex: 0 0 auto;
+}
+
+/* ---- Footer button row ------------------------------------------------------------------ */
+.footer
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: flex-end;
+	flex: 0 0 auto;
+	margin-top: 12dp;
+	border-top: 1dp #2F37A8;
+	padding-top: 12dp;
+}
+
+.footer button
+{
+	margin-left: 12dp;
+}
+
+/* Primary action left, secondary (Main Menu) right -- matches the .wnd originals (e.g.
+   Skirmish's Play Game / Main Menu) instead of grouping both buttons at the right edge. */
+.footer-split
+{
+	justify-content: space-between;
+}
+
+.footer-split button
+{
+	margin-left: 0;
+}
+
+/* ---- Shell frame: full-screen blueprint background + bordered panel ------------------
+   Shared by screens whose .wnd fills the whole 800x600 blueprint-ruler backdrop (see
+   WOLWelcomeMenu.wnd's WOLWelcomeMenuParent/MainMenuRuler + GadgetParent), instead of
+   floating in a fixed-size dialog like .frame. Percent geometry mirrors the .wnd's own
+   non-uniform 800x600-to-screen stretch. */
+.shell-background
+{
+	display: block;
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	z-index: -1;
+}
+
+body.shell
+{
+	width: 100%;
+	height: 100%;
+}
+
+.shell-frame
+{
+	box-sizing: border-box;
+	position: absolute;
+	left: 5.6%;
+	top: 7.3%;
+	width: 88.8%;
+	height: 85.4%;
+	background-color: rgba(2, 2, 2, 190);
+	border: 2dp #2F37A8;
+	padding: 16dp;
+	display: flex;
+	flex-direction: column;
+}
+
+.shell-title-bar
+{
+	font-size: 26dp;
+	font-weight: bold;
+	color: #FFFFFF;
+	text-align: left;
+	padding-bottom: 8dp;
+	border-bottom: 1dp #2F37A8;
+	margin-bottom: 12dp;
+	flex: 0 0 auto;
+}
+
+/* ---- Right-click context menu -------------------------------------------------------------
+   Generic reusable popup for the RC*.wnd-style right-click menus (WOLLobbyMenu.cpp's
+   GLM_RIGHT_CLICKED, WOLBuddyOverlay.cpp's own right-click menus). A screen positions
+   .context-menu at the cursor via data-style-left/top (pre-clamped on-screen by the caller,
+   same clamp WOLLobbyMenu.cpp's GLM_RIGHT_CLICKED does against TheDisplay's width/height) and
+   toggles it + a full-viewport .context-menu-backdrop with data-if="menu_visible"; the backdrop
+   sits behind the menu and closes it on any click outside, replacing winSetLoneWindow()'s
+   click-away-closes behavior. Both use position:fixed (viewport-relative), not absolute: a caller
+   may nest .context-menu inside an already-positioned ancestor (e.g. OnlineLobby.rml's
+   .shell-frame), and RmlUi's mouse_x/mouse_y event coordinates the caller feeds into
+   data-style-left/top are viewport-relative, not relative to that ancestor. */
+.context-menu-backdrop
+{
+	display: block;
+	position: fixed;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	z-index: 100;
+}
+
+.context-menu
+{
+	display: block;
+	position: fixed;
+	z-index: 101;
+	background-color: rgba(2, 2, 2, 235);
+	border: 1dp #2F37A8;
+	min-width: 110dp;
+}
+
+.context-menu-item
+{
+	display: block;
+	height: 30dp;
+	line-height: 30dp;
+	padding: 0 12dp;
+	color: #FFFFFF;
+	text-align: center;
+	border-bottom: 1dp rgba(47, 55, 168, 80);
+}
+
+.context-menu-item:last-child
+{
+	border-bottom: 0dp transparent;
+}
+
+.context-menu-item:hover
+{
+	background-color: rgba(47, 55, 168, 160);
+}
+
+
+/* =========================================================================================
+   Screen template -- the redesigned shell look. Opt in with class="screen" on <body>; every
+   rule below is scoped to it, so screens that still use .shell-frame keep their look.
+
+   The shell map (the live battle behind the menus) is the backdrop, so nothing fills the frame:
+   content sits in floating translucent .surface panels with the map showing around and between
+   them, headings and quiet buttons float on the map behind a soft text glow, and the frame stops
+   growing on ultrawide screens so the map fills the sides. Keep the map in view: prefer a panel
+   that is as tall as its content over one stretched to the bottom.
+
+   Design language
+	  Palette   ink       #05070F            deepest backdrop
+	            surface   #070A1AE0          panels (.surface), the only filled boxes; 88% so text
+	                                         reads over any terrain. Text on the map itself gets
+	                                         a #070A1AC8-D9 plate (heading, back) or .map-glow
+	            raised    #141A3ED7          controls, hovered rows
+	            line      #8080FF28          hairline separators; borders only where needed
+	            blue      #2F37A8 / #3A46D0 / #8080FF   brand, selected, hover/focus; the retail
+	                                         push buttons' blues (47 55 168 pushed, 0 0 255 lit)
+	            text      #EEF1FA  text-2 #A9B1CF  text-3 #7079A0 (labels, overlines)
+	            accent    #D1FD04            the .wnd push button HILITE green (209 253 4), the one
+	                                         "act here" colour: hover and pressed text, title tick,
+	                                         focus ring, selected-row bar, checks, badges
+	                      #E6FF6A / #A8CC00 / #8FB000   light / dark / pressed green, for fills
+	                                         (progress, rank); #0E1400 text on a green fill
+	            primary   blue plate #3F4CD8-#252E96, 2dp #6170FA edge, white text; on hover and
+	                                         focus the edge and text go green (.btn-cta)
+	                                         Selection fills and "on" segments stay blue.
+	            status    good #36D8B2 (teal, clear of the lime accent)  warn #E8D440  bad #FF5050
+	                      buddy #14B1FF
+	  Type      Noto Sans for body text; bold text (titles, buttons, labels) draws in Exo 2 Bold, and
+	            each script's own faces take over (RmlTextShaping). Title 40dp bold caps behind an accent tick; crumb and
+	            overline 15-16dp bold caps tracked 2dp; body 20dp (the .wnd Arial 12 at 800x600);
+	            small 16dp; primary button 24dp. Text drawn straight on the map (.on-map, the
+	            header, the back button) gets .map-glow.
+	  Spacing   4 / 8 / 12 / 16 / 20 / 24 / 40dp; 20dp between floating panels.
+	  Frame     one instrument frame on every shell screen (.screen-ruler): a frame line inset from the
+	            screen edges, a tinted ruler band outside it (side 40dp, top 112dp, bottom 88dp,
+	            fixed), a tick scale standing on the line in every band, a corner block where the
+	            scales meet. The top band holds the .hq-header, the bottom band the .action-bar (the
+	            main menu's: the news ticker). The content frame keeps a 20dp gutter inside the line.
+	  Motion    hover/press 0.12s cubic-out, panels 0.22s cubic-out, loading pulse 1.2s.
+	            Opacity, colours and margins only: the renderer has no transforms.
+
+   Skeleton
+	<body class="screen" data-model="...">
+		<div class="screen-ruler"><div class="rs rs-top"></div>
+			(rs-bottom, rs-left and rs-right the same, then rc-tl, rc-tr, rc-bl, rc-br)</div>
+		<div class="hq-band hq-header">...</div>          (see HQ terminal)
+		<div class="screen-frame">
+			<div class="screen-header">
+				<div class="screen-heading">
+					<div class="screen-crumb">parent<span class="crumb-sep">&#8250;</span></div>
+					<div class="screen-title">title</div>
+				</div>
+				<div class="screen-header-aside">optional controls</div>
+			</div>
+			<div class="screen-body">.col.col-main / .col.col-side of .surface panels</div>
+			<div class="action-bar">                             drawn in the bottom band
+				<button class="btn-back">back or cancel</button>   always far left
+				status (readiness, countdown) <div class="spacer"/> secondary buttons
+				<button class="btn-cta">primary</button>            always far right
+			</div>
+		</div>
+	</body>
+
+   Components: .surface, .overline, .seg > button.seg-item(.on), label.check > input.checkbox,
+   .swatches > button.swatch(.on/.random), .row-item(.selected), .list-head, .empty-state,
+   .pulse, .stat, .dot, the map card (.map-frame, .marker, .map-name), plus scoped restyles of button, select, input.range, text inputs and
+   scrollbars. Clickable pieces are <button>s so they get the click sound and disabled handling.
+   ========================================================================================= */
+
+body.screen
+{
+	width: 100%;
+	height: 100%;
+	font-size: 20dp;
+}
+
+/* ---- Frame: the instrument frame every shell screen shares -------------------------------------
+   No art. One frame line runs round the screen, inset from its edges; everything between that line
+   and the edges is the ruler band, one quiet tint on all four sides that lets the map read through.
+   The frame line is a ruler's edge: a tick scale (the ruler-ticks decorator, RmlRulerDecorator.h)
+   stands on it on every side and points out into the band, a minor tick every 4dp, a longer one
+   every 5th and the longest every 10th, counted from each corner with an index mark in the middle.
+   Each corner carries the same small block where the scales meet.
+
+	<div class="screen-ruler">
+		<div class="rs rs-top"><div></div>x4</div>    (rs-bottom the same; rs-left and rs-right hold
+		<div class="rc rc-tl"><div></div></div>        two; the rc blocks are the corner pieces)
+	</div>
+
+   Bands (dp), fixed for every framed screen (body.hq and the main menu), never overridden per screen:
+	  side     40   the social dock's tab sits in the right one
+	  top     112   the .hq-header (logo, crumb and title, status, clock) over a 16dp tick lane
+	  bottom   88   a 16dp tick lane over the .action-bar (back left, status, primary right), or the
+	                main menu's news ticker
+   The frame line is the band's last dp. Content (.screen-frame) keeps a 20dp gutter inside it on
+   every side: 60dp from the sides, 132dp from the top, 108dp from the bottom. Screens fit their
+   content to this frame; the frame never moves for a screen.
+
+   Load screens keep the thin edge ruler (their art is the picture and they have no header or
+   actions): 20dp strips on the screen edges with the ticks standing on the edge. */
+.screen-ruler
+{
+	display: block;
+	position: absolute;
+	left: 0;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	z-index: 3;
+	pointer-events: none;
+}
+
+.screen-ruler .rs, .screen-ruler .rc
+{
+	display: block;
+	position: absolute;
+	box-sizing: border-box;
+	pointer-events: none;
+	border-color: #8E97F8B8;
+}
+
+.screen-ruler .rs > div, .screen-ruler .rc > div
+{
+	display: none;
+}
+
+/* The band: one tint under all four sides and the corners, the opening left clear. */
+.hq .screen-ruler, .mm-d .screen-ruler
+{
+	border-width: 112dp 40dp 88dp 40dp;
+	border-color: #070A18A8;
+}
+
+/* The tick lanes, 16dp deep, each closed by the frame line on its inner side. */
+.hq .screen-ruler .rs-top, .mm-d .screen-ruler .rs-top
+{
+	left: 0;
+	right: 0;
+	top: -16dp;
+	height: 16dp;
+	border-bottom-width: 1dp;
+	decorator: ruler-ticks(bottom #8E97F8A0 none);
+}
+
+.hq .screen-ruler .rs-bottom, .mm-d .screen-ruler .rs-bottom
+{
+	left: 0;
+	right: 0;
+	bottom: -16dp;
+	height: 16dp;
+	border-top-width: 1dp;
+	decorator: ruler-ticks(top #8E97F8A0 none);
+}
+
+.hq .screen-ruler .rs-left, .mm-d .screen-ruler .rs-left
+{
+	left: -16dp;
+	top: 0;
+	bottom: 0;
+	width: 16dp;
+	border-right-width: 1dp;
+	decorator: ruler-ticks(right #8E97F8A0 none);
+}
+
+.hq .screen-ruler .rs-right, .mm-d .screen-ruler .rs-right
+{
+	right: -16dp;
+	top: 0;
+	bottom: 0;
+	width: 16dp;
+	border-left-width: 1dp;
+	decorator: ruler-ticks(left #8E97F8A0 none);
+}
+
+/* Corner pieces: a block where two tick lanes meet, its inner sides on the frame line. */
+.hq .screen-ruler .rc, .mm-d .screen-ruler .rc
+{
+	width: 16dp;
+	height: 16dp;
+	border-width: 1dp;
+	background-color: #8E97F830;
+}
+
+.hq .screen-ruler .rc > div, .mm-d .screen-ruler .rc > div
+{
+	display: block;
+	position: absolute;
+	left: 4dp;
+	top: 4dp;
+	width: 6dp;
+	height: 6dp;
+	background-color: #8E97F8C0;
+}
+
+.hq .rc-tl, .mm-d .rc-tl { left: -16dp; top: -16dp; }
+.hq .rc-tr, .mm-d .rc-tr { right: -16dp; top: -16dp; }
+.hq .rc-bl, .mm-d .rc-bl { left: -16dp; bottom: -16dp; }
+.hq .rc-br, .mm-d .rc-br { right: -16dp; bottom: -16dp; }
+
+/* Load screens: the thin edge ruler over the full-bleed art. */
+.ld .screen-ruler .rs-top, .mm-a .screen-ruler .rs-top, .mm-b .screen-ruler .rs-top, .mm-c .screen-ruler .rs-top
+{
+	left: 0;
+	right: 0;
+	top: 0;
+	height: 20dp;
+	border-bottom-width: 2dp;
+	decorator: ruler-ticks(top #8E97F8B8);
+}
+
+.ld .screen-ruler .rs-bottom, .mm-a .screen-ruler .rs-bottom, .mm-b .screen-ruler .rs-bottom, .mm-c .screen-ruler .rs-bottom
+{
+	left: 0;
+	right: 0;
+	bottom: 0;
+	height: 20dp;
+	border-top-width: 2dp;
+	decorator: ruler-ticks(bottom #8E97F8B8);
+}
+
+.ld .screen-ruler .rs-left, .mm-a .screen-ruler .rs-left, .mm-b .screen-ruler .rs-left, .mm-c .screen-ruler .rs-left
+{
+	left: 0;
+	top: 20dp;
+	bottom: 20dp;
+	width: 20dp;
+	border-right-width: 2dp;
+	decorator: ruler-ticks(left #8E97F8B8);
+}
+
+.ld .screen-ruler .rs-right, .mm-a .screen-ruler .rs-right, .mm-b .screen-ruler .rs-right, .mm-c .screen-ruler .rs-right
+{
+	right: 0;
+	top: 20dp;
+	bottom: 20dp;
+	width: 20dp;
+	border-left-width: 2dp;
+	decorator: ruler-ticks(right #8E97F8B8);
+}
+
+/* Content frame: a flex column. On a framed screen it keeps the 20dp gutter inside the frame line;
+   on a load screen it keeps 88dp / 78dp from the edges, at most 2150dp wide and centred. */
+.screen-frame
+{
+	box-sizing: border-box;
+	position: absolute;
+	left: 88dp;
+	right: 88dp;
+	top: 78dp;
+	bottom: 78dp;
+	max-width: 2150dp;
+	margin-left: auto;
+	margin-right: auto;
+	display: flex;
+	flex-direction: column;
+}
+
+.hq .screen-frame, .mm-d .screen-frame
+{
+	left: 60dp;
+	right: 60dp;
+	top: 132dp;
+	bottom: 108dp;
+	max-width: none;
+}
+
+/* Dark halo behind text drawn straight on the map: a local scrim, only as big as the text. */
+.map-glow, .screen-crumb, .screen-title, .screen .btn-back, .on-map, .hq-crumb, .hq-title, .hq-clock
+{
+	font-effect: glow(1dp 8dp 0dp 1dp #000000F0);
+}
+
+/* ---- Header ------------------------------------------------------------------------------ */
+.screen-header
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	padding: 10dp 0 0 0;
+	margin-bottom: 23dp;
+}
+
+/* The heading sits on its own plate so it reads over bright terrain. */
+.screen-heading
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 1 auto;
+	min-width: 0;
+	padding: 8dp 28dp 8dp 20dp;
+	background-color: #070A1AD9;
+}
+
+.screen-crumb
+{
+	font-size: 16dp;
+	font-weight: bold;
+	letter-spacing: 2dp;
+	text-transform: uppercase;
+	color: #B8C0DE;
+	margin-right: 18dp;
+	white-space: nowrap;
+}
+
+.crumb-sep
+{
+	color: #8080FF;
+	margin: 0 8dp;
+}
+
+.screen-title
+{
+	font-size: 40dp;
+	line-height: 50dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+	text-transform: uppercase;
+	color: #FFFFFF;
+	border-left: 4dp #D1FD04;
+	padding-left: 15dp;
+	white-space: nowrap;
+}
+
+.screen-header-aside
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	margin-left: auto;
+}
+
+/* ---- Body and columns --------------------------------------------------------------------- */
+.screen-body
+{
+	display: flex;
+	flex-direction: row;
+	flex: 1 1 0%;
+	min-height: 0;
+}
+
+.col
+{
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+
+.col-main
+{
+	flex: 1 1 0%;
+}
+
+.col-side
+{
+	flex: 0 0 auto;
+	margin-left: 20dp;
+}
+
+/* Floating panel: the only filled box on a screen, 88% so text on it reads over any map. */
+.surface
+{
+	display: block;
+	background-color: #070A1AE0;
+	padding: 20dp;
+}
+
+.surface + .surface
+{
+	margin-top: 20dp;
+}
+
+/* Small tracked caps over a group: the section heading of the template. */
+.overline
+{
+	display: block;
+	font-size: 15dp;
+	font-weight: bold;
+	letter-spacing: 2dp;
+	text-transform: uppercase;
+	color: #8089B0;
+	white-space: nowrap;
+}
+
+.muted { color: #A9B1CF; }
+.dim { color: #7079A0; }
+
+/* ---- Action bar: back far left, status between, primary far right ------------------------------
+   On a framed screen it is part of the frame: it leaves the content column and sits in the bottom
+   band under the tick lane, 58dp tall, lined up with the content's sides (and stays full width
+   while the social dock is out). Buttons in it are 48dp, the primary 58dp. */
+.action-bar
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	height: 75dp;
+	margin-top: 20dp;
+}
+
+.hq .screen-frame > .action-bar
+{
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: -100dp;
+	height: 58dp;
+	margin-top: 0;
+	z-index: 4;
+}
+
+.hq.dock-open .screen-frame > .action-bar
+{
+	right: -390dp;
+}
+
+.screen.hq .action-bar button
+{
+	height: 48dp;
+	line-height: 46dp;
+}
+
+.screen.hq .action-bar button.btn-cta
+{
+	height: 58dp;
+	line-height: 54dp;
+}
+
+.action-bar button
+{
+	margin-left: 15dp;
+}
+
+.action-bar button:first-child
+{
+	margin-left: 0;
+}
+
+/* ---- Buttons ------------------------------------------------------------------------------ */
+.screen button, .screen .button
+{
+	decorator: none;
+	font-effect: none;
+	box-sizing: border-box;
+	height: 50dp;
+	line-height: 48dp;
+	padding: 0 25dp;
+	min-width: 0;
+	font-size: 19dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+	color: #D7DCF0;
+	background-color: #141A3ED7;
+	border: 1dp #8080FF46;
+	transition: background-color color border-color 0.12s cubic-out;
+}
+
+.screen button:hover, .screen .button:hover
+{
+	decorator: none;
+	color: #D1FD04;
+	background-color: #2F37A8D2;
+	border-color: #8080FF;
+}
+
+.screen button:active, .screen .button:active
+{
+	decorator: none;
+	color: #D1FD04;
+	background-color: #1E246EE6;
+	border-color: #8080FF;
+}
+
+.screen button:focus-visible
+{
+	border-color: #D1FD04;
+}
+
+.screen button[disabled], .screen button.disabled,
+.screen button[disabled]:hover, .screen button.disabled:hover,
+.screen button[disabled]:active, .screen button.disabled:active
+{
+	decorator: none;
+	font-effect: none;
+	color: #4A5070;
+	background-color: #0C0F24AA;
+	border-color: #8080FF1E;
+}
+
+/* Primary action: the retail push button made bold. A lit blue plate with a bright blue edge; on
+   hover and focus the edge and the text turn the .wnd hilite green. One per screen, always at the right
+   end of the action bar. */
+.screen button.btn-cta
+{
+	height: 65dp;
+	line-height: 61dp;
+	min-width: 300dp;
+	padding: 0 50dp;
+	font-size: 24dp;
+	letter-spacing: 2dp;
+	color: #FFFFFF;
+	border: 2dp #6170FA;
+	decorator: vertical-gradient(#3F4CD8 #252E96);
+}
+
+.screen button.btn-cta:hover, .screen button.btn-cta:focus-visible
+{
+	color: #D1FD04;
+	border-color: #D1FD04;
+	decorator: vertical-gradient(#4A58EA #2F37A8);
+}
+
+.screen button.btn-cta:active
+{
+	color: #D1FD04;
+	border-color: #A8CC00;
+	decorator: vertical-gradient(#1E246E #2A3290);
+}
+
+.screen button.btn-cta[disabled], .screen button.btn-cta[disabled]:hover, .screen button.btn-cta[disabled]:active
+{
+	decorator: none;
+	color: #4A5070;
+	background-color: #1A2040C8;
+	border-color: #8080FF1E;
+}
+
+/* Back/cancel: quiet text button with a chevron, always at the left end of the action bar. */
+.screen button.btn-back
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	justify-content: center;
+	height: 50dp;
+	line-height: 25dp;
+	padding: 0 23dp 0 15dp;
+	font-size: 21dp;
+	color: #C4CAE4;
+	background-color: #070A1AC8;
+	border-color: transparent;
+}
+
+.screen button.btn-back:hover
+{
+	color: #FFFFFF;
+	background-color: #1E246EE6;
+	border-color: transparent;
+}
+
+.screen button.btn-back:active
+{
+	color: #D1FD04;
+}
+
+.screen button.btn-back[disabled], .screen button.btn-back[disabled]:hover, .screen button.btn-back[disabled]:active
+{
+	color: #4A5070;
+	background-color: #070A1A8C;
+	border-color: transparent;
+}
+
+.btn-back[disabled] .chevron
+{
+	color: #4A5070;
+}
+
+.chevron
+{
+	font-size: 33dp;
+	margin-right: 10dp;
+	color: #8080FF;
+}
+
+/* In a back button the chevron is its own flex item, centred on the label's line. */
+.btn-back .chevron
+{
+	flex: 0 0 auto;
+	line-height: 33dp;
+	margin-top: -5dp;
+}
+
+.screen button.btn-small
+{
+	height: 40dp;
+	line-height: 38dp;
+	padding: 0 18dp;
+	font-size: 16dp;
+}
+
+/* ---- Segmented control: a small set of choices, one on --------------------------------------
+	<div class="seg"><button class="seg-item" data-class-on="...">1</button>...</div>
+	Only for a fixed set of up to four short labels. A list fed by data (starting cash: mods and
+	Generals Online add amounts) switches to a select past four entries:
+	<div class="seg" data-if="list.size &lt;= 4">..</div><select class="seg-overflow" data-if="list.size &gt; 4">..</select> */
+.seg
+{
+	display: flex;
+	flex-direction: row;
+	flex: 0 0 auto;
+	background-color: #05070FC8;
+	border: 1dp #8080FF28;
+	padding: 2dp;
+}
+
+.screen .seg button.seg-item
+{
+	height: 38dp;
+	line-height: 38dp;
+	padding: 0 15dp;
+	min-width: 38dp;
+	font-size: 18dp;
+	letter-spacing: 0.5dp;
+	text-align: center;
+	color: #A9B1CF;
+	background-color: transparent;
+	border-width: 0;
+	margin-left: 2dp;
+}
+
+.screen .seg button.seg-item:first-child
+{
+	margin-left: 0;
+}
+
+.screen .seg button.seg-item:hover
+{
+	color: #FFFFFF;
+	background-color: #2F37A878;
+}
+
+.screen .seg button.seg-item.on, .screen .seg button.seg-item.on:hover
+{
+	color: #FFFFFF;
+	background-color: #3A46D0;
+}
+
+.screen .seg button.seg-item[disabled], .screen .seg button.seg-item[disabled]:hover
+{
+	color: #4A5070;
+	background-color: transparent;
+}
+
+.screen .seg button.seg-item.on[disabled]
+{
+	color: #A9B1CF;
+	background-color: #2F37A850;
+}
+
+.screen select.seg-overflow
+{
+	display: block;
+	width: 100%;
+	margin-bottom: 14dp;
+}
+
+.screen select.seg-overflow selectbox
+{
+	max-height: 250dp;
+}
+
+/* ---- Colour swatches -----------------------------------------------------------------------
+	<div class="swatches"><button class="swatch" data-class-on=".." data-class-taken=".."><span class="chip"
+		data-style-background-color=".."/></button>..</div>
+	Every row lists the same palette in the same order (.random, the hollow "?", first), so nothing
+	moves when a colour is picked. A colour another slot holds stays in place, dimmed and disabled
+	(.taken). The picked one gets a ring in the button's own border: no size or layout change. */
+.swatches
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+}
+
+.screen .swatches button.swatch
+{
+	box-sizing: border-box;
+	flex: 0 0 auto;
+	width: 28dp;
+	height: 28dp;
+	padding: 2dp;
+	margin-right: 2dp;
+	background-color: transparent;
+	border: 2dp transparent;
+	transition: border-color 0.12s cubic-out;
+}
+
+.swatch .chip
+{
+	display: block;
+	width: 100%;
+	height: 100%;
+	line-height: 20dp;
+	font-size: 15dp;
+	font-weight: bold;
+	text-align: center;
+	color: #A9B1CF;
+	transition: opacity 0.12s cubic-out;
+}
+
+.swatch.random .chip
+{
+	box-sizing: border-box;
+	line-height: 18dp;
+	border: 1dp #8080FF6E;
+}
+
+.screen .swatches button.swatch:hover
+{
+	background-color: transparent;
+	border-color: #FFFFFF78;
+}
+
+.swatch.random:hover .chip
+{
+	color: #FFFFFF;
+}
+
+.screen .swatches button.swatch.on, .screen .swatches button.swatch.on:hover
+{
+	background-color: transparent;
+	border-color: #FFFFFF;
+}
+
+.swatch.random.on .chip
+{
+	color: #FFFFFF;
+	border-color: #FFFFFF;
+}
+
+/* Not editable here (a slot someone else controls): the palette stays readable, the pick ringed grey. */
+.screen .swatches button.swatch[disabled], .screen .swatches button.swatch[disabled]:hover
+{
+	background-color: transparent;
+	border-color: transparent;
+}
+
+.swatch[disabled] .chip
+{
+	opacity: 0.45;
+}
+
+.screen .swatches button.swatch.on[disabled]
+{
+	border-color: #A9B1CF;
+}
+
+.swatch.on[disabled] .chip
+{
+	opacity: 1;
+}
+
+/* Held by another slot: faded right back so it reads as unavailable. */
+.swatch.taken .chip, .swatch.taken[disabled] .chip
+{
+	opacity: 0.16;
+}
+
+/* ---- Checkbox: <label class="check"><input class="checkbox" type="checkbox"/><span>..</span></label> */
+label.check
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	color: #D7DCF0;
+}
+
+label.check:hover
+{
+	color: #FFFFFF;
+}
+
+.screen input.checkbox, .screen input.checkbox:hover
+{
+	decorator: none;
+	box-sizing: border-box;
+	width: 25dp;
+	height: 25dp;
+	margin-right: 13dp;
+	background-color: #05070FDC;
+	border: 2dp #8080FF6E;
+	transition: background-color border-color 0.12s cubic-out;
+}
+
+.screen label.check:hover input.checkbox
+{
+	border-color: #8080FF;
+}
+
+.screen input.checkbox:checked, .screen input.checkbox:checked:hover
+{
+	decorator: none;
+	background-color: #D1FD04;
+	border: 6dp #0B1030;
+}
+
+.screen input.checkbox[disabled], .screen input.checkbox[disabled]:checked
+{
+	decorator: none;
+	opacity: 0.4;
+}
+
+/* ---- Slider ------------------------------------------------------------------------------- */
+.screen input.range
+{
+	height: 30dp;
+}
+
+.screen input.range slidertrack
+{
+	margin-top: 13dp;
+	height: 4dp;
+	background-color: #8080FF3C;
+	border-width: 0;
+}
+
+.screen input.range sliderbar
+{
+	width: 18dp;
+	height: 30dp;
+	background-color: #D7DCF0;
+	border-width: 0;
+	transition: background-color 0.12s cubic-out;
+}
+
+.screen input.range sliderbar:hover, .screen input.range sliderbar:active
+{
+	background-color: #D1FD04;
+}
+
+/* ---- Dropdown ----------------------------------------------------------------------------- */
+.screen select
+{
+	height: 45dp;
+	background-color: #05070FD2;
+	border: 1dp #8080FF3C;
+	color: #EEF1FA;
+	font-size: 19dp;
+	transition: background-color border-color 0.12s cubic-out;
+}
+
+.screen select selectvalue
+{
+	height: 43dp;
+	line-height: 43dp;
+	margin-right: 35dp;
+	padding: 0 13dp;
+	text-overflow: ellipsis;
+}
+
+/* A small down triangle drawn with borders (no such glyph in the UI fonts, no rotation in the renderer). */
+.screen select selectarrow, .screen select:hover selectarrow, .screen select:checked selectarrow
+{
+	decorator: none;
+	width: 0;
+	height: 0;
+	margin: 19dp 15dp 0 0;
+	border-top: 8dp #8080FF;
+	border-left: 6dp transparent;
+	border-right: 6dp transparent;
+}
+
+.screen select:hover, .screen select:focus
+{
+	background-color: #141A3EE6;
+	border-color: #8080FF;
+}
+
+.screen select:hover selectarrow, .screen select:checked selectarrow
+{
+	border-top-color: #FFFFFF;
+}
+
+.screen select[disabled], .screen select[disabled]:hover
+{
+	opacity: 0.45;
+	background-color: #05070FA0;
+	border-color: #8080FF28;
+	color: #A9B1CF;
+}
+
+.screen select[disabled] selectarrow
+{
+	decorator: none;
+	opacity: 1;
+	border-top-color: #7079A0;
+}
+
+.screen select selectbox
+{
+	background-color: #090C1E;
+	border: 1dp #3A46D0;
+	padding: 4dp 0;
+	max-height: 450dp;
+}
+
+.screen select selectbox option
+{
+	height: 40dp;
+	line-height: 40dp;
+	padding: 0 15dp;
+	color: #D7DCF0;
+}
+
+.screen select selectbox option:hover
+{
+	background-color: #2F37A8DC;
+	color: #FFFFFF;
+}
+
+.screen select selectbox option:checked
+{
+	color: #D1FD04;
+}
+
+/* An occupant select's SLOT_PLAYER entry: it only keeps a player's value matched, so it is disabled
+   and takes no room in the list. data-if cannot hide an <option>: the select forces display:block on
+   every option, so a hidden one stays pickable. */
+.screen select selectbox option.occ-player
+{
+	height: 0;
+	line-height: 0;
+	padding: 0;
+	overflow: hidden;
+	visibility: hidden;
+}
+
+/* ---- Text input --------------------------------------------------------------------------- */
+.screen .text-input, .screen .chat-input
+{
+	height: 50dp;
+	line-height: 48dp;
+	padding: 0 15dp;
+	background-color: #05070FD2;
+	border: 1dp #8080FF3C;
+	transition: border-color 0.12s cubic-out;
+}
+
+.screen .text-input:hover, .screen .chat-input:hover
+{
+	border-color: #8080FF8C;
+}
+
+.screen .text-input:focus, .screen .chat-input:focus
+{
+	border-color: #8080FF;
+	background-color: #0B1030E6;
+}
+
+/* ---- Chat entry: the input with its send button flush to its right -------------------------
+	<div class="chat-entry send-row"><input type="text" class="chat-input"/>
+		<button class="chat-send" data-event-click="send_chat"><span class="send-arrow"></span></button>
+		<button class="chat-send emote" data-event-click="send_emote"><span class="send-emote">*</span></button></div>
+	The row's own class keeps its spacing; send-row joins the input and the button(s) into one control (no overlap: the input drops its right border and the button's left border is the seam)
+	of the input's height. The arrow is the accent, drawn with borders (no glyph needed). */
+.screen .send-row .chat-input
+{
+	margin-right: 0;
+	border-right-width: 0;
+}
+
+.screen .send-row button.chat-send
+{
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	justify-content: center;
+	align-self: stretch;
+	width: 52dp;
+	height: auto;
+	min-width: 0;
+	padding: 0;
+	margin-left: 0;
+	line-height: 1;
+	background-color: #0B1030E6;
+	border: 1dp #8080FF3C;
+}
+
+.screen .send-row button.chat-send:hover
+{
+	background-color: #2F37A8D2;
+	border-color: #D1FD04;
+}
+
+.screen .send-row button.chat-send:active
+{
+	background-color: #1E246EE6;
+	border-color: #D1FD04;
+}
+
+.chat-send .send-arrow
+{
+	display: block;
+	width: 0;
+	height: 0;
+	margin-left: 4dp;
+	border-left: 16dp #D1FD04;
+	border-top: 10dp transparent;
+	border-bottom: 10dp transparent;
+}
+
+.chat-send:hover .send-arrow
+{
+	border-left-color: #D1FD04;
+}
+
+.chat-send .send-emote
+{
+	display: block;
+	margin-top: 16dp;
+	font-size: 44dp;
+	line-height: 44dp;
+	font-weight: bold;
+	color: #D1FD04;
+}
+
+.chat-send:hover .send-emote
+{
+	color: #D1FD04;
+}
+
+/* ---- Scrollbar: slim, lit on hover -------------------------------------------------------- */
+/* A recessed channel with a bevelled blue thumb, like the .wnd slider art: lit top and left edges,
+   dark bottom and right. Brighter on hover, the accent while dragged. */
+.screen scrollbarvertical
+{
+	width: 12dp;
+	margin-left: 4dp;
+}
+
+.screen scrollbarvertical slidertrack
+{
+	width: 12dp;
+	background-color: #05070FB4;
+	border-left: 1dp #8080FF1F;
+	border-right: 1dp #8080FF1F;
+}
+
+.screen scrollbarvertical sliderbar
+{
+	box-sizing: border-box;
+	width: 12dp;
+	min-height: 48dp;
+	border-top: 1dp #A0A8FF;
+	border-bottom: 1dp #141A3E;
+	border-left: 1dp #5560E8;
+	border-right: 1dp #1E246E;
+	decorator: horizontal-gradient(#3A46D0 #2A33A0);
+	transition: border-color 0.12s cubic-out;
+}
+
+.screen scrollbarvertical sliderbar:hover
+{
+	border-top-color: #D0D4FF;
+	decorator: horizontal-gradient(#5560E8 #3A46D0);
+}
+
+.screen scrollbarvertical sliderbar:active
+{
+	border-top-color: #E6FF6A;
+	border-left-color: #C8F000;
+	border-right-color: #8FB000;
+	border-bottom-color: #4A5C00;
+	decorator: horizontal-gradient(#D1FD04 #A8CC00);
+}
+
+/* ---- List rows ---------------------------------------------------------------------------
+	One entry of a scrolling list, a flex row of cells. Hover lights it; .selected adds the
+	accent bar on the left. A data-for row needs the display, which this gives it. */
+.row-item
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	box-sizing: border-box;
+	height: 44dp;
+	padding: 0 15dp 0 13dp;
+	border-left: 3dp transparent;
+	border-bottom: 1dp #FFFFFF0A;
+	transition: background-color 0.1s cubic-out;
+}
+
+.row-item:hover
+{
+	background-color: #2F37A84B;
+}
+
+.row-item.selected, .row-item.selected:hover
+{
+	background-color: #2F37A8A0;
+	border-left-color: #D1FD04;
+}
+
+/* Column caption row over a list. */
+.list-head
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	height: 38dp;
+	padding: 0 15dp 0 16dp;
+	border-bottom: 1dp #8080FF28;
+}
+
+/* ---- Empty and loading states --------------------------------------------------------------- */
+.empty-state
+{
+	display: block;
+	padding: 60dp 30dp;
+	text-align: center;
+	color: #7079A0;
+	font-size: 20dp;
+}
+
+.empty-state .overline
+{
+	display: block;
+	margin-bottom: 10dp;
+}
+
+@keyframes pulse
+{
+	from { opacity: 0.35; }
+	to { opacity: 1; }
+}
+
+.pulse
+{
+	animation: 1.2s cubic-in-out infinite alternate pulse;
+}
+
+/* ---- Small pieces ------------------------------------------------------------------------- */
+/* Big number over a small caption (career stats and the like). */
+.stat
+{
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 0%;
+	min-width: 0;
+}
+
+.stat-value
+{
+	font-size: 33dp;
+	line-height: 38dp;
+	font-weight: bold;
+	color: #EEF1FA;
+}
+
+.stat-label
+{
+	font-size: 15dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+	text-transform: uppercase;
+	color: #7079A0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Status dot (ping, presence). */
+.dot
+{
+	display: inline-block;
+	width: 10dp;
+	height: 10dp;
+	border-radius: 4dp;
+	background-color: #36D8B2;
+}
+
+/* ---- Map card: a map preview with numbered start positions, its name under it ---------------
+	<div class="map-frame"><mappreview class="map-image" data-attr-map="..">
+		<div data-for="marker : start_markers"><div class="marker" data-if="marker.used"
+			data-style-left="marker.x_style" data-style-top="marker.y_style">
+			<div class="marker-dot">{{marker.position + 1}}</div></div></div></mappreview></div>
+	<div class="map-name">..</div> <div class="map-meta">..</div> */
+.group-title
+{
+	margin-bottom: 15dp;
+}
+
+.map-frame
+{
+	display: block;
+	position: relative;
+	flex: 0 0 auto;
+	width: 400dp;
+	height: 400dp;
+	background-color: #05070F;
+}
+
+.map-image
+{
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+/* <mappreview> letterboxes the map's own art (any aspect) inside its frame and draws it as its first
+   child, .mp-art; start markers go inside the <mappreview> so they sit on the image. */
+mappreview
+{
+	position: relative;
+}
+
+mappreview .mp-art
+{
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+}
+
+.map-missing
+{
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	height: 100%;
+	color: #7079A0;
+	text-align: center;
+}
+
+/* A frame whose height follows its preview (fit="width") has none of its own. */
+.map-card .map-missing
+{
+	height: 160dp;
+}
+
+.map-name
+{
+	display: block;
+	margin: 18dp 0 18dp 0;
+	font-size: 25dp;
+	font-weight: bold;
+	color: #EEF1FA;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.map-button
+{
+	display: block;
+}
+
+/* Start positions: numbered squares, filled with the occupant's colour. Left click takes the
+   spot, right click clears it. */
+.marker
+{
+	display: block;
+	position: absolute;
+	width: 30dp;
+	height: 30dp;
+	margin-left: -15dp;
+	margin-top: -15dp;
+}
+
+.marker-dot
+{
+	display: block;
+	box-sizing: border-box;
+	width: 30dp;
+	height: 30dp;
+	line-height: 25dp;
+	text-align: center;
+	font-size: 16dp;
+	font-weight: bold;
+	color: #FFFFFF;
+	font-effect: shadow(1dp 1dp #000000);
+	border: 2dp #FFFFFFB4;
+	background-color: #05070FA0;
+	transition: border-color 0.12s cubic-out;
+}
+
+.marker:hover .marker-dot
+{
+	border-color: #D1FD04;
+}
+
+.marker.occupied .marker-dot
+{
+	border-color: #FFFFFF;
+}
+
+/* The occupant's name only on hover: eight names under eight squares run into each other, and every
+   player card already carries its spot number. The hovered marker rises over its neighbours. */
+.marker:hover
+{
+	z-index: 5;
+}
+
+.marker-label
+{
+	display: none;
+	position: absolute;
+	top: 34dp;
+	left: -115dp;
+	width: 260dp;
+	text-align: center;
+	font-size: 16dp;
+	font-weight: bold;
+	color: #FFFFFF;
+	white-space: nowrap;
+}
+
+.marker:hover .marker-label
+{
+	display: block;
+}
+
+.marker-label span
+{
+	display: inline-block;
+	padding: 2dp 8dp;
+	background-color: #05070FE6;
+}
+
+.map-meta
+{
+	display: block;
+	margin-top: -10dp;
+	color: #A9B1CF;
+}
+
+
+/* =========================================================================================
+   Shared components of the redesigned screens (on top of the template above). Setup screens,
+   load screens, the online dashboard and options build from these, so a mod restyles them here.
+
+	Player card   one slot of a game: the player's colour down its left edge, the faction badge,
+	              who is in it and their choices. .pc-compact for an open or closed slot.
+		<div class="pc-grid">
+			<div class="player-card" data-style-border-left-color="row.color_hex">
+				<div class="pc-top"><div class="pc-badge"><mappedimage/></div>
+					<div class="pc-who">name or occupant select</div><div class="pc-spot">3</div></div>
+				<div class="pc-line">army select, team .seg</div>
+				<div class="pc-line">.swatches</div>
+			</div>
+		</div>
+	Stat card     .stat-card: an .overline over a .stat-row of .stat (big value, small caption).
+	Tile          button.tile > .tile-title + .tile-caption: a big clickable choice.
+	Tab rail      .tab-rail > button.rail-item(.on): categories down the side of a screen.
+	Progress      .progress > .progress-fill (width set inline): the one progress bar look.
+	Chip          .chip-label(.good/.accent/.warn): small tracked caps on a tinted plate (ready, host,
+	              no map); never shrinks in a flex row. .chip-status(.on) > .chip-dot + text: a setting
+	              shown read-only, on (green dot) or off (hollow, struck through).
+	Load layout   see LoadScreen.rcss: every load screen is full-bleed art under the ruler with
+	              .ld-card player cards along the bottom.
+	Persona       .persona-hero (rank portrait, badge, rank name, .progress) over .stat-blocks of
+	              .stat-block: a player's rank header and career record (player info).
+	Facts         .fact > .stat-label + .fact-value, .detail-kind of chips: a detail card's
+	              label/value pairs; the screen lays them out.
+	Modal         .modal-card > .modal-head(.modal-heading > .overline + .modal-title, .modal-close)
+	              + .modal-body + .modal-actions: every popup, message box, confirmation and
+	              progress card. The scrim is either the page (<body class="screen modal">, a
+	              popup document; .over-game for a light one over live play) or, for a confirm over
+	              its own screen, a <div class="modal-scrim"> child of <body>. .modal-card.danger is
+	              a destructive confirm (red edge, tick and primary). Size a card with its own class
+	              (.pr-card { width; height }); .modal-body holds .field (overline over an input) and
+	              .checks. A card with no primary may put a status line where it would sit.
+
+   Gotchas of this RmlUi build (each one has bitten a screen):
+	- Bare text directly inside a flex container does not render: wrap it in a <span>.
+	- A binding on the data-for element itself can read past the end of a shrinking list for one
+	  frame: repeat a plain wrapper (<div data-for="row : rows">) and bind on an element inside it.
+	- Army option labels go in <span class="army-name">.
+	- .marker-label text goes in a <span>.
+	- A full-viewport scrim (.modal-scrim, the score and credits art and scrims) trips the harness
+	  ruler audit on purpose: give a new one an exemption in rmlui_render's audit.
+	- line-height takes a length or a number, not "normal".
+	- See also: data-attrif-disabled (never data-attr-disabled), button[disabled], display:block on
+	  data-for rows, scroll containers flex: 1 1 0% + min-height: 0, viewport layers as direct
+	  children of <body>, no transforms, no box-shadow, clip: always on clipped absolute art, and
+	  every select needs an option matching its value.
+   ========================================================================================= */
+
+/* ---- Player cards --------------------------------------------------------------------------- */
+.pc-grid
+{
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: flex-start;
+	align-content: flex-start;
+	justify-content: space-between;
+}
+
+.player-card
+{
+	display: block;
+	box-sizing: border-box;
+	width: 49.3%;
+	margin-bottom: 12dp;
+	padding: 12dp 14dp;
+	background-color: #070A1AE6;
+	border-left: 6dp #7079A0;
+	border-top: 1dp #8080FF1E;
+}
+
+.player-card.human
+{
+	background-color: #0B1030EB;
+	border-top-color: #8080FF46;
+}
+
+.pc-top, .pc-line
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+}
+
+.pc-line
+{
+	margin-top: 8dp;
+}
+
+/* Faction badge: the army's icon on a dark plate; a ? for Random. */
+.pc-badge
+{
+	display: block;
+	flex: 0 0 56dp;
+	box-sizing: border-box;
+	width: 56dp;
+	height: 56dp;
+	margin-right: 14dp;
+	background-color: #05070FDC;
+	border: 1dp #8080FF28;
+	text-align: center;
+	line-height: 54dp;
+	font-size: 28dp;
+	font-weight: bold;
+	color: #7079A0;
+}
+
+.pc-badge mappedimage
+{
+	display: block;
+	width: 46dp;
+	height: 46dp;
+	margin: 4dp;
+}
+
+.pc-who
+{
+	display: block;
+	flex: 1 1 0%;
+	min-width: 0;
+}
+
+.pc-who select
+{
+	width: 100%;
+	max-width: 270dp;
+}
+
+.pc-name
+{
+	display: block;
+	font-size: 24dp;
+	font-weight: bold;
+	color: #FFFFFF;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.pc-sub
+{
+	display: block;
+	margin-top: 2dp;
+	font-size: 16dp;
+	color: #A9B1CF;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Start spot: a flat status chip, "START 3" (the map's numbered square) or "START ?" when the game
+   picks it, edged in the player's colour. Picked on the map, so it never looks like a button. */
+.pc-spot
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	height: 30dp;
+	margin-left: 12dp;
+	padding: 0 10dp 0 8dp;
+	background-color: #05070FC8;
+	border-left: 3dp #A9B1CF;
+	white-space: nowrap;
+}
+
+.pc-spot-cap
+{
+	margin-right: 7dp;
+	font-size: 13dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+	text-transform: uppercase;
+	color: #8089B0;
+}
+
+.pc-spot-no
+{
+	font-size: 18dp;
+	font-weight: bold;
+	color: #FFFFFF;
+}
+
+.pc-spot.random .pc-spot-no
+{
+	color: #7079A0;
+}
+
+.pc-line select
+{
+	flex: 1 1 0%;
+	min-width: 0;
+}
+
+.pc-line .seg
+{
+	margin-left: 10dp;
+}
+
+/* Army select: the general's badge in front of the name, in the list and the closed select. */
+.army-icon
+{
+	display: inline-block;
+	width: 30dp;
+	height: 30dp;
+	margin-right: 12dp;
+	vertical-align: middle;
+}
+
+.army-random
+{
+	box-sizing: border-box;
+	line-height: 28dp;
+	text-align: center;
+	font-size: 16dp;
+	font-weight: bold;
+	color: #A9B1CF;
+	border: 1dp #8080FF46;
+	background-color: #141A3E;
+}
+
+.army-select selectbox
+{
+	min-width: 340dp;
+}
+
+/* The closed select lays the badge and the name out in a row, so a long name ends in an ellipsis. */
+.army-select selectvalue
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+}
+
+.army-select selectvalue .army-icon
+{
+	flex: 0 0 auto;
+}
+
+.army-name
+{
+	white-space: nowrap;
+}
+
+.army-select selectvalue .army-name
+{
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* A slot's army when this machine cannot change it: the closed select's look, no arrow. */
+.army-ro
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 1 1 0%;
+	min-width: 0;
+	box-sizing: border-box;
+	height: 45dp;
+	padding: 0 13dp;
+	background-color: #05070F8C;
+	border: 1dp #8080FF1E;
+	color: #D7DCF0;
+	font-size: 19dp;
+}
+
+.army-ro > div
+{
+	flex: 0 0 auto;
+}
+
+.army-ro-label
+{
+	flex: 1 1 auto;
+	min-width: 0;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* Team: fixed-width segments, so the control is the same width on every card. */
+.screen .team-seg button.seg-item
+{
+	flex: 0 0 38dp;
+	width: 38dp;
+	min-width: 0;
+	padding: 0;
+}
+
+.screen .team-seg button.seg-item:first-child
+{
+	flex-basis: 64dp;
+	width: 64dp;
+}
+
+/* Open or closed slot: one short row with quick ways to fill it. */
+.player-card.pc-compact
+{
+	padding-top: 9dp;
+	padding-bottom: 9dp;
+	background-color: #05070FB4;
+	border-left-color: #8080FF28;
+	border-top-color: transparent;
+}
+
+.pc-compact .pc-who
+{
+	flex: 0 0 160dp;
+}
+
+.pc-slot-no
+{
+	display: block;
+	flex: 0 0 auto;
+	width: 30dp;
+	margin-right: 6dp;
+	font-size: 18dp;
+	font-weight: bold;
+	color: #7079A0;
+}
+
+.pc-add
+{
+	display: flex;
+	flex-direction: row;
+	flex: 1 1 auto;
+	justify-content: flex-end;
+}
+
+.screen .pc-add button
+{
+	height: 40dp;
+	line-height: 38dp;
+	padding: 0 12dp;
+	margin-left: 6dp;
+	font-size: 15dp;
+	color: #A9B1CF;
+	background-color: transparent;
+	border: 1dp #8080FF3C;
+}
+
+.screen .pc-add button:hover
+{
+	color: #FFFFFF;
+	border-color: #D1FD04;
+	background-color: #2F37A878;
+}
+
+.screen .pc-add button[disabled], .screen .pc-add button[disabled]:hover, .screen .pc-add button[disabled]:active
+{
+	color: #4A5070;
+	background-color: transparent;
+	border-color: #8080FF1E;
+}
+
+.pc-add button[disabled] .pc-plus
+{
+	color: #4A5070;
+}
+
+.pc-add-label
+{
+	align-self: center;
+	margin-right: 6dp;
+	font-size: 13dp;
+	color: #7079A0;
+}
+
+.pc-plus
+{
+	color: #D1FD04;
+	margin-right: 4dp;
+}
+
+/* ---- Stat card ------------------------------------------------------------------------------ */
+.stat-card
+{
+	display: block;
+}
+
+.stat-row
+{
+	display: flex;
+	flex-direction: row;
+	margin-top: 10dp;
+}
+
+.stat-row .stat + .stat
+{
+	margin-left: 16dp;
+	padding-left: 16dp;
+	border-left: 1dp #8080FF28;
+}
+
+/* ---- Tile: a big clickable choice ------------------------------------------------------------ */
+.screen button.tile
+{
+	display: flex;
+	flex-direction: column;
+	justify-content: flex-end;
+	box-sizing: border-box;
+	height: auto;
+	padding: 24dp 26dp;
+	text-align: left;
+	letter-spacing: 0;
+	background-color: #070A1AE6;
+	border: 1dp #8080FF28;
+	border-bottom: 4dp #2F37A8;
+	transition: background-color border-color 0.12s cubic-out;
+}
+
+.screen button.tile:hover
+{
+	background-color: #141A3EF0;
+	border-color: #8080FF;
+	border-bottom-color: #D1FD04;
+}
+
+.screen button.tile:active
+{
+	background-color: #1E246EF0;
+}
+
+.tile-title
+{
+	display: block;
+	font-size: 36dp;
+	line-height: 42dp;
+	font-weight: bold;
+	letter-spacing: 2dp;
+	text-transform: uppercase;
+	color: #FFFFFF;
+	white-space: nowrap;
+}
+
+.tile-caption
+{
+	display: block;
+	margin-top: 6dp;
+	font-size: 18dp;
+	line-height: 24dp;
+	font-weight: normal;
+	letter-spacing: 0;
+	text-transform: none;
+	color: #A9B1CF;
+	white-space: normal;
+}
+
+.tile:hover .tile-title
+{
+	color: #D1FD04;
+}
+
+/* ---- Tab rail: categories down the side of a screen ------------------------------------------ */
+.tab-rail
+{
+	display: flex;
+	flex-direction: column;
+	flex: 0 0 300dp;
+	padding: 10dp 0;
+	background-color: #070A1AE6;
+}
+
+.screen .tab-rail button.rail-item
+{
+	display: block;
+	width: 100%;
+	height: 62dp;
+	line-height: 62dp;
+	padding: 0 24dp 0 22dp;
+	text-align: left;
+	font-size: 22dp;
+	letter-spacing: 2dp;
+	color: #A9B1CF;
+	background-color: transparent;
+	border-width: 0;
+	border-left: 4dp transparent;
+}
+
+.screen .tab-rail button.rail-item:hover
+{
+	color: #FFFFFF;
+	decorator: horizontal-gradient(#2F37A8B4 #2F37A800);
+}
+
+.screen .tab-rail button.rail-item.on, .screen .tab-rail button.rail-item.on:hover
+{
+	color: #FFFFFF;
+	border-left-color: #D1FD04;
+	decorator: horizontal-gradient(#2F37A8F0 #2F37A840);
+}
+
+/* With the HQ brackets (.hq-brackets): the scan line under the label. */
+.rail-item .hq-scan
+{
+	left: 22dp;
+	bottom: 10dp;
+}
+
+/* ---- Progress bar --------------------------------------------------------------------------- */
+.progress
+{
+	display: block;
+	box-sizing: border-box;
+	height: 18dp;
+	padding: 3dp;
+	background-color: #05070FE6;
+	border: 1dp #3A46D0;
+	border-top-color: #1E246E;
+}
+
+.progress-fill
+{
+	display: block;
+	box-sizing: border-box;
+	height: 100%;
+	decorator: vertical-gradient(#E6FF6A #8FB000);
+	border-right: 2dp #F4FFC0;
+}
+
+/* ---- Chips ------------------------------------------------------------------------------------ */
+.chip-label
+{
+	display: inline-block;
+	padding: 2dp 10dp;
+	font-size: 14dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+	text-transform: uppercase;
+	color: #D7DCF0;
+	background-color: #2F37A878;
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+
+.chip-label.good { color: #041410; background-color: #36D8B2; }
+.chip-label.accent { color: #0E1400; background-color: #D1FD04; }
+.chip-label.warn { color: #1A1604; background-color: #E8D440; }
+
+/* Status chip: a setting shown, not edited. On: a filled green dot on a green tint. Off: a hollow
+   dot, dim and struck through. Flat, no hover, so it never reads as a button.
+	<div class="chip-status" data-class-on="..."><span class="chip-dot"></span><gametext key=".."/></div> */
+.chip-status
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	height: 34dp;
+	padding: 0 14dp 0 12dp;
+	font-size: 15dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: #8089B0;
+	background-color: #070A1AC8;
+	border: 1dp #8080FF28;
+}
+
+.chip-status gametext
+{
+	text-decoration: line-through;
+}
+
+.chip-status .chip-dot
+{
+	display: block;
+	box-sizing: border-box;
+	width: 12dp;
+	height: 12dp;
+	margin-right: 9dp;
+	border-radius: 6dp;
+	border: 2dp #7079A0;
+}
+
+.chip-status.on
+{
+	color: #E4F8EE;
+	background-color: #0E2A22D8;
+	border-color: #36D8B28C;
+}
+
+.chip-status.on gametext
+{
+	text-decoration: none;
+}
+
+.chip-status.on .chip-dot
+{
+	background-color: #36D8B2;
+	border-color: #36D8B2;
+}
+
+.accent-overline
+{
+	color: #D1FD04;
+}
+
+/* ---- Persona: a player's rank header and career record ---------------------------------------
+	<div class="persona-hero"><div class="persona-portrait"><mappedimage class="persona-rank-image"/>
+		<div class="persona-badge"><mappedimage/></div></div>
+		<div class="persona-rank"><div class="overline">Rank</div><div class="persona-rank-name">..</div>
+		<div class="progress persona-progress">..</div></div></div>
+	<div class="stat-blocks"><div class="stat-block"><div class="stat-block-value">..</div>
+		<div class="stat-label">..</div></div>..</div>   four blocks a row */
+.persona-hero
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	padding-bottom: 22dp;
+	border-bottom: 1dp #8080FF28;
+}
+
+.persona-portrait
+{
+	position: relative;
+	flex: 0 0 auto;
+	width: 150dp;
+	height: 150dp;
+	background-color: #05070FDC;
+	border: 1dp #8080FF3C;
+}
+
+.persona-rank-image
+{
+	display: block;
+	width: 140dp;
+	height: 140dp;
+	margin: 4dp;
+}
+
+.persona-badge
+{
+	display: block;
+	position: absolute;
+	right: 0;
+	bottom: 0;
+	width: 54dp;
+	height: 54dp;
+	background-color: #070A1AF0;
+	border-top: 1dp #D1FD04;
+	border-left: 1dp #D1FD04;
+}
+
+.persona-badge mappedimage
+{
+	display: block;
+	width: 46dp;
+	height: 46dp;
+	margin: 4dp;
+}
+
+.persona-rank
+{
+	display: block;
+	flex: 1 1 0%;
+	min-width: 0;
+	margin-left: 28dp;
+}
+
+.persona-rank-name
+{
+	display: block;
+	margin-top: 4dp;
+	font-size: 36dp;
+	line-height: 44dp;
+	font-weight: bold;
+	color: #FFFFFF;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.persona-progress
+{
+	margin-top: 16dp;
+	width: 70%;
+}
+
+.stat-blocks
+{
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	margin-top: 8dp;
+}
+
+.stat-block
+{
+	display: block;
+	box-sizing: border-box;
+	width: 25%;
+	padding: 14dp 16dp 12dp 0;
+	border-bottom: 1dp #FFFFFF0A;
+}
+
+.stat-block-value
+{
+	display: block;
+	font-size: 28dp;
+	line-height: 34dp;
+	font-weight: bold;
+	color: #EEF1FA;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.stat-block .stat-label
+{
+	display: block;
+	margin-top: 2dp;
+	letter-spacing: 0.5dp;
+}
+
+/* ---- Facts: a detail card's label over value pairs ------------------------------------------------
+	<div class="detail-kind"><span class="chip-label">..</span>..</div>   chips naming what it is
+	<div class="fact"><div class="stat-label">Map</div><div class="fact-value">..</div></div>
+   The screen lays the facts out (a column, a row, a grid); this is how one reads. */
+.fact
+{
+	display: block;
+	min-width: 0;
+}
+
+.fact .stat-label
+{
+	letter-spacing: 0;
+}
+
+.fact-value
+{
+	display: block;
+	margin-top: 2dp;
+	font-size: 21dp;
+	font-weight: bold;
+	color: #EEF1FA;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.detail-kind
+{
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+}
+
+.detail-kind .chip-label
+{
+	margin: 0 8dp 4dp 0;
+}
+
+/* ---- Right-click menu on the template palette ------------------------------------------------- */
+.screen .context-menu
+{
+	background-color: #090C1EF5;
+	border: 1dp #3A46D0;
+	min-width: 110dp;
+	padding: 4dp 0;
+}
+
+.screen .context-menu-item
+{
+	height: 36dp;
+	line-height: 36dp;
+	padding: 0 18dp;
+	text-align: left;
+	border-bottom-width: 0;
+	color: #D7DCF0;
+}
+
+.screen .context-menu-item:hover
+{
+	background-color: #2F37A8DC;
+	color: #FFFFFF;
+}
+
+/* ---- Modal: a centred card on a dim scrim ------------------------------------------------------
+	A popup over another screen or over the game. <body class="screen modal"> is the scrim and centres
+	the card; the card speaks the screen template's language: an overline and a title behind the
+	accent tick, the content, then an action bar with back/cancel far left and the primary far right.
+		<body class="screen modal">
+			<div class="modal-card">
+				<div class="modal-head"><div class="overline">crumb</div><div class="modal-title">title</div></div>
+				<div class="modal-body">..</div>
+				<div class="modal-actions"><button class="btn-back">..</button><div class="spacer"/>
+					<button class="btn-cta">..</button></div>
+			</div>
+		</body>
+	.modal.over-game keeps the scrim light, so live gameplay stays readable around a compact card.
+	A confirmation over its own screen uses <div class="modal-scrim"> instead (below); .danger on the
+	card marks a destructive one. */
+body.modal
+{
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	background-color: #02030AB4;
+}
+
+body.modal.over-game
+{
+	background-color: #02030A5A;
+}
+
+/* In-document variant: a confirmation over its own screen. The scrim is a direct child of <body>
+   (after the frame) and covers the viewport; show it with data-if.
+	<div class="modal-scrim" data-if="..."><div class="modal-card(.danger)">head, body, actions</div></div> */
+.modal-scrim
+{
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	z-index: 10;
+	background-color: #02030AB4;
+}
+
+.modal-card
+{
+	display: flex;
+	flex-direction: column;
+	box-sizing: border-box;
+	width: 640dp;
+	max-height: 90%;
+	background-color: #070A1AF2;
+	border: 1dp #8080FF3A; /* the .hq-card edge */
+	border-top: 3dp #6170FA;
+	animation: 0.18s cubic-out modal-in;
+}
+
+@keyframes modal-in
+{
+	from { opacity: 0; margin-top: 24dp; }
+	to { opacity: 1; margin-top: 0dp; }
+}
+
+.modal-head
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	padding: 24dp 28dp 0 28dp;
+}
+
+.modal-heading
+{
+	display: block;
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.modal-head .overline
+{
+	margin: 0 0 6dp 19dp;
+}
+
+.modal-title
+{
+	display: block;
+	font-size: 30dp;
+	line-height: 38dp;
+	font-weight: bold;
+	letter-spacing: 1dp;
+	text-transform: uppercase;
+	color: #FFFFFF;
+	border-left: 4dp #D1FD04;
+	padding-left: 15dp;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* A square close button in the head, for popups whose .wnd had one. */
+.screen button.modal-close
+{
+	flex: 0 0 auto;
+	width: 44dp;
+	height: 44dp;
+	line-height: 40dp;
+	padding: 0;
+	margin-left: 16dp;
+	text-align: center;
+	font-size: 28dp;
+	color: #A9B1CF;
+	background-color: transparent;
+	border-color: transparent;
+}
+
+.screen button.modal-close:hover
+{
+	color: #FFFFFF;
+	background-color: #2F37A878;
+	border-color: transparent;
+}
+
+.modal-body
+{
+	display: block;
+	flex: 1 1 auto;
+	min-height: 0;
+	padding: 22dp 28dp 26dp 28dp;
+	color: #D7DCF0;
+	line-height: 28dp;
+}
+
+.modal-actions
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	padding: 18dp 28dp;
+	background-color: #04060FC8;
+	border-top: 1dp #8080FF1E;
+}
+
+.modal-actions button
+{
+	margin-left: 12dp;
+}
+
+.modal-actions button:first-child
+{
+	margin-left: 0;
+}
+
+.screen .modal-actions button.btn-cta
+{
+	height: 54dp;
+	line-height: 50dp;
+	min-width: 200dp;
+	padding: 0 36dp;
+	font-size: 21dp;
+}
+
+.screen .modal-actions button.btn-back
+{
+	height: 50dp;
+	line-height: 25dp;
+	font-size: 19dp;
+	background-color: transparent;
+}
+
+.screen .modal-actions button.btn-back:hover
+{
+	background-color: #1E246EE6;
+}
+
+/* Danger: a destructive confirmation (delete). Red edge, red tick, red primary. */
+.modal-card.danger
+{
+	border-top-color: #FF5050;
+}
+
+.modal-card.danger .modal-title
+{
+	border-left-color: #FF5050;
+}
+
+.screen .modal-card.danger .modal-actions button.btn-cta
+{
+	color: #FFFFFF;
+	border-color: #F07878;
+	decorator: vertical-gradient(#E04848 #B82E2E);
+}
+
+.screen .modal-card.danger .modal-actions button.btn-cta:hover
+{
+	color: #FFFFFF;
+	border-color: #FFA0A0;
+	decorator: vertical-gradient(#F05A5A #C83838);
+}
+
+.screen .modal-card.danger .modal-actions button.btn-cta:active
+{
+	color: #FFFFFF;
+	border-color: #E04848;
+	decorator: vertical-gradient(#A82828 #C03434);
+}
+
+/* A labelled field: an overline over its control. */
+.field
+{
+	display: block;
+}
+
+.field + .field, .field + .checks, .checks + .field
+{
+	margin-top: 20dp;
+}
+
+.field .overline
+{
+	margin-bottom: 8dp;
+}
+
+.field .text-input
+{
+	display: block;
+	box-sizing: border-box;
+	width: 100%;
+}
+
+/* A column of checkboxes. */
+.checks
+{
+	display: block;
+}
+
+.checks label.check
+{
+	height: 40dp;
+}
+
+/* ---- Social dock: an online screen makes room for the expanded dock ----------------------------
+	RmlSocialDock sets .dock-open on every body with .dock-host while its panel is out, so the
+	screen narrows beside the 390dp panel instead of sitting under it. The panel docks against the
+	right band inside the frame line; the content keeps its 20dp gutter to it. */
+.screen.dock-open .screen-frame
+{
+	margin-right: 390dp;
+}
+
+.shell.dock-open .shell-frame
+{
+	width: auto;
+	right: 5.6%;
+	margin-right: 402dp;
+}
+
+/* 5:4 and 4:3: a 340dp panel. */
+@media (max-aspect-ratio: 3/2)
+{
+	.screen.dock-open .screen-frame { margin-right: 340dp; }
+	.hq.dock-open .screen-frame > .action-bar { right: -340dp; }
+	.shell.dock-open .shell-frame { margin-right: 352dp; }
+}
+
+
+/* =========================================================================================
+   HQ terminal -- the main menu's command-post language, shared by every screen. The shell map
+   stays the picture; the ruler's top and bottom bands carry where you are and who is online, the
+   green hilite marks what the pointer is on, and art cards open the next step.
+
+	Header strip  .hq-band.hq-header > .hq-band-in: the logo, the screen's crumb and title, optional
+	              small controls, and the status (online pill and clock) far right, in the frame's top
+	              band. A direct child of <body> (a viewport layer, like the ruler); class="hq" on
+	              <body> puts the screen in the frame. It replaces the .screen-heading plate: a
+	              screen's .screen-header then only holds its toolbar (filters, pickers), if it has one.
+		<body class="screen hq">
+		<div class="hq-band hq-header"><div class="hq-band-in">
+			<mappedimage name="GeneralsLogo" class="hq-logo"/>
+			<div class="hq-heading"><div class="hq-crumb">parent<span class="crumb-sep">&#8250;</span></div>
+				<div class="hq-title">title</div></div>
+			<div class="hq-aside">optional buttons</div>
+			<div class="hq-status">
+				<div class="hq-pill" data-if="logged_in"><span class="hq-dot"></span>
+					<span class="hq-count" data-if="online_count_text != ''">{{online_count_text}}</span>
+					<span class="hq-sep" data-if="online_count_text != '' &amp;&amp; player_name != ''"></span>
+					<span class="hq-name" data-if="player_name != ''">{{player_name}}</span></div>
+				<div class="hq-pill hq-off" data-if="!logged_in"><span class="hq-dot"></span>Offline</div>
+				<div class="hq-clock" data-if="clock_text != ''">{{clock_text}}</div>
+			</div>
+		</div></div>
+	              The four variables come from RmlHqStatus (RmlHqStatus.h): a screen binds it into its
+	              data model, refreshes it on show and ticks it from update().
+	Brackets      .hq-brackets on a primary row or tile, holding <span class="hq-br hq-br-tl"/> (tl, tr,
+	              bl, br) and <span class="hq-scan"/>: green corner brackets and a scan line drawn out
+	              under it on hover and focus; .current or .selected keeps them, quieter. For a few big
+	              choices, never a dense list.
+	Section       .hq-section: a section heading, small caps: <div class="hq-section"><gametext/></div>
+	Card          button.hq-card > .hq-art (art well, clips) + .hq-card-text (.hq-card-title,
+	              .hq-card-desc) + <span class="hq-edge"/>: the edge and the border light green on
+	              hover and focus. A div.hq-card keeps the look without the hover.
+	Ticker        .hq-band.hq-ticker > .hq-band-in > .hq-tag + .hq-tk-view (see MainMenu.rml): scrolling
+	              news in the frame's bottom band; .hq-tk-static for a still line.
+   ========================================================================================= */
+
+/* ---- Bands: the header and the ticker in the frame's top and bottom bands ----------------------
+   No fill of their own: the frame's band tint is under them. They span the frame line's width and
+   their row keeps the 20dp gutter, so the logo, Back and the first panel share one left edge. Above
+   the frame's band tint (z-index 3). */
+.hq-band
+{
+	display: block;
+	position: absolute;
+	left: 40dp;
+	right: 40dp;
+	box-sizing: border-box;
+	z-index: 4;
+}
+
+.hq-band-in
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	box-sizing: border-box;
+	height: 100%;
+	padding: 0 20dp;
+}
+
+/* The top band above its tick lane. */
+.hq-header
+{
+	top: 0;
+	height: 96dp;
+}
+
+/* GeneralsLogo is 370x120 art. */
+.hq-logo
+{
+	flex: 0 0 auto;
+	width: 256dp;
+	height: 83dp;
+}
+
+/* The main menu's emblem: the art at full size, hanging over the frame line into the gutter. */
+.mm-d .hq-logo
+{
+	align-self: flex-start;
+	width: 370dp;
+	height: 120dp;
+	margin-top: 10dp;
+}
+
+.hq-heading
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 1 auto;
+	min-width: 0;
+	height: 44dp;
+	margin-left: 22dp;
+	padding-left: 26dp;
+	border-left: 1dp #8080FF38;
+}
+
+.hq-crumb
+{
+	flex: 0 0 auto;
+	margin-right: 16dp;
+	font-size: 16dp;
+	font-weight: bold;
+	letter-spacing: 2dp;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: #A9B1CF;
+}
+
+.hq-title
+{
+	flex: 0 1 auto;
+	min-width: 0;
+	font-size: 34dp;
+	line-height: 40dp;
+	font-weight: bold;
+	letter-spacing: 2dp;
+	text-transform: uppercase;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	color: #FFFFFF;
+	border-left: 4dp #D1FD04;
+	padding-left: 14dp;
+}
+
+/* Small controls a screen keeps in the strip (Options, the match summary): quiet until hovered. */
+.hq-aside
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	margin-left: auto;
+}
+
+.hq-aside > *
+{
+	margin-left: 10dp;
+}
+
+.screen .hq-aside > button
+{
+	height: 42dp;
+	line-height: 40dp;
+	padding: 0 18dp;
+	font-size: 16dp;
+	letter-spacing: 2dp;
+	color: #B8C0DE;
+	background-color: #0E1433;
+	border: 1dp #8080FF40;
+}
+
+.screen .hq-aside > button:hover
+{
+	color: #D1FD04;
+	background-color: #141A3EE6;
+	border-color: #D1FD04;
+}
+
+.hq-status
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	margin-left: auto;
+}
+
+.hq-aside + .hq-status
+{
+	margin-left: 20dp;
+	padding-left: 20dp;
+	border-left: 1dp #8080FF38;
+}
+
+.hq-pill
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	height: 38dp;
+	padding: 0 18dp 0 16dp;
+	font-size: 16dp;
+	font-weight: bold;
+	letter-spacing: 2dp;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: #EEF1FA;
+	background-color: #0E1433;
+	border: 1dp #8080FF40;
+}
+
+.hq-dot
+{
+	display: inline-block;
+	width: 10dp;
+	height: 10dp;
+	border-radius: 5dp;
+	margin-right: 12dp;
+	background-color: #36D8B2;
+}
+
+.hq-off
+{
+	color: #7079A0;
+	background-color: transparent;
+	border-color: #8080FF24;
+}
+
+.hq-off .hq-dot
+{
+	background-color: transparent;
+	border: 2dp #5A6390;
+}
+
+.hq-sep
+{
+	display: inline-block;
+	width: 1dp;
+	height: 18dp;
+	margin: 0 14dp;
+	background-color: #8080FF50;
+}
+
+.hq-name
+{
+	color: #D1FD04;
+	letter-spacing: 1dp;
+	text-transform: none;
+	font-size: 18dp;
+}
+
+.hq-clock
+{
+	margin-left: 20dp;
+	padding-left: 20dp;
+	border-left: 1dp #8080FF38;
+	height: 38dp;
+	line-height: 38dp;
+	font-size: 24dp;
+	font-weight: bold;
+	letter-spacing: 3dp;
+	color: #A9B1CF;
+}
+
+/* 5:4 and 4:3: the strip keeps the title; the logo shrinks and the count gives way to the name. */
+@media (max-aspect-ratio: 3/2)
+{
+	body.hq .hq-logo { width: 222dp; height: 72dp; }
+	body.hq .hq-heading { margin-left: 16dp; padding-left: 18dp; }
+	body.hq .hq-title { font-size: 30dp; }
+	body.hq .hq-count, body.hq .hq-sep { display: none; }
+	body.hq .hq-clock { margin-left: 14dp; padding-left: 14dp; font-size: 22dp; letter-spacing: 2dp; }
+}
+
+/* ---- Ticker: the bottom strip ------------------------------------------------------------------ */
+.hq-ticker
+{
+	bottom: 0;
+	height: 72dp;
+}
+
+.hq-tag
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	height: 42dp;
+	padding-right: 20dp;
+	margin-right: 4dp;
+	border-right: 1dp #8080FF38;
+	font-size: 14dp;
+	font-weight: bold;
+	letter-spacing: 3dp;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: #D1FD04;
+}
+
+.hq-tag .hq-dot
+{
+	width: 8dp;
+	height: 8dp;
+	border-radius: 4dp;
+	margin-right: 10dp;
+}
+
+/* The news run. The slide comes in from the right edge (its left, a share of the viewport) while the
+   run moves back by its own width (its left, a share of the shrink-to-fit track), so the text enters
+   on the right and leaves on the left whatever its length. The slide is very wide so the track's
+   shrink-to-fit width is the whole run, never capped at the viewport. */
+.hq-tk-view
+{
+	display: block;
+	position: relative;
+	flex: 1 1 0%;
+	min-width: 0;
+	height: 42dp;
+	overflow: hidden;
+	clip: always;
+}
+
+.hq-tk-slide
+{
+	display: block;
+	position: absolute;
+	top: 0;
+	left: 100%;
+	width: 30000dp;
+	height: 42dp;
+	animation: 80s linear infinite ticker-slide;
+}
+
+.hq-tk-track
+{
+	display: block;
+	position: absolute;
+	left: 0;
+	top: 0;
+	white-space: nowrap;
+}
+
+.hq-tk-run
+{
+	display: block;
+	position: relative;
+	left: 0%;
+	line-height: 42dp;
+	font-size: 17dp;
+	color: #C9CFE8;
+	animation: 80s linear infinite ticker-run;
+}
+
+@keyframes ticker-slide
+{
+	from { left: 100%; }
+	to { left: 0%; }
+}
+
+@keyframes ticker-run
+{
+	from { left: 0%; }
+	to { left: -100%; }
+}
+
+/* The run fades out against the tag instead of being cut. */
+.hq-tk-fade
+{
+	display: block;
+	position: absolute;
+	left: 0;
+	top: 0;
+	bottom: 0;
+	width: 48dp;
+	decorator: horizontal-gradient(#070A18D0 #070A1800);
+}
+
+.hq-tk-item
+{
+	margin-left: 26dp;
+	padding-left: 26dp;
+	border-left: 2dp #8080FF60;
+}
+
+.hq-tk-static
+{
+	flex: 1 1 auto;
+	font-size: 15dp;
+	letter-spacing: 1dp;
+	white-space: nowrap;
+	color: #7079A0;
+}
+
+/* ---- Brackets and scan line ------------------------------------------------------------------- */
+.hq-brackets
+{
+	position: relative;
+}
+
+.hq-br
+{
+	display: block;
+	position: absolute;
+	width: 14dp;
+	height: 14dp;
+	border-color: #D1FD04;
+	opacity: 0;
+	transition: opacity 0.12s cubic-out;
+}
+
+.hq-br-tl { left: 0; top: 0; border-left-width: 2dp; border-top-width: 2dp; }
+.hq-br-tr { right: 0; top: 0; border-right-width: 2dp; border-top-width: 2dp; }
+.hq-br-bl { left: 0; bottom: 0; border-left-width: 2dp; border-bottom-width: 2dp; }
+.hq-br-br { right: 0; bottom: 0; border-right-width: 2dp; border-bottom-width: 2dp; }
+
+/* Drawn out from the left under the item's label; the host moves it under its own label. */
+.hq-scan
+{
+	display: block;
+	position: absolute;
+	left: 0;
+	bottom: 4dp;
+	width: 0%;
+	height: 2dp;
+	decorator: horizontal-gradient(#D1FD04 #D1FD0400);
+	transition: width 0.22s cubic-out;
+}
+
+.hq-brackets:hover .hq-br, .hq-brackets:focus-visible .hq-br { opacity: 1; }
+.hq-brackets:hover .hq-scan { width: 70%; }
+
+/* The open or chosen one: brackets and scan line stay, quieter. */
+.hq-brackets.current .hq-br, .hq-brackets.selected .hq-br { opacity: 0.55; }
+.hq-brackets.current .hq-scan, .hq-brackets.selected .hq-scan { width: 70%; }
+.hq-brackets.current:hover .hq-br, .hq-brackets.selected:hover .hq-br { opacity: 1; }
+
+/* ---- Section heading ------------------------------------------------------------------------- */
+.hq-section
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	font-size: 15dp;
+	font-weight: bold;
+	letter-spacing: 2dp;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: #B8C0DE;
+}
+
+/* ---- Art card ------------------------------------------------------------------------------------ */
+.screen button.hq-card, .hq-card
+{
+	display: block;
+	position: relative;
+	box-sizing: border-box;
+	height: auto;
+	line-height: 1.2;
+	padding: 0;
+	text-align: left;
+	text-transform: none;
+	white-space: normal;
+	color: #EEF1FA;
+	background-color: #070A1AEC;
+	border: 1dp #8080FF3A;
+	transition: border-color 0.12s cubic-out;
+}
+
+.screen button.hq-card:hover, .screen button.hq-card:focus-visible
+{
+	background-color: #0B1030F0;
+	border-color: #D1FD04;
+}
+
+.screen button.hq-card:active
+{
+	background-color: #141A3EF0;
+	border-color: #A8CC00;
+}
+
+.hq-edge
+{
+	display: block;
+	position: absolute;
+	left: -1dp;
+	right: -1dp;
+	top: -1dp;
+	height: 4dp;
+	background-color: transparent;
+	transition: background-color 0.12s cubic-out;
+}
+
+button.hq-card:hover .hq-edge, button.hq-card:focus-visible .hq-edge
+{
+	background-color: #D1FD04;
+}
+
+.hq-art
+{
+	display: block;
+	position: relative;
+	overflow: hidden;
+	clip: always;
+	background-color: #0A0E26;
+}
+
+.hq-card-text
+{
+	display: block;
+	padding: 16dp 18dp;
+}
+
+.hq-card-title
+{
+	display: block;
+	font-size: 25dp;
+	line-height: 30dp;
+	font-weight: bold;
+	letter-spacing: 2dp;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: #FFFFFF;
+	transition: color 0.12s cubic-out;
+}
+
+button.hq-card:hover .hq-card-title
+{
+	color: #D1FD04;
+}
+
+.hq-card-desc
+{
+	display: block;
+	margin-top: 6dp;
+	font-weight: normal;
+	font-size: 16dp;
+	line-height: 21dp;
+	color: #A9B1CF;
+}
+
+
+/* =========================================================================================
+   Game setup -- skirmish, LAN and online share one flow, in the order players think: the map,
+   then who plays, then the rules, then start.
+
+	<div class="screen-body su-body">
+		<div class="col su-map-col"><div class="hq-card su-hero">       01 Map: the preview with its
+			.hq-section, .map-frame (markers), .su-hero-info (.su-map-name, .su-cap, Select Map)</div></div>
+		<div class="col col-main"><div class="surface su-players">      02 Players
+			.su-players-head (.hq-section, .su-fill "Fill with AI" buttons)
+			.su-list > .su-item (data-for over the slots, in GameSetupData::displayOrder() order):
+				.su-group    a team group's head (team mode)
+				.su-fold     "Unused on this map (n)": opens and closes the folded slots
+				.prow        one slot: .prow-chip (colour, opens .prow-pop), .prow-badge, .prow-who,
+				             .prow-army, .team-seg, .prow-spot; .prow.empty for an open or closed slot
+				             (.prow-add quick AI buttons)
+				.prow-pop    the colour popover: the fixed palette, taken colours dimmed
+		</div></div>
+		<div class="col col-side su-side"><div class="surface su-rules"> 03 Rules; chat or honors under it
+	</div>
+	<div class="action-bar"> back | spacer | .su-ready (Ready to start, or .su-blockers) | Start </div>
+
+   Two-line rows on 5:4 and 4:3. The rows are the only list: the fold and team groups are
+   presentation, every row keeps its own slot's controls and events.
+   ========================================================================================= */
+.su-body
+{
+	align-items: flex-start;
+}
+
+.su-map-col
+{
+	flex: 0 0 440dp;
+	width: 440dp;
+	margin-right: 20dp;
+}
+
+.su-side
+{
+	width: 380dp;
+	align-self: stretch;
+}
+
+.col-main.su-main
+{
+	align-self: stretch;
+}
+
+/* ---- 01 Map ---------------------------------------------------------------------------------- */
+.su-hero
+{
+	padding: 16dp 18dp 18dp 18dp;
+}
+
+.su-hero .hq-section
+{
+	margin-bottom: 14dp;
+}
+
+.su-hero .map-frame
+{
+	width: 404dp;
+	height: auto; /* follows the preview: <mappreview fit="width"> */
+}
+
+.su-hero .map-missing
+{
+	height: 300dp;
+}
+
+.su-hero-info
+{
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	align-items: center;
+	margin-top: 14dp;
+}
+
+.su-map-name
+{
+	display: block;
+	flex: 1 1 100%;
+	font-size: 25dp;
+	line-height: 30dp;
+	font-weight: bold;
+	color: #FFFFFF;
+	white-space: normal;
+}
+
+.su-cap
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	height: 30dp;
+	margin-top: 10dp;
+	padding: 0 12dp;
+	font-size: 15dp;
+	font-weight: bold;
+	letter-spacing: 1.5dp;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: #D7DCF0;
+	background-color: #2F37A878;
+}
+
+.su-cap span
+{
+	margin-right: 6dp;
+	color: #D1FD04;
+}
+
+.screen button.su-map-btn
+{
+	flex: 0 0 auto;
+	margin: 10dp 0 0 auto;
+}
+
+/* ---- 02 Players -------------------------------------------------------------------------------- */
+/* As tall as its rows, scrolling only when they outgrow the column. */
+.su-players
+{
+	display: flex;
+	flex-direction: column;
+	flex: 0 1 auto;
+	min-height: 0;
+	max-height: 100%;
+	box-sizing: border-box;
+	padding: 16dp 20dp 14dp 20dp;
+}
+
+.su-players-head
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 0 auto;
+	height: 40dp;
+	margin-bottom: 6dp;
+}
+
+.su-fill
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	margin-left: auto;
+}
+
+.su-fill .overline
+{
+	margin-right: 10dp;
+}
+
+.screen .su-fill button, .screen .prow-add button
+{
+	height: 36dp;
+	line-height: 34dp;
+	padding: 0 12dp;
+	margin-left: 6dp;
+	font-size: 15dp;
+	color: #A9B1CF;
+	background-color: transparent;
+	border: 1dp #8080FF3C;
+}
+
+.screen .su-fill button:hover, .screen .prow-add button:hover
+{
+	color: #FFFFFF;
+	border-color: #D1FD04;
+	background-color: #2F37A878;
+}
+
+.screen .su-fill button[disabled], .screen .su-fill button[disabled]:hover,
+.screen .prow-add button[disabled], .screen .prow-add button[disabled]:hover
+{
+	color: #4A5070;
+	background-color: transparent;
+	border-color: #8080FF1E;
+}
+
+.su-fill button[disabled] .pc-plus, .prow-add button[disabled] .pc-plus
+{
+	color: #4A5070;
+}
+
+.su-list
+{
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+.su-item
+{
+	display: block;
+}
+
+/* A team group's head: "TEAM 1", or "NO TEAM". */
+.su-group
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	height: 30dp;
+	margin: 12dp 0 2dp 0;
+	font-size: 14dp;
+	font-weight: bold;
+	letter-spacing: 2dp;
+	text-transform: uppercase;
+	color: #B8C0DE;
+	border-bottom: 1dp #8080FF30;
+}
+
+.su-item:first-child .su-group
+{
+	margin-top: 0;
+}
+
+.su-group-no
+{
+	margin-left: 8dp;
+	color: #D1FD04;
+}
+
+/* The fold over the slots the map has no room for. */
+.su-fold
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	height: 38dp;
+	margin-top: 10dp;
+	padding: 0 12dp;
+	font-size: 15dp;
+	font-weight: bold;
+	letter-spacing: 1.5dp;
+	text-transform: uppercase;
+	color: #7C86B4;
+	background-color: #05070F8C;
+	border: 1dp #8080FF1E;
+	transition: color border-color 0.12s cubic-out;
+}
+
+.su-fold:hover
+{
+	color: #FFFFFF;
+	border-color: #8080FF60;
+}
+
+.su-fold-mark
+{
+	width: 18dp;
+	margin-right: 6dp;
+	font-size: 22dp;
+	color: #8080FF;
+}
+
+.su-fold:hover .su-fold-mark
+{
+	color: #D1FD04;
+}
+
+.su-fold-count
+{
+	margin-left: 8dp;
+	color: #A9B1CF;
+}
+
+/* One slot: its colour down the left edge. */
+.prow
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	box-sizing: border-box;
+	height: 58dp;
+	margin-top: 6dp;
+	padding: 0 10dp 0 10dp;
+	background-color: #0B1030C8;
+	border-left: 5dp #7079A0;
+}
+
+.prow.human
+{
+	background-color: #11184AD2;
+}
+
+.prow.empty
+{
+	height: 50dp;
+	background-color: #05070F8C;
+	border-left-color: #8080FF28;
+}
+
+.prow.unused
+{
+	opacity: 0.8;
+}
+
+.prow > *
+{
+	flex: 0 0 auto;
+}
+
+/* The colour chip: the slot's colour (a hollow "?" for random); opens the popover. */
+.screen button.prow-chip
+{
+	box-sizing: border-box;
+	width: 32dp;
+	height: 32dp;
+	line-height: 26dp;
+	padding: 0;
+	margin-right: 10dp;
+	font-size: 16dp;
+	text-align: center;
+	color: #A9B1CF;
+	border: 2dp #FFFFFF46;
+	transition: border-color 0.12s cubic-out;
+}
+
+.screen button.prow-chip:hover, .screen button.prow-chip.open
+{
+	border-color: #D1FD04;
+}
+
+.screen button.prow-chip[disabled], .screen button.prow-chip[disabled]:hover
+{
+	border-color: #FFFFFF1E;
+}
+
+.prow-no
+{
+	width: 32dp;
+	margin-right: 10dp;
+	text-align: center;
+	font-size: 18dp;
+	font-weight: bold;
+	color: #7079A0;
+}
+
+.prow-badge
+{
+	display: block;
+	box-sizing: border-box;
+	width: 42dp;
+	height: 42dp;
+	margin-right: 12dp;
+	line-height: 40dp;
+	text-align: center;
+	font-size: 22dp;
+	font-weight: bold;
+	color: #7079A0;
+	background-color: #05070FDC;
+	border: 1dp #8080FF28;
+}
+
+.prow-badge mappedimage
+{
+	display: block;
+	width: 34dp;
+	height: 34dp;
+	margin: 3dp;
+}
+
+.prow-who
+{
+	display: block;
+	width: 200dp;
+	min-width: 0;
+	margin-right: 10dp;
+}
+
+.prow-who select
+{
+	width: 100%;
+}
+
+.prow-name
+{
+	display: block;
+	font-size: 21dp;
+	font-weight: bold;
+	color: #FFFFFF;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.prow-state
+{
+	display: block;
+	font-size: 19dp;
+	color: #A9B1CF;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.prow > .prow-army
+{
+	flex: 1 1 0%;
+	min-width: 0;
+}
+
+.prow-army select, .prow-army .army-ro
+{
+	width: 100%;
+}
+
+.prow .team-seg
+{
+	margin-left: 10dp;
+}
+
+/* Start spot: the map's numbered square, edged in the player's colour; "?" when the game picks it. */
+.prow-spot
+{
+	box-sizing: border-box;
+	width: 40dp;
+	height: 36dp;
+	margin-left: 10dp;
+	line-height: 32dp;
+	text-align: center;
+	font-size: 18dp;
+	font-weight: bold;
+	color: #FFFFFF;
+	background-color: #05070FC8;
+	border: 2dp #A9B1CF;
+}
+
+.prow-spot.random
+{
+	color: #7079A0;
+	border-color: #8080FF46;
+}
+
+/* An open or closed slot: its occupant, then quick ways to add an AI. */
+.prow-add
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	margin-left: auto;
+}
+
+.prow-add .overline
+{
+	margin-right: 4dp;
+}
+
+/* Status on a network slot, a small line under the name: connection, no map, host, ready. */
+.prow-sub
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	margin-top: 3dp;
+}
+
+.prow-sub > *
+{
+	margin-right: 6dp;
+}
+
+.prow-sub .chip-label
+{
+	padding: 1dp 7dp;
+	font-size: 12dp;
+	letter-spacing: 1dp;
+}
+
+.prow.human.net
+{
+	height: auto;
+	min-height: 58dp;
+	padding-top: 6dp;
+	padding-bottom: 6dp;
+}
+
+/* The colour popover: opens under its row from the chip, the whole palette in a fixed order. */
+.prow-pop
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	margin: 2dp 0 4dp 15dp;
+	padding: 8dp 10dp;
+	background-color: #090C1EF5;
+	border: 1dp #3A46D0;
+	border-top: 2dp #D1FD04;
+	animation: 0.14s cubic-out pop-in;
+}
+
+@keyframes pop-in
+{
+	from { opacity: 0; margin-top: -6dp; }
+	to { opacity: 1; margin-top: 2dp; }
+}
+
+.prow-pop .swatches
+{
+	flex: 0 0 auto;
+}
+
+.prow-pop-name
+{
+	margin-left: 12dp;
+	font-size: 16dp;
+	color: #A9B1CF;
+	white-space: nowrap;
+}
+
+/* ---- 03 Rules ---------------------------------------------------------------------------------- */
+.su-rules .hq-section
+{
+	margin-bottom: 16dp;
+}
+
+.su-rules .opt-label
+{
+	display: block;
+	margin: 0 0 8dp 0;
+	font-size: 17dp;
+	color: #A9B1CF;
+}
+
+.su-rules .cash-seg
+{
+	margin-bottom: 16dp;
+}
+
+.screen .su-rules .cash-seg button.seg-item
+{
+	flex: 1 1 0%;
+	padding: 0 4dp;
+	font-size: 17dp;
+}
+
+.su-speed
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	margin-bottom: 14dp;
+}
+
+.su-speed .opt-label
+{
+	flex: 0 0 auto;
+	margin: 0 16dp 0 0;
+}
+
+.su-speed input.range
+{
+	flex: 1 1 0%;
+}
+
+.su-chips
+{
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	margin-top: 14dp;
+}
+
+.su-chips .chip-status
+{
+	margin: 0 8dp 8dp 0;
+}
+
+/* ---- Readiness: what Start would refuse, by the Start button --------------------------------- */
+.su-ready
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	flex: 0 1 auto;
+	min-width: 0;
+	height: 58dp;
+	margin-right: 20dp;
+	padding: 0 20dp 0 16dp;
+	background-color: #070A1AD9;
+	border-left: 3dp #D1FD04;
+	font-size: 17dp;
+	font-weight: bold;
+	letter-spacing: 1.5dp;
+	text-transform: uppercase;
+	white-space: nowrap;
+	color: #D1FD04;
+}
+
+.su-ready .dot
+{
+	margin-right: 12dp;
+	background-color: #D1FD04;
+}
+
+/* Up to three reasons fit the bar's 58dp; more are cut (Start still refuses with its message). */
+.su-ready.blocked
+{
+	height: auto;
+	min-height: 58dp;
+	max-height: 58dp;
+	overflow: hidden;
+	box-sizing: border-box;
+	padding: 3dp 20dp 3dp 16dp;
+	border-left-color: #E8D440;
+	font-size: 16dp;
+	letter-spacing: 0;
+	text-transform: none;
+	font-weight: normal;
+	color: #EEF1FA;
+}
+
+.su-blockers
+{
+	display: block;
+	min-width: 0;
+}
+
+.su-blocker
+{
+	display: flex;
+	flex-direction: row;
+	align-items: center;
+	line-height: 17dp;
+	white-space: nowrap;
+}
+
+.su-blocker-mark
+{
+	flex: 0 0 auto;
+	width: 15dp;
+	height: 15dp;
+	margin-right: 10dp;
+	line-height: 15dp;
+	text-align: center;
+	font-size: 14dp;
+	font-weight: bold;
+	color: #1A1604;
+	background-color: #E8D440;
+}
+
+.su-blocker span
+{
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+/* ---- 5:4 and 4:3: narrower columns, two-line rows ------------------------------------------------ */
+@media (max-aspect-ratio: 3/2)
+{
+	.su-map-col { flex-basis: 330dp; width: 330dp; }
+	.su-hero { padding: 14dp 14dp 16dp 14dp; }
+	.su-hero .map-frame { width: 302dp; }
+	.su-map-name { font-size: 22dp; line-height: 27dp; }
+	.su-side { width: 300dp; }
+	.su-players { padding: 14dp 14dp 12dp 14dp; }
+	.su-fill .overline { display: none; }
+	.screen .su-fill button { padding: 0 8dp; margin-left: 4dp; font-size: 14dp; }
+	.prow { flex-wrap: wrap; height: auto; padding: 8dp 8dp 8dp 8dp; }
+	.prow.empty { height: auto; }
+	.prow-who { flex: 1 0 70%; width: auto; margin-right: 0; }
+	.prow > .prow-army { flex: 1 1 0%; min-width: 150dp; margin: 8dp 0 0 42dp; }
+	.prow .team-seg { margin-top: 8dp; }
+	.prow-spot { margin-top: 8dp; }
+	.screen .prow .team-seg button.seg-item { flex-basis: 28dp; width: 28dp; font-size: 15dp; }
+	.screen .prow .team-seg button.seg-item:first-child { flex-basis: 48dp; width: 48dp; }
+	.prow-badge { display: none; }
+	.prow-add { flex: 1 1 100%; justify-content: flex-end; margin-top: 6dp; }
+	.prow-add .overline { display: none; }
+	.screen .prow-add button { padding: 0 8dp; margin-left: 4dp; font-size: 14dp; }
+	.prow-pop { margin-left: 8dp; }
+	.screen .prow-pop .swatches button.swatch { width: 26dp; height: 26dp; margin-right: 1dp; }
+	.prow-pop .swatch .chip { line-height: 18dp; font-size: 13dp; }
+	.prow-pop .swatch.random .chip { line-height: 16dp; }
+	.prow-pop-name { display: none; }
+	.su-ready { padding: 0 14dp 0 12dp; font-size: 15dp; margin-right: 14dp; }
+	.su-ready.blocked { font-size: 14dp; }
+}
+
+/* ==== Text languages: right-to-left (dir="rtl") and Chinese (lang="zh-Hant") ==================
+
+	RmlTextShaping gives a right-to-left document (Arabic) dir="rtl" and replaces its style sheets
+	with mirrored copies (see RmlTextShaping::mirrorStyleSheet): left and right swap in properties
+	and values, rows run right to left, four-sided boxes and horizontal gradients flip. What follows
+	is what that can't work out on its own. Rules naming [dir=rtl] are not mirrored themselves, so
+	they read as written. Keep this section self-contained so it merges cleanly.
+*/
+
+/* Text starts at the right. */
+body[dir=rtl]
+{
+	text-align: right;
+}
+
+/* A line's leading pieces come before its text, which in a right-to-left line is to the right: a
+   the plus of an add-AI button, a chat line's time and name. RmlUi lays inline
+   boxes out left to right whatever the direction, so they float right instead. */
+body[dir=rtl] .pc-plus,
+body[dir=rtl] .chat-time,
+body[dir=rtl] .chat-name
+{
+	float: right;
+}
+
+/* Chinese runs its words together, and RmlUi breaks lines only at spaces: let a line break
+   anywhere a word would overflow, so a sentence wraps inside its box. */
+body[lang^=zh]
+{
+	word-break: break-word;
+}
+
+/* Progress bars fill from the right. A fill is a block sized in percent, which RmlUi starts at the
+   left edge whatever the direction; an auto left margin moves it to the right one. */
+body[dir=rtl] .progress-fill,
+body[dir=rtl] .rank-progress-fill,
+body[dir=rtl] .wc-army-fill
+{
+	margin-left: auto;
+}

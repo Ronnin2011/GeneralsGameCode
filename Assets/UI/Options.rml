@@ -1,0 +1,414 @@
+<rml>
+<head>
+	<title>Options</title>
+	<link type="text/rcss" href="common.rcss"/>
+	<link type="text/rcss" href="ShellCommon.rcss"/>
+	<link type="text/rcss" href="Options.rcss"/>
+</head>
+<body class="screen hq dock-host" data-model="options">
+	<div class="screen-ruler"><div class="rs rs-top"><div></div><div></div><div></div><div></div></div><div class="rs rs-bottom"><div></div><div></div><div></div><div></div></div><div class="rs rs-left"><div></div><div></div></div><div class="rs rs-right"><div></div><div></div></div><div class="rc rc-tl"><div></div></div><div class="rc rc-tr"><div></div></div><div class="rc rc-bl"><div></div></div><div class="rc rc-br"><div></div></div></div>
+
+	<div class="hq-band hq-header"><div class="hq-band-in">
+			<mappedimage name="GeneralsLogo" class="hq-logo"/>
+			<div class="hq-heading"><div class="hq-title"><gametext key="GUI:Options"/></div></div>
+			<div class="hq-status">
+				<div class="hq-pill" data-if="logged_in"><span class="hq-dot"></span><span class="hq-count" data-if="online_count_text != ''">{{online_count_text}}</span><span class="hq-sep" data-if="online_count_text != '' &amp;&amp; player_name != ''"></span><span class="hq-name" data-if="player_name != ''">{{player_name}}</span></div>
+				<div class="hq-pill hq-off" data-if="!logged_in"><span class="hq-dot"></span>Offline</div>
+				<div class="hq-clock" data-if="clock_text != ''">{{clock_text}}</div>
+			</div>
+	</div></div>
+
+	<div class="screen-frame">
+		<div class="screen-body">
+			<!-- Categories down the left. -->
+			<div class="tab-rail">
+				<button class="rail-item hq-brackets" data-class-on="tab == 'video'" data-class-selected="tab == 'video'" data-event-click="select_video">Display<span class="hq-scan"></span><span class="hq-br hq-br-tl"></span><span class="hq-br hq-br-tr"></span><span class="hq-br hq-br-bl"></span><span class="hq-br hq-br-br"></span></button>
+				<button class="rail-item hq-brackets" data-class-on="tab == 'graphics'" data-class-selected="tab == 'graphics'" data-event-click="select_graphics">Graphics<span class="hq-scan"></span><span class="hq-br hq-br-tl"></span><span class="hq-br hq-br-tr"></span><span class="hq-br hq-br-bl"></span><span class="hq-br hq-br-br"></span></button>
+				<button class="rail-item hq-brackets" data-class-on="tab == 'audio'" data-class-selected="tab == 'audio'" data-event-click="select_audio"><gametext key="GUI:Audio"/><span class="hq-scan"></span><span class="hq-br hq-br-tl"></span><span class="hq-br hq-br-tr"></span><span class="hq-br hq-br-bl"></span><span class="hq-br hq-br-br"></span></button>
+				<button class="rail-item hq-brackets" data-class-on="tab == 'controls'" data-class-selected="tab == 'controls'" data-event-click="select_controls">Controls<span class="hq-scan"></span><span class="hq-br hq-br-tl"></span><span class="hq-br hq-br-tr"></span><span class="hq-br hq-br-bl"></span><span class="hq-br hq-br-br"></span></button>
+				<!-- Ronin @feature 29/10/2026 DX9: the interface, the on-screen info and the replays -->
+				<button class="rail-item hq-brackets" data-class-on="tab == 'interface'" data-class-selected="tab == 'interface'" data-event-click="select_interface">Interface<span class="hq-scan"></span><span class="hq-br hq-br-tl"></span><span class="hq-br hq-br-tr"></span><span class="hq-br hq-br-bl"></span><span class="hq-br hq-br-br"></span></button>
+				<button class="rail-item hq-brackets" data-class-on="tab == 'network'" data-class-selected="tab == 'network'" data-event-click="select_network"><gametext key="GUI:Network"/><span class="hq-scan"></span><span class="hq-br hq-br-tl"></span><span class="hq-br hq-br-tr"></span><span class="hq-br hq-br-bl"></span><span class="hq-br hq-br-br"></span></button>
+			</div>
+
+			<!-- One label/control row per setting, its tooltip text under the label. Only the active
+			     category is laid out. -->
+			<div class="surface opt-panel">
+				<!-- Display: resolution, brightness, anti-aliasing, texture filtering, anisotropy -->
+				<div class="opt-page scroll-container" data-if="tab == 'video'">
+					<div class="opt-head">Display</div>
+					<!-- The UI text language (Generals Online's settings.json); the options are filled in C++. -->
+					<!-- Ronin @feature 29/10/2026 DX9: Generals Online's (its settings.json): kept, off until that merge -->
+					<div class="opt-row disabled">
+						<div class="opt-text"><div class="opt-label">Game language</div><div class="opt-desc">Takes effect the next time you start the game.</div></div>
+						<div class="opt-control"><select id="select_language" data-value="text_language" disabled="disabled"></select></div>
+					</div>
+					<!-- How much of a wide screen the menus and the control bar use (settings.json ui.interface_width). -->
+					<div class="opt-row disabled">
+						<div class="opt-text"><div class="opt-label">Interface Width</div><div class="opt-desc">On wide screens, keeps the menus and the control bar in a centred area.</div></div>
+						<div class="opt-control">
+							<select data-value="interface_width" disabled="disabled">
+								<option value="0">Full width</option>
+								<option value="1">21:9</option>
+								<option value="2">16:9 (centred)</option>
+							</select>
+						</div>
+					</div>
+					<div class="opt-row" data-class-disabled="restricted">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:Resolution"/></div><div class="opt-desc"><gametext key="TOOLTIP:Resolution"/></div></div>
+						<div class="opt-control"><select id="select_resolution" data-value="resolution_index" data-attrif-disabled="restricted"></select></div>
+					</div>
+					<div class="opt-row">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:GammaAdjustment"/></div><div class="opt-desc"><gametext key="TOOLTIP:Brightness"/></div></div>
+						<div class="opt-control opt-slider">
+							<input class="range" type="range" min="0" max="100" step="1" data-value="brightness" data-tooltip="TOOLTIP:Brightness"/>
+							<div class="opt-value">{{brightness}}</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- Graphics: the detail preset (options filled in C++, RmlOptionsScreen::populateSelectOptions),
+				     its sliders and every effect toggle; editing one switches the preset to Custom. -->
+				<div class="opt-page scroll-container" data-if="tab == 'graphics'">
+					<div class="opt-head">Graphics</div>
+					<!-- Ronin @feature 29/10/2026 DX9: Legacy = the 2003 detail settings, Enhanced = the DX9 renderer's own (his .seg switch) -->
+					<div class="seg">
+						<button class="seg-item" data-class-on="graphics_view == 'legacy'" data-event-click="graphics_legacy">Legacy</button>
+						<button class="seg-item" data-class-on="graphics_view == 'enhanced'" data-event-click="graphics_enhanced">Enhanced</button>
+					</div>
+					<div data-if="graphics_view == 'legacy'">
+					<div class="opt-row" data-class-disabled="restricted">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:Detail"/></div></div>
+						<div class="opt-control"><select id="select_detail" data-value="detail_level" data-attrif-disabled="restricted"
+							data-event-change="detail_level_changed"></select></div>
+					</div>
+					<div class="opt-row" data-class-disabled="detail_controls_disabled">
+						<div class="opt-text"><div class="opt-label">Texture Resolution</div><div class="opt-desc"><gametext key="TOOLTIP:LowResSlider"/></div></div>
+						<div class="opt-control opt-slider">
+							<input class="range" type="range" min="0" max="2" step="1" data-value="texture_resolution"
+								data-attrif-disabled="detail_controls_disabled" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:LowResSlider"/>
+						</div>
+					</div>
+					<div class="opt-row" data-class-disabled="detail_controls_disabled">
+						<div class="opt-text"><div class="opt-label">Particle Cap</div><div class="opt-desc"><gametext key="TOOLTIP:ParticleCapSlider"/></div></div>
+						<div class="opt-control opt-slider">
+							<input class="range" type="range" min="100" max="5000" step="100" data-value="particle_cap"
+								data-attrif-disabled="detail_controls_disabled" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:ParticleCapSlider"/>
+							<div class="opt-value">{{particle_cap}}</div>
+						</div>
+					</div>
+
+					<div class="opt-group" data-class-disabled="detail_controls_disabled">
+						<div class="overline"><gametext key="GUI:AdvanceDisplayOptions"/></div>
+						<div class="opt-desc"><gametext key="GUI:AdvancedOptionsToggleOnOff"/></div>
+					</div>
+					<div class="opt-toggles" data-class-disabled="detail_controls_disabled">
+						<!-- Ronin @feature 30/10/2026 DX9: greyed while Enhanced covers them: its shadow maps, its lighting (which keeps clouds and ground light on) -->
+						<label class="check opt-toggle" data-class-disabled="shadow_quality &gt; 0">
+							<input class="checkbox" type="checkbox" data-checked="shadow_3d"
+								data-attrif-disabled="detail_controls_disabled || shadow_quality &gt; 0" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:Shadows3D"/>
+							<div class="opt-text"><div class="opt-label"><gametext key="GUI:Shadows3D"/></div><div class="opt-desc"><gametext key="TOOLTIP:Shadows3D"/></div></div>
+						</label>
+						<label class="check opt-toggle" data-class-disabled="shadow_quality &gt; 0">
+							<input class="checkbox" type="checkbox" data-checked="shadow_2d"
+								data-attrif-disabled="detail_controls_disabled || shadow_quality &gt; 0" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:Shadows2D"/>
+							<div class="opt-text"><div class="opt-label"><gametext key="GUI:Shadows2D"/></div><div class="opt-desc"><gametext key="TOOLTIP:Shadows2D"/></div></div>
+						</label>
+						<label class="check opt-toggle" data-class-disabled="lighting">
+							<input class="checkbox" type="checkbox" data-checked="cloud_shadows"
+								data-attrif-disabled="detail_controls_disabled || lighting" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:CloudShadows"/>
+							<div class="opt-text"><div class="opt-label"><gametext key="GUI:CloudShadows"/></div><div class="opt-desc"><gametext key="TOOLTIP:CloudShadows"/></div></div>
+						</label>
+						<label class="check opt-toggle" data-class-disabled="lighting">
+							<input class="checkbox" type="checkbox" data-checked="ground_lighting"
+								data-attrif-disabled="detail_controls_disabled || lighting" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:GroundLighting"/>
+							<div class="opt-text"><div class="opt-label"><gametext key="GUI:GroundLighting"/></div><div class="opt-desc"><gametext key="TOOLTIP:GroundLighting"/></div></div>
+						</label>
+						<label class="check opt-toggle" data-class-disabled="improved_water">
+							<input class="checkbox" type="checkbox" data-checked="smooth_water"
+								data-attrif-disabled="detail_controls_disabled || improved_water" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:SmoothWater"/>
+							<div class="opt-text"><div class="opt-label"><gametext key="GUI:SmoothWater"/></div><div class="opt-desc"><gametext key="TOOLTIP:SmoothWater"/></div></div>
+						</label>
+						<label class="check opt-toggle">
+							<input class="checkbox" type="checkbox" data-checked="extra_animations"
+								data-attrif-disabled="detail_controls_disabled" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:ExtraAnimations"/>
+							<div class="opt-text"><div class="opt-label"><gametext key="GUI:ExtraAnimations"/></div><div class="opt-desc"><gametext key="TOOLTIP:ExtraAnimations"/></div></div>
+						</label>
+						<label class="check opt-toggle">
+							<input class="checkbox" type="checkbox" data-checked="no_dynamic_lod"
+								data-attrif-disabled="detail_controls_disabled" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:NoDynamicLOD"/>
+							<div class="opt-text"><div class="opt-label"><gametext key="GUI:NoDynamicLOD"/></div><div class="opt-desc"><gametext key="TOOLTIP:NoDynamicLOD"/></div></div>
+						</label>
+						<label class="check opt-toggle">
+							<input class="checkbox" type="checkbox" data-checked="heat_effects"
+								data-attrif-disabled="detail_controls_disabled" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:HeatEffects"/>
+							<div class="opt-text"><div class="opt-label"><gametext key="GUI:HeatEffects"/></div><div class="opt-desc"><gametext key="TOOLTIP:HeatEffects"/></div></div>
+						</label>
+						<label class="check opt-toggle">
+							<input class="checkbox" type="checkbox" data-checked="building_occlusion"
+								data-attrif-disabled="detail_controls_disabled" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:BehindBuilding"/>
+							<div class="opt-text"><div class="opt-label"><gametext key="GUI:BehindBuilding"/></div><div class="opt-desc"><gametext key="TOOLTIP:BehindBuilding"/></div></div>
+						</label>
+						<label class="check opt-toggle">
+							<input class="checkbox" type="checkbox" data-checked="props"
+								data-attrif-disabled="detail_controls_disabled" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:ShowProps"/>
+							<div class="opt-text"><div class="opt-label"><gametext key="GUI:ShowProps"/></div><div class="opt-desc"><gametext key="TOOLTIP:ShowProps"/></div></div>
+						</label>
+					</div>
+					</div>
+					<div data-if="graphics_view == 'enhanced'">
+					<!-- Ronin @feature 29/10/2026 DX9: ours - TAA beside MSAA (TAA does not run under MSAA). Texture filtering and
+					     anisotropy are left out: this build reads neither key at start. -->
+					<div class="opt-row">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:AntiAliasing"/></div><div class="opt-desc">TAA smooths edges and shimmer and runs with every effect. MSAA turns TAA and HDR off.</div></div>
+						<div class="opt-control">
+							<select data-value="anti_aliasing">
+								<option value="0"><gametext key="GUI:AntiAliasing0"/></option>
+								<option value="1">TAA</option>
+								<option value="2">2x MSAA</option>
+								<option value="3">4x MSAA</option>
+								<option value="4">8x MSAA</option>
+							</select>
+						</div>
+					</div>
+					<div class="opt-row" data-if="anti_aliasing == 1">
+						<div class="opt-text"><div class="opt-label">TAA Sharpening</div></div>
+						<div class="opt-control opt-slider">
+							<input class="range" type="range" min="0" max="100" step="5" data-value="taa_sharpness"/>
+							<div class="opt-value">{{taa_sharpness}}</div>
+						</div>
+					</div>
+					<div class="opt-row" data-if="anti_aliasing == 1">
+						<div class="opt-text"><div class="opt-label">TAA Texture Detail</div><div class="opt-desc">Below 0 picks sharper textures; TAA smooths the shimmer that brings. 0: as without TAA.</div></div>
+						<div class="opt-control opt-slider">
+							<input class="range" type="range" min="-20" max="0" step="1" data-value="taa_mip_bias"/>
+							<div class="opt-value">{{ taa_mip_bias / 10 | format(1) }}</div>
+						</div>
+					</div>
+					<div class="opt-row">
+						<div class="opt-text"><div class="opt-label">Shadow Quality</div><div class="opt-desc">Off gives the game's own shadows back.</div></div>
+						<div class="opt-control">
+							<select data-value="shadow_quality">
+								<option value="0">Off</option>
+								<option value="1">Normal</option>
+								<option value="2">High</option>
+								<option value="3">Ultra</option>
+							</select>
+						</div>
+					</div>
+					<div class="opt-row">
+						<div class="opt-text"><div class="opt-label">Ambient Occlusion</div><div class="opt-desc">Soft shade where things meet the ground and each other.</div></div>
+						<div class="opt-control">
+							<select data-value="ssao_quality">
+								<option value="0">Off</option>
+								<option value="1">Normal</option>
+								<option value="2">High</option>
+								<option value="3">Ultra</option>
+							</select>
+						</div>
+					</div>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">New Lighting</div><div class="opt-desc">Lights per pixel, the night look, the sky in reflections. Off: the game's own.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="lighting"/></div>
+					</label>
+					<label class="check opt-row opt-check-row" data-class-disabled="!lighting">
+						<div class="opt-text"><div class="opt-label">Lamps and Effect Lights</div><div class="opt-desc">The light of lamps, fires and weapons, with their beams and glows.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="light_effects" data-attrif-disabled="!lighting"/></div>
+					</label>
+					<label class="check opt-row opt-check-row" data-class-disabled="anti_aliasing &gt;= 2">
+						<div class="opt-text"><div class="opt-label">HDR</div><div class="opt-desc">A brighter sun and a softer roll-off into white. Needs MSAA off.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="hdr"/></div>
+					</label>
+					<!-- Ronin @feature 30/10/2026 DX9: Options.ini DX9Water - switches on Accept; keeps Smooth Water Borders on -->
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Improved Water</div><div class="opt-desc">Waves, foam, wakes and reflections on the sea, lakes and rivers.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="improved_water"/></div>
+					</label>
+					<label class="check opt-row opt-check-row" data-class-disabled="!improved_water">
+						<div class="opt-text"><div class="opt-label">Water Reflections</div><div class="opt-desc">The sea and lakes mirror what stands over them. Needs Improved Water on.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="water_reflections" data-attrif-disabled="!improved_water"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Fog of War Fade</div><div class="opt-desc">The shroud fades as units see, instead of snapping.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="shroud_interpolation"/></div>
+					</label>
+					<!-- Ronin @feature 30/10/2026 DX9: always on - the 2003 terrain path does not draw right in this build (UI_Work 11) -->
+					<label class="check opt-row opt-check-row disabled">
+						<div class="opt-text"><div class="opt-label">Terrain Materials</div><div class="opt-desc">FHD textures, true blending and PBR maps. Always on.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="splat" disabled="disabled"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Terrain Relief</div><div class="opt-desc">Parallax Occlusion Mapping: a realistic illusion of 3D depth and self-shadowing on flat surfaces.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="pom"/></div>
+					</label>
+					</div>
+				</div>
+
+				<!-- Audio -->
+				<div class="opt-page scroll-container" data-if="tab == 'audio'">
+					<div class="opt-head"><gametext key="GUI:Audio"/></div>
+					<div class="opt-row">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:MusicVolume"/></div></div>
+						<div class="opt-control opt-slider">
+							<input class="range" type="range" min="0" max="100" step="1" data-value="music_volume" data-tooltip="GUI:MusicVolume"/>
+							<div class="opt-value">{{music_volume}}</div>
+						</div>
+					</div>
+					<div class="opt-row">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:SFXVolume"/></div></div>
+						<div class="opt-control opt-slider">
+							<input class="range" type="range" min="0" max="100" step="1" data-value="sfx_volume" data-tooltip="GUI:SFXVolume"/>
+							<div class="opt-value">{{sfx_volume}}</div>
+						</div>
+					</div>
+					<div class="opt-row">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:VoiceVolume"/></div></div>
+						<div class="opt-control opt-slider">
+							<input class="range" type="range" min="0" max="100" step="1" data-value="voice_volume" data-tooltip="GUI:VoiceVolume"/>
+							<div class="opt-value">{{voice_volume}}</div>
+						</div>
+					</div>
+					<!-- Ronin @feature 29/10/2026 DX9: the SuperHackers' MoneyTransactionVolume, which the .wnd menu only re-saved -->
+					<div class="opt-row">
+						<div class="opt-text"><div class="opt-label">Money Sounds</div><div class="opt-desc">The tick of money coming in and going out.</div></div>
+						<div class="opt-control opt-slider">
+							<input class="range" type="range" min="0" max="100" step="1" data-value="money_volume"/>
+							<div class="opt-value">{{money_volume}}</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- Controls -->
+				<div class="opt-page scroll-container" data-if="tab == 'controls'">
+					<div class="opt-head">Controls</div>
+					<div class="opt-row">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:ScrollSpeed"/></div><div class="opt-desc"><gametext key="TOOLTIP:ScrollSpeed"/></div></div>
+						<div class="opt-control opt-slider">
+							<input class="range" type="range" min="10" max="200" step="5" data-value="scroll_speed" data-tooltip="ToolTip:ScrollSpeed"/>
+							<div class="opt-value">{{scroll_speed}}</div>
+						</div>
+					</div>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:AlternateMouse"/></div><div class="opt-desc"><gametext key="TOOLTIP:AlternateMouse"/></div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="alternate_mouse" data-tooltip="TOOLTIP:AlternateMouse"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:RetaliationTitle"/></div><div class="opt-desc"><gametext key="GUI:Retaliation"/></div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="retaliation" data-tooltip="GUI:Retaliation"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:DoubleClickAttackMove"/></div><div class="opt-desc"><gametext key="TOOLTIP:DoubleClickAttackMove"/></div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="double_click_attack_move" data-tooltip="TOOLTIP:DoubleClickAttackMove"/></div>
+					</label>
+					<!-- Ronin @feature 29/10/2026 DX9: the SuperHackers' mouse and scroll settings, which the .wnd menu only re-saved -->
+					<label class="check opt-row opt-check-row" data-class-disabled="!alternate_mouse">
+						<div class="opt-text"><div class="opt-label">Right-Drag Scrolls With the Alternate Mouse</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="right_mouse_scroll" data-attrif-disabled="!alternate_mouse"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Draw Scroll Anchor</div><div class="opt-desc">A mark where a right-drag scroll began.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="draw_anchor"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Move Scroll Anchor</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="move_anchor"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Edge Scrolling in a Window</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="edge_windowed"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Edge Scrolling Full Screen</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="edge_fullscreen"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Keep the Pointer In: Match, Window</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="capture_windowed_game"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Keep the Pointer In: Menus, Window</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="capture_windowed_menu"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Keep the Pointer In: Match, Full Screen</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="capture_fullscreen_game"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Keep the Pointer In: Menus, Full Screen</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="capture_fullscreen_menu"/></div>
+					</label>
+				</div>
+
+				<!-- Ronin @feature 29/10/2026 DX9: Interface - the modern UI switch and the SuperHackers' settings the .wnd menu only re-saved -->
+				<div class="opt-page scroll-container" data-if="tab == 'interface'">
+					<div class="opt-head">Interface</div>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Modern Interface</div><div class="opt-desc">The new control bar and menus. Off: the 2003 ones. After a restart.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="modern_ui"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Money per Minute</div><div class="opt-desc">Your income beside the money.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="money_per_minute"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Language Filter</div><div class="opt-desc">Hides offensive words in chat.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="language_filter"/></div>
+					</label>
+					<div class="opt-head">On-Screen Information</div>
+					<label class="check opt-row opt-check-row"><div class="opt-text"><div class="opt-label">Frame Rate</div></div><div class="opt-control"><input class="checkbox" type="checkbox" data-checked="show_fps"/></div></label>
+					<label class="check opt-row opt-check-row"><div class="opt-text"><div class="opt-label">Clock</div></div><div class="opt-control"><input class="checkbox" type="checkbox" data-checked="show_clock"/></div></label>
+					<label class="check opt-row opt-check-row"><div class="opt-text"><div class="opt-label">Game Time</div></div><div class="opt-control"><input class="checkbox" type="checkbox" data-checked="show_game_time"/></div></label>
+					<label class="check opt-row opt-check-row"><div class="opt-text"><div class="opt-label">Network Latency</div></div><div class="opt-control"><input class="checkbox" type="checkbox" data-checked="show_latency"/></div></label>
+					<label class="check opt-row opt-check-row"><div class="opt-text"><div class="opt-label">Player List</div></div><div class="opt-control"><input class="checkbox" type="checkbox" data-checked="show_player_list"/></div></label>
+					<div class="opt-head">Replays and Observing</div>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Record the Camera</div><div class="opt-desc">Replays keep where you looked.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="save_camera"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Play the Recorded Camera</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="use_camera"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Archive Every Replay</div><div class="opt-desc">Each match's replay is also copied under its date and time.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="archive_replays"/></div>
+					</label>
+					<label class="check opt-row opt-check-row">
+						<div class="opt-text"><div class="opt-label">Observe Single Players</div><div class="opt-desc">An observer can see through one player's fog of war. Costs some speed; from the next map.</div></div>
+						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="player_observer"/></div>
+					</label>
+				</div>
+
+				<!-- Network: IP choices filled in C++ like the detail preset. -->
+				<div class="opt-page scroll-container" data-if="tab == 'network'">
+					<div class="opt-head"><gametext key="GUI:Network"/></div>
+					<div class="opt-row" data-class-disabled="restricted">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:IPAddresses"/></div><div class="opt-desc"><gametext key="TOOLTIP:LanIP"/></div></div>
+						<div class="opt-control"><select id="select_lan_ip" data-value="lan_ip_index" data-attrif-disabled="restricted" data-tooltip="TOOLTIP:LanIP"></select></div>
+					</div>
+					<div class="opt-row" data-class-disabled="restricted">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:OnlineIPAddresses"/></div><div class="opt-desc"><gametext key="TOOLTIP:OnlineIP"/></div></div>
+						<div class="opt-control"><select id="select_online_ip" data-value="online_ip_index" data-attrif-disabled="restricted" data-tooltip="TOOLTIP:OnlineIP"></select></div>
+					</div>
+					<div class="opt-row" data-class-disabled="restricted">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:FireWallPort"/></div><div class="opt-desc"><gametext key="TOOLTIP:FireWallPort"/></div></div>
+						<div class="opt-control"><input class="text-input" type="text" maxlength="5" data-value="firewall_port_override" data-attrif-disabled="restricted" data-tooltip="TOOLTIP:FireWallPort"/></div>
+					</div>
+					<!-- Ronin @feature 29/10/2026 DX9: no HTTP proxy or send delay - obsolete, the SuperHackers' .wnd hides them too -->
+					<div class="opt-row" data-class-disabled="restricted">
+						<div class="opt-text"><div class="opt-label"><gametext key="GUI:FirewallRefresh"/></div><div class="opt-desc"><gametext key="TOOLTIP:RefreshNat"/></div></div>
+						<div class="opt-control"><button class="btn-small" data-event-click="firewall_refresh" data-attrif-disabled="restricted" data-tooltip="TOOLTIP:RefreshNat"><gametext key="GUI:FirewallRefresh"/></button></div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<div class="action-bar">
+			<button class="btn-back" data-event-click="cancel" data-tooltip="TOOLTIP:OptionsCancel"><span class="chevron">&#8249;</span><gametext key="GUI:Cancel"/></button>
+			<div class="spacer"></div>
+			<button data-event-click="defaults" data-tooltip="TOOLTIP:OptionsDefaults"><gametext key="GUI:Defaults"/></button>
+			<button class="btn-cta" data-event-click="accept" data-tooltip="TOOLTIP:OptionsAccept"><gametext key="GUI:Accept"/></button>
+		</div>
+	</div>
+</body>
+</rml>

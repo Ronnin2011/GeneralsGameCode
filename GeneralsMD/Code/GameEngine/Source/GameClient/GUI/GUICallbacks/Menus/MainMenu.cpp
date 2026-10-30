@@ -215,7 +215,7 @@ void diffReverseSide();
 void HandleCanceledDownload( Bool resetDropDown )
 {
 	buttonPushed = FALSE;
-	if (resetDropDown)
+	if (resetDropDown && dropDownWindows[DROPDOWN_MAIN])	// Ronin @bugfix 29/10/2026 DX9: none while the RmlUi main menu is up (ModernUI)
 	{
 		dropDownWindows[DROPDOWN_MAIN]->winHide(FALSE);
 		TheTransitionHandler->setGroup("MainMenuDefaultMenuLogoFade");

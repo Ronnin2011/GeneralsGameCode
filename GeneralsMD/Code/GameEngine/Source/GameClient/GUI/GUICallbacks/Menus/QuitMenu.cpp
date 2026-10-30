@@ -46,6 +46,7 @@
 #include "GameClient/GameText.h"
 #include "GameClient/MessageBox.h"
 #include "GameClient/Shell.h"
+#include "GameClient/RmlUiScreenRegistry.h"	// Ronin @feature 29/10/2026 DX9: the RmlUi game menu
 #include "GameClient/InGameUI.h"
 #include "GameLogic/GameLogic.h"
 #include "GameLogic/VictoryConditions.h"
@@ -114,6 +115,7 @@ void destroyQuitMenu()
 {
   // destroy the quit menu
 	quitConfirmationWindow = nullptr;
+	RmlUiScreenRegistry::close( AsciiString( "Menus/QuitMenu.wnd" ) );	// Ronin @feature 29/10/2026 DX9: the RmlUi game menu, if it is the one up
 	if(fullQuitMenuLayout)
 	{
 		fullQuitMenuLayout->destroyWindows();
@@ -236,6 +238,7 @@ void HideQuitMenu()
 	// So don't do anything that counts on that menu actually being here.
 	if(!isVisible)
 		return;
+	RmlUiScreenRegistry::close( AsciiString( "Menus/QuitMenu.wnd" ) );	// Ronin @feature 29/10/2026 DX9: the RmlUi game menu, if it is the one up
 	if(quitMenuLayout && quitMenuLayout == noSaveLoadQuitMenuLayout)
 		TheTransitionHandler->reverse("QuitNoSaveBack");
 	else if( quitMenuLayout && quitMenuLayout == fullQuitMenuLayout)
@@ -297,6 +300,40 @@ void ToggleQuitMenu()
 		DEBUG_ASSERTCRASH(saveLoadBack != nullptr, ("Not able to get the back button window from the save/load menu"));
 		TheWindowManager->winSendSystemMsg(saveLoadMenuLayout->getFirstWindow(), GBM_SELECTED, (WindowMsgData)saveLoadBack, 0);
 		saveLoadMenuLayout = nullptr;
+		return;
+	}
+
+	// Ronin @feature 29/10/2026 DX9: the RmlUi game menu (ModernUI): no layout, the screen sets its own buttons. Options over it closes
+	// first, as above; the pause and the unpause are the .wnd path's below.
+	if( RmlUiScreenRegistry::isRegistered( AsciiString( "Menus/QuitMenu.wnd" ) ) )
+	{
+		if( RmlUiScreenRegistry::isOpen( AsciiString( "Menus/OptionsMenu.wnd" ) ) )
+		{
+			RmlUiScreenRegistry::back( AsciiString( "Menus/OptionsMenu.wnd" ) );
+			return;
+		}
+		if( quitConfirmationWindow )
+			TheWindowManager->winDestroy( quitConfirmationWindow );
+		quitConfirmationWindow = nullptr;
+		if( isVisible )
+		{
+			isVisible = FALSE;
+			if( !TheGameLogic->isInMultiplayerGame() )
+				TheGameLogic->setGamePaused( FALSE );
+			RmlUiScreenRegistry::close( AsciiString( "Menus/QuitMenu.wnd" ) );
+		}
+		else
+		{
+			TheMouse->setCursor( Mouse::ARROW );
+			if( TheGameLogic->isInSkirmishGame() || !TheGameLogic->isInMultiplayerGame() )
+				TheGameLogic->setGamePaused( TRUE );
+			HideDiplomacy();
+			HideInGameChat();
+			TheControlBar->hidePurchaseScience();
+			isVisible = TRUE;
+			RmlUiScreenRegistry::open( AsciiString( "Menus/QuitMenu.wnd" ) );
+		}
+		TheInGameUI->setQuitMenuVisible( isVisible );
 		return;
 	}
 
@@ -424,6 +461,30 @@ void ToggleQuitMenu()
 
 	TheInGameUI->setQuitMenuVisible(isVisible);
 
+}
+
+//-------------------------------------------------------------------------------------------------
+// Ronin @feature 29/10/2026 DX9: the RmlUi game menu's buttons, as QuitMenuSystem() below runs the .wnd's
+//-------------------------------------------------------------------------------------------------
+void QuitMenuOpenSaveLoad()
+{
+	saveLoadMenuLayout = TheShell->getSaveLoadMenuLayout();
+	saveLoadMenuLayout->runInit();
+	saveLoadMenuLayout->hide( FALSE );
+	saveLoadMenuLayout->bringForward();
+}
+
+void QuitMenuAskExit()
+{
+	quitConfirmationWindow = QuitMessageBoxYesNo(TheGameText->fetch("GUI:QuitPopupTitle"), TheGameText->fetch("GUI:QuitPopupMessage"), exitQuitMenu, noExitQuitMenu);
+}
+
+void QuitMenuAskRestart()
+{
+	if ( TheGameLogic->isInMultiplayerGame() )
+		quitConfirmationWindow = MessageBoxYesNo(TheGameText->fetch("GUI:SurrenderConfirmationTitle"), TheGameText->fetch("GUI:SurrenderConfirmation"), surrenderQuitMenu, noExitQuitMenu);
+	else
+		quitConfirmationWindow = MessageBoxYesNo(TheGameText->fetch("GUI:RestartConfirmationTitle"), TheGameText->fetch("GUI:RestartConfirmation"), restartMissionMenu, noExitQuitMenu);
 }
 
 //-------------------------------------------------------------------------------------------------

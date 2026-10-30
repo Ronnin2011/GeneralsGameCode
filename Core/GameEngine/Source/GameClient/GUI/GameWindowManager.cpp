@@ -1178,7 +1178,7 @@ GameWindow* GameWindowManager::findWindowUnderMouse(GameWindow*& toolTipWindow, 
 {
 	for (GameWindow* window = m_windowList; window; window = window->m_next)
 	{
-		if (!isMouseWithinWindow(window, mousePos, requiredStatusMask, forbiddenStatusMask))
+		if (window->m_headless || !isMouseWithinWindow(window, mousePos, requiredStatusMask, forbiddenStatusMask))	// Ronin @feature 28/10/2026 DX9: not headless
 			continue;
 
 		if (toolTipWindow == nullptr)
@@ -1214,7 +1214,7 @@ Int GameWindowManager::drawWindow( GameWindow *window )
 	if( window == nullptr )
 		return WIN_ERR_INVALID_WINDOW;
 
-	if( BitIsSet( window->m_status, WIN_STATUS_HIDDEN ) == FALSE )
+	if( BitIsSet( window->m_status, WIN_STATUS_HIDDEN ) == FALSE && !window->m_headless )	// Ronin @feature 28/10/2026 DX9: a headless window is not drawn
 	{
 
 		if( !BitIsSet( window->m_status, WIN_STATUS_SEE_THRU ) && window->m_draw )
@@ -3567,7 +3567,7 @@ GameWindow *GameWindowManager::getWindowUnderCursor( Int x, Int y, Bool ignoreEn
 		for( window = m_windowList; window; window = window->m_next )
 		{
 
-			if( BitIsSet( window->m_status, WIN_STATUS_ABOVE ) &&
+			if( !window->m_headless && BitIsSet( window->m_status, WIN_STATUS_ABOVE ) &&	// Ronin @feature 28/10/2026 DX9: not headless
 					!BitIsSet( window->m_status, WIN_STATUS_HIDDEN ) &&
 					x >= window->m_region.lo.x &&
 					x <= window->m_region.hi.x &&
@@ -3588,7 +3588,7 @@ GameWindow *GameWindowManager::getWindowUnderCursor( Int x, Int y, Bool ignoreEn
 		{
 			for( window = m_windowList; window; window = window->m_next )
 			{
-				if( !BitIsSet( window->m_status, WIN_STATUS_ABOVE |
+				if( !window->m_headless && !BitIsSet( window->m_status, WIN_STATUS_ABOVE |	// Ronin @feature 28/10/2026 DX9: not headless
 																				WIN_STATUS_BELOW |
 																				WIN_STATUS_HIDDEN ) &&
 						x >= window->m_region.lo.x &&
@@ -3611,7 +3611,7 @@ GameWindow *GameWindowManager::getWindowUnderCursor( Int x, Int y, Bool ignoreEn
 		{
 			for( window = m_windowList; window; window = window->m_next )
 			{
-				if( BitIsSet( window->m_status, WIN_STATUS_BELOW ) &&
+				if( !window->m_headless && BitIsSet( window->m_status, WIN_STATUS_BELOW ) &&	// Ronin @feature 28/10/2026 DX9: not headless
 						!BitIsSet( window->m_status, WIN_STATUS_HIDDEN ) &&
 						x >= window->m_region.lo.x &&
 						x <= window->m_region.hi.x &&
