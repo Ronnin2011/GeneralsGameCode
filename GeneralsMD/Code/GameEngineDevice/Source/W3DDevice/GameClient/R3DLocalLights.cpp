@@ -1626,7 +1626,16 @@ float R3DLocalLights::getPoolFill(void)	{ return s_poolFill; }
 void  R3DLocalLights::setHotspot(float v)	{ s_hotspot = (v < 0.0f) ? 0.0f : ((v > 0.9f) ? 0.9f : v); }
 float R3DLocalLights::getHotspot(void)	{ return s_hotspot; }
 
-void R3DLocalLights::setEnabled(Bool on)	{ s_enabled = on; }
+// Ronin @feature 30/10/2026 DX9: the new lighting carries the 2003 cloud shadows and ground lighting: they are on while it is.
+static void lightingTakesLegacyLight(void)
+{
+	if (s_enabled && TheWritableGlobalData != NULL)
+	{
+		TheWritableGlobalData->m_useCloudMap = TRUE;
+		TheWritableGlobalData->m_useLightMap = TRUE;
+	}
+}
+void R3DLocalLights::setEnabled(Bool on)	{ s_enabled = on; lightingTakesLegacyLight(); }
 Bool R3DLocalLights::isEnabled(void)		{ return s_enabled; }
 void R3DLocalLights::setEffects(Bool on)	{ s_effects = on; }
 Bool R3DLocalLights::isEffects(void)		{ return s_effects; }
@@ -2259,6 +2268,7 @@ void R3DLocalLights::beginFrame(void)
 		if (TheGlobalData != NULL)
 		{
 			s_enabled = TheGlobalData->m_lighting;
+			lightingTakesLegacyLight();
 			s_effects = TheGlobalData->m_lightEffects;
 		}
 	}
