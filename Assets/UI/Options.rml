@@ -356,7 +356,7 @@
 					</label>
 					<div class="opt-head">On-Screen Information</div>
 					<label class="check opt-row opt-check-row"><div class="opt-text"><div class="opt-label">Frame Rate</div></div><div class="opt-control"><input class="checkbox" type="checkbox" data-checked="show_fps"/></div></label>
-					<label class="check opt-row opt-check-row"><div class="opt-text"><div class="opt-label">Clock</div></div><div class="opt-control"><input class="checkbox" type="checkbox" data-checked="show_clock"/></div></label>
+					<label class="check opt-row opt-check-row"><div class="opt-text"><div class="opt-label">Clock</div><div class="opt-desc">In a match; the menus show the time in their header.</div></div><div class="opt-control"><input class="checkbox" type="checkbox" data-checked="show_clock"/></div></label>
 					<label class="check opt-row opt-check-row"><div class="opt-text"><div class="opt-label">Game Time</div></div><div class="opt-control"><input class="checkbox" type="checkbox" data-checked="show_game_time"/></div></label>
 					<label class="check opt-row opt-check-row"><div class="opt-text"><div class="opt-label">Network Latency</div></div><div class="opt-control"><input class="checkbox" type="checkbox" data-checked="show_latency"/></div></label>
 					<label class="check opt-row opt-check-row"><div class="opt-text"><div class="opt-label">Player List</div></div><div class="opt-control"><input class="checkbox" type="checkbox" data-checked="show_player_list"/></div></label>

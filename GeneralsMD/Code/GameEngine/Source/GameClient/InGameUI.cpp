@@ -63,6 +63,7 @@
 #include "GameClient/GameWindowID.h"
 #include "GameClient/GUICallbacks.h"
 #include "GameClient/InGameUI.h"
+#include "GameClient/RmlUiInputHook.h"	// Ronin @feature 30/10/2026 DX9: ModernUI, for the clock
 #include "GameClient/VideoPlayer.h"
 #include "GameClient/Mouse.h"
 #include "GameClient/GadgetStaticText.h"
@@ -3773,7 +3774,9 @@ void InGameUI::postWindowDraw()
 		drawRenderFps(hudOffsetX, hudOffsetY);
 	}
 
-	if (m_systemTimePointSize > 0)
+	// Ronin @feature 30/10/2026 DX9: with ModernUI the menus' header shows the time, so this clock is a match's only.
+	const Bool inMatch = TheGameLogic->isInGame() && !TheGameLogic->isInShellGame();
+	if (m_systemTimePointSize > 0 && (inMatch || TheRmlUiInputHook == nullptr || !TheRmlUiInputHook->drawsControlBar()))
 	{
 		drawSystemTime(hudOffsetX, hudOffsetY);
 	}
