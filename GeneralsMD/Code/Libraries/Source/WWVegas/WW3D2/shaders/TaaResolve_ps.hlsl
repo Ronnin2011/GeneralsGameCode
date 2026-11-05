@@ -338,8 +338,10 @@ float4 resolve(float2 uv, out float3 lowBits)
             float4 fl = tex2Dlod(g_Flash, float4(uv, 0.0f, 0.0f));
             if (fl.a > 0.5f)
             {
+                // Ronin @bugfix 05/11/2026 DX9: no cap at the surface colour - a bright map's light clamps to 1, the cap was the frame
+                // itself and the flash added nothing. The original game added it to the ambient and every light, past the surface colour.
                 float3 surface = saturate(shown * g_FlashPrm.rgb);
-                shown = min(shown + surface * fl.rgb * g_FlashPrm.w, max(shown, surface));
+                shown = saturate(shown + surface * fl.rgb * g_FlashPrm.w);
             }
         }
         return float4(shown, 0.0f);
