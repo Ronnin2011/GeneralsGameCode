@@ -167,7 +167,8 @@ public:
 		TextureClass* diffuseTexture,
 		const Matrix3D& worldTransform,
 		const RigidTexGen& texGen,
-		const ShaderClass& shader);
+		const ShaderClass& shader,
+		int baseVertex = 0);	// Ronin @feature 05/11/2026 DX9: a skin's place in the shared skin buffer; 0 for a rigid mesh
 
 	void Flush_Single_Rigid();
 	void Reset_Single_Rigid_Collection() { m_pendingSingleRigidCount = 0; }
@@ -269,6 +270,7 @@ private:
 		VertexMaterialClass*     material;  // per-record: VS material constants swapped per distinct material
 		ShaderClass              shader;    // per-record: blend/z/alpha-test/cull render state, re-applied per group
 		bool                     shroud;    // per-record: false = its light env already carries the fog (a ghost object)
+		int                      baseVertex; // Ronin @feature 05/11/2026 DX9: a skin's first vertex in the skin buffer (rigid: 0)
 	};
 
 	enum { MAX_PENDING_SINGLE_RIGID = 4096 };
@@ -281,6 +283,7 @@ private:
 	unsigned             m_pendingSingleRigidCount;
 	// Container-constant: every mesh in a DX8RigidFVFCategoryContainer shares one FVF (one decl, one VB).
 	DWORD                m_srFVF;
+	bool                 m_srSkinBatch;	// Ronin @bugfix 05/11/2026 DX9: the batch is a skin container's (its colour channel is empty)
 
 	// Statistics — Ronin @diagnostic §16 DX9: all produced by the merged Flush_Single_Rigid.
 	// Live counters first, then their end-of-frame snapshots in the SAME order (the two lists are

@@ -616,12 +616,21 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 	// Those meshes fall back to LEGACY_CLOUD / LEGACY (FFP), isolating Draw_Single_Rigid's per-mesh cost.
 	static const bool DISABLE_SINGLE_RIGID_PATH = false;
 
+	// Ronin @feature 05/11/2026 DX9: a skin (the gate let it in): its buffer carries a second uv set it never textures - the shader
+	// reads the first only - and each skin sits at its own place in that buffer (baseVertexOffset).
+	MeshModelClass* const rendererModel = renderer->Get_Mesh_Model_Class();
+	const bool skinDraw = (rendererModel != nullptr) && rendererModel->Get_Flag(MeshGeometryClass::SKIN);
+	// Ronin @bugfix 05/11/2026 DX9: the skin container declares XYZNUV1, its buffer is XYZNDUV2 (colour at 24, uv at 28): the shader's
+	// layout comes from the buffer, or it read the colour as the uv - the streaked soldiers. The old path keeps the declared one.
+	const DWORD programFVF = skinDraw ? (DWORD)dynamic_fvf_type : geometryFVF;
+	const int programTexCount = (programFVF & D3DFVF_TEXCOUNT_MASK) >> D3DFVF_TEXCOUNT_SHIFT;
+
 	const bool canUseProgrammableFallback =
 		!DISABLE_SINGLE_RIGID_PATH &&
 		allowProgrammableRigidFallback &&
 		shaderUsesOpaqueBlend &&
-		((geometryFVF & D3DFVF_NORMAL) != 0) &&
-		(fvfTexCount == 1) &&
+		((programFVF & D3DFVF_NORMAL) != 0) &&
+		(programTexCount == 1 || (skinDraw && programTexCount == 2)) &&
 		(stage1Texture == nullptr);
 
 
@@ -753,13 +762,14 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 			// inline (legacy) meshes are unaffected; the batch is flushed at the end of Render().
 			if (TheDX8InstanceManager.Collect_Single_Rigid(
 					renderer,
-					geometryFVF,
+					programFVF,
 					lightEnv,
 					material,
 					stage0Texture,
 					worldTransform,
 					singleRigidTexGen,
-					activeShader)) {
+					activeShader,
+					skinDraw ? (int)baseVertexOffset : 0)) {	// Ronin @feature 05/11/2026 DX9: a skin draws from its place in the skin buffer
 
 			/*#ifdef WWDEBUG
 			// Ronin @diagnostic DX9: log EVERY mesh that takes the single-rigid programmable path,
@@ -2155,6 +2165,21 @@ void DX8SkinFVFCategoryContainer::Render()
 			}
 		}
 
+		// Ronin @feature 05/11/2026 DX9: the skins collected for the programmable shader, drawn while this chunk of the skin buffer
+		// is still bound (the next chunk refills it); then the buffer and its layout go back for the passes below.
+		if (TheDX8InstanceManager.Get_Pending_Single_Rigid_Count() > 0) {
+			TheDX8InstanceManager.Flush_Single_Rigid();
+
+			DX8Wrapper::Set_Vertex_Buffer(vb);
+			DX8Wrapper::Set_Index_Buffer(index_buffer, 0, "DX8SkinFVFCategoryContainer::Render post single-rigid flush");
+			if (pDev && vb.Get_D3D_VB()) {
+				const UINT skinStride = vb.FVF_Info().Get_FVF_Size();
+				DX8Wrapper::Force_Stream0(vb.Get_D3D_VB(), vb.Get_VB_Offset() * skinStride, skinStride);
+			}
+			DX8Wrapper::BindLayoutFVF(vb.FVF_Info().Get_FVF(), "DX8SkinFVFCategoryContainer::Render post single-rigid flush");
+			DX8Wrapper::Apply_Render_State_Changes();
+		}
+
 		Render_Procedural_Material_Passes();
 	}
 
@@ -2638,7 +2663,8 @@ void DX8TextureCategoryClass::Render()
 		// the instance-count requirement. (selection/material override, object scale,
 		// sorted/aligned/oriented, etc.)
 		const bool allowProgrammableRigidFallback =
-			!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) &&
+			// Ronin @feature 05/11/2026 DX9: skins too, deformed into world space already; not in the shadow depth pass.
+			(!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) || !MeshClass::s_InShadowDepthPass) &&
 			// Ronin @bugfix 31/07/2026 §16 DX9: strips must NOT take the programmable path. Everything
 			// deferred is drawn by DX8PolygonRendererClass::Render_Instanced, which always issues a
 			// D3DPT_TRIANGLELIST DrawIndexedPrimitive with index_count/3 primitives; only Render() branches

@@ -397,6 +397,7 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	, m_geometryDeclCacheCount(0)
 	, m_pendingSingleRigidCount(0)
 	, m_srFVF(0)
+	, m_srSkinBatch(false)
 	, m_instancedRecords(0)
 	, m_instancedDrawCalls(0)
 	, m_instancedMeshes(0)
@@ -1100,7 +1101,8 @@ bool DX8InstanceManagerClass::Collect_Single_Rigid(
 	TextureClass* diffuseTexture,
 	const Matrix3D& worldTransform,
 	const RigidTexGen& texGen,
-	const ShaderClass& shader)
+	const ShaderClass& shader,
+	int baseVertex)
 {
 
 	// Ronin @bugfix 31/07/2026 §16 DX9: strips can NEVER be collected -- Flush_Single_Rigid draws every
@@ -1129,10 +1131,13 @@ bool DX8InstanceManagerClass::Collect_Single_Rigid(
 	rec.material = material;
 	rec.shader   = shader;         // per-record render state (blend/z/alpha-test/cull)
 	rec.shroud   = (lightEnv == nullptr) || !lightEnv->Is_Fog_Dimmed();	// Ronin @bugfix 08/10/2026 DX9: see the flush
+	rec.baseVertex = baseVertex;	// Ronin @feature 05/11/2026 DX9: drawn from there (Render_Instanced)
 	m_pendingSingleRigidCount++;
 
 	// Container-constant: every mesh in a DX8RigidFVFCategoryContainer shares one FVF (one decl/VB).
 	m_srFVF = geometryFVF;
+	// Ronin @bugfix 05/11/2026 DX9: a skin container's batch - its layout has a colour channel no skin fills (container-constant too).
+	m_srSkinBatch = (renderer->Get_Mesh_Model_Class() != nullptr) && renderer->Get_Mesh_Model_Class()->Get_Flag(MeshGeometryClass::SKIN);
 
 	// Keep the on-screen [SR] readout accurate now that meshes route through Collect, not Draw.
 	{
@@ -1189,6 +1194,8 @@ bool DX8InstanceManagerClass::Single_Rigid_Order_Less(const PendingSingleRigid& 
 		if (ra->Get_Vertex_Index_Range() != rb->Get_Vertex_Index_Range()) return ra->Get_Vertex_Index_Range() < rb->Get_Vertex_Index_Range();
 		if (ra->Is_Strip()               != rb->Is_Strip())               return (int)ra->Is_Strip() < (int)rb->Is_Strip();
 	}
+	// Ronin @feature 05/11/2026 DX9: two soldiers of one model share a renderer but not their vertices - never one draw.
+	if (a.baseVertex != b.baseVertex) return a.baseVertex < b.baseVertex;
 
 	// texGen is per-MESH, not per-category: live scrolling treads carry their own customUVOffset, so they
 	// land in separate runs and draw individually (correct, and better than the old instancing, which
@@ -1376,7 +1383,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		(TheGlobalData != nullptr) &&
 		TheGlobalData->m_useCloudMap &&
 		(TheGlobalData->m_timeOfDay != TIME_OF_DAY_NIGHT) &&
-		(m_srFVF & D3DFVF_DIFFUSE) == 0;
+		((m_srFVF & D3DFVF_DIFFUSE) == 0 || m_srSkinBatch);	// Ronin @bugfix 05/11/2026 DX9: the skin buffer's colour is empty - clouds, as the old path
 	TextureClass* rigidCloudTex = cloudEnabled ? Get_Valid_Rigid_Cloud_Texture() : nullptr;
 	const bool cloudActive = cloudEnabled && (rigidCloudTex != nullptr);
 
@@ -1673,7 +1680,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 			dev->SetPixelShaderConstantF(28, rec.inst.lightDiffuse0, 1);
 		}
 
-		rec.renderer->Render_Instanced(0);
+		rec.renderer->Render_Instanced(rec.baseVertex);	// Ronin @feature 05/11/2026 DX9: 0, or a skin's place in the skin buffer
 
 		// Ronin @diagnostic 02/08/2026 DX9: Render_Instanced bypasses DX8_RECORD_RENDER, so report the
 		// draw here. One instanced draw for runLen meshes = 1 call, runLen x the polygons.
