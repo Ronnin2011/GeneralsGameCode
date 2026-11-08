@@ -221,6 +221,7 @@ public:
 	static void Set_Pool_Emulation(bool enable) { _PoolEmulation=enable; }
 	static bool Is_Pool_Emulation() { return _PoolEmulation; }
 	static unsigned _Get_Shadow_Upload_Total() { return _ShadowUploadTotal; }
+	static unsigned _Get_Shadow_Reload_Total() { return _ShadowReloadTotal; }	// step 4: copies read again from their file
 	// Uploads every copy written since; WW3D::Begin_Render calls it, for the code that binds a cached D3D pointer.
 	static void _Flush_Shadow_Uploads();
 	bool Has_Shadow() const { return ShadowTexture!=nullptr; }
@@ -243,6 +244,10 @@ protected:
 	void Release_Video_Copy();
 	void Recreate_Video_Copy();
 	IDirect3DTexture8 *Peek_Shadow_Texture() const { return ShadowTexture; }
+	// Ronin @feature 08/11/2026 DX9Ex: step 4 - a texture loaded from a file keeps no copy; the first CPU access loads the
+	// file again and keeps the copy from then on (KeepShadow). Track_Video_Copy: the reset tracker alone.
+	void Reload_With_Shadow();
+	void Track_Video_Copy();
 
 	bool Initialized;
 
@@ -288,9 +293,11 @@ private:
 	TextureBaseClass *ShareSource;
 	mutable bool ShadowDirty;
 	bool ShadowTracked;
+	bool KeepShadow;
 	mutable unsigned ShadowUploadCount;
 	static bool _PoolEmulation;
 	static unsigned _ShadowUploadTotal;
+	static unsigned _ShadowReloadTotal;
 
 	friend class TextureLoadTaskClass;
 	friend class CubeTextureLoadTaskClass;

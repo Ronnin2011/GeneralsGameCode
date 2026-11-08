@@ -1320,7 +1320,12 @@ void TextureLoadTaskClass::Apply(bool initialize)
 		if (video != nullptr)
 		{
 			Texture->Apply_New_Surface(video, initialize);
-			Texture->Attach_Shadow(Peek_D3D_Texture());
+			// Ronin @feature 08/11/2026 DX9Ex: step 4 - a file is not written after loading: no copy, unless the CPU asked to
+			// read it (TextureBaseClass::Reload_With_Shadow). The reset tracker either way.
+			if (Texture->KeepShadow)
+				Texture->Attach_Shadow(Peek_D3D_Texture());
+			else
+				Texture->Track_Video_Copy();
 			video->Release();
 		}
 		else

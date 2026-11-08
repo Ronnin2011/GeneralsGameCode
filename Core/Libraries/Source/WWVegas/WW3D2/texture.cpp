@@ -99,6 +99,7 @@ static unsigned unused_texture_id;
 // written copies wait here (each with a reference) for the next frame's flush.
 bool TextureBaseClass::_PoolEmulation = false;
 unsigned TextureBaseClass::_ShadowUploadTotal = 0;
+unsigned TextureBaseClass::_ShadowReloadTotal = 0;
 static DynamicVectorClass<TextureBaseClass *> DirtyShadows;
 
 // This throttles submissions to the background texture loading queue.
@@ -140,6 +141,7 @@ TextureBaseClass::TextureBaseClass
 	ShareSource(nullptr),
 	ShadowDirty(false),
 	ShadowTracked(false),
+	KeepShadow(false),
 	ShadowUploadCount(0),
 	TextureLoadTask(nullptr),
 	ThumbnailLoadTask(nullptr),
@@ -412,11 +414,32 @@ void TextureBaseClass::Attach_Shadow(IDirect3DTexture8 *sysmem)
 	Release_Shadow();
 	ShadowTexture=sysmem;
 	ShadowTexture->AddRef();
+	Track_Video_Copy();
+}
+
+void TextureBaseClass::Track_Video_Copy()
+{
 	if (!ShadowTracked)
 	{
 		ShadowTracked=true;
 		DX8TextureManagerClass::Add(new DX8ShadowTextureTrackerClass(this));
 	}
+}
+
+// Step 4: the default-pool texture of a loaded file cannot be locked; read the file again, keeping its copy this time.
+void TextureBaseClass::Reload_With_Shadow()
+{
+	if (!_PoolEmulation || ShadowTexture != nullptr || IsProcedural || D3DTexture == nullptr ||
+		D3DTexture->GetType() != D3DRTYPE_TEXTURE || !TextureLoader::Is_DX8_Thread())
+		return;
+	D3DSURFACE_DESC desc;
+	if (FAILED(((IDirect3DTexture8 *)D3DTexture)->GetLevelDesc(0, &desc)) || desc.Pool != D3DPOOL_DEFAULT ||
+		(desc.Usage & (D3DUSAGE_DYNAMIC | D3DUSAGE_RENDERTARGET)) != 0)
+		return;	// lockable as it is, or not ours to reload
+	KeepShadow=true;
+	Invalidate();
+	Init();
+	++_ShadowReloadTotal;
 }
 
 void TextureBaseClass::Release_Shadow()
@@ -470,11 +493,8 @@ void TextureBaseClass::Share_D3D_Texture(TextureBaseClass *source)
 	if (source != nullptr) source->Add_Ref();	// before Set_D3D_Base_Texture drops a previous share
 	Set_D3D_Base_Texture((source != nullptr) ? source->Peek_D3D_Base_Texture() : nullptr);
 	ShareSource=source;
-	if (Is_Pool_Emulation() && !ShadowTracked)	// a reset must release the shared default-pool texture too
-	{
-		ShadowTracked=true;
-		DX8TextureManagerClass::Add(new DX8ShadowTextureTrackerClass(this));
-	}
+	if (Is_Pool_Emulation())	// a reset must release the shared default-pool texture too
+		Track_Video_Copy();
 }
 
 
@@ -1194,7 +1214,8 @@ void TextureClass::Apply(unsigned int stage)
 SurfaceClass *TextureClass::Get_Surface_Level(unsigned int level) const
 {
 	// Ronin @feature 08/11/2026 DX9Ex: under pool emulation the CPU works on the system-memory copy - there even while a reset
-	// has no default-pool texture, and taking it uploads nothing. The surface queues the upload.
+	// has no default-pool texture, and taking it uploads nothing. The surface queues the upload. A loaded file reads its again.
+	const_cast<TextureClass *>(this)->Reload_With_Shadow();
 	IDirect3DTexture8 *source = (Peek_Shadow_Texture() != nullptr) ? Peek_Shadow_Texture() : Peek_D3D_Texture();
 	if (!source)
 	{
@@ -1217,6 +1238,14 @@ SurfaceClass *TextureClass::Get_Surface_Level(unsigned int level) const
 */
 void TextureClass::Get_Level_Description( SurfaceClass::SurfaceDescription & desc, unsigned int level )
 {
+	// Ronin @feature 08/11/2026 DX9Ex: step 4 - from the D3D texture: a description needs no copy (Get_Surface_Level reads one).
+	D3DSURFACE_DESC d3d_desc;
+	if (Peek_D3D_Texture() != nullptr && SUCCEEDED(Peek_D3D_Texture()->GetLevelDesc(level, &d3d_desc))) {
+		desc.Format = D3DFormat_To_WW3DFormat(d3d_desc.Format);
+		desc.Width = d3d_desc.Width;
+		desc.Height = d3d_desc.Height;
+		return;
+	}
 	SurfaceClass * surf = Get_Surface_Level(level);
 	if (surf != nullptr) {
 		surf->Get_Description(desc);
@@ -1246,6 +1275,7 @@ IDirect3DSurface8 *TextureClass::Get_D3D_Surface_Level(unsigned int level)
 // Ronin @feature 08/11/2026 DX9Ex: the texture the CPU may lock (see texture.h).
 IDirect3DTexture8 *TextureClass::Peek_Lockable_Texture(bool will_write)
 {
+	Reload_With_Shadow();	// Ronin @feature 08/11/2026 DX9Ex: step 4 - a loaded file's copy, read again
 	if (Peek_Shadow_Texture() == nullptr) return Peek_D3D_Texture();
 	if (will_write) Mark_Shadow_Dirty(nullptr);
 	return Peek_Shadow_Texture();

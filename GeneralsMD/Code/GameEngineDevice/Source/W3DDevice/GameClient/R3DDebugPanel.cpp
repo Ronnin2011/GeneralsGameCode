@@ -1385,8 +1385,18 @@ namespace
 		const Int count = DX8TextureManagerClass::Get_Shadow_Textures(s_list, MAX_LISTED);
 		const Int listed = (count < MAX_LISTED) ? count : MAX_LISTED;
 		double bytes = 0.0;
+		double fileBytes = 0.0;	// Ronin @feature 08/11/2026 DX9Ex: step 4 - copies of loaded files could be read again from disk
+		Int fileCount = 0;
 		for (Int i = 0; i < listed; ++i)
-			bytes += (double)s_list[i]->Get_Texture_Memory_Usage();
+		{
+			const double b = (double)s_list[i]->Get_Texture_Memory_Usage();
+			bytes += b;
+			if (!s_list[i]->Is_Procedural())
+			{
+				fileBytes += b;
+				++fileCount;
+			}
+		}
 
 		const unsigned uploads = TextureBaseClass::_Get_Shadow_Upload_Total();
 		const unsigned frame = WW3D::Get_Frame_Count();
@@ -1400,6 +1410,10 @@ namespace
 			DX8Wrapper::Is_Ex() ? "Direct3D 9Ex" : "plain Direct3D 9 (9Ex not available here)",
 			TextureBaseClass::Is_Pool_Emulation() ? "on" : "off",
 			count, bytes / (1024.0 * 1024.0), newUploads, frames, (frames > 0) ? (double)newUploads / (double)frames : 0.0, uploads);
+		printAscii(line, FALSE);
+		line.format("  of them: %d loaded from files, %.1f MB  /  %d made by the game, %.1f MB  -  file copies read again: %u",
+			fileCount, fileBytes / (1024.0 * 1024.0), listed - fileCount, (bytes - fileBytes) / (1024.0 * 1024.0),
+			TextureBaseClass::_Get_Shadow_Reload_Total());
 		printAscii(line, FALSE);
 
 		// the most uploaded, in all
