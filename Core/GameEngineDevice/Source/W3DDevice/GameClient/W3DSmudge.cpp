@@ -153,9 +153,11 @@ static TextureClass* generateProceduralNoiseTexture()
 	// Create D3D managed texture directly
 	LPDIRECT3DDEVICE8 pDev = DX8Wrapper::_Get_D3D_Device8();
 	IDirect3DTexture8* d3dTex = nullptr;
+	DWORD noiseUsage = 0;	// Ronin @feature 08/11/2026 DX9Ex: a lockable default-pool texture on 9Ex
+	const D3DPOOL noisePool = DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, &noiseUsage);
 	HRESULT hr = pDev->CreateTexture(
-		NOISE_SIZE, NOISE_SIZE, 1, 0,
-		D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &d3dTex, nullptr);
+		NOISE_SIZE, NOISE_SIZE, 1, noiseUsage,
+		D3DFMT_A8R8G8B8, noisePool, &d3dTex, nullptr);
 	if (FAILED(hr) || !d3dTex)
 	{
 		DEBUG_LOG(("W3DSmudge: CreateTexture for noise failed (0x%08X)", (unsigned)hr));

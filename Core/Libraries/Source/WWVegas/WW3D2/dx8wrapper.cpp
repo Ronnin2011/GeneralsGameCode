@@ -180,6 +180,8 @@ D3DCOLOR							DX8Wrapper::FogColor										= 0;
 
 IDirect3D8 *					DX8Wrapper::D3DInterface								= nullptr;
 IDirect3DDevice8 *			DX8Wrapper::D3DDevice									= nullptr;
+bool								DX8Wrapper::ExRequested								= false;	// Ronin @feature 08/11/2026 DX9Ex
+bool								DX8Wrapper::IsEx										= false;
 IDirect3DSurface8 *			DX8Wrapper::CurrentRenderTarget						= nullptr;
 IDirect3DSurface8 *			DX8Wrapper::CurrentDepthBuffer						= nullptr;
 IDirect3DSurface8 *			DX8Wrapper::DefaultRenderTarget						= nullptr;
@@ -235,6 +237,7 @@ static DynamicVectorClass<RenderDeviceDescClass>	_RenderDeviceDescriptionTable;
 
 typedef IDirect3D9* (WINAPI *Direct3DCreate8Type) (UINT SDKVersion);
 Direct3DCreate8Type	Direct3DCreate8Ptr = nullptr;
+typedef HRESULT (WINAPI *Direct3DCreate9ExType) (UINT SDKVersion, IDirect3D9Ex **ppD3D);	// Ronin @feature 08/11/2026 DX9Ex
 HINSTANCE D3D8Lib = nullptr;
 
 DX8_CleanupHook	 *DX8Wrapper::m_pCleanupHook=nullptr;
@@ -776,7 +779,23 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 			// the graphics driver from potentially loading the old game dbghelp.dll and then crashing the game process.
 			DbgHelpGuard dbgHelpGuard;
 
-			D3DInterface = Direct3DCreate8Ptr(D3D_SDK_VERSION);		// TODO: handle failure cases...
+			// Ronin @feature 08/11/2026 DX9Ex: the Ex interface when asked for and present; else the plain one, as before.
+			IsEx = false;
+			Direct3DCreate9ExType createEx = ExRequested ? (Direct3DCreate9ExType) GetProcAddress(D3D8Lib, "Direct3DCreate9Ex") : nullptr;
+			IDirect3D9Ex *d3dEx = nullptr;
+			if (createEx != nullptr && SUCCEEDED(createEx(D3D_SDK_VERSION, &d3dEx)) && d3dEx != nullptr)
+			{
+				D3DInterface = d3dEx;
+				IsEx = true;
+			}
+			else
+			{
+				if (ExRequested)
+				{
+					WWDEBUG_SAY(("DX9Ex: Direct3DCreate9Ex unavailable or failed - plain Direct3D 9"));
+				}
+				D3DInterface = Direct3DCreate8Ptr(D3D_SDK_VERSION);		// TODO: handle failure cases...
+			}
 		}
 		if (D3DInterface == nullptr) {
 			WWDEBUG_SAY(("ERROR: Direct3DCreate9 returned NULL! D3D_SDK_VERSION=%d", D3D_SDK_VERSION));
@@ -1200,6 +1219,38 @@ void DX8Wrapper::Shutdown_Decl_Cache()
 	}
 }
 
+// Ronin @feature 08/11/2026 DX9Ex: CreateDeviceEx / ResetEx take the fullscreen display mode spelled out; windowed, none.
+static D3DDISPLAYMODEEX *Ex_Display_Mode(const D3DPRESENT_PARAMETERS &pp, D3DDISPLAYMODEEX &mode)
+{
+	if (pp.Windowed) return nullptr;
+	::ZeroMemory(&mode, sizeof(mode));
+	mode.Size = sizeof(mode);
+	mode.Width = pp.BackBufferWidth;
+	mode.Height = pp.BackBufferHeight;
+	mode.RefreshRate = pp.FullScreen_RefreshRateInHz;
+	mode.Format = pp.BackBufferFormat;
+	mode.ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
+	return &mode;
+}
+
+static HRESULT Create_Device_Plain_Or_Ex(IDirect3D9 *d3d, bool ex, UINT adapter, D3DDEVTYPE type, HWND hwnd, DWORD flags,
+	D3DPRESENT_PARAMETERS *pp, IDirect3DDevice9 **out)
+{
+	if (!ex) return d3d->CreateDevice(adapter, type, hwnd, flags, pp, out);
+	D3DDISPLAYMODEEX mode;
+	IDirect3DDevice9Ex *dev = nullptr;
+	const HRESULT hr = ((IDirect3D9Ex *)d3d)->CreateDeviceEx(adapter, type, hwnd, flags, pp, Ex_Display_Mode(*pp, mode), &dev);
+	*out = dev;
+	return hr;
+}
+
+D3DPOOL DX8Wrapper::_Get_Managed_Pool(D3DPOOL pool, DWORD *usage)
+{
+	if (pool != D3DPOOL_MANAGED || !IsEx) return pool;
+	if (usage != nullptr) *usage |= D3DUSAGE_DYNAMIC;
+	return D3DPOOL_DEFAULT;
+}
+
 bool DX8Wrapper::Create_Device()
 {
 	WWASSERT(D3DDevice==nullptr);	// for now, once you've created a device, you're stuck with it!
@@ -1274,8 +1325,10 @@ bool DX8Wrapper::Create_Device()
 	// @feature Ronin 01/03/2026 DX9: Multisampling configuration calling.
 	Configure_Multisampling(_PresentParameters, D3DInterface, CurRenderDevice, WW3D_DEVTYPE);
 
-	HRESULT hr=D3DInterface->CreateDevice
+	HRESULT hr=Create_Device_Plain_Or_Ex	// Ronin @feature 08/11/2026 DX9Ex
 	(
+		D3DInterface,
+		IsEx,
 		CurRenderDevice,
 		WW3D_DEVTYPE,
 		_Hwnd,
@@ -1297,8 +1350,10 @@ bool DX8Wrapper::Create_Device()
 			_PresentParameters.AutoDepthStencilFormat==D3DFMT_D24X8))
 		{
 			_PresentParameters.AutoDepthStencilFormat=D3DFMT_D16;
-			hr = D3DInterface->CreateDevice
+			hr = Create_Device_Plain_Or_Ex	// Ronin @feature 08/11/2026 DX9Ex
 			(
+				D3DInterface,
+				IsEx,
 				CurRenderDevice,
 				WW3D_DEVTYPE,
 				_Hwnd,
@@ -1371,7 +1426,16 @@ bool DX8Wrapper::Reset_Device(bool reload_assets)
 
 		HRESULT hr=_Get_D3D_Device8()->TestCooperativeLevel();
 		if (hr != D3DERR_DEVICELOST )
-		{	DX8CALL_HRES(Reset(&_PresentParameters),hr)
+		{
+			if (IsEx)	// Ronin @feature 08/11/2026 DX9Ex: ResetEx takes the fullscreen mode; default-pool resources survive it
+			{
+				D3DDISPLAYMODEEX mode;
+				hr = ((IDirect3DDevice9Ex *)_Get_D3D_Device8())->ResetEx(&_PresentParameters, Ex_Display_Mode(_PresentParameters, mode));
+			}
+			else
+			{
+				DX8CALL_HRES(Reset(&_PresentParameters),hr)
+			}
 			if (hr != D3D_OK)
 				return false;	//reset failed.
 		}
@@ -2564,6 +2628,17 @@ void DX8Wrapper::End_Scene(bool flip_frames)
 					WWDEBUG_SAY(("TestCooperativeLevel FAILED after Present DEVICELOST: 0x%08X (%s)",
 						deviceState, DXGetErrorString9A(deviceState)));
 					ThreadClass::Sleep_Ms(100);
+				}
+			}
+			// Ronin @feature 08/11/2026 DX9Ex: a 9Ex device is only lost when the GPU hung (a reset recovers it) or its
+			// driver stopped (not recoverable here).
+			else if (IsEx && hr == D3DERR_DEVICEHUNG) {
+				WWDEBUG_SAY(("Present: D3DERR_DEVICEHUNG - resetting"));
+				if (Reset_Device(true)) {
+					IsDeviceLost = false;
+				}
+				else {
+					ThreadClass::Sleep_Ms(500);
 				}
 			}
 			else {
@@ -3790,6 +3865,10 @@ IDirect3DTexture8 * DX8Wrapper::_Create_DX8_Texture
 		return texture;
 	}
 
+	// Ronin @feature 08/11/2026 DX9Ex: managed on 9Ex becomes a lockable default-pool texture (see _Get_Managed_Pool).
+	DWORD managedUsage=0;
+	pool=_Get_Managed_Pool(pool, &managedUsage);
+
 	// We should never run out of video memory when allocating a non-rendertarget texture.
 	// However, it seems to happen sometimes when there are a lot of textures in memory and so
 	// if it happens we'll release assets and try again (anything is better than crashing).
@@ -3798,7 +3877,7 @@ IDirect3DTexture8 * DX8Wrapper::_Create_DX8_Texture
 		width,
 		height,
 		mip_level_count,
-		0,
+		managedUsage,
 		WW3DFormat_To_D3DFormat(format),
 		pool,
 		&texture);
@@ -3817,7 +3896,7 @@ IDirect3DTexture8 * DX8Wrapper::_Create_DX8_Texture
 			width,
 			height,
 			mip_level_count,
-			0,
+			managedUsage,
 			WW3DFormat_To_D3DFormat(format),
 			pool,
 			&texture);
@@ -3857,9 +3936,9 @@ IDirect3DTexture8 * DX8Wrapper::_Create_DX8_Texture
 		D3DX_DEFAULT,
 		D3DX_DEFAULT,
 		mip_level_count,//create_mipmaps ? 0 : 1,
-		0,
+		Is_Ex() ? D3DUSAGE_DYNAMIC : 0,	// Ronin @feature 08/11/2026 DX9Ex: as _Get_Managed_Pool
 		D3DFMT_UNKNOWN,
-		D3DPOOL_MANAGED,
+		_Get_Managed_Pool(D3DPOOL_MANAGED, nullptr),
 		D3DX_FILTER_BOX,
 		D3DX_FILTER_BOX,
 		0,
@@ -4086,6 +4165,10 @@ IDirect3DCubeTexture8* DX8Wrapper::_Create_DX8_Cube_Texture
 		return texture;
 	}
 
+	// Ronin @feature 08/11/2026 DX9Ex: managed on 9Ex becomes a lockable default-pool texture (see _Get_Managed_Pool).
+	DWORD managedUsage=0;
+	pool=_Get_Managed_Pool(pool, &managedUsage);
+
 	// We should never run out of video memory when allocating a non-rendertarget texture.
 	// However, it seems to happen sometimes when there are a lot of textures in memory and so
 	// if it happens we'll release assets and try again (anything is better than crashing).
@@ -4094,7 +4177,7 @@ IDirect3DCubeTexture8* DX8Wrapper::_Create_DX8_Cube_Texture
 		DX8Wrapper::_Get_D3D_Device8(),
 		width,
 		mip_level_count,
-		0,
+		managedUsage,
 		WW3DFormat_To_D3DFormat(format),
 		pool,
 		&texture
@@ -4115,7 +4198,7 @@ IDirect3DCubeTexture8* DX8Wrapper::_Create_DX8_Cube_Texture
 			DX8Wrapper::_Get_D3D_Device8(),
 			width,
 			mip_level_count,
-			0,
+			managedUsage,
 			WW3DFormat_To_D3DFormat(format),
 			pool,
 			&texture
@@ -4164,6 +4247,9 @@ IDirect3DVolumeTexture8* DX8Wrapper::_Create_DX8_Volume_Texture
 	// We should never run out of video memory when allocating a non-rendertarget texture.
 	// However, it seems to happen sometimes when there are a lot of textures in memory and so
 	// if it happens we'll release assets and try again (anything is better than crashing).
+	// Ronin @feature 08/11/2026 DX9Ex: managed on 9Ex becomes a lockable default-pool texture (see _Get_Managed_Pool).
+	DWORD managedUsage=0;
+	pool=_Get_Managed_Pool(pool, &managedUsage);
 	unsigned ret=D3DXCreateVolumeTexture
 	(
 		DX8Wrapper::_Get_D3D_Device8(),
@@ -4171,7 +4257,7 @@ IDirect3DVolumeTexture8* DX8Wrapper::_Create_DX8_Volume_Texture
 		height,
 		depth,
 		mip_level_count,
-		0,
+		managedUsage,
 		WW3DFormat_To_D3DFormat(format),
 		pool,
 		&texture
@@ -4194,7 +4280,7 @@ IDirect3DVolumeTexture8* DX8Wrapper::_Create_DX8_Volume_Texture
 			height,
 			depth,
 			mip_level_count,
-			0,
+			managedUsage,
 			WW3DFormat_To_D3DFormat(format),
 			pool,
 			&texture

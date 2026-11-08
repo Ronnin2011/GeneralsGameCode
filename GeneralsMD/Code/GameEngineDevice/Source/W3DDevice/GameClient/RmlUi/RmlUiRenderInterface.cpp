@@ -147,7 +147,9 @@ Rml::CompiledGeometryHandle RmlUiRenderInterface::CompileGeometry(Rml::Span<cons
 	CompiledGeometry geom = { nullptr, nullptr, (int)vertices.size(), (int)indices.size() };
 	const bool wide = geom.numVertices > 0xFFFF;
 
-	if (FAILED(dev->CreateVertexBuffer(geom.numVertices * sizeof(RmlDxVertex), D3DUSAGE_WRITEONLY, kRmlFvf, D3DPOOL_MANAGED, &geom.vb, nullptr)))
+	// Ronin @feature 08/11/2026 DX9Ex: these buffers and textures take the default pool on 9Ex (no managed pool there).
+	if (FAILED(dev->CreateVertexBuffer(geom.numVertices * sizeof(RmlDxVertex), D3DUSAGE_WRITEONLY, kRmlFvf,
+			DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, nullptr), &geom.vb, nullptr)))
 		return 0;
 	RmlDxVertex *dst = nullptr;
 	if (SUCCEEDED(geom.vb->Lock(0, 0, (void **)&dst, 0)))
@@ -166,7 +168,8 @@ Rml::CompiledGeometryHandle RmlUiRenderInterface::CompileGeometry(Rml::Span<cons
 	}
 
 	const UINT indexSize = wide ? sizeof(DWORD) : sizeof(WORD);
-	if (FAILED(dev->CreateIndexBuffer(geom.numIndices * indexSize, D3DUSAGE_WRITEONLY, wide ? D3DFMT_INDEX32 : D3DFMT_INDEX16, D3DPOOL_MANAGED, &geom.ib, nullptr)))
+	if (FAILED(dev->CreateIndexBuffer(geom.numIndices * indexSize, D3DUSAGE_WRITEONLY, wide ? D3DFMT_INDEX32 : D3DFMT_INDEX16,
+			DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, nullptr), &geom.ib, nullptr)))
 	{
 		releaseRef(geom.vb);
 		return 0;
@@ -531,7 +534,9 @@ Rml::TextureHandle RmlUiRenderInterface::GenerateTexture(Rml::Span<const Rml::by
 	if (!dev || source.empty() || source_dimensions.x <= 0 || source_dimensions.y <= 0)
 		return 0;
 	IDirect3DTexture9 *tex = nullptr;
-	if (FAILED(dev->CreateTexture(source_dimensions.x, source_dimensions.y, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &tex, nullptr)))
+	DWORD texUsage = 0;
+	const D3DPOOL texPool = DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, &texUsage);	// Ronin @feature 08/11/2026 DX9Ex
+	if (FAILED(dev->CreateTexture(source_dimensions.x, source_dimensions.y, 1, texUsage, D3DFMT_A8R8G8B8, texPool, &tex, nullptr)))
 		return 0;
 	D3DLOCKED_RECT rect;
 	if (SUCCEEDED(tex->LockRect(0, &rect, nullptr, 0)))

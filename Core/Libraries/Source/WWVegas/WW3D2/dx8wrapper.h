@@ -614,6 +614,14 @@ public:
 	static bool Is_Device_Lost() { return IsDeviceLost; }
 	static bool Is_Initted() { return IsInitted; }
 
+	// Ronin @feature 08/11/2026 DX9Ex: a Direct3D 9Ex device, asked for before Init (W3DDisplay); Is_Ex says whether one was
+	// made (Direct3DCreate9Ex can be missing). 9Ex has no managed pool and keeps default-pool resources over a reset.
+	static void Set_Ex_Requested(bool on) { ExRequested = on; }
+	static bool Is_Ex() { return IsEx; }
+	// `pool` unchanged, except MANAGED on 9Ex: DEFAULT, plus D3DUSAGE_DYNAMIC in `usage` (a texture the CPU still locks).
+	// usage = nullptr for a buffer: a default-pool buffer locks as it is.
+	static D3DPOOL _Get_Managed_Pool(D3DPOOL pool, DWORD *usage);
+
 	static bool Has_Stencil ();
 	static void Get_Format_Name(unsigned int format, StringClass *tex_format);
 
@@ -1044,6 +1052,8 @@ protected:
 
 	static IDirect3D9*					D3DInterface;			//d3d8;
 	static IDirect3DDevice9*			D3DDevice;				//d3ddevice8;
+	static bool								ExRequested;			// Ronin @feature 08/11/2026 DX9Ex
+	static bool								IsEx;					// D3DInterface / D3DDevice are the Ex interfaces
 
 	static IDirect3DSurface8 *			CurrentRenderTarget;
 	static IDirect3DSurface8 *			CurrentDepthBuffer;

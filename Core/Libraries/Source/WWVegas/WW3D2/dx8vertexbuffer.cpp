@@ -487,7 +487,7 @@ void DX8VertexBufferClass::Create_Vertex_Buffer(UsageType usage)
 		FVF_Info().Get_FVF_Size()*VertexCount,
 		usage_flags,
 		FVF_Info().Get_FVF(),
-		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED,
+		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, nullptr),	// Ronin @feature 08/11/2026 DX9Ex: default pool on 9Ex
 		&VertexBuffer,
 		NULL);  // DX9: pSharedHandle
 	if (SUCCEEDED(ret)) {
@@ -513,7 +513,7 @@ void DX8VertexBufferClass::Create_Vertex_Buffer(UsageType usage)
 		FVF_Info().Get_FVF_Size()*VertexCount,
 		usage_flags,
 		FVF_Info().Get_FVF(),
-		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED,
+		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, nullptr),	// Ronin @feature 08/11/2026 DX9Ex: default pool on 9Ex
 		&VertexBuffer,
 		NULL);  // DX9: pSharedHandle
 

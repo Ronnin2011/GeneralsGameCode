@@ -1368,8 +1368,8 @@ namespace
 		printAscii(state, FALSE);
 	}
 
-	// Ronin @feature 08/11/2026 DX9Ex: `pool` - the managed-pool emulation: textures with a system-memory copy, their
-	// memory, and the uploads since the last `pool` - which textures the CPU writes, how often.
+	// Ronin @feature 08/11/2026 DX9Ex: `pool` - the device, and the managed-pool emulation: textures with a system-memory copy,
+	// their memory, and the uploads since the last `pool` - which textures the CPU writes, how often.
 	void cmdPool(Int argc, const AsciiString *argv)
 	{
 		(void)argv;
@@ -1396,7 +1396,8 @@ namespace
 		s_lastFrame = frame;
 
 		AsciiString line;
-		line.format("pool emulation: %s  copies: %d textures, %.1f MB system memory  uploads: %u since the last `pool` over %u frames (%.2f a frame), %u in all",
+		line.format("device: %s  pool emulation: %s  copies: %d textures, %.1f MB system memory  uploads: %u since the last `pool` over %u frames (%.2f a frame), %u in all",
+			DX8Wrapper::Is_Ex() ? "Direct3D 9Ex" : "plain Direct3D 9 (9Ex not available here)",
 			TextureBaseClass::Is_Pool_Emulation() ? "on" : "off",
 			count, bytes / (1024.0 * 1024.0), newUploads, frames, (frames > 0) ? (double)newUploads / (double)frames : 0.0, uploads);
 		printAscii(line, FALSE);
@@ -3782,7 +3783,7 @@ void R3DDebugPanel::update(void)
 		registerCommand("power", "power [0|1] - unlimited power for your player, 0 = your real output; single player only", cmdPower);
 		registerCommand("mapvision", "mapvision [on|off] - the whole map revealed for your player; single player only", cmdMapVision);
 		registerCommand("parts", "parts [on|off] - additive model parts (rocket flames, muzzle flashes) drawn instanced after the effects; off = depth-sorted as in 2003 (not saved)", cmdParts);
-		registerCommand("pool", "pool - the managed-pool emulation: textures with a system-memory copy, their memory, uploads since the last `pool`, the most uploaded", cmdPool);
+		registerCommand("pool", "pool - the device (9Ex or plain) and the managed-pool emulation: textures with a system-memory copy, their memory, uploads since the last `pool`, the most uploaded", cmdPool);
 	}
 
 	// Ronin @feature 16/09/2026 DX9: placement takes the mouse after the window translator (10) and before meta events (20),

@@ -378,10 +378,12 @@ Bool R3DShadowMap::init(Int resolution)
 	// samples NULL, which reads as black — no mask.
 	{
 		IDirect3DDevice9 *maskDev = DX8Wrapper::_Get_D3D_Device8();
+		DWORD maskUsage = 0;	// Ronin @feature 08/11/2026 DX9Ex: a lockable default-pool texture on 9Ex
+		const D3DPOOL maskPool = DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, &maskUsage);
 		for (Int i = 0; i < m_splitCount && i < MAX_SHADOW_SPLITS && maskDev != NULL; ++i)
 		{
-			if (FAILED(maskDev->CreateTexture(MOVING_MASK_RES, MOVING_MASK_RES, 1, 0, D3DFMT_A8R8G8B8,
-											  D3DPOOL_MANAGED, &m_movingMaskTex[i], NULL)))
+			if (FAILED(maskDev->CreateTexture(MOVING_MASK_RES, MOVING_MASK_RES, 1, maskUsage, D3DFMT_A8R8G8B8,
+											  maskPool, &m_movingMaskTex[i], NULL)))
 				m_movingMaskTex[i] = NULL;
 		}
 	}
@@ -1287,8 +1289,10 @@ void R3DShadowMap::uploadMovingMask(Int split)
 	if (split < 0 || split >= MAX_SHADOW_SPLITS || m_movingMaskTex[split] == NULL)
 		return;
 
+	// Ronin @bugfix 08/11/2026 DX9Ex: on 9Ex the mask is a dynamic default-pool texture; a plain lock waits for the GPU
+	// still reading last frame's. Every texel is rewritten below, so DISCARD hands out fresh memory instead.
 	D3DLOCKED_RECT lr;
-	if (FAILED(m_movingMaskTex[split]->LockRect(0, &lr, NULL, 0)))
+	if (FAILED(m_movingMaskTex[split]->LockRect(0, &lr, NULL, DX8Wrapper::Is_Ex() ? D3DLOCK_DISCARD : 0)))
 		return;
 	for (Int y = 0; y < MOVING_MASK_RES; ++y)
 	{

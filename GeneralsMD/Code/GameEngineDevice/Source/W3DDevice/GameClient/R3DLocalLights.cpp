@@ -426,8 +426,10 @@ static void swapBeamTextures(IDirect3DDevice9 *dev, Bool hideBeams, Bool hideGlo
 			restoreBeamTexture(bt);
 		else
 		{
+			DWORD clearUsage = 0;	// Ronin @feature 08/11/2026 DX9Ex: a lockable default-pool texture on 9Ex
+			const D3DPOOL clearPool = DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, &clearUsage);
 			if (s_clearTex == NULL && dev != NULL &&
-				SUCCEEDED(dev->CreateTexture(1, 1, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &s_clearTex, NULL)) && s_clearTex != NULL)
+				SUCCEEDED(dev->CreateTexture(1, 1, 1, clearUsage, D3DFMT_A8R8G8B8, clearPool, &s_clearTex, NULL)) && s_clearTex != NULL)
 			{
 				D3DLOCKED_RECT lr;
 				if (SUCCEEDED(s_clearTex->LockRect(0, &lr, NULL, 0)))

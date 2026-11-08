@@ -737,7 +737,7 @@ HRESULT WaterRenderObjClass::generateVertexBuffer( Int sizeX, Int sizeY, Int ver
 	if (doStatic)
 	{
 		//change settings for a static vertex buffer
-		pool = D3DPOOL_MANAGED;
+		pool = DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, nullptr);	// Ronin @feature 08/11/2026 DX9Ex: default pool on 9Ex
 		usage = D3DUSAGE_WRITEONLY;
 		fvf=0;// DX8 Docs confusing on this. Say no FVF for vertex shaders. Else DX8_FVF_XYZDUV1;
 		m_numVertices=sizeX*sizeY;
@@ -818,7 +818,7 @@ HRESULT WaterRenderObjClass::generateIndexBuffer(Int sizeX, Int sizeY)
 		(m_numIndices+2)*sizeof(WORD),
 		D3DUSAGE_WRITEONLY,
 		D3DFMT_INDEX16,
-		D3DPOOL_MANAGED,
+		DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, nullptr),	// Ronin @feature 08/11/2026 DX9Ex: default pool on 9Ex
 		&m_indexBufferD3D,
 		NULL
 	)))
@@ -3743,7 +3743,9 @@ void WaterRenderObjClass::buildHeightTexture()
 	}
 
 	IDirect3DTexture9 *tex = nullptr;
-	if (FAILED(dev->CreateTexture(w, h, 1, 0, vtf ? D3DFMT_R32F : D3DFMT_L8, D3DPOOL_MANAGED, &tex, nullptr)) || tex == nullptr)
+	DWORD heightUsage = 0;	// Ronin @feature 08/11/2026 DX9Ex: a lockable default-pool texture on 9Ex
+	const D3DPOOL heightPool = DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, &heightUsage);
+	if (FAILED(dev->CreateTexture(w, h, 1, heightUsage, vtf ? D3DFMT_R32F : D3DFMT_L8, heightPool, &tex, nullptr)) || tex == nullptr)
 		return;
 	D3DLOCKED_RECT lr;
 	if (FAILED(tex->LockRect(0, &lr, nullptr, 0)))

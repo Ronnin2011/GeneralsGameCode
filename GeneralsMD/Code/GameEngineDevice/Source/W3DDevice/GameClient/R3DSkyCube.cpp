@@ -239,7 +239,9 @@ static void build(const WaterTransparencySetting *water)
 	Bool ok = TRUE;
 	for (Int f = 0; f < 5; ++f)
 		ok = (readFace(dev, names[f], faces[f]) && ok) ? TRUE : FALSE;
-	if (ok && s_cube == NULL && FAILED(dev->CreateCubeTexture(SKY_SIZE, 0, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &s_cube, NULL)))
+	DWORD cubeUsage = 0;	// Ronin @feature 08/11/2026 DX9Ex: a lockable default-pool texture on 9Ex
+	const D3DPOOL cubePool = DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, &cubeUsage);
+	if (ok && s_cube == NULL && FAILED(dev->CreateCubeTexture(SKY_SIZE, 0, cubeUsage, D3DFMT_A8R8G8B8, cubePool, &s_cube, NULL)))
 		s_cube = NULL;
 	if (ok && s_cube != NULL)
 	{
@@ -370,7 +372,9 @@ static void buildGroundMap(void)
 			}
 		}
 	}
-	if (s_groundMap == NULL && FAILED(dev->CreateTexture(GROUND_MAP, GROUND_MAP, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &s_groundMap, NULL)))
+	DWORD groundUsage = 0;	// Ronin @feature 08/11/2026 DX9Ex: a lockable default-pool texture on 9Ex
+	const D3DPOOL groundPool = DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, &groundUsage);
+	if (s_groundMap == NULL && FAILED(dev->CreateTexture(GROUND_MAP, GROUND_MAP, 1, groundUsage, D3DFMT_A8R8G8B8, groundPool, &s_groundMap, NULL)))
 	{
 		s_groundMap = NULL;
 		return;

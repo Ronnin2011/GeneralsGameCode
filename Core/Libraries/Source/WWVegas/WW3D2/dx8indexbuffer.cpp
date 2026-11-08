@@ -303,7 +303,7 @@ DX8IndexBufferClass::DX8IndexBufferClass(unsigned short index_count_,UsageType u
 		sizeof(WORD)*index_count,
 		usage_flags,
 		D3DFMT_INDEX16,
-		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED,
+		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, nullptr),	// Ronin @feature 08/11/2026 DX9Ex: default pool on 9Ex
 		&index_buffer,
 		NULL);  // DX9: pSharedHandle
 
@@ -326,7 +326,7 @@ DX8IndexBufferClass::DX8IndexBufferClass(unsigned short index_count_,UsageType u
 		sizeof(WORD)*index_count,
 		usage_flags,
 		D3DFMT_INDEX16,
-		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : D3DPOOL_MANAGED,
+		(usage&USAGE_DYNAMIC) ? D3DPOOL_DEFAULT : DX8Wrapper::_Get_Managed_Pool(D3DPOOL_MANAGED, nullptr),	// Ronin @feature 08/11/2026 DX9Ex: default pool on 9Ex
 		&index_buffer,
 		NULL);  // DX9: pSharedHandle
 
