@@ -977,6 +977,12 @@ void PointGroupClass::Render(RenderInfoClass &rinfo)
 			unsigned char *vb=(unsigned char*)Lock.Get_Formatted_Vertex_Array();
 			const FVFInfoClass& fvfinfo=PointVerts.FVF_Info();
 
+			// Ronin @perf 07/11/2026 DX9: a point's corners share its colour (Update_Arrays copies it to each): converted once a point.
+			const int verts_per_point = (PointMode == QUADS) ? 4 : 3;
+			const unsigned default_color = current_diffuse ? 0 :
+				DX8Wrapper::Convert_Color_Clamp(Vector4(DefaultPointColor[0],DefaultPointColor[1],DefaultPointColor[2],DefaultPointAlpha));
+			int color_point = -1;
+			unsigned point_color = default_color;
 			for (i = current; i < current + delta; i++)
 			{
 				/// @todo lorenzen sez: use pointer arithmetic throughout this block
@@ -984,13 +990,11 @@ void PointGroupClass::Render(RenderInfoClass &rinfo)
 				/// @todo lorenzen sez: use a fast while loop
 				// Copy Locations
 				*(Vector3*)(vb+fvfinfo.Get_Location_Offset())=VertexLoc[i];
-				if (current_diffuse) {
-					unsigned color=DX8Wrapper::Convert_Color_Clamp(VertexDiffuse[i]);
-					*(unsigned int*)(vb+fvfinfo.Get_Diffuse_Offset())=color;
+				if (current_diffuse && i / verts_per_point != color_point) {
+					color_point = i / verts_per_point;
+					point_color = DX8Wrapper::Convert_Color_Clamp(VertexDiffuse[i]);
 				}
-				else
-					*(unsigned int*)(vb+fvfinfo.Get_Diffuse_Offset())=
-						DX8Wrapper::Convert_Color_Clamp(Vector4(DefaultPointColor[0],DefaultPointColor[1],DefaultPointColor[2],DefaultPointAlpha));
+				*(unsigned int*)(vb+fvfinfo.Get_Diffuse_Offset())=point_color;
 				*(Vector2*)(vb+fvfinfo.Get_Tex_Offset(0))=VertexUV[i];
 				vb+=fvfinfo.Get_FVF_Size();
 			}

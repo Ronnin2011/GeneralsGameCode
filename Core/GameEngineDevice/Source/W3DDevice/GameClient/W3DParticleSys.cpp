@@ -45,6 +45,58 @@
 
 //-------------------------------------------------------------------------------------------------
 
+// Ronin @perf 07/11/2026 DX9: one doParticles call's texture and atlas lookups, by the particle type's name: the asset manager and the
+// atlas are asked once per texture instead of once per system. Emptied at the end of every call.
+namespace
+{
+	struct ParticleTextureLookup
+	{
+		const char*							name;
+		RefCountPtr<TextureClass>			texture;
+		TextureAtlasClass::TextureLocation	location[2];	// [premultiplied]
+		Bool								located[2];
+	};
+	enum { TEXTURE_LOOKUP_SLOTS = 512 };
+	ParticleTextureLookup s_textureLookups[TEXTURE_LOOKUP_SLOTS];
+	UnsignedShort s_textureLookupUsed[TEXTURE_LOOKUP_SLOTS];
+	UnsignedInt s_textureLookupCount = 0;
+
+	// nullptr once the table is half full: the caller then asks the asset manager itself, as before.
+	ParticleTextureLookup* findTextureLookup(const char* name)
+	{
+		UnsignedInt slot = (UnsignedInt)(((size_t)name >> 3) & (TEXTURE_LOOKUP_SLOTS - 1));
+		for (UnsignedInt probe = 0; probe < TEXTURE_LOOKUP_SLOTS; ++probe, slot = (slot + 1) & (TEXTURE_LOOKUP_SLOTS - 1))
+		{
+			ParticleTextureLookup& entry = s_textureLookups[slot];
+			if (entry.name == name)
+				return &entry;
+			if (entry.name == nullptr)
+			{
+				if (s_textureLookupCount >= TEXTURE_LOOKUP_SLOTS / 2)
+					return nullptr;
+				entry.name = name;
+				entry.texture.Assign_No_Add_Ref(W3DDisplay::m_assetManager->Get_Texture(name));
+				entry.located[0] = entry.located[1] = FALSE;
+				s_textureLookupUsed[s_textureLookupCount++] = (UnsignedShort)slot;
+				return &entry;
+			}
+		}
+		return nullptr;
+	}
+
+	// Ends the call: no reference outlives it, so an atlas eviction or a device reset never meets a stale entry.
+	void clearTextureLookups()
+	{
+		for (UnsignedInt i = 0; i < s_textureLookupCount; ++i)
+		{
+			ParticleTextureLookup& entry = s_textureLookups[s_textureLookupUsed[i]];
+			entry.name = nullptr;
+			entry.texture.Clear();
+		}
+		s_textureLookupCount = 0;
+	}
+}
+
 // Ronin @perf 06/11/2026 DX9: streaks too - they draw between the sprites, and on a texture of their own they cut every merged draw.
 static Bool supportsAtlasing(const ParticleSystem& system)
 {
@@ -276,7 +328,11 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 		// Particles with the same properties will now be batched onto a single texture surface before being drawn.
 		// If a different particle type appears before the batch is filled, the previous batch will be drawn first.
 		RefCountPtr<TextureClass> texture;
-		texture.Assign_No_Add_Ref(W3DDisplay::m_assetManager->Get_Texture(sys->getParticleTypeName().str()));
+		ParticleTextureLookup* lookup = findTextureLookup(sys->getParticleTypeName().str());	// Ronin @perf 07/11/2026 DX9: once per texture
+		if (lookup != nullptr)
+			texture = lookup->texture;
+		else
+			texture.Assign_No_Add_Ref(W3DDisplay::m_assetManager->Get_Texture(sys->getParticleTypeName().str()));
 
 		// TheSuperHackers @performance stephanmeesters 18/10/2026 Draw sprites from a shared atlas page where possible,
 		// so particles with different textures, and alpha and additive particles, can join the same batch.
@@ -285,7 +341,15 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 		Bool atlased = FALSE;
 		if (supportsAtlasing(*sys))
 		{
-			const TextureAtlasClass::TextureLocation location = m_atlas.Find_Or_Insert(texture.Peek(), shaderType == ParticleSystemInfo::ALPHA);
+			// Ronin @perf 07/11/2026 DX9: the atlas answers the same for a texture all through one call; asked once.
+			const Int premultiplied = (shaderType == ParticleSystemInfo::ALPHA) ? 1 : 0;
+			if (lookup != nullptr && !lookup->located[premultiplied])
+			{
+				lookup->location[premultiplied] = m_atlas.Find_Or_Insert(texture.Peek(), premultiplied != 0);
+				lookup->located[premultiplied] = TRUE;
+			}
+			const TextureAtlasClass::TextureLocation location = (lookup != nullptr) ? lookup->location[premultiplied] :
+				m_atlas.Find_Or_Insert(texture.Peek(), premultiplied != 0);
 			if (location.page != nullptr)
 			{
 				texture = location.page;
@@ -481,6 +545,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 
 	// TheSuperHackers @info Flush the last batch if one is pending.
 	flushParticleBatch(rinfo, pointCount);
+	clearTextureLookups();	// Ronin @perf 07/11/2026 DX9: the call's lookups end with it
 	FrameCost_Add(FrameCostStats::MS_PARTICLE_RENDER, renderStart);	// Ronin @diagnostic 07/11/2026 DX9: [CPU] snow and smudges not included
 
 		/// @todo lorenzen sez: this should be debug only:
