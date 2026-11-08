@@ -2763,7 +2763,9 @@ void DX8TextureCategoryClass::Render()
 		if (!DX8RendererDebugger::Is_Enabled() || !mesh->Is_Disabled_By_Debugger()) {
 
 		if ((!!mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SORT)) && WW3D::Is_Sorting_Enabled()) {
-			renderer->Render_Sorted(mesh->Get_Base_Vertex_Offset(),mesh->Get_Bounding_Sphere());
+			// Ronin @perf 07/11/2026 DX9: an additive part (a rocket's flame) is drawn instanced after the sorting pool (`parts`).
+			if (!TheDX8InstanceManager.Collect_Additive_Part(renderer, mesh, lenv, vmaterial, Peek_Texture(0), shader, *world_transform))
+				renderer->Render_Sorted(mesh->Get_Base_Vertex_Offset(),mesh->Get_Bounding_Sphere());
 		} else {
 
 			//non-transparent mesh that will be rendered immediately.  Okay to adjust the shader/material

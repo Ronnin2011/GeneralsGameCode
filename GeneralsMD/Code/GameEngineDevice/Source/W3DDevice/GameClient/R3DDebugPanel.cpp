@@ -1348,6 +1348,24 @@ namespace
 		printAscii(state, FALSE);
 	}
 
+	// Ronin @perf 07/11/2026 DX9: `parts on|off` - additive model parts (rocket flames, muzzle flashes) drawn instanced after the
+	// effects (dx8instancing), on by default; off = depth-sorted among them, the 2003 order. Not saved; [INST] parts= counts them.
+	void cmdParts(Int argc, const AsciiString *argv)
+	{
+		Bool on = FALSE;
+		if (argc == 2 && parseOnOff(argv[1].str(), &on))
+			TheDX8InstanceManager.Set_Additive_Parts(on ? true : false);
+		else if (argc != 1)
+		{
+			printAscii(AsciiString("usage: parts [on|off]"), TRUE);
+			return;
+		}
+		AsciiString state;
+		state.format("parts: %s  shader: %s", TheDX8InstanceManager.Get_Additive_Parts() ? "on (instanced after the effects)" : "off (depth-sorted, as in 2003)",
+			TheDX8InstanceManager.Has_Additive_PS() ? "loaded" : "MISSING (AdditivePart.pso)");
+		printAscii(state, FALSE);
+	}
+
 	Bool screenCentreOnTerrain(Coord3D *out)
 	{
 		if (TheTacticalView == nullptr)
@@ -3233,7 +3251,8 @@ namespace
 		{
 			const unsigned runs       = TheDX8InstanceManager.Get_Last_Frame_Instanced_Draw_Calls();
 			const unsigned instMeshes = TheDX8InstanceManager.Get_Last_Frame_Instanced_Meshes();
-			text.format(L"[INST] recs=%u  runs=%u  inst=%u  indiv=%u  nrm=%u/%u  lbrk=%u  refl=%u  flushes=%u  avgRun=%.1f",
+			// Ronin @perf 07/11/2026 DX9: parts = additive model parts drawn instanced after the effects / the draws they took (`parts`).
+			text.format(L"[INST] recs=%u  runs=%u  inst=%u  indiv=%u  nrm=%u/%u  lbrk=%u  refl=%u  flushes=%u  avgRun=%.1f  parts=%u/%u",
 				TheDX8InstanceManager.Get_Last_Frame_Instanced_Records(), runs, instMeshes,
 				TheDX8InstanceManager.Get_Last_Frame_Instanced_Individual_Draws(),
 				TheDX8InstanceManager.Get_Last_Frame_Instanced_Normal_Mapped_Merged(),
@@ -3241,7 +3260,9 @@ namespace
 				TheDX8InstanceManager.Get_Last_Frame_Instanced_Light_Breaks(),
 				TheDX8InstanceManager.Get_Last_Frame_Reflective_Draws(),
 				TheDX8InstanceManager.Get_Last_Frame_Instanced_Flushes(),
-				(runs > 0) ? ((float)instMeshes / (float)runs) : 0.0f);
+				(runs > 0) ? ((float)instMeshes / (float)runs) : 0.0f,
+				TheDX8InstanceManager.Get_Last_Frame_Additive_Parts(),
+				TheDX8InstanceManager.Get_Last_Frame_Additive_Draws());
 			putRow(R3DDebugPanel::ROW_INST, text, GameMakeColor(0, 255, 255, 255));
 		}
 
@@ -3699,6 +3720,7 @@ void R3DDebugPanel::update(void)
 		registerCommand("credits", "credits [amount] - add money to your player; single player only", cmdCredits);
 		registerCommand("power", "power [0|1] - unlimited power for your player, 0 = your real output; single player only", cmdPower);
 		registerCommand("mapvision", "mapvision [on|off] - the whole map revealed for your player; single player only", cmdMapVision);
+		registerCommand("parts", "parts [on|off] - additive model parts (rocket flames, muzzle flashes) drawn instanced after the effects; off = depth-sorted as in 2003 (not saved)", cmdParts);
 	}
 
 	// Ronin @feature 16/09/2026 DX9: placement takes the mouse after the window translator (10) and before meta events (20),

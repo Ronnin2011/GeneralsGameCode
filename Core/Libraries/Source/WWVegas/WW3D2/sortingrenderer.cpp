@@ -49,6 +49,7 @@
 #include "texture.h"
 #include <d3dx9math.h>  // Native DX9 math
 #include "statistics.h"
+#include "dx8instancing.h"	// Ronin @perf 07/11/2026 DX9: Flush_Additive_Parts
 #include <WWDebug/wwprofile.h>
 #include <algorithm>
 #include <list>
@@ -1034,6 +1035,9 @@ void SortingRendererClass::Flush()
 
 	DX8Wrapper::Set_Transform(D3DTS_VIEW,old_view);
 	DX8Wrapper::Set_Transform(D3DTS_WORLD,old_world);
+
+	// Ronin @perf 07/11/2026 DX9: the additive parts (`parts`), with the camera back: drawn over everything the pool drew.
+	TheDX8InstanceManager.Flush_Additive_Parts();
 
 	Sort_Lap(TheSortingStats.ms[SortingRendererStats::MS_FLUSH], flushStart);	// Ronin @diagnostic 06/11/2026 DX9: [SORT]
 	++TheSortingStats.flushes;

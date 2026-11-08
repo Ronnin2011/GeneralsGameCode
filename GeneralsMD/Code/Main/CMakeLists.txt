@@ -119,7 +119,11 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/ReflectiveRigid.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/ReflectiveRigid.pso"
-        # Ronin @build 14/08/2026 Deploy terrain shadows vertex shader to shaders subfolder.
+        # Ronin @build 07/11/2026 Deploy the additive parts' pixel shader to shaders subfolder.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/AdditivePart.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/AdditivePart.pso"
+        # Ronin @build 14/08/2026 Deploy terrain shadows vertex shader to shaders subfolder.````
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/TerrainShadow.vso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/TerrainShadow.vso"

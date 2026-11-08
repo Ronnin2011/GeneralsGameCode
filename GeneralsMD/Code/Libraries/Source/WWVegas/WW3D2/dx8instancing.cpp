@@ -34,6 +34,9 @@
 #include "vertmaterial.h"
 #include "ww3d.h"   // Ronin @diagnostic 21/06/2026: WW3D::Get_Frame_Count for the per-frame SR counter
 #include "statistics.h" // Ronin @diagnostic 02/08/2026: Record_Instanced_Draw (this path bypasses DX8Wrapper)
+#include "mesh.h"      // Ronin @perf 07/11/2026 DX9: the additive parts - the mesh, its model's arrays and the shadow pass flag
+#include "meshmdl.h"
+#include "texture.h"
 
 
 // Global instance
@@ -393,6 +396,7 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	, m_rigidVSNoColor(nullptr)
 	, m_instancePS(nullptr)
 	, m_reflectivePS(nullptr)
+	, m_additivePS(nullptr)
 	, m_declCacheCount(0)
 	, m_geometryDeclCacheCount(0)
 	, m_pendingSingleRigidCount(0)
@@ -417,6 +421,12 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	, m_lastFrameInstancedFlushes(0)
 	, m_lastFrameReflectiveDraws(0)
 	, m_instancedStatsFrame(0)
+	, m_pendingAdditiveCount(0)
+	, m_additiveParts(true)
+	, m_additivePartsCount(0)
+	, m_additiveDraws(0)
+	, m_lastFrameAdditiveParts(0)
+	, m_lastFrameAdditiveDraws(0)
 {
 	memset(m_declCache, 0, sizeof(m_declCache));
 	memset(m_geometryDeclCache, 0, sizeof(m_geometryDeclCache));
@@ -436,6 +446,8 @@ void DX8InstanceManagerClass::Release_Resources()
 	if (m_rigidVSNoColor) { m_rigidVSNoColor->Release(); m_rigidVSNoColor = nullptr; }
 	if (m_instancePS) { m_instancePS->Release(); m_instancePS = nullptr; }
 	if (m_reflectivePS) { m_reflectivePS->Release(); m_reflectivePS = nullptr; }
+	if (m_additivePS) { m_additivePS->Release(); m_additivePS = nullptr; }	// Ronin @perf 07/11/2026 DX9: the additive parts' PS
+	m_pendingAdditiveCount = 0;
 
 	for (unsigned i = 0; i < m_declCacheCount; ++i) {
 		if (m_declCache[i].decl) {
@@ -564,6 +576,12 @@ bool DX8InstanceManagerClass::Load_Instance_Shader()
 	if (!Load_Pixel_Shader_From_File("shaders\\ReflectiveRigid.pso", &m_reflectivePS)) {
 		WWDEBUG_SAY(("DX8InstanceManager: ReflectiveRigid.pso not loaded; reflective rigid path disabled"));
 		m_reflectivePS = nullptr;
+	}
+
+	// Ronin @perf 07/11/2026 DX9: the additive parts' PS. Non-fatal: without it they stay in the sorting pool.
+	if (!Load_Pixel_Shader_From_File("shaders\\AdditivePart.pso", &m_additivePS)) {
+		WWDEBUG_SAY(("DX8InstanceManager: AdditivePart.pso not loaded; additive parts stay in the sorting pool"));
+		m_additivePS = nullptr;
 	}
 
 	return true;
@@ -1088,6 +1106,216 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	DX8Wrapper::Invalidate_Vertex_Buffer_State();
 
 	return true;
+}
+
+// Ronin @perf 07/11/2026 DX9: a sorted mesh whose one pass is additive and writes no depth (a rocket's flame, a muzzle flash) is
+// collected here instead of going to the sorting pool. False = not such a part, or the switch is off: the caller pools it.
+bool DX8InstanceManagerClass::Collect_Additive_Part(
+	DX8PolygonRendererClass* renderer,
+	MeshClass* mesh,
+	LightEnvironmentClass* lightEnv,
+	VertexMaterialClass* material,
+	TextureClass* texture,
+	const ShaderClass& shader,
+	const Matrix3D& worldTransform)
+{
+	if (!m_additiveParts || !Is_Enabled() || m_instanceVS == nullptr || m_additivePS == nullptr || m_singleRigidVB == nullptr)
+		return false;
+	if (renderer == nullptr || mesh == nullptr || lightEnv == nullptr || material == nullptr || texture == nullptr)
+		return false;
+	if (MeshClass::s_InShadowDepthPass || renderer->Is_Strip() || m_pendingAdditiveCount >= MAX_PENDING_ADDITIVE)
+		return false;
+
+	// What AdditivePart_ps reproduces: ONE or SRC_ALPHA onto ONE, no depth write, no alpha test, one texture times the lit colour.
+	const ShaderClass::SrcBlendFuncType src = shader.Get_Src_Blend_Func();
+	if (shader.Get_Dst_Blend_Func() != ShaderClass::DSTBLEND_ONE ||
+		(src != ShaderClass::SRCBLEND_ONE && src != ShaderClass::SRCBLEND_SRC_ALPHA) ||
+		shader.Get_Depth_Mask() != ShaderClass::DEPTH_WRITE_DISABLE ||
+		shader.Get_Alpha_Test() != ShaderClass::ALPHATEST_DISABLE ||
+		shader.Get_Texturing() != ShaderClass::TEXTURING_ENABLE ||
+		shader.Get_Primary_Gradient() != ShaderClass::GRADIENT_MODULATE ||
+		shader.Get_Secondary_Gradient() != ShaderClass::SECONDARY_GRADIENT_DISABLE ||
+		shader.Get_Post_Detail_Color_Func() != ShaderClass::DETAILCOLOR_DISABLE ||
+		shader.Get_Post_Detail_Alpha_Func() != ShaderClass::DETAILALPHA_DISABLE) {
+		return false;
+	}
+
+	// The geometry is the model's own arrays, copied as the container copied them: one pass, one UV set, no vertex colours,
+	// no UV animation, and this renderer draws every triangle of it.
+	MeshModelClass* model = mesh->Peek_Model();
+	if (model == nullptr || model->Get_Flag(MeshGeometryClass::SKIN) || model->Get_Pass_Count() != 1 ||
+		model->Get_UV_Array_Count() != 1 || model->Get_Color_Array(0, false) != nullptr ||
+		model->Get_Color_Array(1, false) != nullptr || material->Peek_Mapper(0) != nullptr ||
+		renderer->Get_Index_Count() != (unsigned)model->Get_Polygon_Count() * 3) {
+		return false;
+	}
+
+	Roll_Instancing_Stats_Frame();
+	PendingAdditivePart& part = m_pendingAdditive[m_pendingAdditiveCount++];
+	memcpy(part.inst.row0, (const float*)&worldTransform[0], sizeof(part.inst.row0));
+	memcpy(part.inst.row1, (const float*)&worldTransform[1], sizeof(part.inst.row1));
+	memcpy(part.inst.row2, (const float*)&worldTransform[2], sizeof(part.inst.row2));
+	Extract_Instance_Lighting(lightEnv, part.inst);
+	part.model = model;
+	part.texture = texture;
+	part.material = material;
+	part.shader = shader;
+	++m_additivePartsCount;
+	return true;
+}
+
+// Ronin @perf 07/11/2026 DX9: the collected additive parts, one instanced draw per model / texture / material / shader. Called at the
+// end of SortingRendererClass::Flush, after the camera is back: on top of everything the pool drew, as the switch's look says.
+void DX8InstanceManagerClass::Flush_Additive_Parts()
+{
+	const unsigned count = m_pendingAdditiveCount;
+	m_pendingAdditiveCount = 0;
+	if (count == 0)
+		return;
+
+	IDirect3DDevice9* dev = DX8Wrapper::_Get_D3D_Device8();
+	IDirect3DVertexDeclaration9* decl = (dev != nullptr) ? Get_Or_Create_Instance_Decl(dynamic_fvf_type) : nullptr;
+	if (decl == nullptr || m_instanceVS == nullptr || m_additivePS == nullptr || m_singleRigidVB == nullptr)
+		return;
+	Roll_Instancing_Stats_Frame();
+
+	// Groups: records that share model, texture, material and shader ride one draw.
+	struct PartLess {
+		const PendingAdditivePart* p;
+		bool operator()(unsigned a, unsigned b) const {
+			if (p[a].model != p[b].model) return p[a].model < p[b].model;
+			if (p[a].texture != p[b].texture) return p[a].texture < p[b].texture;
+			if (p[a].material != p[b].material) return p[a].material < p[b].material;
+			return p[a].shader.Get_Bits() < p[b].shader.Get_Bits();
+		}
+	};
+	for (unsigned i = 0; i < count; ++i)
+		m_additiveOrder[i] = i;
+	const PartLess less = { m_pendingAdditive };
+	std::sort(m_additiveOrder, m_additiveOrder + count, less);
+
+	// Every group's model goes into one dynamic VB / IB, once.
+	enum { MAX_GROUPS = 256 };
+	unsigned groupStart[MAX_GROUPS];
+	unsigned groupEnd[MAX_GROUPS];
+	unsigned groupVertex[MAX_GROUPS];
+	unsigned groupIndex[MAX_GROUPS];
+	unsigned groups = 0, totalVerts = 0, totalIndices = 0;
+	for (unsigned i = 0; i < count && groups < MAX_GROUPS; ) {
+		unsigned end = i + 1;
+		while (end < count && !less(m_additiveOrder[i], m_additiveOrder[end]))
+			++end;
+		MeshModelClass* model = m_pendingAdditive[m_additiveOrder[i]].model;
+		const unsigned verts = (unsigned)model->Get_Vertex_Count();
+		const unsigned indices = (unsigned)model->Get_Polygon_Count() * 3;
+		if (totalVerts + verts > 60000 || totalIndices + indices > 60000)
+			break;		// far past anything shipped; the rest are skipped this pass
+		groupStart[groups] = i;
+		groupEnd[groups] = end;
+		groupVertex[groups] = totalVerts;
+		groupIndex[groups] = totalIndices;
+		totalVerts += verts;
+		totalIndices += indices;
+		++groups;
+		i = end;
+	}
+	if (groups == 0)
+		return;
+
+	DynamicVBAccessClass vbAccess(BUFFER_TYPE_DYNAMIC_DX8, dynamic_fvf_type, (unsigned short)totalVerts);
+	DynamicIBAccessClass ibAccess(BUFFER_TYPE_DYNAMIC_DX8, (unsigned short)totalIndices);
+	{
+		DynamicVBAccessClass::WriteLockClass vbLock(&vbAccess);
+		DynamicIBAccessClass::WriteLockClass ibLock(&ibAccess);
+		VertexFormatXYZNDUV2* v = vbLock.Get_Formatted_Vertex_Array();
+		unsigned short* ix = ibLock.Get_Index_Array();
+		for (unsigned g = 0; g < groups; ++g) {
+			MeshModelClass* model = m_pendingAdditive[m_additiveOrder[groupStart[g]]].model;
+			const Vector3* pos = model->Get_Vertex_Array();
+			const Vector3* nrm = model->Get_Vertex_Normal_Array();
+			const Vector2* uv = model->Get_UV_Array_By_Index(0);
+			const TriIndex* tri = model->Get_Polygon_Array();
+			const int verts = model->Get_Vertex_Count();
+			for (int i = 0; i < verts; ++i, ++v) {
+				v->x = pos[i].X; v->y = pos[i].Y; v->z = pos[i].Z;
+				v->nx = (nrm != nullptr) ? nrm[i].X : 0.0f;
+				v->ny = (nrm != nullptr) ? nrm[i].Y : 0.0f;
+				v->nz = (nrm != nullptr) ? nrm[i].Z : 1.0f;
+				v->diffuse = 0xFFFFFFFF;
+				v->u1 = (uv != nullptr) ? uv[i].U : 0.0f;
+				v->v1 = (uv != nullptr) ? uv[i].V : 0.0f;
+				v->u2 = 0.0f; v->v2 = 0.0f;
+			}
+			const int polys = model->Get_Polygon_Count();
+			for (int p = 0; p < polys; ++p) {
+				*ix++ = (unsigned short)tri[p].I;
+				*ix++ = (unsigned short)tri[p].J;
+				*ix++ = (unsigned short)tri[p].K;
+			}
+		}
+	}
+	DX8Wrapper::Set_Vertex_Buffer(vbAccess);
+	DX8Wrapper::Set_Index_Buffer(ibAccess, 0);
+
+	for (unsigned g = 0; g < groups; ++g) {
+		const PendingAdditivePart& first = m_pendingAdditive[m_additiveOrder[groupStart[g]]];
+		const unsigned instances = groupEnd[g] - groupStart[g];
+
+		DX8Wrapper::Set_Shader(first.shader);
+		DX8Wrapper::Set_Material(first.material);
+		DX8Wrapper::Set_Texture(0, first.texture);
+		DX8Wrapper::Apply_Render_State_Changes();
+
+		dev->SetVertexDeclaration(decl);
+		dev->SetVertexShader(m_instanceVS);
+		dev->SetPixelShader(m_additivePS);
+		dev->SetSoftwareVertexProcessing(FALSE);
+
+		D3DXMATRIX dxView;
+		Upload_Rigid_View_Projection(dev, &dxView);
+		RigidShaderLightingConstants lightingConstants;
+		Build_Rigid_Shader_Lighting_Constants(dev, dynamic_fvf_type, nullptr, first.material, dxView, &lightingConstants);
+		Upload_Rigid_Shader_VS_Lighting_Constants(dev, lightingConstants);
+		const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		dev->SetVertexShaderConstantF(14, zero, 1);	// no cloud projection
+		dev->SetVertexShaderConstantF(19, zero, 1);	// no texgen
+
+		// This group's records, one after another in the ring; a group that would run past its end starts again at 0.
+		if (m_singleRigidCursor + instances > SINGLE_RIGID_RING_INSTANCES)
+			m_singleRigidCursor = 0;
+		const unsigned ringSlot = m_singleRigidCursor;
+		m_singleRigidCursor += instances;
+		if (m_singleRigidCursor >= SINGLE_RIGID_RING_INSTANCES)
+			m_singleRigidCursor = 0;
+		void* data = nullptr;
+		const DWORD lockFlag = (ringSlot == 0) ? D3DLOCK_DISCARD : D3DLOCK_NOOVERWRITE;
+		if (FAILED(m_singleRigidVB->Lock(ringSlot * sizeof(InstanceData), instances * sizeof(InstanceData), &data, lockFlag)))
+			continue;
+		InstanceData* out = (InstanceData*)data;
+		for (unsigned r = 0; r < instances; ++r)
+			out[r] = m_pendingAdditive[m_additiveOrder[groupStart[g] + r]].inst;
+		m_singleRigidVB->Unlock();
+
+		dev->SetStreamSource(1, m_singleRigidVB, ringSlot * sizeof(InstanceData), sizeof(InstanceData));
+		dev->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | instances);
+		dev->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1);
+
+		MeshModelClass* model = first.model;
+		dev->DrawIndexedPrimitive(D3DPT_TRIANGLELIST, (INT)groupVertex[g], 0, (UINT)model->Get_Vertex_Count(),
+			ibAccess.Get_IB_Offset() + groupIndex[g], (UINT)model->Get_Polygon_Count());
+		++m_additiveDraws;
+		Debug_Statistics::Record_Instanced_Draw(model->Get_Polygon_Count() * (int)instances, model->Get_Vertex_Count() * (int)instances);
+	}
+
+	// Back to fixed function, as Draw_Reflective_Rigid leaves it.
+	dev->SetStreamSourceFreq(0, 1);
+	dev->SetStreamSourceFreq(1, 1);
+	dev->SetStreamSource(1, nullptr, 0, 0);
+	dev->SetVertexDeclaration(nullptr);
+	dev->SetVertexShader(nullptr);
+	dev->SetPixelShader(nullptr);
+	ShaderClass::Invalidate();
+	DX8Wrapper::Invalidate_Vertex_Buffer_State();
 }
 
 // Ronin @perf 24/06/2026 DX9 P1: defer one eligible single-rigid mesh into the per-category batch.
@@ -2102,6 +2330,10 @@ void DX8InstanceManagerClass::Roll_Instancing_Stats_Frame()
 	m_lastFrameInstancedNormalMappedMerged = m_instancedNormalMappedMerged;
 	m_lastFrameInstancedFlushes         = m_instancedFlushes;
 	m_lastFrameReflectiveDraws          = m_reflectiveDraws;
+	m_lastFrameAdditiveParts            = m_additivePartsCount;	// Ronin @perf 07/11/2026 DX9: the additive parts
+	m_lastFrameAdditiveDraws            = m_additiveDraws;
+	m_additivePartsCount = 0;
+	m_additiveDraws = 0;
 	m_instancedRecords = 0;
 	m_instancedDrawCalls = 0;
 	m_instancedMeshes = 0;

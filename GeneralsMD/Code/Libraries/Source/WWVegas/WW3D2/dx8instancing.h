@@ -27,6 +27,8 @@
 class DX8PolygonRendererClass;
 class LightEnvironmentClass;
 class Matrix3D;
+class MeshClass;
+class MeshModelClass;
 class TextureClass;
 class VertexMaterialClass;
 
@@ -154,6 +156,23 @@ public:
 	// before routing an env-reflect pass to the per-pixel path (else it stays on legacy).
 	bool Has_Reflective_PS() const { return m_reflectivePS != nullptr; }
 
+	// Ronin @perf 07/11/2026 DX9: additive model parts (rocket flames, muzzle flashes) - sorted meshes with an additive, no-depth-write
+	// pass - collected instead of pooled, and drawn instanced by Flush_Additive_Parts after the sorting pool. Off = the pool, as before.
+	bool Collect_Additive_Part(
+		DX8PolygonRendererClass* renderer,
+		MeshClass* mesh,
+		LightEnvironmentClass* lightEnv,
+		VertexMaterialClass* material,
+		TextureClass* texture,
+		const ShaderClass& shader,
+		const Matrix3D& worldTransform);
+	void Flush_Additive_Parts();
+	void Set_Additive_Parts(bool on) { m_additiveParts = on; }
+	bool Get_Additive_Parts() const { return m_additiveParts; }
+	unsigned Get_Last_Frame_Additive_Parts() const { return m_lastFrameAdditiveParts; }	// parts collected
+	unsigned Get_Last_Frame_Additive_Draws() const { return m_lastFrameAdditiveDraws; }	// instanced draws issued
+	bool Has_Additive_PS() const { return m_additivePS != nullptr; }
+
 
 	// Ronin @perf 24/06/2026 DX9 P1: deferred single-rigid batch. The renderer collects eligible
 	// non-instanced rigid meshes per texture-category via Collect_Single_Rigid, then issues them all
@@ -249,6 +268,7 @@ private:
 	IDirect3DVertexShader9* m_rigidVS;           // Ronin @feature 23/05/2026 DX9 R3: Non-instanced rigid fallback VS (with COLOR0)
 	IDirect3DVertexShader9* m_rigidVSNoColor;    // Ronin @feature 23/05/2026 DX9 R3: Non-instanced rigid fallback VS (no COLOR0)
 	IDirect3DPixelShader9* m_reflectivePS;       // Ronin @feature DX9: per-pixel env reflection PS (ReflectiveRigid.pso) for reflective pass-0
+	IDirect3DPixelShader9* m_additivePS;         // Ronin @perf 07/11/2026 DX9: AdditivePart.pso - texture x lit colour, for the additive parts
 
 	// Ronin @bugfix 18/02/2026 DX9: Per-FVF declaration cache (replaces single m_instanceDecl)
 	CachedDecl m_declCache[MAX_CACHED_DECLS];
@@ -308,6 +328,25 @@ private:
 	unsigned m_lastFrameReflectiveDraws;
 	unsigned m_instancedStatsFrame;      // last WW3D frame seen — self-contained roll, like the [SR] counters
 	void Roll_Instancing_Stats_Frame();  // snapshot+reset ALL instanced counters on frame change
+
+	// Ronin @perf 07/11/2026 DX9: the additive parts waiting for Flush_Additive_Parts. Transform and lighting are taken at collect;
+	// the geometry is the model's own arrays, copied once per model at the flush.
+	struct PendingAdditivePart {
+		InstanceData          inst;
+		MeshModelClass*       model;
+		TextureClass*         texture;
+		VertexMaterialClass*  material;
+		ShaderClass           shader;
+	};
+	enum { MAX_PENDING_ADDITIVE = 2048 };
+	PendingAdditivePart   m_pendingAdditive[MAX_PENDING_ADDITIVE];
+	unsigned              m_additiveOrder[MAX_PENDING_ADDITIVE];
+	unsigned              m_pendingAdditiveCount;
+	bool                  m_additiveParts;	// the switch (panel `parts`); off = the sorting pool, as before
+	unsigned              m_additivePartsCount;
+	unsigned              m_additiveDraws;
+	unsigned              m_lastFrameAdditiveParts;
+	unsigned              m_lastFrameAdditiveDraws;
 
 	// Internal helpers
 	bool Create_Instance_VB();
