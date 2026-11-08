@@ -3217,6 +3217,25 @@ void ParticleSystemManager::reset()
 	// leave templates as-is
 }
 
+// Ronin @diagnostic 07/11/2026 DX9: the [CPU] row's numbers (ParticleSys.h); the clock reads only while the row is on and shown.
+FrameCostStats TheFrameCostStats = {};
+double FrameCost_Now()
+{
+	if (!TheFrameCostStats.enabled)
+		return 0.0;
+	static LARGE_INTEGER freq = {};
+	if (freq.QuadPart == 0)
+		QueryPerformanceFrequency(&freq);
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+	return (double)now.QuadPart * 1000.0 / (double)freq.QuadPart;
+}
+void FrameCost_Add(Int slot, double startMs)
+{
+	if (TheFrameCostStats.enabled && startMs != 0.0)
+		TheFrameCostStats.ms[slot] += FrameCost_Now() - startMs;
+}
+
 // ------------------------------------------------------------------------------------------------
 /** Update all particle systems */
 // ------------------------------------------------------------------------------------------------
@@ -3224,6 +3243,7 @@ void ParticleSystemManager::reset()
 void ParticleSystemManager::update()
 {
 	//USE_PERF_TIMER(ParticleSystemManager)
+	const double updateStart = FrameCost_Now();	// Ronin @diagnostic 07/11/2026 DX9: [CPU] the particle update
 
 	// TheSuperHackers @tweak Complete the render update of the previous logic frame before the logic update
 	// changes the rates, so that every logic frame integrates exactly one logic time step.
@@ -3277,6 +3297,7 @@ void ParticleSystemManager::update()
 			}
 		}
 	}
+	FrameCost_Add(FrameCostStats::MS_PARTICLE_UPDATE, updateStart);
 }
 
 // ------------------------------------------------------------------------------------------------

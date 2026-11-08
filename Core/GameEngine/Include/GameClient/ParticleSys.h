@@ -970,5 +970,19 @@ protected:
 /// The particle system manager singleton
 extern ParticleSystemManager *TheParticleSystemManager;
 
+// Ronin @diagnostic 07/11/2026 DX9: the panel's [CPU] row - CPU time of the particle update, the particle render (the streak
+// ribbons apart) and the logic step, summed over a frame; timed only while `enabled`, read and zeroed by the panel.
+struct FrameCostStats
+{
+	enum { MS_PARTICLE_UPDATE, MS_PARTICLE_RENDER, MS_STREAKS, MS_LOGIC, MS_COUNT };
+	double			ms[MS_COUNT];
+	UnsignedInt		streaks;		///< streak ribbons rendered
+	UnsignedInt		logicSteps;		///< logic updates run
+	Bool			enabled;
+};
+extern FrameCostStats TheFrameCostStats;
+double FrameCost_Now();							///< ms on the performance clock; 0 while not enabled
+void FrameCost_Add(Int slot, double startMs);	///< adds the time since startMs to ms[slot]
+
 class DebugDisplayInterface;
 extern void ParticleSystemDebugDisplay( DebugDisplayInterface *dd, void *, FILE *fp = nullptr );

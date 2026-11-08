@@ -173,6 +173,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 
 	// external mechanism must tell us when it's OK to render again...
 	m_readyToRender = false;
+	const double renderStart = FrameCost_Now();	// Ronin @diagnostic 07/11/2026 DX9: [CPU] the particle render
 
 	//reset each frame
 	/// @todo lorenzen sez: this should be debug only:
@@ -402,7 +403,10 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 
 
 			//RENDER STREAK!
+			const double streakStart = FrameCost_Now();	// Ronin @diagnostic 07/11/2026 DX9: [CPU] the ribbon's geometry and its pool insert
 			m_streakLine->Render( rinfo );
+			FrameCost_Add(FrameCostStats::MS_STREAKS, streakStart);
+			++TheFrameCostStats.streaks;
 			m_onScreenParticleCount += (pointCount - startCount);
 			pointCount = startCount;
 		}
@@ -477,6 +481,7 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 
 	// TheSuperHackers @info Flush the last batch if one is pending.
 	flushParticleBatch(rinfo, pointCount);
+	FrameCost_Add(FrameCostStats::MS_PARTICLE_RENDER, renderStart);	// Ronin @diagnostic 07/11/2026 DX9: [CPU] snow and smudges not included
 
 		/// @todo lorenzen sez: this should be debug only:
 	TheParticleSystemManager->setOnScreenParticleCount(m_onScreenParticleCount);

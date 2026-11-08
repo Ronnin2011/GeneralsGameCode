@@ -903,7 +903,10 @@ void GameEngine::update()
 		// TheSuperHackers @info Ignores frozen time because the script engine needs updating in the logic update regardless.
 		if (canUpdateGameLogic(FramePacer::IgnoreFrozenTime))
 		{
+			const double logicStart = FrameCost_Now();	// Ronin @diagnostic 07/11/2026 DX9: [CPU] the logic step
 			TheGameLogic->UPDATE();
+			FrameCost_Add(FrameCostStats::MS_LOGIC, logicStart);
+			++TheFrameCostStats.logicSteps;
 
 			if (!TheFramePacer->isTimeFrozen())
 			{

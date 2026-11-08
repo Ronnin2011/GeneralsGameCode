@@ -66,6 +66,7 @@
 #include "W3DDevice/GameClient/WorldHeightMap.h"
 #include "WW3D2/dx8instancing.h"
 #include "WW3D2/statistics.h"
+#include "WW3D2/sortingrenderer.h"	// Ronin @diagnostic 06/11/2026 DX9: [SORT]
 
 // Ronin @feature 28/09/2026 DX9: [SR] counters, in dx8instancing.cpp. Declared out here: inside the namespace below they
 // would name internal functions that do not exist.
@@ -144,9 +145,9 @@ namespace
 	// Ronin @feature 28/09/2026 DX9: `rows` switches, defaults as W3DDisplay.cpp's old SHOW_* constants. [DRAW2] shares draw's
 	// name, so one switch drives both.
 	const char    *const ROW_NAMES[R3DDebugPanel::ROW_COUNT] =
-		{ "sr", "inst", "draw", "draw", "shadow", "perf", "depth", "terrain", "ui", "rstate", "taa", "water", "light", "light" };
+		{ "sr", "inst", "draw", "draw", "shadow", "perf", "depth", "terrain", "ui", "rstate", "taa", "water", "light", "light", "sort", "cpu" };
 	Bool           s_rowOn[R3DDebugPanel::ROW_COUNT] =
-		{ TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, TRUE, TRUE };
+		{ TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE };
 	DisplayString *s_rowText[R3DDebugPanel::ROW_COUNT] = {};	// each row's string, made on first use
 	DisplayString *s_noPanel      = nullptr;
 
@@ -155,6 +156,11 @@ namespace
 	unsigned       s_drawPrev[Debug_Statistics::DRAW_SUBSYS_COUNT] = {};
 	unsigned       s_drawNow[Debug_Statistics::DRAW_SUBSYS_COUNT]  = {};	// this frame's draws per subsystem
 	unsigned       s_drawTotal    = 0;
+	SortingRendererStats s_sortNow = {};							// Ronin @diagnostic 06/11/2026 DX9: [SORT] last frame's pool numbers
+	double         s_sortEase[SortingRendererStats::MS_COUNT] = {};	// ... its times, eased like the GPU rows
+	FrameCostStats s_cpuNow = {};								// Ronin @diagnostic 07/11/2026 DX9: [CPU] last frame's numbers
+	double         s_cpuEase[FrameCostStats::MS_COUNT] = {};		// ... its times, eased
+	double         s_cpuSteps = 0.0;								// ... logic steps a frame, eased
 	Int64          s_perfFreq     = 0;
 	Int64          s_perfNow      = 0;
 	Int64          s_perfFirst    = 0;
@@ -3164,6 +3170,21 @@ namespace
 		TheWaterStats.wakeRipples  = 0;
 		TheWaterStats.wakeTexel    = 0.0f;
 		TheWaterStats.enabled      = (s_rowOn[R3DDebugPanel::ROW_WATER] && s_visible) ? TRUE : FALSE;
+
+		// Ronin @diagnostic 06/11/2026 DX9: [SORT] - keep this frame's pool numbers, ease the times, zero them for the next.
+		s_sortNow = TheSortingStats;
+		for (Int i = 0; i < SortingRendererStats::MS_COUNT; ++i)
+			s_sortEase[i] = s_sortEase[i] * 0.9 + s_sortNow.ms[i] * 0.1;
+		TheSortingStats = SortingRendererStats();
+		TheSortingStats.enabled = (s_rowOn[R3DDebugPanel::ROW_SORT] && s_visible);
+
+		// Ronin @diagnostic 07/11/2026 DX9: [CPU] - the same for the particle and logic timers.
+		s_cpuNow = TheFrameCostStats;
+		for (Int i = 0; i < FrameCostStats::MS_COUNT; ++i)
+			s_cpuEase[i] = s_cpuEase[i] * 0.9 + s_cpuNow.ms[i] * 0.1;
+		s_cpuSteps = s_cpuSteps * 0.9 + (double)s_cpuNow.logicSteps * 0.1;
+		TheFrameCostStats = FrameCostStats();
+		TheFrameCostStats.enabled = (s_rowOn[R3DDebugPanel::ROW_CPU] && s_visible) ? TRUE : FALSE;
 	}
 
 	// Ronin @feature 28/09/2026 DX9: sets the row's text and hands it to the panel for this frame.
@@ -3254,6 +3275,28 @@ namespace
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_SHADOWRECV],
 				s_drawNow[Debug_Statistics::DRAW_SUBSYS_PREPASS]);
 			putRow(R3DDebugPanel::ROW_DRAW2, text, GameMakeColor(255, 160, 0, 255));
+		}
+
+		// Ronin @diagnostic 06/11/2026 DX9: the sorting pool's CPU time, eased; insert is the list scan, flush holds the rest.
+		if (s_rowOn[R3DDebugPanel::ROW_SORT])
+		{
+			text.format(L"[SORT] insert=%.2fms  flush=%.2fms (build=%.2f sort=%.2f regroup=%.2f draw=%.2f)  nodes=%u  direct=%u  tris=%u  flushes=%u",
+				s_sortEase[SortingRendererStats::MS_INSERT], s_sortEase[SortingRendererStats::MS_FLUSH],
+				s_sortEase[SortingRendererStats::MS_BUILD], s_sortEase[SortingRendererStats::MS_SORT],
+				s_sortEase[SortingRendererStats::MS_REGROUP], s_sortEase[SortingRendererStats::MS_DRAW],
+				s_sortNow.nodes, s_sortNow.direct, s_sortNow.triangles, s_sortNow.flushes);
+			putRow(R3DDebugPanel::ROW_SORT, text, GameMakeColor(255, 160, 0, 255));
+		}
+
+		// Ronin @diagnostic 07/11/2026 DX9: CPU time outside the sorting pool, eased per frame; fxRender holds the streaks, and logic
+		// is also shown per step (it runs 30 times a second, not every frame).
+		if (s_rowOn[R3DDebugPanel::ROW_CPU])
+		{
+			text.format(L"[CPU] fxUpdate=%.2fms  fxRender=%.2fms (streaks=%.2fms, %u)  logic=%.2fms a frame (%.2fms a step)",
+				s_cpuEase[FrameCostStats::MS_PARTICLE_UPDATE], s_cpuEase[FrameCostStats::MS_PARTICLE_RENDER],
+				s_cpuEase[FrameCostStats::MS_STREAKS], s_cpuNow.streaks, s_cpuEase[FrameCostStats::MS_LOGIC],
+				(s_cpuSteps > 0.01) ? s_cpuEase[FrameCostStats::MS_LOGIC] / s_cpuSteps : 0.0);
+			putRow(R3DDebugPanel::ROW_CPU, text, GameMakeColor(255, 160, 0, 255));
 		}
 
 		// Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Shadow fit - texel moves with zoom, yaw and sun. No maps, no row.

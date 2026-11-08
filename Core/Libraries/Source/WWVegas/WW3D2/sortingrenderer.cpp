@@ -53,6 +53,28 @@
 #include <algorithm>
 #include <list>
 
+// Ronin @diagnostic 06/11/2026 DX9: the [SORT] row's numbers; the clock reads only while the row is on and shown.
+SortingRendererStats TheSortingStats = {};
+static LARGE_INTEGER Sort_Start()
+{
+	LARGE_INTEGER t = {};
+	if (TheSortingStats.enabled)
+		QueryPerformanceCounter(&t);
+	return t;
+}
+static void Sort_Lap(double &ms, LARGE_INTEGER &from)
+{
+	if (!TheSortingStats.enabled || from.QuadPart == 0)
+		return;
+	static LARGE_INTEGER freq = {};
+	if (freq.QuadPart == 0)
+		QueryPerformanceFrequency(&freq);
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+	ms += (double)(now.QuadPart - from.QuadPart) * 1000.0 / (double)freq.QuadPart;
+	from = now;
+}
+
  // Ronin @bugfix 19/01/2026 Sorting guard: reduce debug spam - only log pipeline diffs on validation failure.
 static bool Should_Log_Sorting_Guard_Failure(const char* where, unsigned* outCount = nullptr)
 {
@@ -390,7 +412,9 @@ void SortingRendererClass::Insert_Triangles(
 			&mtx);
 		state->transformed_center=Vector3(transformed_vec[0],transformed_vec[1],transformed_vec[2]);
 
+		LARGE_INTEGER insertStart = Sort_Start();	// Ronin @diagnostic 06/11/2026 DX9: [SORT] the sorted-list scan
 		Insert_To_Sorted_List(state);
+		Sort_Lap(TheSortingStats.ms[SortingRendererStats::MS_INSERT], insertStart);
 	}
 	else
 	{
@@ -621,6 +645,11 @@ void SortingRendererClass::Flush_Sorting_Pool()
 {
 	if (!overlapping_node_count) return;
 
+	// Ronin @diagnostic 06/11/2026 DX9: [SORT] this pool's size, and a clock for its steps.
+	TheSortingStats.nodes += overlapping_node_count;
+	TheSortingStats.triangles += overlapping_polygon_count;
+	LARGE_INTEGER step = Sort_Start();
+
 /*#ifdef WWDEBUG
 	// Ronin @debug 03/02/2026: Log what state sorting flush applies (to compare with skin path)
 	static int s_sortFlushLog = 0;
@@ -753,7 +782,9 @@ void SortingRendererClass::Flush_Sorting_Pool()
 		}
 	}
 
+	Sort_Lap(TheSortingStats.ms[SortingRendererStats::MS_BUILD], step);	// Ronin @diagnostic 06/11/2026 DX9: [SORT] vertex copy and depths
 	Sort(tis, tis + overlapping_polygon_count);
+	Sort_Lap(TheSortingStats.ms[SortingRendererStats::MS_SORT], step);
 
 	// Ronin @perf 09/08/2026 §19b.1 DX9: additive blending (ONE/ONE, SRC_ALPHA/ONE) is COMMUTATIVE, so
 	// those triangles need no depth order relative to EACH OTHER. The z-sort above interleaves nodes and
@@ -783,6 +814,7 @@ void SortingRendererClass::Flush_Sorting_Pool()
 			run_start = run_end;
 		}
 	}
+	Sort_Lap(TheSortingStats.ms[SortingRendererStats::MS_REGROUP], step);	// Ronin @diagnostic 06/11/2026 DX9: [SORT] the additive regroup
 
 	// TheSuperHackers @fix stephanmeesters 10/06/2026
 	// Split rendering into chunks to prevent a crash when exceeding the 16-bit index buffer limit.
@@ -861,6 +893,7 @@ void SortingRendererClass::Flush_Sorting_Pool()
 
 		chunkOffset += chunkCount;
 	}
+	Sort_Lap(TheSortingStats.ms[SortingRendererStats::MS_DRAW], step);	// Ronin @diagnostic 06/11/2026 DX9: [SORT] index fill, state and draws
 
 	// Release all references and return nodes back to the clean list for the frame...
 	for (unsigned node_id=0;node_id<overlapping_node_count;++node_id) {
@@ -891,6 +924,9 @@ void SortingRendererClass::Flush()
 	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_SORTED);
 
 	WWPROFILE("SortingRenderer::Flush");
+
+	// Ronin @diagnostic 06/11/2026 DX9: [SORT] the whole flush: the direct draws, then the pool.
+	LARGE_INTEGER flushStart = Sort_Start();
 
 	IDirect3DDevice9* pDev = DX8Wrapper::_Get_D3D_Device8();
 
@@ -978,6 +1014,7 @@ void SortingRendererClass::Flush()
 
 			Release_Refs(state);
 			clean_list.push_front(state);
+			++TheSortingStats.direct;	// Ronin @diagnostic 06/11/2026 DX9: [SORT] a sorted node drawn from its own buffers
 		}
 	}
 
@@ -998,6 +1035,8 @@ void SortingRendererClass::Flush()
 	DX8Wrapper::Set_Transform(D3DTS_VIEW,old_view);
 	DX8Wrapper::Set_Transform(D3DTS_WORLD,old_world);
 
+	Sort_Lap(TheSortingStats.ms[SortingRendererStats::MS_FLUSH], flushStart);	// Ronin @diagnostic 06/11/2026 DX9: [SORT]
+	++TheSortingStats.flushes;
 }
 
 // ----------------------------------------------------------------------------

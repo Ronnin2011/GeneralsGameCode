@@ -23,6 +23,20 @@
 class SortingNodeStruct;
 class SphereClass;
 
+// Ronin @diagnostic 06/11/2026 DX9: the sorting pool's CPU time, summed over a frame's flushes, for the panel's [SORT] row.
+// Timed only while `enabled` (the row on and shown); the panel reads and zeroes it once a frame.
+struct SortingRendererStats
+{
+	enum { MS_INSERT, MS_FLUSH, MS_BUILD, MS_SORT, MS_REGROUP, MS_DRAW, MS_COUNT };
+	double		ms[MS_COUNT];	// insert: the sorted-list scan; flush: all of Flush; build/sort/regroup/draw: the pool's steps
+	unsigned	nodes;			// pooled nodes
+	unsigned	direct;			// sorted nodes drawn from their own buffers
+	unsigned	triangles;		// pooled triangles
+	unsigned	flushes;
+	bool		enabled;
+};
+extern SortingRendererStats TheSortingStats;
+
 class SortingRendererClass
 {
 	static bool _EnableTriangleDraw;

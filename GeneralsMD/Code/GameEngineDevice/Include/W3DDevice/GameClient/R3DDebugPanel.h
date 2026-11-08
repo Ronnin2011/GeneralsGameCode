@@ -36,6 +36,8 @@ public:
 		ROW_WATER,		// Ronin @diagnostic 28/09/2026 DX9: water shader load/use and draws, docs/Water_Work.md §5
 		ROW_LIGHT,		// Ronin @diagnostic 09/10/2026 DX9: local lights drawn in screen space (R3DLocalLights)
 		ROW_LIGHT2,		// Ronin @diagnostic 11/10/2026 DX9: its second row - the lamps and what stands in their light
+		ROW_SORT,		// Ronin @diagnostic 06/11/2026 DX9: the sorting pool's CPU time (docs/Performance_Work.md)
+		ROW_CPU,		// Ronin @diagnostic 07/11/2026 DX9: particle update / render and logic CPU time (docs/Performance_Work.md)
 		ROW_COUNT
 	};
 
