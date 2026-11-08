@@ -45,9 +45,10 @@
 
 //-------------------------------------------------------------------------------------------------
 
+// Ronin @perf 06/11/2026 DX9: streaks too - they draw between the sprites, and on a texture of their own they cut every merged draw.
 static Bool supportsAtlasing(const ParticleSystem& system)
 {
-	return system.isUsingParticles() && system.getParticleAlignment() != ParticleSystemInfo::PARTICLE_ALIGNMENT_CONFORMING;
+	return (system.isUsingParticles() || system.isUsingStreak()) && system.getParticleAlignment() != ParticleSystemInfo::PARTICLE_ALIGNMENT_CONFORMING;
 }
 
 static Bool usesSharedBlend(ParticleSystemInfo::ParticleShaderType shaderType, Bool atlased)
@@ -377,22 +378,10 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 		{
 			m_streakLine->Reset_Line();
 
+			// Ronin @perf 06/11/2026 DX9: the page, cell and blend chosen above, as the sprites get; off the atlas, the same presets as before.
 			m_streakLine->Set_Texture( texture.Peek() );
-			switch( sys->getShaderType() )
-			{
-				case ParticleSystemInfo::ADDITIVE:
-					m_streakLine->Set_Shader( ShaderClass::_PresetAdditiveSpriteShader );
-					break;
-				case ParticleSystemInfo::ALPHA:
-					m_streakLine->Set_Shader( ShaderClass::_PresetAlphaSpriteShader );
-					break;
-				case ParticleSystemInfo::ALPHA_TEST:
-					m_streakLine->Set_Shader( ShaderClass::_PresetATestSpriteShader );
-					break;
-				case ParticleSystemInfo::MULTIPLY:
-					m_streakLine->Set_Shader( ShaderClass::_PresetMultiplicativeSpriteShader );
-					break;
-			}
+			m_streakLine->Set_Shader( shader );
+			m_streakLine->Set_Texture_UV_Rect( uvRect );
 
 			//UPDATE THE STREAK'S ARRAYS
 			m_streakLine->Set_LocsWidthsColors(

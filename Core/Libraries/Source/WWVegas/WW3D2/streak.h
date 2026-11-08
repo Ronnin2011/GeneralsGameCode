@@ -104,6 +104,7 @@ class StreakLineClass : public RenderObjClass
 
 		void					Set_Texture(TextureClass *texture);
 		void					Set_Shader(ShaderClass shader);
+		void					Set_Texture_UV_Rect(const Vector4 &rect);	// Ronin @perf 06/11/2026 DX9: the per-point streak path only
 		void					Set_Width(float width);
 		void					Set_Color(const Vector3 &color);
 		void					Set_Opacity(float opacity);

@@ -43,6 +43,7 @@
 #include "texture.h"
 #include "WWMath/matrix3d.h"
 #include "WWMath/vector2.h"
+#include "WWMath/vector4.h"
 
 class RenderInfoClass;
 class SphereClass;
@@ -98,6 +99,7 @@ public:
 	// Set properties used to render this line segment
 	void					Set_Texture(TextureClass *texture);
 	void					Set_Shader(ShaderClass shader)						{ Shader = shader; }
+	void					Set_Texture_UV_Rect(const Vector4 &rect)			{ TextureUVRect = rect; }	// Ronin @perf 06/11/2026 DX9: an atlas cell
 	void					Set_Width(float width)									{ Width = width; }
 	void					Set_Color(const Vector3 &color)						{ Color = color; }
 	void					Set_Opacity(float opacity)								{ Opacity = opacity; }
@@ -185,6 +187,7 @@ private:
 		DEFAULT_BITS = MERGE_INTERSECTIONS | (UNIFORM_WIDTH_TEXTURE_MAP << TEXTURE_MAP_MODE_OFFSET)
 	};
 	unsigned int					Bits;
+	Vector4							TextureUVRect;	// Ronin @perf 06/11/2026 DX9: where the texture sits on its atlas page; (0,0,1,1) = all of it
 
 	friend class SegmentedLineClass;
 

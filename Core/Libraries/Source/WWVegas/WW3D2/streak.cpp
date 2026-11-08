@@ -329,6 +329,12 @@ void StreakLineClass::Set_Shader(ShaderClass shader)
 	StreakRenderer.Set_Shader(shader);
 }
 
+// Ronin @perf 06/11/2026 DX9: only the per-point streak path (particle streaks) reads it; the segment line keeps the whole texture.
+void StreakLineClass::Set_Texture_UV_Rect(const Vector4 &rect)
+{
+	StreakRenderer.Set_Texture_UV_Rect(rect);
+}
+
 float StreakLineClass::Get_Width()
 {
 	return LineRenderer.Get_Width();

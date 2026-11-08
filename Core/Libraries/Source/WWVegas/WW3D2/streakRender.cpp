@@ -70,6 +70,7 @@ StreakRendererClass::StreakRendererClass() :
 		// CurrentUVOffset(0.0f,0.0f),
 		// UVOffsetDeltaPerMS(0.0f, 0.0f),
 		Bits(DEFAULT_BITS),
+		TextureUVRect(0.0f, 0.0f, 1.0f, 1.0f),
 		m_vertexBufferSize(0),
 		m_vertexBuffer(nullptr)
 {
@@ -90,6 +91,7 @@ StreakRendererClass::StreakRendererClass(const StreakRendererClass & that) :
 		// CurrentUVOffset(0.0f,0.0f),
 		// UVOffsetDeltaPerMS(0.0f, 0.0f),
 		Bits(DEFAULT_BITS),
+		TextureUVRect(0.0f, 0.0f, 1.0f, 1.0f),
 		m_vertexBufferSize(0),
 		m_vertexBuffer(nullptr)
 {
@@ -112,6 +114,7 @@ StreakRendererClass & StreakRendererClass::operator = (const StreakRendererClass
 		// CurrentUVOffset = that.CurrentUVOffset;
 		// UVOffsetDeltaPerMS = that.UVOffsetDeltaPerMS;
 		Bits = that.Bits;
+		TextureUVRect = that.TextureUVRect;
 		// Don't modify m_vertexBufferSize and m_vertexBuffer.
 	}
 	return *this;
@@ -1352,8 +1355,9 @@ void StreakRendererClass::RenderStreak
 				vertex->Z = vertexArray[i].z;
 				*reinterpret_cast<unsigned int *>(vb + diffuseOffset) = DX8Wrapper::Convert_Color_Clamp(colors[MIN((i/2), point_cnt)]); // TODO: Does not work correctly when subdivision are not 0
 				Vector2 *texture = reinterpret_cast<Vector2 *>(vb + textureOffset);
-				texture->U = vertexArray[i].u1;
-				texture->V = vertexArray[i].v1;
+				// Ronin @perf 06/11/2026 DX9: into the texture's atlas cell, so a streak shares the particles' page and draws with them.
+				texture->U = TextureUVRect.X + vertexArray[i].u1 * (TextureUVRect.Z - TextureUVRect.X);
+				texture->V = TextureUVRect.Y + vertexArray[i].v1 * (TextureUVRect.W - TextureUVRect.Y);
 				vb += vbSize;
 			}
 		}
