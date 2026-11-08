@@ -136,7 +136,8 @@ public:
 								Vector4 * colors,
 								float * widths,
 								const SphereClass & obj_sphere,
-								unsigned int *personalities);
+								unsigned int *personalities,
+								const float *point_tex_v = nullptr);	// Ronin @feature 08/11/2026 DX9: V per point, else personality & 1
 
 private:
 

@@ -312,7 +312,8 @@ void StreakRendererClass::RenderStreak
 	Vector4 * colors,								/////////////// DIFFERENT FROM RENDER()
 	float * widths,									/////////////// DIFFERENT FROM RENDER()
 	const SphereClass & obj_sphere,
-	unsigned int *personalities			/////////////// DIFFERENT FROM RENDER()
+	unsigned int *personalities,			/////////////// DIFFERENT FROM RENDER()
+	const float *point_tex_v
 )
 {
 	// Ronin @diagnostic 09/08/2026 §19b.2 DX9: streak trails. Render() at :193 is a stub — this is the
@@ -763,14 +764,16 @@ void StreakRendererClass::RenderStreak
 			intersection[intersectionIndex][TOP_EDGE].Point = midpoint;
 
 //			intersection[intersectionIndex][TOP_EDGE].TexV = mid_tex_v;
-			intersection[intersectionIndex][TOP_EDGE].TexV = personalities[intersectionIndex]&1;//LORENZEN LORENZEN
+			// Ronin @feature 08/11/2026 DX9: a rounded trail's inserted points carry V between their neighbours' (same index).
+			const float pointV = (point_tex_v != nullptr) ? point_tex_v[intersectionIndex] : (float)(personalities[intersectionIndex]&1);
+			intersection[intersectionIndex][TOP_EDGE].TexV = pointV;//LORENZEN LORENZEN
 
 			intersection[intersectionIndex][BOTTOM_EDGE].PointCount = 1;
 			intersection[intersectionIndex][BOTTOM_EDGE].NextSegmentID = intersectionIndex;
 			intersection[intersectionIndex][BOTTOM_EDGE].Point = midpoint;
 
 //			intersection[intersectionIndex][BOTTOM_EDGE].TexV = mid_tex_v;
-			intersection[intersectionIndex][BOTTOM_EDGE].TexV = personalities[intersectionIndex]&1;//LORENZEN LORENZEN
+			intersection[intersectionIndex][BOTTOM_EDGE].TexV = pointV;//LORENZEN LORENZEN
 
 			// Intersection calculation: if the top/bottom planes of both adjoining segments are not
 			// very close to being parallel, intersect them to get top/bottom intersection lines. If

@@ -655,6 +655,108 @@ void StreakLineClass::Render_Seg_Line(RenderInfoClass & rinfo)
 }
 
 
+// Ronin @feature 08/11/2026 DX9: rounded trails. The trail's points lie on the missile's path, whose sharp turns are the
+// game logic's; a curve through the same points rounds them. One inserted point per ROUND_STEP_DEGREES of a segment's turn.
+static const float ROUND_STEP_DEGREES = 6.0f;	// smaller = rounder, more points (sensible 1..45)
+
+// The ribbon builder's chunk (STREAK_CHUNK_SIZE + 1, streakRender.cpp): a rounded line longer than that stays straight.
+// One spare slot each: the builder reads colors[MIN(i/2, point_cnt)].
+enum { ROUND_MAX_POINTS = 129, ROUND_MAX_INSERTS = 8 };
+static Vector3 s_roundPoints[ROUND_MAX_POINTS + 1];
+static Vector4 s_roundColors[ROUND_MAX_POINTS + 1];
+static float s_roundWidths[ROUND_MAX_POINTS + 1];
+static unsigned int s_roundPersonalities[ROUND_MAX_POINTS + 1];
+static float s_roundTexV[ROUND_MAX_POINTS + 1];
+
+// The turn at point i in degrees; 0 at the line's ends.
+static float Round_Turn_Degrees(const Vector3 *p, unsigned int n, unsigned int i)
+{
+	if (i == 0 || i + 1 >= n) return 0.0f;
+	const Vector3 a = p[i] - p[i - 1];
+	const Vector3 b = p[i + 1] - p[i];
+	const float la = a.Length();
+	const float lb = b.Length();
+	if (la < 1.0e-4f || lb < 1.0e-4f) return 0.0f;
+	float c = Vector3::Dot_Product(a, b) / (la * lb);
+	if (c >= 0.99999f) return 0.0f;
+	if (c < -1.0f) c = -1.0f;
+	return acosf(c) * (180.0f / 3.14159265f);
+}
+
+// Centripetal Catmull-Rom (Barry-Goldman) between p1 and p2, u in 0..1: no loops or overshoot when the points are
+// spaced unevenly (the exhaust's spacing follows the missile's speed).
+static Vector3 Round_Catmull_Rom(const Vector3 &p0, const Vector3 &p1, const Vector3 &p2, const Vector3 &p3, float u)
+{
+	const float d01 = sqrtf((p1 - p0).Length());
+	const float d12 = sqrtf((p2 - p1).Length());
+	const float d23 = sqrtf((p3 - p2).Length());
+	const float t1 = (d01 > 1.0e-4f) ? d01 : 1.0e-4f;
+	const float t2 = t1 + ((d12 > 1.0e-4f) ? d12 : 1.0e-4f);
+	const float t3 = t2 + ((d23 > 1.0e-4f) ? d23 : 1.0e-4f);
+	const float t = t1 + (t2 - t1) * u;
+	const Vector3 a1 = p0 * ((t1 - t) / t1) + p1 * (t / t1);
+	const Vector3 a2 = p1 * ((t2 - t) / (t2 - t1)) + p2 * ((t - t1) / (t2 - t1));
+	const Vector3 a3 = p2 * ((t3 - t) / (t3 - t2)) + p3 * ((t - t2) / (t3 - t2));
+	const Vector3 b1 = a1 * ((t2 - t) / t2) + a2 * (t / t2);
+	const Vector3 b2 = a2 * ((t3 - t) / (t3 - t1)) + a3 * ((t - t1) / (t3 - t1));
+	return b1 * ((t2 - t) / (t2 - t1)) + b2 * ((t - t1) / (t2 - t1));
+}
+
+// Fills the s_round arrays; returns their point count, or 0 to draw the line as it is (straight, too long, too short).
+static unsigned int Round_Trail(unsigned int n, const Vector3 *p, const Vector4 *col, const float *wid, const unsigned int *pers,
+	float step_degrees)
+{
+	if (n < 3 || n > ROUND_MAX_POINTS) return 0;
+	float turn[ROUND_MAX_POINTS];
+	for (unsigned int i = 0; i < n; ++i)
+		turn[i] = Round_Turn_Degrees(p, n, i);
+	unsigned int inserts[ROUND_MAX_POINTS];
+	unsigned int total = n;
+	for (unsigned int i = 0; i + 1 < n; ++i)
+	{
+		unsigned int k = (unsigned int)(0.5f * (turn[i] + turn[i + 1]) / step_degrees);	// the segment turns half of each end's angle
+		if (k > ROUND_MAX_INSERTS) k = ROUND_MAX_INSERTS;
+		inserts[i] = k;
+		total += k;
+	}
+	if (total == n || total > ROUND_MAX_POINTS) return 0;
+
+	unsigned int out = 0;
+	for (unsigned int i = 0; i < n; ++i)
+	{
+		const unsigned int pi = (pers != nullptr) ? pers[i] : 0;
+		s_roundPoints[out] = p[i];
+		s_roundColors[out] = col[i];
+		s_roundWidths[out] = wid[i];
+		s_roundPersonalities[out] = pi;
+		s_roundTexV[out] = (float)(pi & 1);
+		++out;
+		if (i + 1 >= n || inserts[i] == 0) continue;
+		const Vector3 p0 = (i > 0) ? p[i - 1] : (p[i] * 2.0f - p[i + 1]);
+		const Vector3 p3 = (i + 2 < n) ? p[i + 2] : (p[i + 1] * 2.0f - p[i]);
+		const unsigned int pj = (pers != nullptr) ? pers[i + 1] : 0;
+		const float v0 = (float)(pi & 1);
+		const float v1 = (float)(pj & 1);
+		for (unsigned int k = 1; k <= inserts[i]; ++k)
+		{
+			const float u = (float)k / (float)(inserts[i] + 1);
+			s_roundPoints[out] = Round_Catmull_Rom(p0, p[i], p[i + 1], p3, u);
+			s_roundColors[out].Set(col[i].X + (col[i + 1].X - col[i].X) * u, col[i].Y + (col[i + 1].Y - col[i].Y) * u,
+				col[i].Z + (col[i + 1].Z - col[i].Z) * u, col[i].W + (col[i + 1].W - col[i].W) * u);
+			s_roundWidths[out] = wid[i] + (wid[i + 1] - wid[i]) * u;
+			s_roundPersonalities[out] = (u < 0.5f) ? pi : pj;
+			s_roundTexV[out] = v0 + (v1 - v0) * u;
+			++out;
+		}
+	}
+	s_roundPoints[out] = s_roundPoints[out - 1];
+	s_roundColors[out] = s_roundColors[out - 1];
+	s_roundWidths[out] = s_roundWidths[out - 1];
+	s_roundPersonalities[out] = s_roundPersonalities[out - 1];
+	s_roundTexV[out] = s_roundTexV[out - 1];
+	return out;
+}
+
 void StreakLineClass::Render_Streak_Line(RenderInfoClass & rinfo)
 {
 
@@ -680,6 +782,17 @@ void StreakLineClass::Render_Streak_Line(RenderInfoClass & rinfo)
 //		&(PointLocations[0]),
 //		bounding_sphere
 //		);
+
+	// Ronin @feature 08/11/2026 DX9: rounded trails - the same builder on the curve's points.
+	const unsigned int rounded = Round_Trail(PointLocations.Count(), &(PointLocations[0]), &(PointColors[0]),
+		&(PointWidths[0]), Personalities, ROUND_STEP_DEGREES);
+	if (rounded != 0)
+	{
+		StreakRenderer.RenderStreak(rinfo, Transform, rounded, s_roundPoints, s_roundColors, s_roundWidths, bounding_sphere,
+			s_roundPersonalities, s_roundTexV);
+		return;
+	}
+
 	StreakRenderer.RenderStreak(
 		rinfo,
 		Transform,
