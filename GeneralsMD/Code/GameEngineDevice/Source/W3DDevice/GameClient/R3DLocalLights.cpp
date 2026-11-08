@@ -3614,7 +3614,8 @@ void R3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 		float fxEase = 1.0f;	// Ronin @feature 19/10/2026 DX9: 1 = an effect light takes what its particles say at once
 		if (s_fxLights > 0 && s_fxStrength > 0.0f && TheParticleSystemManager != NULL)
 		{
-			struct FxGlow { const ParticleSystem *sys; Vector3 at; float col[3]; float power; float spread; Bool fire; };
+			// Ronin @bugfix 08/11/2026 DX9: anchor / anchorReach - a merged light's first (strongest) member, the only one the merge tests.
+			struct FxGlow { const ParticleSystem *sys; Vector3 at; float col[3]; float power; float spread; Bool fire; Vector3 anchor; float anchorReach; };
 			static FxGlow fx[FX_CANDIDATES];
 			Int fxCount = 0;
 			ParticleSystemManager::ParticleSystemList &systems = TheParticleSystemManager->getAllParticleSystems();
@@ -3766,21 +3767,27 @@ void R3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 			};
 			// Ronin @bugfix 16/10/2026 DX9: one blast is several glowing systems at one spot, and each was a light - stacked, far too
 			// bright. Centres within half the bigger reach are one light: power summed, centre and colour by power. `lights fxmerge`.
+			// Ronin @bugfix 08/11/2026 DX9: the test is against each light's anchor and the two effects' own reaches - testing the grown
+			// light snowballed: a salvo's row of blasts became one light, reach and power summed, lighting the whole area.
 			static FxGlow merged[FX_CANDIDATES];
 			Int mergedCount = 0;
 			for (Int f = 0; f < fxCount; ++f)
 			{
 				const FxGlow &g = fx[f];
+				const float rb = fxReachOf(g.spread, g.power, g.fire);
 				Int into = -1;
 				for (Int m = 0; m < mergedCount && into < 0 && s_fxMerge; ++m)
 				{
-					const float ra = fxReachOf(merged[m].spread, merged[m].power, merged[m].fire), rb = fxReachOf(g.spread, g.power, g.fire);
-					if ((merged[m].at - g.at).Length() < 0.5f * ((ra > rb) ? ra : rb) * s_fxReach)
+					const float ra = merged[m].anchorReach;
+					if ((merged[m].anchor - g.at).Length() < 0.5f * ((ra > rb) ? ra : rb) * s_fxReach)
 						into = m;
 				}
 				if (into < 0)
 				{
-					merged[mergedCount++] = g;
+					merged[mergedCount] = g;
+					merged[mergedCount].anchor = g.at;
+					merged[mergedCount].anchorReach = rb;
+					++mergedCount;
 					continue;
 				}
 				FxGlow &mm = merged[into];
