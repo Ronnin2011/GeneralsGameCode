@@ -3884,7 +3884,8 @@ IDirect3DTexture8 * DX8Wrapper::_Create_DX8_Texture
 IDirect3DTexture8 * DX8Wrapper::_Create_DX8_Texture
 (
 	IDirect3DSurface8 *surface,
-	MipCountType mip_level_count
+	MipCountType mip_level_count,
+	D3DPOOL pool
 )
 {
 	DX8_THREAD_ASSERT();
@@ -3898,7 +3899,7 @@ IDirect3DTexture8 * DX8Wrapper::_Create_DX8_Texture
 	// This function will create a texture with a different (but similar) format if the surface is
 	// not in a supported texture format.
 	WW3DFormat format=D3DFormat_To_WW3DFormat(surface_desc.Format);
-	texture = _Create_DX8_Texture(surface_desc.Width, surface_desc.Height, format, mip_level_count);
+	texture = _Create_DX8_Texture(surface_desc.Width, surface_desc.Height, format, mip_level_count, pool);
 
 	// Copy the surface to the texture
 	IDirect3DSurface8 *tex_surface = nullptr;

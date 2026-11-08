@@ -1998,7 +1998,8 @@ static void updateFogMask(void)
 		s_fogLitLast = TRUE;	// the new mask is written clear once
 		fresh = TRUE;			// the first copy marks nothing
 	}
-	IDirect3DTexture9 *mt = (s_fogMaskTex != NULL) ? s_fogMaskTex->Peek_D3D_Texture() : NULL;
+	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy under pool emulation; a write below queues its upload.
+	IDirect3DTexture9 *mt = (s_fogMaskTex != NULL) ? s_fogMaskTex->Peek_Lockable_Texture(false) : NULL;
 	D3DLOCKED_RECT src;
 	if (mt == NULL || FAILED(st->LockRect(0, &src, NULL, D3DLOCK_READONLY)))
 		return;
@@ -2035,6 +2036,7 @@ static void updateFogMask(void)
 				out[x] = (age[x] > 0) ? 0xFF000000 : 0;
 		}
 		mt->UnlockRect(0);
+		s_fogMaskTex->Mark_Shadow_Dirty();	// Ronin @feature 08/11/2026 DX9Ex: no-op unless emulated
 	}
 	s_fogLitLast = litNow;
 	for (UnsignedInt i = 0; i < count; ++i)

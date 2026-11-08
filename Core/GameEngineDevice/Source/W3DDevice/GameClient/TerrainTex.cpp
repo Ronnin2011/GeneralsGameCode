@@ -108,7 +108,7 @@ int TerrainTextureClass::update(WorldHeightMap* htMap, Int texturePage)
 	IDirect3DSurface8* surface_level;
 	D3DSURFACE_DESC surface_desc;
 	D3DLOCKED_RECT locked_rect;
-	DX8_ErrorCode(Peek_D3D_Texture()->GetSurfaceLevel(0, &surface_level));
+	DX8_ErrorCode(Peek_Lockable_Texture()->GetSurfaceLevel(0, &surface_level));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 	DX8_ErrorCode(surface_level->GetDesc(&surface_desc));
 	if (surface_desc.Width < TEXTURE_WIDTH) {
 		surface_level->Release();
@@ -189,7 +189,7 @@ int TerrainTextureClass::update(WorldHeightMap* htMap, Int texturePage)
 
 	surface_level->UnlockRect();
 	surface_level->Release();
-	DX8_ErrorCode(D3DXFilterTexture(Peek_D3D_Texture(), nullptr, 0, D3DX_FILTER_BOX));
+	DX8_ErrorCode(D3DXFilterTexture(Peek_Lockable_Texture(), nullptr, 0, D3DX_FILTER_BOX));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 	if (WW3D::Get_Texture_Reduction()) {
 		Peek_D3D_Texture()->SetLOD(WW3D::Get_Texture_Reduction());
 	}
@@ -374,7 +374,7 @@ Bool TerrainTextureClass::updateFlat(WorldHeightMap *htMap, Int xCell, Int yCell
 	IDirect3DSurface8 *surface_level;
 	D3DSURFACE_DESC surface_desc;
 	D3DLOCKED_RECT locked_rect;
-	DX8_ErrorCode(Peek_D3D_Texture()->GetSurfaceLevel(0, &surface_level));
+	DX8_ErrorCode(Peek_Lockable_Texture()->GetSurfaceLevel(0, &surface_level));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 	DX8_ErrorCode(surface_level->GetDesc(&surface_desc));
 	DEBUG_ASSERTCRASH((Int)surface_desc.Width == cellWidth*pixelsPerCell, ("Bitmap too small."));
 	DEBUG_ASSERTCRASH((Int)surface_desc.Height == cellWidth*pixelsPerCell, ("Bitmap too small."));
@@ -419,7 +419,7 @@ Bool TerrainTextureClass::updateFlat(WorldHeightMap *htMap, Int xCell, Int yCell
 
 	surface_level->UnlockRect();
 	surface_level->Release();
-	DX8_ErrorCode(D3DXFilterTexture(Peek_D3D_Texture(), nullptr, 0, D3DX_FILTER_BOX));
+	DX8_ErrorCode(D3DXFilterTexture(Peek_Lockable_Texture(), nullptr, 0, D3DX_FILTER_BOX));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 	return(surface_desc.Height);
 }
 
@@ -484,8 +484,8 @@ AlphaTerrainTextureClass::AlphaTerrainTextureClass( TextureClass *pBaseTex ):
 		WW3D_FORMAT_A1R5G5B5, MIP_LEVELS_1 )
 {
 	// Attach the base texture's d3d texture.
-	IDirect3DTexture8 * d3d_tex = pBaseTex->Peek_D3D_Texture();
-	Set_D3D_Base_Texture(d3d_tex);
+	// Ronin @feature 08/11/2026 DX9Ex: shared, so a reset under pool emulation hands over the base's new one.
+	Share_D3D_Texture(pBaseTex);
 }
 
 
@@ -773,7 +773,7 @@ int AlphaEdgeTextureClass::update(WorldHeightMap* htMap, Int texturePage)
 	IDirect3DSurface8* surface_level;
 	D3DSURFACE_DESC surface_desc;
 	D3DLOCKED_RECT locked_rect;
-	DX8_ErrorCode(Peek_D3D_Texture()->GetSurfaceLevel(0, &surface_level));
+	DX8_ErrorCode(Peek_Lockable_Texture()->GetSurfaceLevel(0, &surface_level));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 	DX8_ErrorCode(surface_level->LockRect(&locked_rect, nullptr, 0));
 	DX8_ErrorCode(surface_level->GetDesc(&surface_desc));
 
@@ -832,7 +832,7 @@ int AlphaEdgeTextureClass::update(WorldHeightMap* htMap, Int texturePage)
 
 	surface_level->UnlockRect();
 	surface_level->Release();
-	DX8_ErrorCode(D3DXFilterTexture(Peek_D3D_Texture(), nullptr, 0, D3DX_FILTER_BOX));
+	DX8_ErrorCode(D3DXFilterTexture(Peek_Lockable_Texture(), nullptr, 0, D3DX_FILTER_BOX));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 	return surface_desc.Height;
 }
 

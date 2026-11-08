@@ -55,6 +55,7 @@
 #include "WWMath/vector2i.h"
 #include "colorspace.h"
 #include "WWLib/bound.h"
+#include "texture.h"	// Ronin @feature 08/11/2026 DX9Ex: the pool emulation's owner texture
 #include <d3dx9.h>  // Native DX9 extensions
 
 void Convert_Pixel(Vector3 &rgb, const SurfaceClass::SurfaceDescription &sd, const unsigned char * pixel)
@@ -164,7 +165,10 @@ void Convert_Pixel(unsigned char * pixel,const SurfaceClass::SurfaceDescription 
 *************************************************************************/
 SurfaceClass::SurfaceClass(unsigned width, unsigned height, WW3DFormat format):
 	D3DSurface(nullptr),
-	SurfaceFormat(format)
+	SurfaceFormat(format),
+	ShadowOwner(nullptr),
+	ShadowLevel(0),
+	ShadowPeeked(false)
 {
 	WWASSERT(width);
 	WWASSERT(height);
@@ -172,7 +176,10 @@ SurfaceClass::SurfaceClass(unsigned width, unsigned height, WW3DFormat format):
 }
 
 SurfaceClass::SurfaceClass(const char *filename):
-	D3DSurface(nullptr)
+	D3DSurface(nullptr),
+	ShadowOwner(nullptr),
+	ShadowLevel(0),
+	ShadowPeeked(false)
 {
 	D3DSurface = DX8Wrapper::_Create_DX8_Surface(filename);
 	SurfaceDescription desc;
@@ -181,7 +188,10 @@ SurfaceClass::SurfaceClass(const char *filename):
 }
 
 SurfaceClass::SurfaceClass(IDirect3DSurface8 *d3d_surface)	:
-	D3DSurface (nullptr)
+	D3DSurface (nullptr),
+	ShadowOwner(nullptr),
+	ShadowLevel(0),
+	ShadowPeeked(false)
 {
 	Attach (d3d_surface);
 	SurfaceDescription desc;
@@ -191,10 +201,43 @@ SurfaceClass::SurfaceClass(IDirect3DSurface8 *d3d_surface)	:
 
 SurfaceClass::~SurfaceClass()
 {
+	// Ronin @feature 08/11/2026 DX9Ex: a raw peek may have written the copy (the fonts copy in that way).
+	if (ShadowOwner) {
+		if (ShadowPeeked) ShadowOwner->Mark_Shadow_Dirty(nullptr);
+		ShadowOwner->Release_Ref();
+		ShadowOwner = nullptr;
+	}
 	if (D3DSurface) {
 		D3DSurface->Release();
 		D3DSurface = nullptr;
 	}
+}
+
+// Ronin @feature 08/11/2026 DX9Ex: see surfaceclass.h.
+void SurfaceClass::Set_Shadow_Owner(TextureBaseClass *owner, unsigned int level)
+{
+	if (owner) owner->Add_Ref();
+	if (ShadowOwner) ShadowOwner->Release_Ref();
+	ShadowOwner = owner;
+	ShadowLevel = level;
+	ShadowPeeked = false;
+}
+
+// AddDirtyRect takes level-0 pixels; a lower level's rectangle scales up to them, one texel wider (odd sizes round).
+void SurfaceClass::Mark_Shadow_Written(const RECT *rect)
+{
+	if (ShadowOwner == nullptr) return;
+	if (rect == nullptr) {
+		ShadowOwner->Mark_Shadow_Dirty(nullptr);
+		return;
+	}
+	const LONG grow = (ShadowLevel > 0) ? 1 : 0;
+	RECT level0;
+	level0.left = rect->left << ShadowLevel;
+	level0.top = rect->top << ShadowLevel;
+	level0.right = (rect->right + grow) << ShadowLevel;
+	level0.bottom = (rect->bottom + grow) << ShadowLevel;
+	ShadowOwner->Mark_Shadow_Dirty(&level0);
 }
 
 void SurfaceClass::Get_Description(SurfaceDescription &surface_desc)
@@ -242,6 +285,7 @@ SurfaceClass::LockedSurfacePtr SurfaceClass::Lock(int *pitch, const Vector2i &mi
 void SurfaceClass::Unlock()
 {
 	DX8_ErrorCode(D3DSurface->UnlockRect());
+	Mark_Shadow_Written(nullptr);	// Ronin @feature 08/11/2026 DX9Ex: a lock may have written the copy
 }
 
 /***********************************************************************************************
@@ -280,6 +324,7 @@ void SurfaceClass::Clear()
 	}
 
 	DX8_ErrorCode(D3DSurface->UnlockRect());
+	Mark_Shadow_Written(nullptr);	// Ronin @feature 08/11/2026 DX9Ex
 }
 
 
@@ -319,6 +364,7 @@ void SurfaceClass::Copy(const unsigned char *other)
 	}
 
 	DX8_ErrorCode(D3DSurface->UnlockRect());
+	Mark_Shadow_Written(nullptr);	// Ronin @feature 08/11/2026 DX9Ex
 }
 
 
@@ -364,6 +410,7 @@ void SurfaceClass::Copy(const Vector2i &min, const Vector2i &max, const unsigned
 	}
 
 	DX8_ErrorCode(D3DSurface->UnlockRect());
+	Mark_Shadow_Written(&rect);	// Ronin @feature 08/11/2026 DX9Ex
 }
 
 
@@ -458,12 +505,18 @@ void SurfaceClass::Copy(
 	if (src.right>int(osd.Width)) src.right=int(osd.Width);
 	if (src.bottom>int(osd.Height)) src.bottom=int(osd.Height);
 
+	// Ronin @feature 08/11/2026 DX9Ex: only the copied cell uploads (the particle atlas fills its pages this way).
+	RECT written;
 	if (sd.Format==osd.Format && sd.Width==osd.Width && sd.Height==osd.Height)
 	{
 		POINT dst;
 		dst.x=dstx;
 		dst.y=dsty;
 		DX8Wrapper::_Copy_DX8_Rects(other->D3DSurface,&src,1,D3DSurface,&dst);
+		written.left=dstx;
+		written.top=dsty;
+		written.right=dstx+(src.right-src.left);
+		written.bottom=dsty+(src.bottom-src.top);
 	}
 	else
 	{
@@ -477,7 +530,9 @@ void SurfaceClass::Copy(
 		if (dest.bottom>int(sd.Height)) dest.bottom=int(sd.Height);
 
 		DX8_ErrorCode(D3DXLoadSurfaceFromSurface(D3DSurface,nullptr,&dest,other->D3DSurface,nullptr,&src,D3DX_FILTER_NONE,0));
+		written=dest;
 	}
+	Mark_Shadow_Written(&written);
 }
 
 /***********************************************************************************************
@@ -519,6 +574,7 @@ void SurfaceClass::Stretch_Copy(
 	dest.bottom=dsty+dstheight;
 
 	DX8_ErrorCode(D3DXLoadSurfaceFromSurface(D3DSurface,nullptr,&dest,other->D3DSurface,nullptr,&src,D3DX_FILTER_TRIANGLE ,0));
+	Mark_Shadow_Written(&dest);	// Ronin @feature 08/11/2026 DX9Ex
 }
 
 /***********************************************************************************************

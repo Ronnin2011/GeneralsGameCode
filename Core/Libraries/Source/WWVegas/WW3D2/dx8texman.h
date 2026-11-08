@@ -69,7 +69,7 @@ public:
 
 	virtual void Recreate() const =0;
 
-	void Release()
+	virtual void Release()	// Ronin @feature 08/11/2026 DX9Ex: virtual for the emulation's tracker
 	{
 		Texture->Set_D3D_Base_Texture(nullptr);
 	}
@@ -159,6 +159,19 @@ private:
 	WW3DZFormat ZFormat;
 };
 
+// Ronin @feature 08/11/2026 DX9Ex: managed-pool emulation. A reset drops the default-pool texture; the system-memory copy
+// survives it and fills the new one.
+class DX8ShadowTextureTrackerClass : public TextureTrackerClass
+{
+public:
+	DX8ShadowTextureTrackerClass(TextureBaseClass *tex) : TextureTrackerClass(0,0,MIP_LEVELS_1,tex)
+	{
+	}
+
+	virtual void Release() override { Texture->Release_Video_Copy(); }
+	virtual void Recreate() const override { Texture->Recreate_Video_Copy(); }
+};
+
 
 class DX8TextureManagerClass
 {
@@ -168,6 +181,8 @@ public:
 	static void Remove(TextureBaseClass *tex);
 	static void Release_Textures();
 	static void Recreate_Textures();
+	// Ronin @feature 08/11/2026 DX9Ex: the textures that hold an emulation copy now, for the panel's `pool`; returns the count.
+	static int Get_Shadow_Textures(TextureBaseClass **out, int max);
 private:
 	static TextureTrackerList Managed_Textures;
 };

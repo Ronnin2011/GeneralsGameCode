@@ -24,6 +24,8 @@ public:
 	static void renderPass(const CameraClass &camera, RTS3DScene *scene);	// RTS3DScene::Flush, after the trees
 	static void endFrame(void);				// after R3DTaa::endFrame: ends the scene depth if this pass began it
 	static void shutdown(void);				// frees the shaders and the frame copy while the device exists
+	// Ronin @feature 08/11/2026 DX9Ex: before a device reset - hidden beams drop the texture they hold (default-pool under pool emulation).
+	static void releaseResources(void);
 
 	// Ronin @feature 09/10/2026 DX9: TRUE while this pass draws the scene's dynamic lights - the old paths must not add them again.
 	static Bool ownsDynamicLights(void);

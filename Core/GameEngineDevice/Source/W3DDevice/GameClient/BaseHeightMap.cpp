@@ -101,6 +101,7 @@
 #include "W3DDevice/GameClient/W3DSnow.h"
 #include "W3DDevice/GameClient/R3DShadowMapState.h"	// Ronin 24/08/2026: §29h-5 depth-pass gate
 #include "W3DDevice/GameClient/R3DTaa.h"				// Ronin 08/10/2026: its queries, before a device reset
+#include "W3DDevice/GameClient/R3DLocalLights.h"		// Ronin 08/11/2026 DX9Ex: its beam textures, likewise
 
 
 extern FlatHeightMapRenderObjClass *TheFlatHeightMap;
@@ -437,6 +438,8 @@ void BaseHeightMapRenderObjClass::ReleaseResources()
 
 	// Ronin @bugfix 08/10/2026 DX9: the TAA GPU timer's queries. A device reset fails while any query is alive.
 	R3DTaa::releaseResources();
+	// Ronin @feature 08/11/2026 DX9Ex: the lamps' hidden beams hold a model texture's D3D texture.
+	R3DLocalLights::releaseResources();
 
 	//Release any resources that may be used by custom pixel/vertex shaders
 	W3DShaderManager::shutdown();

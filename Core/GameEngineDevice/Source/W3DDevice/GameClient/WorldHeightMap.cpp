@@ -3290,7 +3290,7 @@ Bool WorldHeightMap::ensurePerMaterialWeightAtlasTextures()
 		}
 
 		IDirect3DSurface8* surf = nullptr;
-		DX8_ErrorCode(tex->Peek_D3D_Texture()->GetSurfaceLevel(0, &surf));
+		DX8_ErrorCode(tex->Peek_Lockable_Texture()->GetSurfaceLevel(0, &surf));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 		if (surf == nullptr) {
 			continue;
 		}
@@ -3335,7 +3335,7 @@ Bool WorldHeightMap::ensurePerMaterialWeightAtlasTextures()
 		// Box-filter mips. Weight channels are smooth scalars per-channel, so the
 		// standard box filter produces correct lower mips (unlike the discrete-ID
 		// channels in the legacy splat control texture).
-		DX8_ErrorCode(D3DXFilterTexture(tex->Peek_D3D_Texture(), nullptr, 0, D3DX_FILTER_BOX));
+		DX8_ErrorCode(D3DXFilterTexture(tex->Peek_Lockable_Texture(), nullptr, 0, D3DX_FILTER_BOX));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 	}
 
 	DEBUG_LOG(("[S20-A2a] allocated %d weight atlas page(s) at %dx%d (active=%d, src=%dx%d)",
@@ -3411,7 +3411,7 @@ Bool WorldHeightMap::ensurePerMaterialNormalAtlasTextures()
 		}
 
 		IDirect3DSurface8* surf = nullptr;
-		DX8_ErrorCode(tex->Peek_D3D_Texture()->GetSurfaceLevel(0, &surf));
+		DX8_ErrorCode(tex->Peek_Lockable_Texture()->GetSurfaceLevel(0, &surf));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 		if (surf == nullptr) {
 			REF_PTR_RELEASE(m_perMaterialNormalAtlas[page]);
 			continue;
@@ -3561,7 +3561,7 @@ Bool WorldHeightMap::ensurePerMaterialNormalAtlasTextures()
 		// detail collapses toward (0,0,1) at coarse mips); follow-up polish is a
 		// normal-aware mip filter. Acceptable for v1 since every page is currently the
 		// flat default anyway.
-		DX8_ErrorCode(D3DXFilterTexture(tex->Peek_D3D_Texture(), nullptr, 0, D3DX_FILTER_BOX));
+		DX8_ErrorCode(D3DXFilterTexture(tex->Peek_Lockable_Texture(), nullptr, 0, D3DX_FILTER_BOX));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 
 		++allocatedPages;
 	}

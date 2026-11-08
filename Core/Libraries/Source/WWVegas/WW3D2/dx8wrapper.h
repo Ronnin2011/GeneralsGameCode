@@ -773,7 +773,8 @@ public:
 		bool rendertarget=false
 	);
 	static IDirect3DTexture8 * _Create_DX8_Texture(const char *filename, MipCountType mip_level_count);
-	static IDirect3DTexture8 * _Create_DX8_Texture(IDirect3DSurface8 *surface, MipCountType mip_level_count);
+	// Ronin @feature 08/11/2026 DX9Ex: `pool` for the pool emulation's system-memory copy.
+	static IDirect3DTexture8 * _Create_DX8_Texture(IDirect3DSurface8 *surface, MipCountType mip_level_count, D3DPOOL pool=D3DPOOL_MANAGED);
 
 	static IDirect3DSurface8 * _Create_DX8_Surface(unsigned int width, unsigned int height, WW3DFormat format);
 	static IDirect3DSurface8 * _Create_DX8_Surface(const char *filename);

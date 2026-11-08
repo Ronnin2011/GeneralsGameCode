@@ -860,6 +860,9 @@ void W3DDisplay::init()
 		{
 			SortingRendererClass::SetMinVertexBufferSize(1);
 		}
+		// Ronin @feature 08/11/2026 DX9Ex: the managed-pool emulation (default-pool textures + system-memory copies) - set
+		// before the first texture exists.
+		TextureBaseClass::Set_Pool_Emulation(true);
 		if (WW3D::Init( ApplicationHWnd ) != WW3D_ERROR_OK)
 			throw ERROR_INVALID_D3D;	//failed to initialize.  User probably doesn't have DX 8.1
 

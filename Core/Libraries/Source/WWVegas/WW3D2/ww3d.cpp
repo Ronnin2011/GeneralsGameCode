@@ -836,6 +836,7 @@ WW3DErrorType WW3D::Begin_Render(bool clear,bool clearz,const Vector3 & color, f
     WWMemoryLogClass::Reset_Counters();
 
     TextureLoader::Update(network_callback);
+    TextureBaseClass::_Flush_Shadow_Uploads();	// Ronin @feature 08/11/2026 DX9Ex: pool emulation's written copies
     DynamicVBAccessClass::_Reset(true);
 		DynamicIBAccessClass::_Reset(true);
 

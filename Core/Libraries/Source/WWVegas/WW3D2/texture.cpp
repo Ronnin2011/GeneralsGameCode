@@ -95,6 +95,12 @@ const unsigned DEFAULT_INACTIVATION_TIME=20000;
 
 static unsigned unused_texture_id;
 
+// Ronin @feature 08/11/2026 DX9Ex: managed-pool emulation, on in the game (W3DDisplay), off in tools that never set it. The
+// written copies wait here (each with a reference) for the next frame's flush.
+bool TextureBaseClass::_PoolEmulation = false;
+unsigned TextureBaseClass::_ShadowUploadTotal = 0;
+static DynamicVectorClass<TextureBaseClass *> DirtyShadows;
+
 // This throttles submissions to the background texture loading queue.
 static unsigned TexturesAppliedPerFrame;
 const unsigned MAX_TEXTURES_APPLIED_PER_FRAME=2;
@@ -130,6 +136,11 @@ TextureBaseClass::TextureBaseClass
 	Height(height),
 	Pool(pool),
 	Dirty(false),
+	ShadowTexture(nullptr),
+	ShareSource(nullptr),
+	ShadowDirty(false),
+	ShadowTracked(false),
+	ShadowUploadCount(0),
 	TextureLoadTask(nullptr),
 	ThumbnailLoadTask(nullptr),
 	HSVShift(0.0f,0.0f,0.0f)
@@ -152,6 +163,12 @@ TextureBaseClass::~TextureBaseClass()
 	{
 		D3DTexture->Release();
 		D3DTexture = nullptr;
+	}
+	Release_Shadow();	// Ronin @feature 08/11/2026 DX9Ex: the emulation's system-memory copy, and a shared texture's owner
+	if (ShareSource)
+	{
+		ShareSource->Release_Ref();
+		ShareSource = nullptr;
 	}
 
 	DX8TextureManagerClass::Remove(this);
@@ -235,6 +252,7 @@ void TextureBaseClass::Invalidate()
 		D3DTexture->Release();
 		D3DTexture = nullptr;
 	}
+	Release_Shadow();	// Ronin @feature 08/11/2026 DX9Ex: the reload makes a new copy
 
 	Initialized=false;
 
@@ -283,6 +301,8 @@ void TextureBaseClass::Invalidate()
 IDirect3DBaseTexture8 * TextureBaseClass::Peek_D3D_Base_Texture() const
 {
 	LastAccessed=WW3D::Get_Sync_Time();
+	// Ronin @feature 08/11/2026 DX9Ex: pool emulation - a CPU write since the last use uploads now.
+	if (ShadowDirty) Upload_Shadow();
 	return D3DTexture;
 }
 
@@ -295,6 +315,14 @@ void TextureBaseClass::Set_D3D_Base_Texture(IDirect3DBaseTexture8* tex)
 	// (gth) Generals does stuff directly with the D3DTexture pointer so lets
 	// reset the access timer whenever someon messes with this pointer.
 	LastAccessed=WW3D::Get_Sync_Time();
+
+	// Ronin @feature 08/11/2026 DX9Ex: another texture shown here is not ours to copy; the emulation's copy goes, a share ends.
+	if (tex != D3DTexture) Release_Shadow();
+	if (ShareSource != nullptr)
+	{
+		ShareSource->Release_Ref();
+		ShareSource = nullptr;
+	}
 
 	if (D3DTexture != nullptr) {
 		D3DTexture->Release();
@@ -315,8 +343,138 @@ void TextureBaseClass::Load_Locked_Surface()
 	WWPROFILE(("TextureClass::Load_Locked_Surface()"));
 	if (D3DTexture) D3DTexture->Release();
 	D3DTexture=nullptr;
+	Release_Shadow();	// Ronin @feature 08/11/2026 DX9Ex: the emulation's copy goes with it
 	TextureLoader::Request_Thumbnail(this);
 	Initialized=false;
+}
+
+
+//**********************************************************************************************
+// Ronin @feature 08/11/2026 DX9Ex: managed-pool emulation - a default-pool texture, filled from a system-memory copy
+// the CPU locks. UpdateTexture sends the copy's dirty regions; a reset recreates the default-pool texture from it.
+void TextureBaseClass::Mark_Shadow_Dirty(const RECT *level0_rect)
+{
+	if (ShadowTexture == nullptr) return;
+	D3DSURFACE_DESC desc;
+	if (level0_rect != nullptr && SUCCEEDED(ShadowTexture->GetLevelDesc(0, &desc)))
+	{
+		RECT clamped=*level0_rect;	// kept inside the texture
+		if (clamped.left < 0) clamped.left=0;
+		if (clamped.top < 0) clamped.top=0;
+		if (clamped.right > (LONG)desc.Width) clamped.right=(LONG)desc.Width;
+		if (clamped.bottom > (LONG)desc.Height) clamped.bottom=(LONG)desc.Height;
+		if (clamped.right <= clamped.left || clamped.bottom <= clamped.top) return;
+		ShadowTexture->AddDirtyRect(&clamped);
+	}
+	else
+		ShadowTexture->AddDirtyRect(nullptr);
+	if (!ShadowDirty && TextureLoader::Is_DX8_Thread())
+	{
+		Add_Ref();
+		DirtyShadows.Add(this);
+	}
+	ShadowDirty=true;
+}
+
+void TextureBaseClass::_Flush_Shadow_Uploads()
+{
+	for (int i=0; i<DirtyShadows.Count(); ++i)
+	{
+		TextureBaseClass *tex=DirtyShadows[i];
+		if (tex->ShadowDirty) tex->Upload_Shadow();
+		tex->Release_Ref();
+	}
+	DirtyShadows.Reset_Active();
+}
+
+IDirect3DTexture8 *TextureBaseClass::Create_Video_Copy(IDirect3DTexture8 *sysmem)
+{
+	D3DSURFACE_DESC desc;
+	if (sysmem == nullptr || FAILED(sysmem->GetLevelDesc(0, &desc))) return nullptr;
+	IDirect3DTexture8 *video=nullptr;
+	if (FAILED(DX8Wrapper::_Get_D3D_Device8()->CreateTexture(desc.Width, desc.Height, sysmem->GetLevelCount(), 0,
+		desc.Format, D3DPOOL_DEFAULT, &video, nullptr)) || video == nullptr)
+	{
+		WWDEBUG_SAY(("Create_Video_Copy: no default-pool texture %u x %u", desc.Width, desc.Height));
+		return nullptr;
+	}
+	sysmem->AddDirtyRect(nullptr);
+	if (FAILED(DX8Wrapper::_Get_D3D_Device8()->UpdateTexture(sysmem, video)))
+	{
+		video->Release();
+		return nullptr;
+	}
+	return video;
+}
+
+void TextureBaseClass::Attach_Shadow(IDirect3DTexture8 *sysmem)
+{
+	Release_Shadow();
+	ShadowTexture=sysmem;
+	ShadowTexture->AddRef();
+	if (!ShadowTracked)
+	{
+		ShadowTracked=true;
+		DX8TextureManagerClass::Add(new DX8ShadowTextureTrackerClass(this));
+	}
+}
+
+void TextureBaseClass::Release_Shadow()
+{
+	if (ShadowTexture != nullptr)
+	{
+		ShadowTexture->Release();
+		ShadowTexture=nullptr;
+	}
+	ShadowDirty=false;
+}
+
+void TextureBaseClass::Upload_Shadow() const
+{
+	if (!TextureLoader::Is_DX8_Thread()) return;	// stays dirty for the render thread
+	ShadowDirty=false;
+	if (ShadowTexture == nullptr || D3DTexture == nullptr || DX8Wrapper::_Get_D3D_Device8() == nullptr) return;
+	DX8_ErrorCode(DX8Wrapper::_Get_D3D_Device8()->UpdateTexture(ShadowTexture, D3DTexture));
+	++ShadowUploadCount;
+	++_ShadowUploadTotal;
+}
+
+// Before a reset: any default-pool texture shown here goes - our own, or one borrowed from another texture.
+void TextureBaseClass::Release_Video_Copy()
+{
+	if (D3DTexture == nullptr || D3DTexture->GetType() != D3DRTYPE_TEXTURE) return;
+	D3DSURFACE_DESC desc;
+	if (FAILED(((IDirect3DTexture8 *)D3DTexture)->GetLevelDesc(0, &desc)) || desc.Pool != D3DPOOL_DEFAULT) return;
+	D3DTexture->Release();
+	D3DTexture=nullptr;
+	if (ShadowTexture == nullptr && !IsProcedural) Initialized=false;	// a loaded texture without its copy reloads
+}
+
+void TextureBaseClass::Recreate_Video_Copy()
+{
+	if (D3DTexture != nullptr) return;
+	if (ShareSource != nullptr)	// the owner first: the trackers run in no set order
+	{
+		ShareSource->Recreate_Video_Copy();
+		D3DTexture=ShareSource->D3DTexture;
+		if (D3DTexture != nullptr) D3DTexture->AddRef();
+		return;
+	}
+	if (ShadowTexture == nullptr) return;
+	D3DTexture=Create_Video_Copy(ShadowTexture);
+	ShadowDirty=false;
+}
+
+void TextureBaseClass::Share_D3D_Texture(TextureBaseClass *source)
+{
+	if (source != nullptr) source->Add_Ref();	// before Set_D3D_Base_Texture drops a previous share
+	Set_D3D_Base_Texture((source != nullptr) ? source->Peek_D3D_Base_Texture() : nullptr);
+	ShareSource=source;
+	if (Is_Pool_Emulation() && !ShadowTracked)	// a reset must release the shared default-pool texture too
+	{
+		ShadowTracked=true;
+		DX8TextureManagerClass::Add(new DX8ShadowTextureTrackerClass(this));
+	}
 }
 
 
@@ -649,18 +807,34 @@ TextureClass::TextureClass
 	default: WWASSERT(0);
 	}
 
-	Poke_Texture
-	(
-		DX8Wrapper::_Create_DX8_Texture
+	// Ronin @feature 08/11/2026 DX9Ex: pool emulation - a managed texture becomes a system-memory copy and its default-pool texture.
+	if (pool==POOL_MANAGED && !rendertarget && Is_Pool_Emulation())
+	{
+		IDirect3DTexture8 *sysmem=DX8Wrapper::_Create_DX8_Texture(width, height, format, mip_level_count, D3DPOOL_SYSTEMMEM, false);
+		IDirect3DTexture8 *video=Create_Video_Copy(sysmem);
+		if (video != nullptr)
+		{
+			Poke_Texture(video);
+			Attach_Shadow(sysmem);
+		}
+		if (sysmem != nullptr) sysmem->Release();
+	}
+
+	if (!Has_Shadow())
+	{
+		Poke_Texture
 		(
-			width,
-			height,
-			format,
-			mip_level_count,
-			d3dpool,
-			rendertarget
-		)
-	);
+			DX8Wrapper::_Create_DX8_Texture
+			(
+				width,
+				height,
+				format,
+				mip_level_count,
+				d3dpool,
+				rendertarget
+			)
+		);
+	}
 
 	if (pool==POOL_DEFAULT)
 	{
@@ -809,14 +983,30 @@ TextureClass::TextureClass
 	default: break;
 	}
 
-	Poke_Texture
-	(
-		DX8Wrapper::_Create_DX8_Texture
+	// Ronin @feature 08/11/2026 DX9Ex: pool emulation, as above (the team colours are made this way).
+	if (Is_Pool_Emulation())
+	{
+		IDirect3DTexture8 *sysmem=DX8Wrapper::_Create_DX8_Texture(surface->Peek_D3D_Surface(), mip_level_count, D3DPOOL_SYSTEMMEM);
+		IDirect3DTexture8 *video=Create_Video_Copy(sysmem);
+		if (video != nullptr)
+		{
+			Poke_Texture(video);
+			Attach_Shadow(sysmem);
+		}
+		if (sysmem != nullptr) sysmem->Release();
+	}
+
+	if (!Has_Shadow())
+	{
+		Poke_Texture
 		(
-			surface->Peek_D3D_Surface(),
-			mip_level_count
-		)
-	);
+			DX8Wrapper::_Create_DX8_Texture
+			(
+				surface->Peek_D3D_Surface(),
+				mip_level_count
+			)
+		);
+	}
 	LastAccessed=WW3D::Get_Sync_Time();
 }
 
@@ -915,6 +1105,7 @@ void TextureClass::Apply_New_Surface
 	bool disable_auto_invalidation
 )
 {
+	Release_Shadow();	// Ronin @feature 08/11/2026 DX9Ex: the loader attaches the new copy after this
 	IDirect3DBaseTexture8* d3d_tex=Peek_D3D_Base_Texture();
 
 	if (d3d_tex) d3d_tex->Release();
@@ -1002,16 +1193,20 @@ void TextureClass::Apply(unsigned int stage)
 */
 SurfaceClass *TextureClass::Get_Surface_Level(unsigned int level) const
 {
-	if (!Peek_D3D_Texture())
+	// Ronin @feature 08/11/2026 DX9Ex: under pool emulation the CPU works on the system-memory copy - there even while a reset
+	// has no default-pool texture, and taking it uploads nothing. The surface queues the upload.
+	IDirect3DTexture8 *source = (Peek_Shadow_Texture() != nullptr) ? Peek_Shadow_Texture() : Peek_D3D_Texture();
+	if (!source)
 	{
 		WWASSERT_PRINT(0, "Get_Surface_Level: D3DTexture is null!");
 		return nullptr;
 	}
 
 	IDirect3DSurface8 *d3d_surface = nullptr;
-	DX8_ErrorCode(Peek_D3D_Texture()->GetSurfaceLevel(level, &d3d_surface));
+	DX8_ErrorCode(source->GetSurfaceLevel(level, &d3d_surface));
 	SurfaceClass *surface = new SurfaceClass(d3d_surface);
 	d3d_surface->Release();
+	if (Peek_Shadow_Texture() != nullptr) surface->Set_Shadow_Owner(const_cast<TextureClass *>(this), level);
 
 	return surface;
 }
@@ -1035,15 +1230,25 @@ void TextureClass::Get_Level_Description( SurfaceClass::SurfaceDescription & des
 */
 IDirect3DSurface8 *TextureClass::Get_D3D_Surface_Level(unsigned int level)
 {
-	if (!Peek_D3D_Texture())
+	IDirect3DTexture8 *source = Peek_Lockable_Texture();	// Ronin @feature 08/11/2026 DX9Ex: the copy, when emulated
+	if (!source)
 	{
 		WWASSERT_PRINT(0, "Get_D3D_Surface_Level: D3DTexture is null!");
 		return nullptr;
 	}
 
 	IDirect3DSurface8 *d3d_surface = nullptr;
-	DX8_ErrorCode(Peek_D3D_Texture()->GetSurfaceLevel(level, &d3d_surface));
+	DX8_ErrorCode(source->GetSurfaceLevel(level, &d3d_surface));
 	return d3d_surface;
+}
+
+//**********************************************************************************************
+// Ronin @feature 08/11/2026 DX9Ex: the texture the CPU may lock (see texture.h).
+IDirect3DTexture8 *TextureClass::Peek_Lockable_Texture(bool will_write)
+{
+	if (Peek_Shadow_Texture() == nullptr) return Peek_D3D_Texture();
+	if (will_write) Mark_Shadow_Dirty(nullptr);
+	return Peek_Shadow_Texture();
 }
 
 //**********************************************************************************************

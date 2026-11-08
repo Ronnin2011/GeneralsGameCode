@@ -26,6 +26,7 @@
 struct IDirect3DVertexBuffer9;
 struct IDirect3DIndexBuffer9;
 struct IDirect3DTexture9;
+class TextureClass;
 
 // The size every engine texture reports to RmlUi: a mapped image's sprite rect is its uv x this, whatever its page's size.
 static const int RmlEngineTextureSpace = 4096;
@@ -69,7 +70,7 @@ public:
 
 	// Ronin @feature 29/10/2026 DX9: a texture the engine keeps writing (a movie's buffer), drawn as it is: video has no alpha,
 	// so it samples opaque and needs no premultiply. Takes its own reference.
-	Rml::TextureHandle registerVideoTexture(IDirect3DTexture9 *texture);
+	Rml::TextureHandle registerVideoTexture(TextureClass *texture);
 
 	virtual Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) override;
 	virtual void RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation, Rml::TextureHandle texture) override;
@@ -99,9 +100,13 @@ private:
 	{
 		IDirect3DTexture9 *texture;	// our own reference
 		bool premultiplied;			// engine pages are straight alpha: the draw premultiplies them
+		// Ronin @feature 08/11/2026 DX9Ex: or the engine's texture (held), its D3D texture read at each draw - the one a reset
+		// remade, uploaded when the pool emulation's copy changed. Holding the D3D texture itself would block a reset.
+		TextureClass *engine;
 	};
 
 	Rml::TextureHandle registerTexture(IDirect3DTexture9 *texture, bool premultiplied);
+	Rml::TextureHandle registerEngineTexture(TextureClass *texture, bool premultiplied);	// takes over the caller's reference
 	Rml::TextureHandle loadEngineTexture(Rml::Vector2i &dimensions, const Rml::String &path);
 	Rml::TextureHandle loadImageFile(Rml::Vector2i &dimensions, const Rml::String &path);
 

@@ -64,6 +64,7 @@ typedef IDirect3DSurface9 IDirect3DSurface8;
 
 class Vector2i;
 class Vector3;
+class TextureBaseClass;
 
 /*************************************************************************
 **                             SurfaceClass
@@ -140,7 +141,11 @@ class SurfaceClass : public RefCountClass
 		unsigned char *CreateCopy(int *width,int *height,int*size,bool flip=false);
 
 			// For use by TextureClass:
-		IDirect3DSurface8 *Peek_D3D_Surface() { return D3DSurface; }
+		IDirect3DSurface8 *Peek_D3D_Surface() { ShadowPeeked = true; return D3DSurface; }
+
+		// Ronin @feature 08/11/2026 DX9Ex: a level of an emulated managed texture's system-memory copy. Writes queue the
+		// texture's upload; a raw peek queues it when the surface goes.
+		void Set_Shadow_Owner(TextureBaseClass *owner, unsigned int level);
 
 		// Attaching and detaching a surface pointer
 		void	Attach (IDirect3DSurface8 *surface);
@@ -165,9 +170,17 @@ class SurfaceClass : public RefCountClass
 
 	private:
 
+		// Ronin @feature 08/11/2026 DX9Ex: `rect` in this level's pixels; nullptr = the whole texture.
+		void Mark_Shadow_Written(const RECT *rect);
+
 		// Direct3D surface object
 		IDirect3DSurface8 *D3DSurface;
 
 		WW3DFormat SurfaceFormat;
+
+		// Ronin @feature 08/11/2026 DX9Ex: the emulated texture this surface belongs to (a held reference), and its level.
+		TextureBaseClass *ShadowOwner;
+		unsigned int ShadowLevel;
+		bool ShadowPeeked;
 	friend class TextureClass;
 };

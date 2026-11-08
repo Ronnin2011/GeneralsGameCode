@@ -83,6 +83,7 @@ class TextureBaseClass : public RefCountClass
 	friend class LoaderThreadClass;
 	friend class DX8TextureTrackerClass;  //(gth) so it can call Poke_Texture,
 	friend class DX8ZTextureTrackerClass;
+	friend class DX8ShadowTextureTrackerClass;
 
 public:
 
@@ -215,10 +216,33 @@ public:
 	IDirect3DVolumeTexture8* Peek_D3D_VolumeTexture() const { return (IDirect3DVolumeTexture8*)Peek_D3D_Base_Texture(); }
 	IDirect3DCubeTexture8* Peek_D3D_CubeTexture() const { return (IDirect3DCubeTexture8*)Peek_D3D_Base_Texture(); }
 
+	// Ronin @feature 08/11/2026 DX9Ex: managed-pool emulation (9Ex has no managed pool). Managed 2D textures become a
+	// default-pool texture plus a system-memory copy the CPU locks; the copy uploads at the next use after a write.
+	static void Set_Pool_Emulation(bool enable) { _PoolEmulation=enable; }
+	static bool Is_Pool_Emulation() { return _PoolEmulation; }
+	static unsigned _Get_Shadow_Upload_Total() { return _ShadowUploadTotal; }
+	// Uploads every copy written since; WW3D::Begin_Render calls it, for the code that binds a cached D3D pointer.
+	static void _Flush_Shadow_Uploads();
+	bool Has_Shadow() const { return ShadowTexture!=nullptr; }
+	unsigned Get_Shadow_Upload_Count() const { return ShadowUploadCount; }
+	void Mark_Shadow_Dirty(const RECT *level0_rect=nullptr);	// nullptr = every level
+	// Show `source`'s D3D texture (held), followed when a reset under the emulation recreates it.
+	void Share_D3D_Texture(TextureBaseClass *source);
+
 protected:
 
 	void Load_Locked_Surface();
 	void Poke_Texture(IDirect3DBaseTexture8* tex) { D3DTexture = tex; }
+
+	// Ronin @feature 08/11/2026 DX9Ex: the emulation's pair. Attach_Shadow keeps a reference to the copy; a reset drops only the
+	// default-pool texture (DX8ShadowTextureTrackerClass).
+	static IDirect3DTexture8 *Create_Video_Copy(IDirect3DTexture8 *sysmem);
+	void Attach_Shadow(IDirect3DTexture8 *sysmem);
+	void Release_Shadow();
+	void Upload_Shadow() const;
+	void Release_Video_Copy();
+	void Recreate_Video_Copy();
+	IDirect3DTexture8 *Peek_Shadow_Texture() const { return ShadowTexture; }
 
 	bool Initialized;
 
@@ -258,6 +282,15 @@ private:
 
 	PoolType Pool;
 	bool Dirty;
+
+	// Ronin @feature 08/11/2026 DX9Ex: the system-memory copy of an emulated managed texture, and its upload state.
+	IDirect3DTexture8 *ShadowTexture;
+	TextureBaseClass *ShareSource;
+	mutable bool ShadowDirty;
+	bool ShadowTracked;
+	mutable unsigned ShadowUploadCount;
+	static bool _PoolEmulation;
+	static unsigned _ShadowUploadTotal;
 
 	friend class TextureLoadTaskClass;
 	friend class CubeTextureLoadTaskClass;
@@ -340,6 +373,9 @@ public:
 	// Get the surface of one of the mipmap levels (defaults to highest-resolution one)
 	SurfaceClass *Get_Surface_Level(unsigned int level = 0) const;
 	IDirect3DSurface8 *Get_D3D_Surface_Level(unsigned int level = 0);
+	// Ronin @feature 08/11/2026 DX9Ex: the texture the CPU may lock - the system-memory copy under pool emulation, else the
+	// D3D texture. `will_write` queues the upload.
+	IDirect3DTexture8 *Peek_Lockable_Texture(bool will_write = true);
 	void Get_Level_Description( SurfaceClass::SurfaceDescription & desc, unsigned int level = 0 );
 
 	TextureFilterClass& Get_Filter() { return Filter; }

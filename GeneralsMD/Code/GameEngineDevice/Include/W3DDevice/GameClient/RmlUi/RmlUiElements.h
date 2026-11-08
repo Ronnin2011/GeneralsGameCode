@@ -26,7 +26,7 @@
 
 class MapMetaData;
 class VideoBuffer;
-struct IDirect3DTexture9;
+class TextureClass;
 
 // <gametext key="GUI:Label"/>: the localised string, from TheGameText.
 class RmlGameTextElement : public Rml::Element
@@ -103,7 +103,7 @@ private:
 	void buildGeometry();
 
 	VideoBuffer *m_buffer = nullptr;			// only compared once bound
-	IDirect3DTexture9 *m_d3dTexture = nullptr;	// our own reference
+	TextureClass *m_videoTexture = nullptr;		// our own reference (Ronin @feature 08/11/2026 DX9Ex: not its D3D texture's)
 	Rml::Vector2i m_textureSize;
 	Rml::Vector2f m_videoSize;
 	Rml::CallbackTexture m_texture;

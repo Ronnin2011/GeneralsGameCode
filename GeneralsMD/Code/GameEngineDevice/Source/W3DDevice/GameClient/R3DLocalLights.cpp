@@ -4390,6 +4390,13 @@ void R3DLocalLights::renderPass(const CameraClass &camera, RTS3DScene *scene)
 	DX8Wrapper::Invalidate_Cached_Render_States();
 }
 
+// Ronin @feature 08/11/2026 DX9Ex: see the header. swapBeamTextures hides the beams again on the next frame.
+void R3DLocalLights::releaseResources(void)
+{
+	for (Int i = 0; i < s_beamTexCount; ++i)
+		restoreBeamTexture(s_beamTex[i]);
+}
+
 void R3DLocalLights::shutdown(void)
 {
 	DX8InstanceManagerClass::Set_Sky_Reflection(NULL, 0.0f);	// Ronin @feature 12/10/2026 DX9: the mesh renderer holds the cube too

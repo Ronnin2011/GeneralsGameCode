@@ -147,31 +147,25 @@ void RmlVideoElement::OnResize()
 void RmlVideoElement::bind(VideoBuffer *buffer)
 {
 	m_texture = Rml::CallbackTexture();
-	if (m_d3dTexture)
-	{
-		m_d3dTexture->Release();
-		m_d3dTexture = nullptr;
-	}
+	REF_PTR_RELEASE(m_videoTexture);	// Ronin @feature 08/11/2026 DX9Ex: the engine texture, not its D3D texture
 	m_buffer = buffer;
 	m_geometryDirty = true;
 	if (!buffer)
 		return;
 
 	TextureClass *texture = static_cast<W3DVideoBuffer *>(buffer)->texture();
-	IDirect3DTexture9 *d3dTexture = texture ? texture->Peek_D3D_Texture() : nullptr;
 	Rml::RenderManager *renderManager = GetRenderManager();
-	if (!d3dTexture || !renderManager || buffer->textureWidth() == 0 || buffer->textureHeight() == 0)
+	if (!texture || !texture->Peek_D3D_Texture() || !renderManager || buffer->textureWidth() == 0 || buffer->textureHeight() == 0)
 		return;
 
-	m_d3dTexture = d3dTexture;
-	m_d3dTexture->AddRef();
+	REF_PTR_SET(m_videoTexture, texture);
 	m_textureSize = Rml::Vector2i((int)buffer->textureWidth(), (int)buffer->textureHeight());
 	m_videoSize = Rml::Vector2f((float)buffer->width(), (float)buffer->height());
 
 	const Rml::Vector2i textureSize = m_textureSize;
-	m_texture = renderManager->MakeCallbackTexture([d3dTexture, textureSize](const Rml::CallbackTextureInterface &textureInterface) -> bool {
+	m_texture = renderManager->MakeCallbackTexture([texture, textureSize](const Rml::CallbackTextureInterface &textureInterface) -> bool {
 		RmlUiRenderInterface *renderInterface = static_cast<RmlUiRenderInterface *>(Rml::GetRenderInterface());
-		Rml::TextureHandle handle = renderInterface ? renderInterface->registerVideoTexture(d3dTexture) : 0;
+		Rml::TextureHandle handle = renderInterface ? renderInterface->registerVideoTexture(texture) : 0;
 		if (!handle)
 			return false;
 		textureInterface.SetTextureHandle(handle, textureSize);
@@ -240,7 +234,7 @@ void RmlVideoElement::OnRender()
 	VideoBuffer *buffer = it != videoSources().end() ? it->second : nullptr;
 	if (buffer != m_buffer)
 		bind(buffer);
-	if (!m_d3dTexture)
+	if (!m_videoTexture)
 		return;
 	if (m_geometryDirty)
 		buildGeometry();

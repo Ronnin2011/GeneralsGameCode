@@ -130,7 +130,10 @@ void RmlUiRenderInterface::releaseAll()
 	}
 	m_geometry.clear();
 	for (std::map<Rml::TextureHandle, LoadedTexture>::iterator it = m_textures.begin(); it != m_textures.end(); ++it)
+	{
 		releaseRef(it->second.texture);
+		REF_PTR_RELEASE(it->second.engine);	// Ronin @feature 08/11/2026 DX9Ex
+	}
 	m_textures.clear();
 }
 
@@ -364,6 +367,12 @@ void RmlUiRenderInterface::RenderGeometry(Rml::CompiledGeometryHandle geometry, 
 	if (texture != 0 && tit != m_textures.end())
 	{
 		IDirect3DTexture9 *tex = tit->second.texture;
+		if (tit->second.engine != nullptr)	// Ronin @feature 08/11/2026 DX9Ex: a reset invalidates engine textures; Init reloads
+		{
+			if (!tit->second.engine->Is_Initialized())
+				tit->second.engine->Init();
+			tex = tit->second.engine->Peek_D3D_Texture();
+		}
 		dev->SetTexture(0, tex);
 		dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
 		dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
@@ -412,17 +421,28 @@ Rml::TextureHandle RmlUiRenderInterface::registerTexture(IDirect3DTexture9 *text
 	if (!texture)
 		return 0;
 	const Rml::TextureHandle handle = m_nextTexture++;
-	LoadedTexture loaded = { texture, premultiplied };
+	LoadedTexture loaded = { texture, premultiplied, nullptr };
 	m_textures[handle] = loaded;
 	return handle;
 }
 
-Rml::TextureHandle RmlUiRenderInterface::registerVideoTexture(IDirect3DTexture9 *texture)
+// Ronin @feature 08/11/2026 DX9Ex: see LoadedTexture::engine.
+Rml::TextureHandle RmlUiRenderInterface::registerEngineTexture(TextureClass *texture, bool premultiplied)
 {
 	if (!texture)
 		return 0;
-	texture->AddRef();
-	return registerTexture(texture, true);
+	const Rml::TextureHandle handle = m_nextTexture++;
+	LoadedTexture loaded = { nullptr, premultiplied, texture };
+	m_textures[handle] = loaded;
+	return handle;
+}
+
+Rml::TextureHandle RmlUiRenderInterface::registerVideoTexture(TextureClass *texture)
+{
+	if (!texture)
+		return 0;
+	texture->Add_Ref();
+	return registerEngineTexture(texture, true);
 }
 
 void RmlUiRenderInterface::ReleaseTexture(Rml::TextureHandle texture)
@@ -431,6 +451,7 @@ void RmlUiRenderInterface::ReleaseTexture(Rml::TextureHandle texture)
 	if (it == m_textures.end())
 		return;
 	releaseRef(it->second.texture);
+	REF_PTR_RELEASE(it->second.engine);	// Ronin @feature 08/11/2026 DX9Ex
 	m_textures.erase(it);
 }
 
@@ -453,8 +474,8 @@ Rml::TextureHandle RmlUiRenderInterface::LoadTexture(Rml::Vector2i &texture_dime
 	return loadImageFile(texture_dimensions, source);
 }
 
-// Through WW3D's own loader, so Art/Textures in the archives and loose overrides resolve as for any model. The engine keeps
-// its TextureClass; we keep a reference to the D3D texture.
+// Through WW3D's own loader, so Art/Textures in the archives and loose overrides resolve as for any model. We keep a
+// reference to the engine's TextureClass (Ronin @feature 08/11/2026 DX9Ex: not to its D3D texture - see LoadedTexture).
 Rml::TextureHandle RmlUiRenderInterface::loadEngineTexture(Rml::Vector2i &dimensions, const Rml::String &path)
 {
 	WW3DAssetManager *assets = WW3DAssetManager::Get_Instance();
@@ -462,15 +483,14 @@ Rml::TextureHandle RmlUiRenderInterface::loadEngineTexture(Rml::Vector2i &dimens
 	if (!tex)
 		return 0;
 	tex->Init();	// textures load lazily on first use
-	IDirect3DTexture9 *d3dTex = tex->Peek_D3D_Texture();
-	if (d3dTex)
-		d3dTex->AddRef();
-	tex->Release_Ref();
-	if (!d3dTex)
+	if (tex->Peek_D3D_Texture() == nullptr)
+	{
+		tex->Release_Ref();
 		return 0;
+	}
 	dimensions.x = RmlEngineTextureSpace;
 	dimensions.y = RmlEngineTextureSpace;
-	return registerTexture(d3dTex, false);
+	return registerEngineTexture(tex, false);
 }
 
 Rml::TextureHandle RmlUiRenderInterface::loadImageFile(Rml::Vector2i &dimensions, const Rml::String &path)

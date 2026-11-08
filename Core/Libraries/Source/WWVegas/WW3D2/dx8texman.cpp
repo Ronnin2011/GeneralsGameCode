@@ -191,8 +191,28 @@ void DX8TextureManagerClass::Recreate_Textures()
 	{
 		TextureTrackerClass *track=it.Peek_Obj();
 		track->Recreate();
-		track->Get_Texture()->Set_Dirty();
+		// Ronin @feature 08/11/2026 DX9Ex: an emulated managed texture is refilled from its copy, not by its owner.
+		if (track->Get_Texture()->Get_Pool()==TextureBaseClass::POOL_DEFAULT)
+			track->Get_Texture()->Set_Dirty();
 		it.Next();
 	}
+}
+
+// Ronin @feature 08/11/2026 DX9Ex: the textures that hold an emulation copy now, for the panel's `pool`.
+int DX8TextureManagerClass::Get_Shadow_Textures(TextureBaseClass **out, int max)
+{
+	int count=0;
+	TextureTrackerListIterator it(&Managed_Textures);
+	while (!it.Is_Done())
+	{
+		TextureBaseClass *tex=it.Peek_Obj()->Get_Texture();
+		if (tex->Has_Shadow())
+		{
+			if (count < max) out[count]=tex;
+			++count;
+		}
+		it.Next();
+	}
+	return count;
 }
 

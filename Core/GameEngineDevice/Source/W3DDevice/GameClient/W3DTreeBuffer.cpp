@@ -141,7 +141,7 @@ int W3DTreeBuffer::W3DTreeTextureClass::update(W3DTreeBuffer *buffer)
 	IDirect3DSurface8 *surface_level;
 	D3DSURFACE_DESC surface_desc;
 	D3DLOCKED_RECT locked_rect;
-	DX8_ErrorCode(Peek_D3D_Texture()->GetSurfaceLevel(0, &surface_level));
+	DX8_ErrorCode(Peek_Lockable_Texture()->GetSurfaceLevel(0, &surface_level));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 	DX8_ErrorCode(surface_level->GetDesc(&surface_desc));
 
 	DX8_ErrorCode(surface_level->LockRect(&locked_rect, nullptr, 0));
@@ -195,7 +195,7 @@ int W3DTreeBuffer::W3DTreeTextureClass::update(W3DTreeBuffer *buffer)
 	}
 	DX8_ErrorCode(surface_level->UnlockRect());
 	surface_level->Release();
-	DX8_ErrorCode(D3DXFilterTexture(Peek_D3D_Texture(), nullptr, (UINT)0, D3DX_FILTER_BOX));
+	DX8_ErrorCode(D3DXFilterTexture(Peek_Lockable_Texture(), nullptr, (UINT)0, D3DX_FILTER_BOX));	// Ronin @feature 08/11/2026 DX9Ex: the lockable copy
 	if (WW3D::Get_Texture_Reduction()) {
 		DX8_ErrorCode(Peek_D3D_Texture()->SetLOD((DWORD)WW3D::Get_Texture_Reduction()));
 	}

@@ -56,7 +56,8 @@ static Bool readFace(IDirect3DDevice9 *dev, const char *name, SkyFace &out)
 		return FALSE;
 	if (!tex->Is_Initialized())
 		tex->Init();
-	IDirect3DTexture9 *d3d = tex->Is_Missing_Texture() ? NULL : tex->Peek_D3D_Texture();
+	// Ronin @feature 08/11/2026 DX9Ex: read through the lockable copy (a default-pool texture cannot be read).
+	IDirect3DTexture9 *d3d = tex->Is_Missing_Texture() ? NULL : tex->Peek_Lockable_Texture(false);
 	IDirect3DSurface9 *src = NULL, *plain = NULL;
 	D3DSURFACE_DESC desc;
 	D3DLOCKED_RECT lock;

@@ -67,6 +67,8 @@
 #include "WW3D2/dx8instancing.h"
 #include "WW3D2/statistics.h"
 #include "WW3D2/sortingrenderer.h"	// Ronin @diagnostic 06/11/2026 DX9: [SORT]
+#include "WW3D2/dx8texman.h"		// Ronin @feature 08/11/2026 DX9Ex: `pool`
+#include "WW3D2/ww3d.h"
 
 // Ronin @feature 28/09/2026 DX9: [SR] counters, in dx8instancing.cpp. Declared out here: inside the namespace below they
 // would name internal functions that do not exist.
@@ -1364,6 +1366,65 @@ namespace
 		state.format("parts: %s  shader: %s", TheDX8InstanceManager.Get_Additive_Parts() ? "on (instanced after the effects)" : "off (depth-sorted, as in 2003)",
 			TheDX8InstanceManager.Has_Additive_PS() ? "loaded" : "MISSING (AdditivePart.pso)");
 		printAscii(state, FALSE);
+	}
+
+	// Ronin @feature 08/11/2026 DX9Ex: `pool` - the managed-pool emulation: textures with a system-memory copy, their
+	// memory, and the uploads since the last `pool` - which textures the CPU writes, how often.
+	void cmdPool(Int argc, const AsciiString *argv)
+	{
+		(void)argv;
+		if (argc != 1)
+		{
+			printAscii(AsciiString("usage: pool"), TRUE);
+			return;
+		}
+		static unsigned s_lastUploads = 0;
+		static unsigned s_lastFrame = 0;
+		enum { MAX_LISTED = 16384, TOP = 8 };
+		static TextureBaseClass *s_list[MAX_LISTED];
+		const Int count = DX8TextureManagerClass::Get_Shadow_Textures(s_list, MAX_LISTED);
+		const Int listed = (count < MAX_LISTED) ? count : MAX_LISTED;
+		double bytes = 0.0;
+		for (Int i = 0; i < listed; ++i)
+			bytes += (double)s_list[i]->Get_Texture_Memory_Usage();
+
+		const unsigned uploads = TextureBaseClass::_Get_Shadow_Upload_Total();
+		const unsigned frame = WW3D::Get_Frame_Count();
+		const unsigned newUploads = uploads - s_lastUploads;
+		const unsigned frames = (frame > s_lastFrame) ? (frame - s_lastFrame) : 0;
+		s_lastUploads = uploads;
+		s_lastFrame = frame;
+
+		AsciiString line;
+		line.format("pool emulation: %s  copies: %d textures, %.1f MB system memory  uploads: %u since the last `pool` over %u frames (%.2f a frame), %u in all",
+			TextureBaseClass::Is_Pool_Emulation() ? "on" : "off",
+			count, bytes / (1024.0 * 1024.0), newUploads, frames, (frames > 0) ? (double)newUploads / (double)frames : 0.0, uploads);
+		printAscii(line, FALSE);
+
+		// the most uploaded, in all
+		Int top[TOP];
+		Int shown = 0;
+		for (; shown < TOP; ++shown)
+		{
+			Int best = -1;
+			for (Int i = 0; i < listed; ++i)
+			{
+				Bool taken = FALSE;
+				for (Int k = 0; k < shown; ++k)
+					if (top[k] == i)
+						taken = TRUE;
+				if (!taken && s_list[i]->Get_Shadow_Upload_Count() > 0 &&
+					(best < 0 || s_list[i]->Get_Shadow_Upload_Count() > s_list[best]->Get_Shadow_Upload_Count()))
+					best = i;
+			}
+			if (best < 0)
+				break;
+			top[shown] = best;
+			const TextureBaseClass *tex = s_list[best];
+			line.format("  %u uploads  %dx%d  %s", tex->Get_Shadow_Upload_Count(), tex->Get_Width(), tex->Get_Height(),
+				tex->Get_Full_Path().Is_Empty() ? "(made by the game, no file)" : tex->Get_Full_Path().str());
+			printAscii(line, FALSE);
+		}
 	}
 
 	Bool screenCentreOnTerrain(Coord3D *out)
@@ -3721,6 +3782,7 @@ void R3DDebugPanel::update(void)
 		registerCommand("power", "power [0|1] - unlimited power for your player, 0 = your real output; single player only", cmdPower);
 		registerCommand("mapvision", "mapvision [on|off] - the whole map revealed for your player; single player only", cmdMapVision);
 		registerCommand("parts", "parts [on|off] - additive model parts (rocket flames, muzzle flashes) drawn instanced after the effects; off = depth-sorted as in 2003 (not saved)", cmdParts);
+		registerCommand("pool", "pool - the managed-pool emulation: textures with a system-memory copy, their memory, uploads since the last `pool`, the most uploaded", cmdPool);
 	}
 
 	// Ronin @feature 16/09/2026 DX9: placement takes the mouse after the window translator (10) and before meta events (20),

@@ -1310,6 +1310,30 @@ void TextureLoadTaskClass::Apply(bool initialize)
 		Height,
 		int(Format),
 		Reduction));
+
+	// Ronin @feature 08/11/2026 DX9Ex: pool emulation - the loaded system-memory texture becomes the copy of a default-pool one.
+	D3DSURFACE_DESC desc;
+	if (D3DTexture->GetType() == D3DRTYPE_TEXTURE && Texture->Get_Asset_Type() == TextureBaseClass::TEX_REGULAR &&
+		SUCCEEDED(Peek_D3D_Texture()->GetLevelDesc(0, &desc)) && desc.Pool == D3DPOOL_SYSTEMMEM)
+	{
+		IDirect3DTexture8 *video = TextureBaseClass::Create_Video_Copy(Peek_D3D_Texture());
+		if (video != nullptr)
+		{
+			Texture->Apply_New_Surface(video, initialize);
+			Texture->Attach_Shadow(Peek_D3D_Texture());
+			video->Release();
+		}
+		else
+		{
+			IDirect3DTexture8 *missing = MissingTexture::_Get_Missing_Texture();
+			Texture->Apply_New_Surface(missing, initialize);
+			missing->Release();
+		}
+		D3DTexture->Release();
+		D3DTexture = nullptr;
+		return;
+	}
+
 	Texture->Apply_New_Surface(D3DTexture, initialize);
 
 	D3DTexture->Release();
@@ -1565,7 +1589,7 @@ bool TextureLoadTaskClass::Begin_Compressed_Load()
 		Format,
 		(MipCountType)MipLevelCount,
 #ifdef USE_MANAGED_TEXTURES
-		D3DPOOL_MANAGED
+		TextureBaseClass::Is_Pool_Emulation() ? D3DPOOL_SYSTEMMEM : D3DPOOL_MANAGED	// Ronin @feature 08/11/2026 DX9Ex: pool emulation
 #else
 		D3DPOOL_SYSTEMMEM
 #endif
@@ -1634,7 +1658,7 @@ bool TextureLoadTaskClass::Begin_Uncompressed_Load()
 		Format,
 		Texture->MipLevelCount,
 #ifdef USE_MANAGED_TEXTURES
-		D3DPOOL_MANAGED
+		TextureBaseClass::Is_Pool_Emulation() ? D3DPOOL_SYSTEMMEM : D3DPOOL_MANAGED	// Ronin @feature 08/11/2026 DX9Ex: pool emulation
 #else
 		D3DPOOL_SYSTEMMEM
 #endif
