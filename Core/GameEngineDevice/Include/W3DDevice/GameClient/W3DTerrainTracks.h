@@ -75,6 +75,7 @@ protected:
 	SphereClass	m_boundingSphere;		///<bounding sphere of TerrainTracks
 	AABoxClass	m_boundingBox;			///<bounding box of TerrainTracks
 	Int			m_activeEdgeCount;			///<number of active edges in segment list
+	Int			m_drawnEdgeCount;			///< Ronin @feature 09/11/2026 DX9: edges flush wrote this frame (rounded turns add some)
 	Int			m_totalEdgesAdded;		///<number of edges ever added to this track
 	const Drawable	*m_ownerDrawable;	///<logical object that's laying down tread marks.
 
@@ -133,6 +134,7 @@ public:
 protected:
 	DX8VertexBufferClass		*m_vertexBuffer;	///<vertex buffer used to draw all tracks
 	DX8IndexBufferClass			*m_indexBuffer;	///<indices defining triangles in maximum length track
+	Int							m_vertexCapacity;	///< Ronin @feature 09/11/2026 DX9: vertices m_vertexBuffer holds (rounded turns add edges)
 	VertexMaterialClass	  	  *m_vertexMaterialClass;	///< vertex lighting material
 	ShaderClass m_shaderClass; ///<shader or rendering state for heightmap
 

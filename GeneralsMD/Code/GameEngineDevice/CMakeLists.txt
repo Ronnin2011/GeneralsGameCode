@@ -68,6 +68,7 @@ set(GAMEENGINEDEVICE_SRC
     Include/W3DDevice/GameClient/R3DSkyCube.h
     Include/W3DDevice/GameClient/R3DSsao.h
     Include/W3DDevice/GameClient/R3DTaa.h
+    Include/W3DDevice/GameClient/R3DTreadMarks.h
     Include/W3DDevice/GameClient/R3DTreeFire.h
     # Ronin @feature 28/10/2026 DX9: the RmlUi layer (docs/UI_Work.md)
     Include/W3DDevice/GameClient/RmlUi/RmlUiFileInterface.h
@@ -213,6 +214,7 @@ set(GAMEENGINEDEVICE_SRC
     Source/W3DDevice/GameClient/R3DSkyCube.cpp
     Source/W3DDevice/GameClient/R3DSsao.cpp
     Source/W3DDevice/GameClient/R3DTaa.cpp
+    Source/W3DDevice/GameClient/R3DTreadMarks.cpp
     Source/W3DDevice/GameClient/R3DTreeFire.cpp
     # Ronin @feature 28/10/2026 DX9: the RmlUi layer 
     Source/W3DDevice/GameClient/RmlUi/RmlUiFileInterface.cpp

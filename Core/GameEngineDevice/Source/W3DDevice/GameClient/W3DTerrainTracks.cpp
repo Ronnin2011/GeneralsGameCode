@@ -62,7 +62,7 @@
 #include "GameLogic/TerrainLogic.h"
 #include "GameLogic/Object.h"
 #include "GameClient/Drawable.h"
-
+#include "W3DDevice/GameClient/R3DTreadMarks.h"	// Ronin @feature 09/11/2026 DX9: tread relief
 
 #define BRIDGE_OFFSET_FACTOR	0.25f	//amount to raise tracks above bridges.
 //=============================================================================
@@ -89,6 +89,7 @@ TerrainTracksRenderObjClass::TerrainTracksRenderObjClass()
 	m_topIndex=0;
 	m_bottomIndex=0;
 	m_activeEdgeCount=0;
+	m_drawnEdgeCount=0;	// Ronin @feature 09/11/2026 DX9: rounded tread marks
 	m_totalEdgesAdded=0;
 	m_bound=false;
 	m_ownerDrawable = nullptr;
@@ -569,6 +570,8 @@ TerrainTracksRenderObjClassSystem::TerrainTracksRenderObjClassSystem()
 	m_indexBuffer = nullptr;
 	m_vertexMaterialClass = nullptr;
 	m_vertexBuffer = nullptr;
+	m_vertexCapacity = 0;	// Ronin @feature 09/11/2026 DX9: rounded tread marks
+	m_vertexBuffer = nullptr;
 
 	m_maxTankTrackEdges=TheGlobalData->m_maxTankTrackEdges;
 	m_maxTankTrackOpaqueEdges=TheGlobalData->m_maxTankTrackOpaqueEdges;
@@ -606,14 +609,16 @@ void TerrainTracksRenderObjClassSystem::ReAcquireResources()
 	REF_PTR_RELEASE(m_vertexBuffer);
 
 	//Create static index buffers.  These will index the vertex buffers holding the track segments
-	m_indexBuffer=NEW_REF(DX8IndexBufferClass,((m_maxTankTrackEdges-1)*6));
+	// Ronin @feature 09/11/2026 DX9: rounded tread marks - a track draws up to ROUND_EDGE_FACTOR x its stored edges.
+	const Int maxDrawnEdges = m_maxTankTrackEdges*R3DTreadMarks::ROUND_EDGE_FACTOR;
+	m_indexBuffer=NEW_REF(DX8IndexBufferClass,((maxDrawnEdges-1)*6));
 
 	// Fill up the IB
 	{
 		DX8IndexBufferClass::WriteLockClass lockIdxBuffer(m_indexBuffer);
 		UnsignedShort *ib=lockIdxBuffer.Get_Index_Array();
 
-		for (i=0; i<(m_maxTankTrackEdges-1); i++)
+		for (i=0; i<(maxDrawnEdges-1); i++)
 		{
 			ib[3]=ib[0]=i*2;
 			ib[1]=i*2+1;
@@ -625,7 +630,11 @@ void TerrainTracksRenderObjClassSystem::ReAcquireResources()
 
 	DEBUG_ASSERTCRASH(numModules*m_maxTankTrackEdges*2 < 65535, ("Too many terrain track edges"));
 
-	m_vertexBuffer=NEW_REF(DX8VertexBufferClass,(DX8_FVF_XYZDUV1,numModules*m_maxTankTrackEdges*2,DX8VertexBufferClass::USAGE_DYNAMIC));
+	// Ronin @feature 09/11/2026 DX9: room for the rounded turns' edges too, within the 16-bit vertex count.
+	m_vertexCapacity = numModules*m_maxTankTrackEdges*2*R3DTreadMarks::ROUND_EDGE_FACTOR;
+	if (m_vertexCapacity > 65534)
+		m_vertexCapacity = 65534;
+	m_vertexBuffer=NEW_REF(DX8VertexBufferClass,(DX8_FVF_XYZDUV1,m_vertexCapacity,DX8VertexBufferClass::USAGE_DYNAMIC));
 }
 
 //=============================================================================
@@ -844,23 +853,30 @@ Try improving the fit to vertical surfaces like cliffs.
 		VertexFormatXYZDUV1 *verts = (VertexFormatXYZDUV1*)lockVtxBuffer.Get_Vertex_Array();
 		trackStartIndex=0;
 
+		// Ronin @feature 09/11/2026 DX9: rounded tread marks - each track's stored edges go through R3DTreadMarks::writeRoundedStrip,
+		// which adds edges where it turns, out of the room the visible tracks leave in the buffer.
+		Int spareEdges = m_vertexCapacity/2;
+		for (mod=m_usedModules; mod; mod=mod->m_nextSystem)
+			if (mod->m_activeEdgeCount >= 2 && mod->Is_Really_Visible())
+				spareEdges -= mod->m_activeEdgeCount;
+
 		mod=m_usedModules;
 		//Fill our vertex buffer with all the tracks
 		while( mod )
 		{
 			Int i,index;
-			Vector3 *endPoint;
-			Vector2 *endPointUV;
+			mod->m_drawnEdgeCount = 0;
 
 			if (mod->m_activeEdgeCount >= 2 && mod->Is_Really_Visible())
 			{
+				static Vector3 edgeLeft[MAX_TRACK_EDGE_COUNT];
+				static Vector3 edgeRight[MAX_TRACK_EDGE_COUNT];
+				static Real edgeV[MAX_TRACK_EDGE_COUNT];
+				static Real edgeFade[MAX_TRACK_EDGE_COUNT];
 				for (i=0,index=mod->m_bottomIndex; i<mod->m_activeEdgeCount; i++,index++)
 				{
 					if (index >= m_maxTankTrackEdges)
 						index=0;
-
-					endPoint=&mod->m_edges[index].endPointPos[0];	//left endpoint
-					endPointUV=&mod->m_edges[index].endPointUV[0];
 
 					distanceFade=1.0f;
 
@@ -873,33 +889,36 @@ Try improving the fit to vertical surfaces like cliffs.
 
 					distanceFade *= mod->m_edges[index].alpha;	//adjust fade with distance from start of track
 
-					verts->x=endPoint->X;
-					verts->y=endPoint->Y;
-					verts->z=endPoint->Z;
-
-					verts->u1=endPointUV->X;
-					verts->v1=endPointUV->Y;
-
-					//fade the alpha channel with distance
-					verts->diffuse=diffuseLight | ( REAL_TO_INT(distanceFade*255.0f) <<24);
-					verts++;
-
-					endPoint=&mod->m_edges[index].endPointPos[1];	//right endpoint
-					endPointUV=&mod->m_edges[index].endPointUV[1];
-
-					verts->x=endPoint->X;
-					verts->y=endPoint->Y;
-					verts->z=endPoint->Z;
-
-					verts->u1=endPointUV->X;
-					verts->v1=endPointUV->Y;			///@todo: Add diffuse lighting.
-
-					verts->diffuse=diffuseLight | ( REAL_TO_INT(distanceFade*255.0f) <<24);
-					verts++;
+					edgeLeft[i] = mod->m_edges[index].endPointPos[0];	//left endpoint, u 0
+					edgeRight[i] = mod->m_edges[index].endPointPos[1];	//right endpoint, u 1
+					edgeV[i] = mod->m_edges[index].endPointUV[0].Y;
+					edgeFade[i] = distanceFade;
 				}
+				Int maxEdges = mod->m_activeEdgeCount + ((spareEdges > 0) ? spareEdges : 0);
+				if (maxEdges > m_maxTankTrackEdges*R3DTreadMarks::ROUND_EDGE_FACTOR)	//the index buffer's length
+					maxEdges = m_maxTankTrackEdges*R3DTreadMarks::ROUND_EDGE_FACTOR;
+				mod->m_drawnEdgeCount = R3DTreadMarks::writeRoundedStrip(edgeLeft, edgeRight, edgeV, edgeFade, mod->m_activeEdgeCount,
+					mod->m_length, (UnsignedInt)diffuseLight, verts, maxEdges);
+				spareEdges -= mod->m_drawnEdgeCount - mod->m_activeEdgeCount;
+				verts += mod->m_drawnEdgeCount*2;
 			}
 			mod = mod->m_nextSystem;
 		}
+	}
+
+	// Ronin @feature 09/11/2026 DX9: tread relief (R3DTreadMarks) - each track's grooves shaded into the ground before its decal.
+	if (m_edgesToFlush >= 2 && R3DTreadMarks::beginRelief(m_vertexBuffer, m_indexBuffer, m_usedModules->Transform))
+	{
+		Int reliefStart = 0;
+		for (TerrainTracksRenderObjClass *rm = m_usedModules; rm != nullptr; rm = rm->m_nextSystem)
+		{
+			if (rm->m_drawnEdgeCount >= 2)
+			{
+				R3DTreadMarks::drawRelief(rm->m_stageZeroTexture, reliefStart, rm->m_drawnEdgeCount);
+				reliefStart += rm->m_drawnEdgeCount*2;
+			}
+		}
+		R3DTreadMarks::endRelief();
 	}
 
 	//draw the filled vertex buffers
@@ -921,13 +940,13 @@ Try improving the fit to vertical surfaces like cliffs.
 		DX8Wrapper::Set_Transform(D3DTS_WORLD,mod->Transform);
 		while (mod)
 		{
-			if (mod->m_activeEdgeCount >= 2 && mod->Is_Really_Visible())
+			if (mod->m_drawnEdgeCount >= 2)	// Ronin @feature 09/11/2026 DX9: the edges the fill above wrote (rounded turns add some)
 			{
 				DX8Wrapper::Set_Texture(0,mod->m_stageZeroTexture);
 				DX8Wrapper::Set_Base_Vertex_Index(trackStartIndex); 	// Ronin @bugfix 07/01/2026 DX9: Update terrain tracks to use Set_Base_Vertex_Index isntead of Set_Index_Buffer_Index_Offset.
-				DX8Wrapper::Draw_Triangles(	0,(mod->m_activeEdgeCount-1)*2, 0, mod->m_activeEdgeCount*2);
+				DX8Wrapper::Draw_Triangles(	0,(mod->m_drawnEdgeCount-1)*2, 0, mod->m_drawnEdgeCount*2);
 
-				trackStartIndex += mod->m_activeEdgeCount*2;
+				trackStartIndex += mod->m_drawnEdgeCount*2;
 			}
 			mod=mod->m_nextSystem;
 		}

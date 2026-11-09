@@ -177,6 +177,13 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/TaaDecalMark.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/TaaDecalMark.pso"
+        # Ronin @build 09/11/2026 Tread relief - the track grooves (R3DTreadMarks).
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TreadRelief.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TreadRelief.vso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/TreadRelief.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/TreadRelief.pso"
         # Ronin @build 26/09/2026 TAA — skinned-mesh velocity (infantry), §14 stage 2.
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/TaaVelSkin.vso"
@@ -232,6 +239,19 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/Textures/WaterNormalRiver.tga"
             "${ZEROHOUR_INSTALL_PATH}/Art/Textures/WaterNormalRiver.tga"
+        # Ronin @build 09/11/2026 Tread relief - the four track textures' relief maps (scripts/treads/GenTreadMaps.py)
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/Textures/extnktrack_nrm.tga"
+            "${ZEROHOUR_INSTALL_PATH}/Art/Textures/extnktrack_nrm.tga"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/Textures/extiretrack_nrm.tga"
+            "${ZEROHOUR_INSTALL_PATH}/Art/Textures/extiretrack_nrm.tga"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/Textures/extiretrack2_nrm.tga"
+            "${ZEROHOUR_INSTALL_PATH}/Art/Textures/extiretrack2_nrm.tga"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/GeneralsMD/Code/GameEngineDevice/Source/W3DDevice/GameClient/Textures/extiretrack03_nrm.tga"
+            "${ZEROHOUR_INSTALL_PATH}/Art/Textures/extiretrack03_nrm.tga"
         # Ronin @build 28/10/2026 The RmlUi layer's documents, style sheets and fonts: Assets/UI to the game's Data/UI.
         COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
             "${CMAKE_SOURCE_DIR}/Assets/UI"
