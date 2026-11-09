@@ -274,7 +274,7 @@ void GameLODManager::initStaticLODLevels()
 	veryhigh.m_sampleCount2D = 6;
 	veryhigh.m_sampleCount3D = 24;
 	veryhigh.m_streamCount = 2;
-	veryhigh.m_maxParticleCount = 5000;
+	veryhigh.m_maxParticleCount = 10000;	// Ronin @feature 09/11/2026 DX9: the top setting, was 5000; both options sliders reach it
 	veryhigh.m_useShadowVolumes = TRUE;
 	veryhigh.m_useShadowDecals = TRUE;
 	veryhigh.m_useCloudMap = TRUE;

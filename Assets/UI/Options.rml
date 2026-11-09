@@ -92,7 +92,7 @@
 					<div class="opt-row" data-class-disabled="detail_controls_disabled">
 						<div class="opt-text"><div class="opt-label">Particle Cap</div><div class="opt-desc"><gametext key="TOOLTIP:ParticleCapSlider"/></div></div>
 						<div class="opt-control opt-slider">
-							<input class="range" type="range" min="100" max="5000" step="100" data-value="particle_cap"
+							<input class="range" type="range" min="100" max="10000" step="100" data-value="particle_cap"
 								data-attrif-disabled="detail_controls_disabled" data-event-change="detail_control_changed" data-tooltip="TOOLTIP:ParticleCapSlider"/>
 							<div class="opt-value">{{particle_cap}}</div>
 						</div>

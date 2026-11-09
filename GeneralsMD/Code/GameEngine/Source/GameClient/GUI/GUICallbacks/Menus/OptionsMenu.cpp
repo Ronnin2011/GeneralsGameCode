@@ -1077,6 +1077,9 @@ void OptionsMenuInit( WindowLayout *layout, void *userData )
 
 	sliderParticleCapID = TheNameKeyGenerator->nameToKey( "OptionsMenu.wnd:ParticleCapSlider" );
   sliderParticleCap = TheWindowManager->winGetWindowFromId( nullptr, sliderParticleCapID );
+	// Ronin @feature 09/11/2026 DX9: the particle cap reaches Very High's 10000; OptionsMenu.wnd's range stops at 5000.
+	if (sliderParticleCap)
+		TheWindowManager->winSendSystemMsg( sliderParticleCap, GSM_SET_MIN_MAX, 100, 10000 );
 
 	WinAdvancedDisplay->winHide(TRUE);
 

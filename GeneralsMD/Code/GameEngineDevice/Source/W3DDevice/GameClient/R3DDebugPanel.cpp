@@ -163,6 +163,8 @@ namespace
 	FrameCostStats s_cpuNow = {};								// Ronin @diagnostic 07/11/2026 DX9: [CPU] last frame's numbers
 	double         s_cpuEase[FrameCostStats::MS_COUNT] = {};		// ... its times, eased
 	double         s_cpuSteps = 0.0;								// ... logic steps a frame, eased
+	UnsignedInt    s_fxPeak   = 0;								// Ronin @diagnostic 09/11/2026 DX9: [CPU] particles' peak, held 5 s
+	Int64          s_fxPeakAt = 0;
 	Int64          s_perfFreq     = 0;
 	Int64          s_perfNow      = 0;
 	Int64          s_perfFirst    = 0;
@@ -3277,6 +3279,12 @@ namespace
 		for (Int i = 0; i < FrameCostStats::MS_COUNT; ++i)
 			s_cpuEase[i] = s_cpuEase[i] * 0.9 + s_cpuNow.ms[i] * 0.1;
 		s_cpuSteps = s_cpuSteps * 0.9 + (double)s_cpuNow.logicSteps * 0.1;
+		const UnsignedInt fxNow = (TheParticleSystemManager != nullptr) ? TheParticleSystemManager->getParticleCount() : 0;
+		if (fxNow >= s_fxPeak || s_perfNow - s_fxPeakAt > s_perfFreq * 5)
+		{
+			s_fxPeak   = fxNow;
+			s_fxPeakAt = s_perfNow;
+		}
 		TheFrameCostStats = FrameCostStats();
 		TheFrameCostStats.enabled = (s_rowOn[R3DDebugPanel::ROW_CPU] && s_visible) ? TRUE : FALSE;
 	}
@@ -3389,10 +3397,13 @@ namespace
 		// is also shown per step (it runs 30 times a second, not every frame).
 		if (s_rowOn[R3DDebugPanel::ROW_CPU])
 		{
-			text.format(L"[CPU] fxUpdate=%.2fms  fxRender=%.2fms (streaks=%.2fms, %u)  logic=%.2fms a frame (%.2fms a step)",
+			text.format(L"[CPU] fxUpdate=%.2fms  fxRender=%.2fms (streaks=%.2fms, %u)  logic=%.2fms a frame (%.2fms a step)"
+				L"  particles=%u (peak %u) of cap %d",
 				s_cpuEase[FrameCostStats::MS_PARTICLE_UPDATE], s_cpuEase[FrameCostStats::MS_PARTICLE_RENDER],
 				s_cpuEase[FrameCostStats::MS_STREAKS], s_cpuNow.streaks, s_cpuEase[FrameCostStats::MS_LOGIC],
-				(s_cpuSteps > 0.01) ? s_cpuEase[FrameCostStats::MS_LOGIC] / s_cpuSteps : 0.0);
+				(s_cpuSteps > 0.01) ? s_cpuEase[FrameCostStats::MS_LOGIC] / s_cpuSteps : 0.0,
+				(TheParticleSystemManager != nullptr) ? TheParticleSystemManager->getParticleCount() : 0u, s_fxPeak,
+				(TheGlobalData != nullptr) ? TheGlobalData->m_maxParticleCount : 0);
 			putRow(R3DDebugPanel::ROW_CPU, text, GameMakeColor(255, 160, 0, 255));
 		}
 
