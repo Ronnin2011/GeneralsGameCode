@@ -32,8 +32,9 @@
 #include "WW3D2/shader.h"
 #include "WW3D2/vertmaterial.h"
 
-#define MAX_TRACK_EDGE_COUNT	100	//maximum number of edges or divisions in track mark
-#define MAX_TRACK_OPAQUE_EDGE	25	//linear fade of edges will begin at this edge
+// Ronin @feature 09/11/2026 DX9: 100 in 2003; High, Very High and Custom lay 200 (GameLOD.cpp, GlobalData.cpp).
+#define MAX_TRACK_EDGE_COUNT	200	//maximum number of edges or divisions in track mark
+#define MAX_TRACK_OPAQUE_EDGE	50	//linear fade of edges will begin at this edge
 #define FADE_TIME_FRAMES 300000	// 300 seconds at 30 fps - time to fade out an edge and remove it from the system.
 
 class TerrainTracksRenderObjClassSystem;

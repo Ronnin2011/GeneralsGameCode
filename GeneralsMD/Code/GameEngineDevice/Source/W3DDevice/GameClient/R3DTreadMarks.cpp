@@ -238,7 +238,7 @@ void R3DTreadMarks::shutdown(void)
 // ---- Ronin @feature 09/11/2026 DX9: rounded tread marks (see the header) ----
 static const float	ROUND_STEP_DEGREES = 6.0f;		// one inserted edge per this much of a segment's turn
 static const float	ROUND_MAX_TURN     = 120.0f;	// sharper (a reversal) stays a corner: a curve there would loop
-enum { ROUND_MAX_INSERTS = 8, ROUND_MAX_STORED = 128 };
+enum { ROUND_MAX_INSERTS = 8, ROUND_MAX_STORED = 256 };	// stored: MAX_TRACK_EDGE_COUNT (200) fits
 
 // The turn at centre i in degrees; 0 at the ends and next to a gap (a break in the track: a jump, a cut).
 static float roundTurn(const Vector3 *c, Int n, Int i, float maxGap)

@@ -280,8 +280,8 @@ void GameLODManager::initStaticLODLevels()
 	veryhigh.m_useCloudMap = TRUE;
 	veryhigh.m_useLightMap = TRUE;
 	veryhigh.m_showSoftWaterEdge = TRUE;
-	veryhigh.m_maxTankTrackEdges = 100;
-	veryhigh.m_maxTankTrackOpaqueEdges = 25;
+	veryhigh.m_maxTankTrackEdges = 200;	// Ronin @feature 09/11/2026 DX9: twice 2003's, as High
+	veryhigh.m_maxTankTrackOpaqueEdges = 50;
 	veryhigh.m_maxTankTrackFadeDelay = 60000;
 	veryhigh.m_useBuildupScaffolds = TRUE;
 	veryhigh.m_useTreeSway = TRUE;
@@ -329,6 +329,11 @@ void GameLODManager::init()
 
 	//Get presets for each known hardware configuration
 	ini.loadFileDirectory( "Data\\INI\\GameLODPresets", INI_LOAD_OVERWRITE, nullptr);
+
+	// Ronin @feature 09/11/2026 DX9: tread marks twice 2003's length on High. GameLOD.ini sets High, so it is raised
+	// after the file; MAX_TRACK_EDGE_COUNT (W3DTerrainTracks.h) holds them.
+	m_staticGameLODInfo[STATIC_GAME_LOD_HIGH].m_maxTankTrackEdges = 200;
+	m_staticGameLODInfo[STATIC_GAME_LOD_HIGH].m_maxTankTrackOpaqueEdges = 50;
 
 	//Get Presets for custom LOD level by pulling them out of initial globaldata (which should
 	//have all settings already applied).

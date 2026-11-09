@@ -749,9 +749,10 @@ GlobalData::GlobalData()
 	m_getHealedAnimationDisplayTimeInSeconds = 0.0f;
 	m_getHealedAnimationZRisePerSecond = 0.0f;
 
-	m_maxTankTrackEdges=100;
-	m_maxTankTrackOpaqueEdges=25;
-	m_maxTankTrackFadeDelay=300000;
+	// Ronin @feature 09/11/2026 DX9: Custom detail starts from these (it has no tracks setting): High's - 200 edges, 60 s.
+	m_maxTankTrackEdges=200;
+	m_maxTankTrackOpaqueEdges=50;
+	m_maxTankTrackFadeDelay=60000;
 
 	m_timeOfDay = TIME_OF_DAY_AFTERNOON;
 	m_weather = WEATHER_NORMAL;
