@@ -19,9 +19,8 @@ struct VertexFormatXYZDUV1;
 class R3DTreadMarks
 {
 public:
-	// Ronin @feature 09/11/2026 DX9: rounded tread marks - the stored edges (one per 10 units of travel) through a centripetal
-	// Catmull-Rom curve, the left points and the right points each, where the track turns. Writes the strip's vertices and
-	// returns its edges (count, as stored, when nothing turns or there is no room). The buffers hold ROUND_EDGE_FACTOR x.
+	// Ronin @feature 09/11/2026 DX9: rounded tread marks. Ronin @feature 10/11/2026 DX9: laid like a road - the centre path through the
+	// stored edges, its corners circular arcs, each edge square to it. Returns the edges written (as stored when there is no room).
 	enum { ROUND_EDGE_FACTOR = 4 };
 	static Int writeRoundedStrip(const Vector3 *left, const Vector3 *right, const float *v, const float *fade, Int count,
 		float spacing, UnsignedInt diffuseRGB, VertexFormatXYZDUV1 *out, Int maxEdges);
@@ -32,4 +31,9 @@ public:
 	static void drawRelief(TextureClass *trackTexture, Int baseVertex, Int edgeCount);
 	static void endRelief(void);		// the device's states back; the wrapper re-applies its own
 	static void shutdown(void);			// frees the shaders and the relief maps while the device exists
+
+	// Ronin @bugfix 10/11/2026 DX9: the pieces the tracks gained this frame, a triangle list for R3DTaa's velocity pass - new marks on still
+	// ground carry no other evidence, so the history faded each one in behind the vehicle. take hands them over and clears them.
+	static Bool hasTaaMarks(void);
+	static Int takeTaaMarks(const Vector3 **verts);
 };

@@ -65,6 +65,8 @@
 #include "W3DDevice/GameClient/R3DTreadMarks.h"	// Ronin @feature 09/11/2026 DX9: tread relief
 
 #define BRIDGE_OFFSET_FACTOR	0.25f	//amount to raise tracks above bridges.
+// Ronin @feature 10/11/2026 DX9: a vehicle turning on the spot lays an edge every this much of its turn (radians: 15 degrees).
+#define TRACK_PIVOT_STEP	(15.0f * WWMATH_PI / 180.0f)
 //=============================================================================
 // TerrainTracksRenderObjClass::~TerrainTracksRenderObjClass
 //=============================================================================
@@ -84,6 +86,7 @@ TerrainTracksRenderObjClass::TerrainTracksRenderObjClass()
 {
 	m_stageZeroTexture=nullptr;
 	m_lastAnchor=Vector3(0,1,2.25);
+	m_anchorFacing=0.0f;	// Ronin @feature 10/11/2026 DX9
 	m_haveAnchor=false;
 	m_haveCap=true;
 	m_topIndex=0;
@@ -185,7 +188,7 @@ void TerrainTracksRenderObjClass::init( Real width, Real length, const Char *tex
 		elsewhere if they become visible again.
 */
 //=============================================================================
-void TerrainTracksRenderObjClass::addCapEdgeToTrack(Real x, Real y)
+void TerrainTracksRenderObjClass::addCapEdgeToTrack(Real x, Real y, Real facing)
 {
 	/// @todo: Have object pass its height and orientation so we can remove extra calls.
 
@@ -254,8 +257,9 @@ void TerrainTracksRenderObjClass::addCapEdgeToTrack(Real x, Real y)
 
 	//we traveled far enough from last point.
 	//accept new point
-	vDir.Z=0;	//ignore height
-	vDir.Normalize();
+	// Ronin @feature 10/11/2026 DX9: across the vehicle's own tracks - its facing, not its way of travel (the @todo above): backing
+	// up no longer swaps the sides over, and a turn on the spot fans round the vehicle.
+	vDir.Set(WWMath::Cos(facing), WWMath::Sin(facing), 0.0f);
 
 	Vector3	vX;
 
@@ -311,7 +315,7 @@ void TerrainTracksRenderObjClass::addCapEdgeToTrack(Real x, Real y)
 * length is reached.  Oldest edges should by faded out by that time.
 */
 //=============================================================================
-void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
+void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y, Real facing)
 {
 	/// @todo: Have object pass its height and orientation so we can remove extra calls.
 
@@ -325,6 +329,7 @@ void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 			m_lastAnchor=Vector3(x,y,TheTerrainLogic->getGroundHeight(x,y));
 
 		m_haveAnchor=true;
+		m_anchorFacing=facing;	// Ronin @feature 10/11/2026 DX9
 		m_airborne = true;
 		m_haveCap = true;	//single segment tracks are always capped because nothing is drawn.
 		return;
@@ -353,7 +358,13 @@ void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 	Vector3	vDir=Vector3(x,y,eHeight)-m_lastAnchor;
 
 	//avoid sqrt() by checking distance squared since last track mark
-	if (vDir.Length2() < sqr(m_length))
+	// Ronin @feature 10/11/2026 DX9: or turning on the spot - tighter than half the track's width, where the inner track runs back:
+	// an edge every TRACK_PIVOT_STEP of turn (a pivot edge), so the marks fan round instead of twisting at one corner.
+	Real turned = facing - m_anchorFacing;
+	turned = WWMath::Fabs(turned - 2.0f * WWMATH_PI * floorf((turned + WWMATH_PI) / (2.0f * WWMATH_PI)));
+	const Real travel = sqrtf(vDir.X * vDir.X + vDir.Y * vDir.Y);
+	const Bool pivot = (turned >= TRACK_PIVOT_STEP && travel < 0.5f * m_width * turned) ? TRUE : FALSE;
+	if (vDir.Length2() < sqr(m_length) && !pivot)
 		return;	//not far enough from anchor to add track
 
 	Int maxEdgeCount=TheTerrainTracksRenderObjClassSystem->m_maxTankTrackEdges;
@@ -373,8 +384,9 @@ void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 
 	//we traveled far enough from last point.
 	//accept new point
-	vDir.Z=0;	//ignore height
-	vDir.Normalize();
+	// Ronin @feature 10/11/2026 DX9: across the vehicle's own tracks - its facing, not its way of travel (the @todo above): backing
+	// up no longer swaps the sides over, and a turn on the spot fans round the vehicle.
+	vDir.Set(WWMath::Cos(facing), WWMath::Sin(facing), 0.0f);
 
 	Vector3	vX;
 
@@ -411,6 +423,10 @@ void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 		topEdge.endPointUV[1].X=1.0f;
 		topEdge.endPointUV[1].Y=1.0f;
 	}
+	// Ronin @feature 10/11/2026 DX9: an edge laid by turning on the spot keeps the last edge's V - the tracks skid round there,
+	// they do not roll - so the fan reads as a scuff, and the next edge along the track still alternates.
+	if (pivot && m_activeEdgeCount > 0)
+		topEdge.endPointUV[0].Y = topEdge.endPointUV[1].Y = m_edges[(m_topIndex > 0) ? m_topIndex - 1 : maxEdgeCount - 1].endPointUV[0].Y;
 
 	topEdge.timeAdded=WW3D::Get_Sync_Time();
 	topEdge.alpha=1.0f;	//fully opaque at start.
@@ -420,8 +436,10 @@ void TerrainTracksRenderObjClass::addEdgeToTrack(Real x, Real y)
 	m_airborne = false;
 
 	m_lastAnchor=vPos;
+	m_anchorFacing=facing;	// Ronin @feature 10/11/2026 DX9: the turn since this edge decides the next (TRACK_PIVOT_STEP)
 	m_activeEdgeCount++;
-	m_totalEdgesAdded++;
+	if (!pivot)
+		m_totalEdgesAdded++;	// Ronin @feature 10/11/2026 DX9: V alternates along the track's travel only
 	m_topIndex++;	//make space for new edge
 }
 

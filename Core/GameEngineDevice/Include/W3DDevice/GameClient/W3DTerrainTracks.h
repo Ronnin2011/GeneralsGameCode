@@ -66,8 +66,8 @@ public:
 
 	Int freeTerrainTracksResources();	///<free W3D assets used for this track
 	void init( Real width, Real length, const Char *texturename);	///<allocate W3D resources and set size
-	void addEdgeToTrack(Real x, Real y);	///< add a new segment to the track
-	void addCapEdgeToTrack(Real x, Real y);	///< cap the existing segment so we can resume at an unconnected position.
+	void addEdgeToTrack(Real x, Real y, Real facing);	///< add a new segment to the track. Ronin @feature 10/11/2026 DX9: facing = the vehicle's
+	void addCapEdgeToTrack(Real x, Real y, Real facing);	///< cap the existing segment so we can resume at an unconnected position.
 	void setAirborne() {m_airborne = true; }	///< Starts a new section of track, generally after going airborne.
 	void setOwnerDrawable(const Drawable *owner) {m_ownerDrawable = owner;}
 
@@ -89,6 +89,7 @@ protected:
 
 	edgeInfo	m_edges[MAX_TRACK_EDGE_COUNT];	///<edges at each segment break
 	Vector3		m_lastAnchor;						///<location of last edge center
+	Real		m_anchorFacing;						///< Ronin @feature 10/11/2026 DX9: the vehicle's facing at the last edge (radians)
 	Int			m_bottomIndex;						///<points at oldest edge on track
 	Int			m_topIndex;						///<points to newest edge on track
 	Bool		m_haveAnchor;					///<set to false until first edge is added

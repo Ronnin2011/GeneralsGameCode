@@ -24,6 +24,8 @@ static IDirect3DVertexShader9	*s_vs = NULL;
 static IDirect3DPixelShader9	*s_ps = NULL;
 static Bool						s_triedShaders = FALSE;
 static Bool						s_open     = FALSE;
+// Ronin @bugfix 10/11/2026 DX9: the pieces laid this frame, for the TAA - new marks on still ground carry no other evidence.
+static Bool  s_markClosed  = TRUE;	// beginRelief ends a frame's tracks: the next track starts a new set
 static const float				RELIEF_STRENGTH = 1.0f;		// how strongly the sun shades the grooves (0..3)
 static const float				RELIEF_GROOVE   = 0.25f;	// how much darker the rut's floor is (0..1)
 
@@ -129,6 +131,7 @@ static TextureClass *reliefFor(TextureClass *track)
 
 Bool R3DTreadMarks::beginRelief(DX8VertexBufferClass *vb, DX8IndexBufferClass *ib, const Matrix3D &world)
 {
+	s_markClosed = TRUE;	// Ronin @bugfix 10/11/2026 DX9: this frame's tracks are written (flush fills them all before the relief)
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
 	if (dev == NULL || vb == NULL || ib == NULL || TheGlobalData == NULL)
 		return FALSE;
@@ -294,48 +297,20 @@ void R3DTreadMarks::shutdown(void)
 }
 
 // ---- Ronin @feature 09/11/2026 DX9: rounded tread marks (see the header) ----
-static const float	ROUND_STEP_DEGREES = 6.0f;		// one inserted edge per this much of a segment's turn
-static const float	ROUND_MAX_TURN     = 120.0f;	// sharper (a reversal) stays a corner: a curve there would loop
-enum { ROUND_MAX_INSERTS = 8, ROUND_MAX_STORED = 256 };	// stored: MAX_TRACK_EDGE_COUNT (200) fits
 
-// The turn at centre i in degrees; 0 at the ends and next to a gap (a break in the track: a jump, a cut).
-static float roundTurn(const Vector3 *c, Int n, Int i, float maxGap)
-{
-	if (i <= 0 || i >= n - 1)
-		return 0.0f;
-	const Vector3 a = c[i] - c[i - 1];
-	const Vector3 b = c[i + 1] - c[i];
-	const float la = a.Length();
-	const float lb = b.Length();
-	if (la < 1.0e-3f || lb < 1.0e-3f || la > maxGap || lb > maxGap)
-		return 0.0f;
-	float cs = Vector3::Dot_Product(a, b) / (la * lb);
-	if (cs >= 0.99999f)
-		return 0.0f;
-	if (cs < -1.0f)
-		cs = -1.0f;
-	return acosf(cs) * (180.0f / 3.14159265f);
-}
-
-// Centripetal Catmull-Rom (Barry-Goldman) between p1 and p2, u in 0..1 - as the projectile trails (streak.cpp).
-static Vector3 roundCatmullRom(const Vector3 &p0, const Vector3 &p1, const Vector3 &p2, const Vector3 &p3, float u)
-{
-	const float d01 = sqrtf((p1 - p0).Length());
-	const float d12 = sqrtf((p2 - p1).Length());
-	const float d23 = sqrtf((p3 - p2).Length());
-	const float t1 = (d01 > 1.0e-4f) ? d01 : 1.0e-4f;
-	const float t2 = t1 + ((d12 > 1.0e-4f) ? d12 : 1.0e-4f);
-	const float t3 = t2 + ((d23 > 1.0e-4f) ? d23 : 1.0e-4f);
-	const float t = t1 + (t2 - t1) * u;
-	const Vector3 a1 = p0 * ((t1 - t) / t1) + p1 * (t / t1);
-	const Vector3 a2 = p1 * ((t2 - t) / (t2 - t1)) + p2 * ((t - t1) / (t2 - t1));
-	const Vector3 a3 = p2 * ((t3 - t) / (t3 - t2)) + p3 * ((t - t2) / (t3 - t2));
-	const Vector3 b1 = a1 * ((t2 - t) / t2) + a2 * (t / t2);
-	const Vector3 b2 = a2 * ((t3 - t) / (t3 - t1)) + a3 * ((t - t1) / (t3 - t1));
-	return b1 * ((t2 - t) / (t2 - t1)) + b2 * ((t - t1) / (t2 - t1));
-}
+enum { ROUND_MAX_STORED = 256 };	// stored: MAX_TRACK_EDGE_COUNT (200) fits
 
 // One edge as TerrainTracksRenderObjClassSystem::flush wrote it in 2003: left u 0, right u 1, the fade in the alpha.
+// Ronin @feature 10/11/2026 DX9: a pair with its own U - an empty pair breaks the strip (a turn on the spot).
+static VertexFormatXYZDUV1 *roundPutPair(VertexFormatXYZDUV1 *out, const Vector3 &l, float ul, const Vector3 &r, float ur, float v,
+	float fade, UnsignedInt diffuseRGB)
+{
+	const UnsignedInt col = diffuseRGB | ((UnsignedInt)REAL_TO_INT(fade * 255.0f) << 24);
+	out->x = l.X; out->y = l.Y; out->z = l.Z; out->u1 = ul; out->v1 = v; out->diffuse = col; ++out;
+	out->x = r.X; out->y = r.Y; out->z = r.Z; out->u1 = ur; out->v1 = v; out->diffuse = col; ++out;
+	return out;
+}
+
 static VertexFormatXYZDUV1 *roundPutEdge(VertexFormatXYZDUV1 *out, const Vector3 &l, const Vector3 &r, float v, float fade,
 	UnsignedInt diffuseRGB)
 {
@@ -345,76 +320,506 @@ static VertexFormatXYZDUV1 *roundPutEdge(VertexFormatXYZDUV1 *out, const Vector3
 	return out;
 }
 
-// Ronin @bugfix 09/11/2026 DX9: on a turn tighter than half the track's width the inner side runs backwards, and its pieces
-// folded over each other (a fan of thin lines). A side that would turn a triangle over holds still: the strip pivots on it.
-static void roundHoldSide(const Vector3 &pl, const Vector3 &pr, Vector3 &l, Vector3 &r)
+// ---- Ronin @feature 10/11/2026 DX9: the strip laid like a road (docs/TreadMarks_Work.md §13): the vehicle's centre path, its
+// corners rounded with circular arcs, each edge square to it at the full width - both tread lanes stay parallel round a turn. ----
+
+static const float	PATH_DEG       = 3.14159265f / 180.0f;
+static const float	PATH_KEEP      = 1.0f;		// x spacing: a stored edge nearer the last kept one merges into it (a creep, a turn)
+static const float	PATH_IN_PLACE  = 0.1f;		// x spacing: a shorter step is the vehicle standing (his dump: 0-0.5 standing)
+static const float	PATH_GAP       = 2.5f;		// x spacing: a longer step is a jump - the strip breaks
+static const float	PATH_ARC_STEP  = 7.5f;		// degrees of arc per edge
+static const float	PATH_COS_BREAK = -0.7071f;	// cos 135: a sharper corner (backing up, a turn round) breaks the strip
+enum { PATH_MAX_ARC = 18, PATH_MAX_EDGES = ROUND_MAX_STORED * (PATH_MAX_ARC + 4), PATH_MAX_TRACKS = 512, TAA_MARK_MAX = 6144 };
+
+// An edge of the strip: its ends on the path's left and right (facing up, as 2003's), the tread pattern's place in tiles, the fade,
+// the stored edge its segment starts at; cut = a run starts here; flip = the vehicle's left is the path's right (backing up).
+struct PathEdge
 {
-	// the strip's triangles (pl, pr, r) and (pl, r, l) wind anticlockwise seen from above while the track runs forward
-	if ((pr.X - pl.X) * (r.Y - pl.Y) - (pr.Y - pl.Y) * (r.X - pl.X) < 0.0f)
-		r = pr;
-	if ((r.X - pl.X) * (l.Y - pl.Y) - (r.Y - pl.Y) * (l.X - pl.X) < 0.0f)
-		l = pl;
+	Vector3 l, r;
+	float   tile, fade;
+	Int     src;
+	Bool    cut, flip;
+};
+static PathEdge s_path[PATH_MAX_EDGES];
+static Int      s_pathCount = 0;
+static Int      s_pathCuts  = 0;		// runs after the first: two empty pairs each
+static float    s_pathHalf  = 0.0f;		// half the track's width
+
+// One run of kept edges, for pathStroke and pathEmit: centres, the ground's rise per unit along the stored edge, segment k (k to k + 1).
+struct PathRun
+{
+	float x[ROUND_MAX_STORED], y[ROUND_MAX_STORED], z[ROUND_MAX_STORED], gx[ROUND_MAX_STORED], gy[ROUND_MAX_STORED];
+	float tile[ROUND_MAX_STORED], fade[ROUND_MAX_STORED];
+	Int   src[ROUND_MAX_STORED];
+	float seg[ROUND_MAX_STORED], dx[ROUND_MAX_STORED], dy[ROUND_MAX_STORED];
+	float h;
+	Bool  flip;
+};
+static PathRun s_run;
+
+static float pathDist(const Vector3 &a, const Vector3 &b)
+{
+	const float dx = b.X - a.X;
+	const float dy = b.Y - a.Y;
+	return sqrtf(dx * dx + dy * dy);
+}
+
+// The cosine of the turn between stored edges a and b (the vehicle's facing).
+static float pathTurnCos(const Vector3 *left, const Vector3 *right, Int a, Int b)
+{
+	const float ax = left[a].X - right[a].X;
+	const float ay = left[a].Y - right[a].Y;
+	const float bx = left[b].X - right[b].X;
+	const float by = left[b].Y - right[b].Y;
+	const float la = sqrtf(ax * ax + ay * ay);
+	const float lb = sqrtf(bx * bx + by * by);
+	return (la > 1.0e-6f && lb > 1.0e-6f) ? (ax * bx + ay * by) / (la * lb) : 1.0f;
+}
+
+// An edge at (cx, cy) heading (ux, uy), on segment j at s from its start. pivot: its inner end (side 1 the left, -1 the right) at (qx, qy).
+static void pathEmit(float cx, float cy, float ux, float uy, Int j, float s, Bool pivot, float qx, float qy, float side, Bool cut)
+{
+	if (s_pathCount >= PATH_MAX_EDGES)
+		return;
+	const PathRun &R = s_run;
+	const float f = (R.seg[j] > 1.0e-6f) ? s / R.seg[j] : 0.0f;
+	const float zc = R.z[j] + (R.z[j + 1] - R.z[j]) * f;
+	const float gx = R.gx[j] + (R.gx[j + 1] - R.gx[j]) * f;
+	const float gy = R.gy[j] + (R.gy[j + 1] - R.gy[j]) * f;
+	float lx = cx - uy * R.h;	// the path's left is (-uy, ux)
+	float ly = cy + ux * R.h;
+	float rx = cx + uy * R.h;
+	float ry = cy - ux * R.h;
+	if (pivot && side > 0.0f)
+	{
+		lx = qx;
+		ly = qy;
+	}
+	else if (pivot)
+	{
+		rx = qx;
+		ry = qy;
+	}
+	const Vector3 l(lx, ly, zc + gx * (lx - cx) + gy * (ly - cy));
+	const Vector3 r(rx, ry, zc + gx * (rx - cx) + gy * (ry - cy));
+	const float tile = R.tile[j] + (R.tile[j + 1] - R.tile[j]) * f;
+	const float fade = R.fade[j] + (R.fade[j + 1] - R.fade[j]) * f;
+	// V is the tile mirrored, interpolated straight between edges: an edge at each whole tile crossed keeps the pattern from folding
+	if (!cut && s_pathCount > 0)
+	{
+		const PathEdge p = s_path[s_pathCount - 1];
+		const float step = (tile >= p.tile) ? 1.0f : -1.0f;
+		for (float w = (step > 0.0f) ? floorf(p.tile) + 1.0f : ceilf(p.tile) - 1.0f; (w - tile) * step < -1.0e-4f &&
+			s_pathCount < PATH_MAX_EDGES - 1; w += step)
+		{
+			const float u = (w - p.tile) / (tile - p.tile);
+			PathEdge &m = s_path[s_pathCount++];
+			m = p;
+			m.cut = FALSE;
+			m.l = p.l + (l - p.l) * u;
+			m.r = p.r + (r - p.r) * u;
+			m.tile = w;
+			m.fade = p.fade + (fade - p.fade) * u;
+		}
+	}
+	PathEdge &e = s_path[s_pathCount++];
+	e.l = l;
+	e.r = r;
+	e.tile = tile;
+	e.fade = fade;
+	e.src = R.src[j];
+	e.cut = cut;
+	e.flip = R.flip;
+	if (cut && s_pathCount > 1)
+		++s_pathCuts;
+}
+
+// One run of kept edges (idx): straight pieces, each corner rounded with the largest circular arc its segments leave room for, every
+// edge square to the path. An arc tighter than half the width would run its inner ends backwards: they pivot on one point instead.
+static void pathStroke(const Vector3 *left, const Vector3 *right, const float *tile, const float *fade, const Int *idx, Int count, float h)
+{
+	PathRun &R = s_run;
+	R.h = h;
+	Int m = 0;
+	for (Int k = 0; k < count; ++k)
+	{
+		const Vector3 &l = left[idx[k]];
+		const Vector3 &r = right[idx[k]];
+		const float cx = 0.5f * (l.X + r.X);
+		const float cy = 0.5f * (l.Y + r.Y);
+		if (m > 0 && fabsf(cx - R.x[m - 1]) + fabsf(cy - R.y[m - 1]) < 1.0e-3f)
+			continue;	// a point on the last one: no segment to lay
+		const float ex = r.X - l.X;
+		const float ey = r.Y - l.Y;
+		const float e2 = ex * ex + ey * ey;
+		const float rise = (e2 > 1.0e-6f) ? (r.Z - l.Z) / e2 : 0.0f;
+		R.x[m] = cx;
+		R.y[m] = cy;
+		R.z[m] = 0.5f * (l.Z + r.Z);
+		R.gx[m] = ex * rise;
+		R.gy[m] = ey * rise;
+		R.tile[m] = tile[idx[k]];
+		R.fade[m] = fade[idx[k]];
+		R.src[m] = idx[k];
+		++m;
+	}
+	if (m < 2)
+		return;
+	for (Int k = 0; k + 1 < m; ++k)
+	{
+		const float ddx = R.x[k + 1] - R.x[k];
+		const float ddy = R.y[k + 1] - R.y[k];
+		R.seg[k] = sqrtf(ddx * ddx + ddy * ddy);
+		R.dx[k] = ddx / R.seg[k];
+		R.dy[k] = ddy / R.seg[k];
+	}
+	const Vector3 vehicleLeft = left[R.src[0]] - right[R.src[0]];
+	R.flip = (R.dx[0] * vehicleLeft.Y - R.dy[0] * vehicleLeft.X < 0.0f) ? TRUE : FALSE;
+
+	// The corners: the turn, its side, tan(turn / 2) - an arc of radius r needs r * that of each segment.
+	static float ang[ROUND_MAX_STORED], sgn[ROUND_MAX_STORED], need[ROUND_MAX_STORED], t[ROUND_MAX_STORED];
+	static float shareA[ROUND_MAX_STORED], shareB[ROUND_MAX_STORED];	// segment j: its start corner's part, its end corner's
+	for (Int k = 0; k < m; ++k)
+	{
+		ang[k] = sgn[k] = need[k] = t[k] = 0.0f;
+		if (k == 0 || k == m - 1)
+			continue;
+		float c = R.dx[k - 1] * R.dx[k] + R.dy[k - 1] * R.dy[k];
+		c = (c > 1.0f) ? 1.0f : ((c < -1.0f) ? -1.0f : c);
+		ang[k] = acosf(c);
+		sgn[k] = (R.dx[k - 1] * R.dy[k] - R.dy[k - 1] * R.dx[k] > 0.0f) ? 1.0f : -1.0f;
+		need[k] = (ang[k] > 0.5f * PATH_DEG) ? tanf(0.5f * ang[k]) : 0.0f;
+	}
+	// Each segment shared by its two corners: by need (both arcs one radius) when that radius clears half the width; else the
+	// gentler corner first takes a radius of h (it stays clean) and the sharper one the rest.
+	for (Int j = 0; j + 1 < m; ++j)
+	{
+		const float na = need[j];
+		const float nb = need[j + 1];
+		shareA[j] = shareB[j] = 0.0f;
+		if (na + nb <= 0.0f)
+			continue;
+		if (na <= 0.0f || nb <= 0.0f || R.seg[j] >= h * (na + nb))
+			shareA[j] = R.seg[j] * na / (na + nb);
+		else if (na <= nb)
+			shareA[j] = (h * na < R.seg[j]) ? h * na : R.seg[j];
+		else
+			shareA[j] = R.seg[j] - ((h * nb < R.seg[j]) ? h * nb : R.seg[j]);
+		shareB[j] = R.seg[j] - shareA[j];
+	}
+	for (Int k = 1; k + 1 < m; ++k)
+		if (need[k] > 0.0f)
+			t[k] = (shareB[k - 1] < shareA[k]) ? shareB[k - 1] : shareA[k];
+
+	pathEmit(R.x[0], R.y[0], R.dx[0], R.dy[0], 0, 0.0f, FALSE, 0.0f, 0.0f, 0.0f, TRUE);
+	for (Int k = 1; k + 1 < m; ++k)
+	{
+		const float d1x = R.dx[k - 1];
+		const float d1y = R.dy[k - 1];
+		const float d2x = R.dx[k];
+		const float d2y = R.dy[k];
+		if (need[k] <= 0.0f || t[k] <= 1.0e-4f)
+		{
+			pathEmit(R.x[k], R.y[k], d2x, d2y, k, 0.0f, FALSE, 0.0f, 0.0f, 0.0f, FALSE);
+			continue;
+		}
+		const float rad = t[k] / need[k];
+		const float t1x = R.x[k] - d1x * t[k];		// the arc starts t before the corner, round a centre on the inner side
+		const float t1y = R.y[k] - d1y * t[k];
+		const float ox = t1x - d1y * sgn[k] * rad;
+		const float oy = t1y + d1x * sgn[k] * rad;
+		Bool pivot = FALSE;
+		float qx = 0.0f;
+		float qy = 0.0f;
+		float after = -1.0f;
+		if (rad < 0.999f * h)
+		{
+			pivot = TRUE;
+			const float a = h * need[k];	// the two inner lines meet a before and a after the corner
+			if (a < R.seg[k - 1] - t[k - 1] - 1.0e-3f && a < R.seg[k] - t[k + 1] - 1.0e-3f)
+			{
+				// both reach it: the inner ends stop there - a sharp inner edge, the lanes round it
+				const float sc = sgn[k] * h / (1.0f + d1x * d2x + d1y * d2y);
+				qx = R.x[k] - (d1y + d2y) * sc;
+				qy = R.y[k] + (d1x + d2x) * sc;
+				pathEmit(R.x[k] - d1x * a, R.y[k] - d1y * a, d1x, d1y, k - 1, R.seg[k - 1] - a, FALSE, 0.0f, 0.0f, 0.0f, FALSE);
+				after = a;
+			}
+			else
+			{
+				// they cross behind the corner (a sharp turn on short segments): the inner ends pivot on the arc's first one
+				qx = t1x - d1y * sgn[k] * h;
+				qy = t1y + d1x * sgn[k] * h;
+			}
+		}
+		Int pieces = (Int)ceilf(ang[k] / (PATH_ARC_STEP * PATH_DEG));
+		pieces = (pieces < 2) ? 2 : ((pieces > PATH_MAX_ARC) ? PATH_MAX_ARC : pieces);
+		pieces += pieces & 1;	// even: the middle edge sits on the corner's own tile
+		const float v0x = t1x - ox;
+		const float v0y = t1y - oy;
+		for (Int p = 0; p <= pieces; ++p)
+		{
+			const float f = (float)p / (float)pieces;
+			const float ca = cosf(sgn[k] * ang[k] * f);
+			const float sa = sinf(sgn[k] * ang[k] * f);
+			const float x = 2.0f * t[k] * f - t[k];		// the arc laid over [corner - t, corner + t], for the pattern and the fade
+			pathEmit(ox + v0x * ca - v0y * sa, oy + v0x * sa + v0y * ca, d1x * ca - d1y * sa, d1x * sa + d1y * ca,
+				(x < 0.0f) ? k - 1 : k, (x < 0.0f) ? R.seg[k - 1] + x : x, pivot, qx, qy, sgn[k], FALSE);
+		}
+		if (after >= 0.0f)
+			pathEmit(R.x[k] + d2x * after, R.y[k] + d2y * after, d2x, d2y, k, after, FALSE, 0.0f, 0.0f, 0.0f, FALSE);	// inner end at the meeting point
+		else if (pivot)
+			pathEmit(R.x[k] + d2x * t[k], R.y[k] + d2y * t[k], d2x, d2y, k, t[k], FALSE, 0.0f, 0.0f, 0.0f, FALSE);	// full width: an empty quad back out
+	}
+	pathEmit(R.x[m - 1], R.y[m - 1], R.dx[m - 2], R.dy[m - 2], m - 2, R.seg[m - 2], FALSE, 0.0f, 0.0f, 0.0f, FALSE);
+}
+
+// The kept edges and their runs. A gap breaks the strip; so do a corner over 135 degrees, the vehicle's left crossing to the path's
+// other side (backing up) and a turn round on the spot. markFrom: the stored edge the last two segments start at.
+static Bool pathBuild(const Vector3 *left, const Vector3 *right, const float *v, const float *fade, Int count, float spacing, Int &markFrom)
+{
+	static Vector3 centre[ROUND_MAX_STORED];
+	static float tile[ROUND_MAX_STORED];
+	static float along[ROUND_MAX_STORED];	// the centre's way from the oldest edge
+	static Bool travel[ROUND_MAX_STORED];	// W3DTerrainTracks flipped V here (an edge laid turning copies it)
+	static Int nextTravel[ROUND_MAX_STORED];
+	static Int prevTravel[ROUND_MAX_STORED];	// Ronin @feature 10/11/2026 DX9: the travel edge at or before each
+	static Int keep[ROUND_MAX_STORED];
+	static Bool cut[ROUND_MAX_STORED];
+	s_pathCount = 0;
+	s_pathCuts = 0;
+	float width = 0.0f;
+	for (Int i = 0; i < count; ++i)
+	{
+		centre[i] = (left[i] + right[i]) * 0.5f;
+		width += pathDist(left[i], right[i]);
+		along[i] = (i == 0) ? 0.0f : along[i - 1] + pathDist(centre[i], centre[i - 1]);
+		travel[i] = (i == 0 || fabsf(v[i] - v[i - 1]) > 0.5f) ? TRUE : FALSE;
+		prevTravel[i] = (travel[i] || i == 0) ? i : prevTravel[i - 1];
+	}
+	for (Int i = count - 1, n = count; i >= 0; --i)
+	{
+		nextTravel[i] = n;
+		if (travel[i])
+			n = i;
+	}
+	// The pattern's tile, whole and of V's parity at each travel edge. Between two, an odd number of tiles nearest the way the centre went
+	// (a creep or a tight turn lays only edges that copy V): spread by distance, so no stretch of track freezes one texel row.
+	Int prior = 0;	// the last travel edge
+	tile[0] = v[0];
+	for (Int i = 1; i < count; ++i)
+	{
+		const Int next = nextTravel[i - 1];	// the travel edge after it, if any
+		const float span = (next < count) ? along[next] - along[prior] : 0.0f;
+		const float tiles = 2.0f * floorf(0.5f * (span / spacing - 1.0f) + 0.5f) + 1.0f;
+		if (next >= count)
+			tile[i] = tile[prior] + (along[i] - along[prior]) / spacing;	// past the newest travel edge: by distance
+		else
+			tile[i] = tile[prior] + ((tiles > 1.0f) ? tiles : 1.0f) * ((span > 1.0e-3f) ? (along[i] - along[prior]) / span : 1.0f);
+		if (travel[i])
+			prior = i;
+	}
+	const float h = 0.5f * width / (float)count;
+	if (h < 0.01f)
+		return FALSE;
+	s_pathHalf = h;
+	const float inPlace = PATH_IN_PLACE * spacing;
+	const float keepLen = PATH_KEEP * spacing;
+	const float gap = PATH_GAP * spacing;
+	Int kept = 1;
+	keep[0] = 0;
+	cut[0] = TRUE;
+	for (Int i = 1; i < count; )
+	{
+		Int j = i;
+		while (j < count && pathDist(centre[j], centre[j - 1]) < inPlace)
+			++j;
+		if (j > i)
+		{
+			// edges i to j - 1 stood at edge i - 1, turning. A turn round - over 135 degrees, travel edge to travel edge (or the newest) - takes no
+			// arc: the strip ends there and starts again after it. A lesser turn merges into the corner.
+			const Int after = (nextTravel[j - 1] < count) ? nextTravel[j - 1] : count - 1;
+			if (pathTurnCos(left, right, prevTravel[i - 1], after) < PATH_COS_BREAK)
+			{
+				if (keep[kept - 1] != i - 1 && pathDist(centre[i - 1], centre[keep[kept - 1]]) > 1.0e-3f)
+				{
+					keep[kept] = i - 1;
+					cut[kept++] = FALSE;
+				}
+				keep[kept] = j - 1;
+				cut[kept++] = TRUE;
+			}
+			i = j;
+			continue;
+		}
+		const float dl = pathDist(centre[i], centre[keep[kept - 1]]);
+		if (dl > gap || (dl > 1.0e-3f && (dl >= keepLen || travel[i])))
+		{
+			keep[kept] = i;
+			cut[kept++] = (dl > gap) ? TRUE : FALSE;
+		}
+		++i;
+	}
+	// the newest edge ends the strip: under the vehicle
+	const Int last = count - 1;
+	if (keep[kept - 1] != last)
+	{
+		const float dl = pathDist(centre[last], centre[keep[kept - 1]]);
+		if (kept > 1 && !cut[kept - 1] && dl < keepLen && !travel[last] && !travel[keep[kept - 1]])
+			keep[kept - 1] = last;
+		else if (dl > 1.0e-3f)
+		{
+			keep[kept] = last;
+			cut[kept++] = (dl > gap) ? TRUE : FALSE;
+		}
+	}
+	markFrom = keep[(kept >= 3) ? kept - 3 : 0];
+
+	Int start = 0;
+	for (Int k = 0; k < kept; ++k)
+	{
+		const Bool end = (k + 1 >= kept || cut[k + 1]) ? TRUE : FALSE;
+		Bool split = FALSE;
+		if (!end && k > start)
+		{
+			const Vector3 a = centre[keep[k]] - centre[keep[k - 1]];
+			const Vector3 b = centre[keep[k + 1]] - centre[keep[k]];
+			const float la = sqrtf(a.X * a.X + a.Y * a.Y);
+			const float lb = sqrtf(b.X * b.X + b.Y * b.Y);
+			const Vector3 va = left[keep[k]] - right[keep[k]];
+			const Vector3 vb = left[keep[k + 1]] - right[keep[k + 1]];
+			const Bool sideA = (a.X * va.Y - a.Y * va.X >= 0.0f) ? TRUE : FALSE;	// the vehicle's left on the path's left
+			const Bool sideB = (b.X * vb.Y - b.Y * vb.X >= 0.0f) ? TRUE : FALSE;
+			split = (la > 1.0e-6f && lb > 1.0e-6f && ((a.X * b.X + a.Y * b.Y) < PATH_COS_BREAK * la * lb || sideA != sideB)) ? TRUE : FALSE;
+		}
+		if (end || split)
+		{
+			pathStroke(left, right, tile, fade, keep + start, k - start + 1, h);
+			start = end ? k + 1 : k;
+		}
+	}
+	return TRUE;	// nothing laid (a spin on the spot only) draws nothing
+}
+
+// ---- Ronin @bugfix 10/11/2026 DX9: the pieces a track gained this frame (its newest edge is new), for R3DTaa's velocity pass. ----
+
+static Vector3 s_markVerts[TAA_MARK_MAX];	// a triangle list
+static Int     s_markCount = 0;
+static float   s_newestPrev[PATH_MAX_TRACKS][4];	// each track's newest edge last frame (left x y, right x y)
+static float   s_newestCur[PATH_MAX_TRACKS][4];
+static Int     s_newestPrevCount = 0;
+static Int     s_newestCurCount  = 0;
+
+static Bool taaMarkFresh(const Vector3 &l, const Vector3 &r)
+{
+	Bool seen = FALSE;
+	for (Int i = 0; i < s_newestPrevCount && !seen; ++i)
+		seen = (s_newestPrev[i][0] == l.X && s_newestPrev[i][1] == l.Y && s_newestPrev[i][2] == r.X && s_newestPrev[i][3] == r.Y) ? TRUE : FALSE;
+	if (s_newestCurCount < PATH_MAX_TRACKS)
+	{
+		s_newestCur[s_newestCurCount][0] = l.X;
+		s_newestCur[s_newestCurCount][1] = l.Y;
+		s_newestCur[s_newestCurCount][2] = r.X;
+		s_newestCur[s_newestCurCount][3] = r.Y;
+		++s_newestCurCount;
+	}
+	return !seen;
+}
+
+static void taaMarkQuad(const Vector3 &l0, const Vector3 &r0, const Vector3 &l1, const Vector3 &r1)
+{
+	if (s_markCount + 6 > TAA_MARK_MAX)
+		return;
+	s_markVerts[s_markCount++] = l0;
+	s_markVerts[s_markCount++] = r0;
+	s_markVerts[s_markCount++] = r1;
+	s_markVerts[s_markCount++] = l0;
+	s_markVerts[s_markCount++] = r1;
+	s_markVerts[s_markCount++] = l1;
+}
+
+Bool R3DTreadMarks::hasTaaMarks(void)
+{
+	return (s_markCount >= 3) ? TRUE : FALSE;
+}
+
+Int R3DTreadMarks::takeTaaMarks(const Vector3 **verts)
+{
+	const Int n = s_markCount;
+	*verts = s_markVerts;
+	s_markCount = 0;
+	return n;
+}
+
+// Ronin @feature 10/11/2026 DX9: a run's end at a break (a turn round, backing up, a sharp corner) fades over
+// half the width, as 2003 fades a track that starts again: two cut ends laid over each other read as planks, not as a turn.
+static void pathFadeBreakEnds(void)
+{
+	static float along[PATH_MAX_EDGES];
+	for (Int s = 0; s < s_pathCount; )
+	{
+		Int t = s + 1;
+		while (t < s_pathCount && !s_path[t].cut)
+			++t;
+		along[s] = 0.0f;
+		for (Int e = s + 1; e < t; ++e)
+			along[e] = along[e - 1] + pathDist((s_path[e].l + s_path[e].r) * 0.5f, (s_path[e - 1].l + s_path[e - 1].r) * 0.5f);
+		for (Int e = s; e < t; ++e)
+		{
+			float k = 1.0f;
+			if (s > 0 && along[e] < k * s_pathHalf)
+				k = along[e] / s_pathHalf;	// it starts at a break
+			if (t < s_pathCount && along[t - 1] - along[e] < k * s_pathHalf)
+				k = (along[t - 1] - along[e]) / s_pathHalf;	// it ends at one
+			s_path[e].fade *= k;
+		}
+		s = t;
+	}
 }
 
 Int R3DTreadMarks::writeRoundedStrip(const Vector3 *left, const Vector3 *right, const float *v, const float *fade, Int count,
 	float spacing, UnsignedInt diffuseRGB, VertexFormatXYZDUV1 *out, Int maxEdges)
 {
-	const float maxGap = 2.5f * spacing;
-	Int inserts[ROUND_MAX_STORED];
-	Bool smooth[ROUND_MAX_STORED];	// segment i has no gap and no reversal: its sides may hold (roundHoldSide)
-	Int total = count;
-	if (count >= 3 && count <= ROUND_MAX_STORED)
+	VertexFormatXYZDUV1 *const first = out;
+	// Ronin @bugfix 10/11/2026 DX9: the frame's first track: last frame's newest edges are the ones to compare with.
+	if (s_markClosed)
 	{
-		Vector3 centre[ROUND_MAX_STORED];
-		float turn[ROUND_MAX_STORED];
-		for (Int i = 0; i < count; ++i)
-			centre[i] = (left[i] + right[i]) * 0.5f;
-		for (Int i = 0; i < count; ++i)
-			turn[i] = roundTurn(centre, count, i, maxGap);
-		for (Int i = 0; i + 1 < count; ++i)
-		{
-			Int k = 0;
-			const float len = (centre[i + 1] - centre[i]).Length();
-			smooth[i] = (len <= maxGap && turn[i] <= ROUND_MAX_TURN && turn[i + 1] <= ROUND_MAX_TURN) ? TRUE : FALSE;
-			if (smooth[i] && fade[i] > 0.0f && fade[i + 1] > 0.0f)
-				k = (Int)(0.5f * (turn[i] + turn[i + 1]) / ROUND_STEP_DEGREES);	// the segment turns half of each end's angle
-			inserts[i] = (k > ROUND_MAX_INSERTS) ? ROUND_MAX_INSERTS : k;
-			total += inserts[i];
-		}
-		if (total > maxEdges)
-			total = count;		// no room this frame: as stored
+		memcpy(s_newestPrev, s_newestCur, sizeof(s_newestCur[0]) * s_newestCurCount);
+		s_newestPrevCount = s_newestCurCount;
+		s_newestCurCount = 0;
+		s_markCount = 0;
+		s_markClosed = FALSE;
 	}
-	const Bool rounded = (total > count) ? TRUE : FALSE;
+	const Bool fresh = taaMarkFresh(left[count - 1], right[count - 1]);
+	Int markFrom = (count > 3) ? count - 3 : 0;
 
-	Vector3 pl, pr;		// the edge written last
-	for (Int i = 0; i < count; ++i)
+	if (count <= ROUND_MAX_STORED && pathBuild(left, right, v, fade, count, spacing, markFrom) && s_pathCount + 2 * s_pathCuts <= maxEdges)
 	{
-		Vector3 l = left[i];
-		Vector3 r = right[i];
-		if (rounded && i > 0 && smooth[i - 1])
-			roundHoldSide(pl, pr, l, r);
-		out = roundPutEdge(out, l, r, v[i], fade[i], diffuseRGB);
-		pl = l;
-		pr = r;
-		if (!rounded || i + 1 >= count || inserts[i] == 0)
-			continue;
-		// Neighbours past a gap or the ends are mirrored, so the curve never reaches across a break.
-		const Bool prevOK = (i > 0) && (((left[i] + right[i]) - (left[i - 1] + right[i - 1])).Length() * 0.5f <= maxGap);
-		const Bool nextOK = (i + 2 < count) && (((left[i + 2] + right[i + 2]) - (left[i + 1] + right[i + 1])).Length() * 0.5f <= maxGap);
-		const Vector3 l0 = prevOK ? left[i - 1]  : (left[i] * 2.0f - left[i + 1]);
-		const Vector3 r0 = prevOK ? right[i - 1] : (right[i] * 2.0f - right[i + 1]);
-		const Vector3 l3 = nextOK ? left[i + 2]  : (left[i + 1] * 2.0f - left[i]);
-		const Vector3 r3 = nextOK ? right[i + 2] : (right[i + 1] * 2.0f - right[i]);
-		for (Int k = 1; k <= inserts[i]; ++k)
+		pathFadeBreakEnds();
+		Vector3 pr(0.0f, 0.0f, 0.0f);
+		for (Int e = 0; e < s_pathCount; ++e)
 		{
-			const float u = (float)k / (float)(inserts[i] + 1);
-			Vector3 cl = roundCatmullRom(l0, left[i], left[i + 1], l3, u);
-			Vector3 cr = roundCatmullRom(r0, right[i], right[i + 1], r3, u);
-			roundHoldSide(pl, pr, cl, cr);
-			out = roundPutEdge(out, cl, cr, v[i] + (v[i + 1] - v[i]) * u, fade[i] + (fade[i + 1] - fade[i]) * u, diffuseRGB);
-			pl = cl;
-			pr = cr;
+			const PathEdge &pe = s_path[e];
+			if (pe.cut && e > 0)
+			{
+				out = roundPutPair(out, pr, 1.0f, pr, 1.0f, 0.0f, 0.0f, diffuseRGB);	// two empty pairs: no triangle joins the runs
+				out = roundPutPair(out, pe.l, 0.0f, pe.l, 0.0f, 0.0f, 0.0f, diffuseRGB);
+			}
+			const float f = fmodf(pe.tile, 2.0f);
+			out = roundPutPair(out, pe.l, pe.flip ? 1.0f : 0.0f, pe.r, pe.flip ? 0.0f : 1.0f, (f <= 1.0f) ? f : 2.0f - f, pe.fade, diffuseRGB);
+			pr = pe.r;
+			if (fresh && e > 0 && !pe.cut && s_path[e - 1].src >= markFrom)
+				taaMarkQuad(s_path[e - 1].l, s_path[e - 1].r, pe.l, pe.r);
 		}
 	}
-	return total;
+	else
+	{
+		for (Int i = 0; i < count; ++i)
+		{
+			out = roundPutEdge(out, left[i], right[i], v[i], fade[i], diffuseRGB);
+			if (fresh && i > markFrom)
+				taaMarkQuad(left[i - 1], right[i - 1], left[i], right[i]);
+		}
+	}
+	return (Int)((out - first) / 2);
 }

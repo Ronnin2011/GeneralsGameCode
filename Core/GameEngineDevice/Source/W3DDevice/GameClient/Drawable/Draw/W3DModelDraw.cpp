@@ -1840,7 +1840,7 @@ void W3DModelDraw::setHidden(Bool hidden)
 
 	if (m_trackRenderObject && hidden)
 	{	const Coord3D* pos = getDrawable()->getPosition();
-		m_trackRenderObject->addCapEdgeToTrack(pos->x,pos->y);
+		m_trackRenderObject->addCapEdgeToTrack(pos->x,pos->y,getDrawable()->getOrientation());	// Ronin @feature 10/11/2026 DX9: its facing
 	}
 
 	doStartOrStopParticleSys();
@@ -3671,7 +3671,7 @@ void W3DModelDraw::reactToTransformChange( const Matrix3D* oldMtx,
 		{
 			if ( m_fullyObscuredByShroud || obj->testStatus( OBJECT_STATUS_STEALTHED ) == TRUE )
 			{
-					m_trackRenderObject->addCapEdgeToTrack(pos->x, pos->y);
+					m_trackRenderObject->addCapEdgeToTrack(pos->x, pos->y, getDrawable()->getOrientation());	// Ronin @feature 10/11/2026 DX9: its facing
 			}
 			else
 			{
@@ -3679,7 +3679,7 @@ void W3DModelDraw::reactToTransformChange( const Matrix3D* oldMtx,
 				{
 					m_trackRenderObject->setAirborne();
 				}
-				m_trackRenderObject->addEdgeToTrack(pos->x, pos->y);
+				m_trackRenderObject->addEdgeToTrack(pos->x, pos->y, getDrawable()->getOrientation());	// Ronin @feature 10/11/2026 DX9: its facing
 			}
 		}
 	}

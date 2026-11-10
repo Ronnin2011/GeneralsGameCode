@@ -40,6 +40,7 @@
 #include "GameClient/DrawableInfo.h"
 #include "W3DDevice/GameClient/R3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: which meshes have their beam polygons hidden
 #include "W3DDevice/GameClient/R3DWaypointLines.h"	// Ronin @feature 09/11/2026 DX9: the waypoint ribbons, after the copy
+#include "W3DDevice/GameClient/R3DTreadMarks.h"		// Ronin @bugfix 10/11/2026 DX9: the tread pieces laid this frame
 #include "Common/KindOf.h"
 #include "GameLogic/PolygonTrigger.h"			// Ronin @bugfix 29/09/2026 DX9: the water's polygons, for its reactive mask
 #include "GameLogic/TerrainLogic.h"			// Ronin @bugfix 26/10/2026 DX9: the ground under a moving decal's mark
@@ -3042,7 +3043,8 @@ void R3DTaa::postRender(void)
 	Bool anyDecalMark = FALSE;
 	for (Int d = 0; d < s_decalMarkCount && !anyDecalMark; ++d)
 		anyDecalMark = decalMarkDrawn(s_decalMarks[d]);
-	if (s_velocityOn && (s_meshDrawCount > 0 || cursorBibLive() || s_waterVertCount > 0 || s_waterMaskDrawn || s_vanishCount > 0 || anyDecalMark) && s_velMeshVS != NULL && s_velMeshPS != NULL &&
+	if (s_velocityOn && (s_meshDrawCount > 0 || cursorBibLive() || s_waterVertCount > 0 || s_waterMaskDrawn || s_vanishCount > 0 || anyDecalMark ||
+		R3DTreadMarks::hasTaaMarks()) && s_velMeshVS != NULL && s_velMeshPS != NULL &&
 		depthTex != NULL && s_curViewProjValid && s_prevViewProjValid && ensureVelocity((UnsignedInt)fbW, (UnsignedInt)fbH))
 	{
 		IDirect3DSurface9 *vSurf  = s_velTex->Get_D3D_Surface_Level();
@@ -3198,6 +3200,24 @@ void R3DTaa::postRender(void)
 					DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ, "R3DTaa::velMesh");
 					dev->SetVertexShader(s_velMeshVS);
 					dev->SetPixelShader(s_velMeshPS);
+				}
+
+				// Ronin @bugfix 10/11/2026 DX9: the tread pieces laid this frame - a GHOST (0.3), one-sided, zero velocity: the history under them starts
+				// again. Nothing else tells a still pixel it changed, and the history faded each new piece in a second or two behind the vehicle.
+				{
+					const Vector3 *treadVerts = NULL;
+					const Int treadCount = R3DTreadMarks::takeTaaMarks(&treadVerts);
+					if (treadCount >= 3)
+					{
+						static const float treadC12[4] = { 0.3f, 1.0f, 1.0f, 0.0f };
+						dev->SetPixelShaderConstantF(12, treadC12, 1);
+						D3DXMATRIX tcT, tpT;
+						D3DXMatrixTranspose(&tcT, &s_curViewProjClean);
+						D3DXMatrixTranspose(&tpT, &s_prevViewProj);
+						dev->SetVertexShaderConstantF(0, (const float *)&tcT, 4);
+						dev->SetVertexShaderConstantF(4, (const float *)&tpT, 4);
+						dev->DrawPrimitiveUP(D3DPT_TRIANGLELIST, (UINT)(treadCount / 3), treadVerts, sizeof(Vector3));
+					}
 				}
 
 				// Ronin @bugfix 29/09/2026 DX9: the water - reactive translucent (one-sided: it writes no depth), zero velocity. Before
