@@ -39,6 +39,13 @@ SnowManager::SnowManager()
 	m_time = 0;
 	m_velocity = 1;
 	m_isVisible = TRUE;	//default to showing if it's enabled via INI.
+	// Ronin @feature 10/11/2026 DX9: no wind until the Weather settings say so
+	m_windDirection = 0.0f;
+	m_windSpeed = 0.0f;
+	m_windGust = 0.0f;
+	m_gustTime = 0.0f;
+	m_driftX = 0.0f;
+	m_driftY = 0.0f;
 }
 
 void SnowManager::init()
@@ -75,6 +82,7 @@ void SnowManager::updateIniSettings()
 	m_emitterSpacing = 1.0f/TheWeatherSetting->m_snowBoxDensity;
 	m_maxPointSize = TheWeatherSetting->m_snowMaxPointSize;
 	m_minPointSize = TheWeatherSetting->m_snowMinPointSize;
+	setWind(TheWeatherSetting->m_snowWindDirection, TheWeatherSetting->m_snowWindSpeed, TheWeatherSetting->m_snowWindGust);	// Ronin @feature 10/11/2026 DX9
 
 	//Time for snow flake to make it from top to bottom of rendered cube around camera.
 	m_fullTimePeriod = m_boxDimensions/m_velocity;
@@ -83,6 +91,21 @@ void SnowManager::updateIniSettings()
 void SnowManager::setVisible(Bool showWeather)
 {
 	m_isVisible = showWeather;
+}
+
+// Ronin @feature 10/11/2026 DX9: the wind - from the Weather settings (updateIniSettings) or the panel's `snow wind`.
+void SnowManager::setWind(Real directionDegrees, Real speed, Real gust)
+{
+	m_windDirection = directionDegrees;
+	m_windSpeed = (speed > 0.0f) ? speed : 0.0f;
+	m_windGust = (gust < 0.0f) ? 0.0f : ((gust > 1.0f) ? 1.0f : gust);
+}
+
+void SnowManager::getWind(Real *directionDegrees, Real *speed, Real *gust) const
+{
+	*directionDegrees = m_windDirection;
+	*speed = m_windSpeed;
+	*gust = m_windGust;
 }
 
 void SnowManager::reset()
@@ -118,6 +141,9 @@ const FieldParse WeatherSetting::m_weatherSettingFieldParseTable[] =
 	{ "SnowVelocity",							INI::parseReal,nullptr,			offsetof( WeatherSetting, m_snowVelocity ) },
 	{ "SnowPointSprites",						INI::parseBool,nullptr,			offsetof( WeatherSetting, m_usePointSprites ) },
 	{ "SnowEnabled",							INI::parseBool,nullptr,			offsetof( WeatherSetting, m_snowEnabled ) },
+	{ "SnowWindDirection",						INI::parseReal,nullptr,			offsetof( WeatherSetting, m_snowWindDirection ) },	// Ronin @feature 10/11/2026 DX9
+	{ "SnowWindSpeed",							INI::parseReal,nullptr,			offsetof( WeatherSetting, m_snowWindSpeed ) },
+	{ "SnowWindGust",							INI::parseReal,nullptr,			offsetof( WeatherSetting, m_snowWindGust ) },
 	{ nullptr, nullptr, nullptr, 0 },
 };
 

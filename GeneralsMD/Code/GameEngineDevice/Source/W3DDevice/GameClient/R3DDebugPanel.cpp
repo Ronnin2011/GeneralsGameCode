@@ -61,6 +61,7 @@
 #include "W3DDevice/GameClient/R3DWaterSeaIni.h"	// Ronin @feature 04/10/2026 DX9: `water save` / `water load`
 #include "W3DDevice/GameClient/R3DSkyCube.h"		// Ronin @feature 12/10/2026 DX9: `sky`
 #include "GameClient/ParticleSys.h"				// Ronin @diagnostic 15/10/2026 DX9: `glowfx`
+#include "GameClient/Snow.h"					// Ronin @feature 10/11/2026 DX9: `snow`
 // Ronin @feature 28/09/2026 DX9: the readouts moved in from W3DDisplay.cpp.
 #include "W3DDevice/GameClient/BaseHeightMap.h"
 #include "W3DDevice/GameClient/WorldHeightMap.h"
@@ -1367,6 +1368,40 @@ namespace
 		AsciiString state;
 		state.format("parts: %s  shader: %s", TheDX8InstanceManager.Get_Additive_Parts() ? "on (instanced after the effects)" : "off (depth-sorted, as in 2003)",
 			TheDX8InstanceManager.Has_Additive_PS() ? "loaded" : "MISSING (AdditivePart.pso)");
+		printAscii(state, FALSE);
+	}
+
+	// Ronin @feature 10/11/2026 DX9: `snow` - the snow's or rain's wind (SnowManager), live; a map sets its own in its map.ini (Weather:
+	// SnowWindDirection, SnowWindSpeed, SnowWindGust). `snow on|off` shows the weather on any map, for testing. Not saved.
+	void cmdSnow(Int argc, const AsciiString *argv)
+	{
+		if (TheSnowManager == NULL || TheWeatherSetting == NULL)
+		{
+			printAscii(AsciiString("snow: no weather settings yet - load a map"), TRUE);
+			return;
+		}
+		Real dir = 0.0f, speed = 0.0f, gust = 0.0f;
+		TheSnowManager->getWind(&dir, &speed, &gust);
+		Bool on = FALSE;
+		if (argc == 2 && parseOnOff(argv[1].str(), &on))
+		{
+			WeatherSetting *ws = (WeatherSetting *)TheWeatherSetting.getNonOverloadedPointer();
+			ws = (WeatherSetting *)ws->friend_getFinalOverride();
+			ws->m_snowEnabled = on;
+		}
+		else if ((argc == 4 || argc == 5) && _stricmp(argv[1].str(), "wind") == 0)
+			TheSnowManager->setWind((Real)atof(argv[2].str()), (Real)atof(argv[3].str()), (argc == 5) ? (Real)atof(argv[4].str()) : gust);
+		else if (argc != 1)
+		{
+			printAscii(AsciiString("usage: snow [on|off] | wind <degrees it blows to, 0 = +X> <speed, units/s> [gusts 0..1]"), TRUE);
+			return;
+		}
+		TheSnowManager->getWind(&dir, &speed, &gust);
+		const Real fall = TheWeatherSetting->m_snowVelocity;
+		AsciiString state;
+		state.format("snow: %s (%s, falls %.1f units/s)  wind: to %.0f degrees, %.1f units/s - a slant of %.0f degrees - gusts %.2f",
+			TheWeatherSetting->m_snowEnabled ? "on" : "off on this map", TheWeatherSetting->m_snowTexture.str(), fall, dir, speed,
+			(fall > 0.001f) ? RAD_TO_DEG(atan(speed / fall)) : 0.0, gust);
 		printAscii(state, FALSE);
 	}
 
@@ -3809,6 +3844,7 @@ void R3DDebugPanel::update(void)
 		registerCommand("mapvision", "mapvision [on|off] - the whole map revealed for your player; single player only", cmdMapVision);
 		registerCommand("parts", "parts [on|off] - additive model parts (rocket flames, muzzle flashes) drawn instanced after the effects; off = depth-sorted as in 2003 (not saved)", cmdParts);
 		registerCommand("pool", "pool - the device (9Ex or plain) and the managed-pool emulation: textures with a system-memory copy, their memory, uploads since the last `pool`, the most uploaded", cmdPool);
+		registerCommand("snow", "snow [on|off] | wind <degrees it blows to> <units/s> [gusts 0..1] - the snow's or rain's wind, live (a map's own: Weather SnowWind* in its map.ini); on|off shows the weather on any map", cmdSnow);
 	}
 
 	// Ronin @feature 16/09/2026 DX9: placement takes the mouse after the window translator (10) and before meta events (20),

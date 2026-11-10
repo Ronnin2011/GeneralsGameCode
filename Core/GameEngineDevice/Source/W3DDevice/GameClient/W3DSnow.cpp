@@ -163,6 +163,8 @@ void W3DSnowManager::update()
 {
 	// TheSuperHackers @tweak The snow render update is now decoupled from the logic step.
 	m_time += WW3D::Get_Logic_Frame_Time_Seconds();
+	// Ronin @feature 10/11/2026 DX9: the gusts' clock, wrapped where both of its waves come round together (10 pi s).
+	m_gustTime = fmod(m_gustTime + WW3D::Get_Logic_Frame_Time_Seconds(), 10.0f * WWMATH_PI);
 
 	//find current time offset, adjusting for overflow
 	m_time=fmod(m_time,m_fullTimePeriod);
@@ -303,6 +305,9 @@ void W3DSnowManager::renderSubBox(RenderInfoClass &rinfo, Int originX, Int origi
 				//Adjust position so snow flakes don't fall straight down.
 				snowCenter.X += m_amplitude * WWMath::Fast_Sin( h0 * m_frequencyScaleX + (Real)x);
 				snowCenter.Y += m_amplitude * WWMath::Fast_Sin( h0 * m_frequencyScaleY + (Real)y);
+				// Ronin @feature 10/11/2026 DX9: the wind's drift, by how far the flake has fallen (W3DSnowManager::render).
+				snowCenter.X += m_driftX * (m_snowCeiling - h0);
+				snowCenter.Y += m_driftY * (m_snowCeiling - h0);
 
 				*(Vector3 *)verts=snowCenter;
 				verts++;
@@ -341,12 +346,19 @@ void W3DSnowManager::render(RenderInfoClass &rinfo)
 	const Coord3D &cPos=TheTacticalView->get3DCameraPosition();
 	Vector3 camPos(cPos.x,cPos.y,cPos.z);
 
+	// Ronin @feature 10/11/2026 DX9: wind - a flake drifts across in step with how far it has fallen, so snow and rain fall at a
+	// slant, varied by slow gusts. The emitters sit upwind by half a fall's drift: the slanted column stays round the camera.
+	const Real gust = 1.0f + m_windGust * (0.6f * WWMath::Sin(m_gustTime * 0.4f) + 0.4f * WWMath::Sin(m_gustTime + 1.3f));
+	const Real across = (m_velocity > 0.001f) ? m_windSpeed * gust / m_velocity : 0.0f;
+	m_driftX = across * WWMath::Cos(DEG_TO_RADF(m_windDirection));
+	m_driftY = across * WWMath::Sin(DEG_TO_RADF(m_windDirection));
+
 	//Number of emitters from cube center to edge of visible extent.
 	Int mumEmittersInHalf=(Int)floor(m_boxDimensions / m_emitterSpacing * 0.5f);
 
 	//Find origin of visible cube surrounding camera.
-	Int cubeCenterX=(Int)floor(camPos.X/m_emitterSpacing);
-	Int cubeCenterY=(Int)floor(camPos.Y/m_emitterSpacing);
+	Int cubeCenterX=(Int)floor((camPos.X - 0.5f * m_driftX * m_boxDimensions)/m_emitterSpacing);
+	Int cubeCenterY=(Int)floor((camPos.Y - 0.5f * m_driftY * m_boxDimensions)/m_emitterSpacing);
 
 	//Find extents of visible cube surrounding camera.
 	Int cubeOriginX=cubeCenterX - mumEmittersInHalf;	//top/left extents.
@@ -365,8 +377,9 @@ void W3DSnowManager::render(RenderInfoClass &rinfo)
 
 	//Particles move outside the visible box as a result of local sine movement
 	//so adjust bounding box to include them.
-	bbox.Extent.X += m_amplitude+m_quadSize;
-	bbox.Extent.Y += m_amplitude+m_quadSize;
+	// Ronin @feature 10/11/2026 DX9: the wind carries them further, up to a whole fall's drift.
+	bbox.Extent.X += m_amplitude+m_quadSize + fabsf(m_driftX) * m_boxDimensions;
+	bbox.Extent.Y += m_amplitude+m_quadSize + fabsf(m_driftY) * m_boxDimensions;
 
 	//Clip our visible snow rendering box
 	if ((cubeOriginX * m_emitterSpacing ) < (bbox.Center.X - bbox.Extent.X))
@@ -445,7 +458,8 @@ void W3DSnowManager::render(RenderInfoClass &rinfo)
 
 	//Particle centers can deviate from center by by amplitude of sine offset.  They also have radius m_quadSize.
 	//Enlarge culling bounds to compensate.
-	m_cullOverscan = m_amplitude+m_quadSize;
+	// Ronin @feature 10/11/2026 DX9: and by the wind's drift, up to a whole fall's.
+	m_cullOverscan = m_amplitude+m_quadSize + ((fabsf(m_driftX) > fabsf(m_driftY)) ? fabsf(m_driftX) : fabsf(m_driftY)) * m_boxDimensions;
 	renderSubBox(rinfo,cubeOriginX,cubeOriginY,cubeDimX,cubeDimY);
 
 	// Reset render states
@@ -536,6 +550,9 @@ void W3DSnowManager::renderAsQuads(RenderInfoClass &rinfo, Int cubeOriginX, Int 
 
 					//find world-space position of snow flake
 					snowCenter.Set(x*m_emitterSpacing,y*m_emitterSpacing,h0);
+					// Ronin @feature 10/11/2026 DX9: the wind's drift, by how far the flake has fallen (W3DSnowManager::render).
+					snowCenter.X += m_driftX * (m_snowCeiling - h0);
+					snowCenter.Y += m_driftY * (m_snowCeiling - h0);
 
 					//Get view-space position
 					Matrix3D::Transform_Vector(view,snowCenter,&snowCenterVS);

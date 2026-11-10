@@ -48,6 +48,11 @@ class WeatherSetting : public Overridable
 		Real	m_snowVelocity;			///<used to set speed at which snow falls (world units/sec).
 		Bool    m_usePointSprites;		///<used to disable hardware point-sprite support.
 		Bool	m_snowEnabled;			///<enable/disable snow on the map.
+		// Ronin @feature 10/11/2026 DX9: wind, per map in its map.ini - SnowWindDirection (degrees it blows to, 0 = +X, 90 = +Y),
+		// SnowWindSpeed (world units/sec across; the slant is that over SnowVelocity), SnowWindGust (0..1).
+		Real	m_snowWindDirection;
+		Real	m_snowWindSpeed;
+		Real	m_snowWindGust;
 
 	public:
 		WeatherSetting()
@@ -65,6 +70,9 @@ class WeatherSetting : public Overridable
 			m_snowEnabled=FALSE;
 			m_snowMaxPointSize=64.0f;
 			m_snowMinPointSize=0.0f;
+			m_snowWindDirection=0.0f;	// Ronin @feature 10/11/2026 DX9: no wind, as in 2003
+			m_snowWindSpeed=0.0f;
+			m_snowWindGust=0.0f;
 		}
 
 		static const FieldParse m_weatherSettingFieldParseTable[];		///< the parse table for INI definition
@@ -91,6 +99,9 @@ class SnowManager : public SubsystemInterface
 	virtual void init() override;
 	virtual void reset() override;
 	virtual void updateIniSettings ();
+	// Ronin @feature 10/11/2026 DX9: the wind - degrees it blows to (0 = +X), world units/sec across, gusts 0..1.
+	void setWind(Real directionDegrees, Real speed, Real gust);
+	void getWind(Real *directionDegrees, Real *speed, Real *gust) const;
 	void setVisible(Bool showWeather);	///<enable/disable rendering of weather - assuming it's available on map.
 
   protected :
@@ -109,6 +120,13 @@ class SnowManager : public SubsystemInterface
 	Real				m_boxDimensions;	///<used to set dimensions of box surrounding camera.
 	Real				m_emitterSpacing;		///<used to control how many emitters are present per world unit
 	Bool				m_isVisible;		///<used to prevent map weather (if defined) from rendering.
+	// Ronin @feature 10/11/2026 DX9: wind for the snow and rain (Weather's SnowWind* keys - a map's map.ini; the panel's `snow`).
+	Real				m_windDirection;	///<where the wind blows to, degrees (0 = +X, 90 = +Y)
+	Real				m_windSpeed;		///<its speed across, world units/sec; 0 = none, as in 2003
+	Real				m_windGust;			///<how much the gusts vary it, 0..1
+	Real				m_gustTime;			///<the gusts' clock, seconds
+	Real				m_driftX;			///<this frame: across per unit fallen (W3DSnowManager::render)
+	Real				m_driftY;
 };
 
 extern SnowManager *TheSnowManager;  ///< the ray effects singleton external
