@@ -2735,52 +2735,13 @@ void ControlBar::setPortraitByObject( Object *obj )
 // ------------------------------------------------------------------------------------------------
 void ControlBar::showRallyPoint(const Coord3D* loc)
 {
-	// if loc is null, destroy any rally point drawable we have shown
-	if (loc == nullptr)
-	{
-		// destroy rally point drawable if present
-		if (m_rallyPointDrawableID != INVALID_DRAWABLE_ID)
-			TheGameClient->destroyDrawable(TheGameClient->findDrawableByID(m_rallyPointDrawableID));
+	// Ronin @feature 09/11/2026 DX9: no rally point flag - the waypoint ribbon ends at the rally point (R3DWaypointLines).
+	// Whatever asks for one, a marker still shown is destroyed, as 2003 did when there was no location.
+	(void)loc;
+	if (m_rallyPointDrawableID != INVALID_DRAWABLE_ID)
+		TheGameClient->destroyDrawable(TheGameClient->findDrawableByID(m_rallyPointDrawableID));
 
-		m_rallyPointDrawableID = INVALID_DRAWABLE_ID;
-		return;
-	}
-
-	Drawable* marker = nullptr;
-
-	// create a rally point drawable if necessary
-	if (m_rallyPointDrawableID == INVALID_DRAWABLE_ID)
-	{
-		const ThingTemplate* ttn = TheThingFactory->findTemplate("RallyPointMarker");
-		if (!ttn)
-		{
-			return;
-		}
-
-		marker = TheThingFactory->newDrawable(ttn);
-		DEBUG_ASSERTCRASH(marker, ("showRallyPoint: Unable to create rally point drawable"));
-		marker->setDrawableStatus(DRAWABLE_STATUS_NO_SAVE);
-		m_rallyPointDrawableID = marker->getID();
-	}
-	else
-		marker = TheGameClient->findDrawableByID(m_rallyPointDrawableID);
-
-	// sanity
-	DEBUG_ASSERTCRASH(marker, ("showRallyPoint: No rally point marker found"));
-
-	// set the position of the rally point drawable to the position passed in
-	marker->setPosition(loc);
-	marker->setOrientation(TheGlobalData->m_downwindAngle); // To blow down wind -- ML
-
-	// set the marker colors to that of the local player
-	Player* player = getCurrentlyViewedPlayer();
-	if (player)
-	{
-		if (TheGlobalData->m_timeOfDay == TIME_OF_DAY_NIGHT)
-			marker->setIndicatorColor(player->getPlayerNightColor());
-		else
-			marker->setIndicatorColor(player->getPlayerColor());
-	}
+	m_rallyPointDrawableID = INVALID_DRAWABLE_ID;
 }
 
 // ------------------------------------------------------------------------------------------------

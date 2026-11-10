@@ -39,6 +39,7 @@
 #include "GameClient/Drawable.h"				// Ronin @bugfix 27/09/2026 DX9: idle infantry - which object a mesh belongs to
 #include "GameClient/DrawableInfo.h"
 #include "W3DDevice/GameClient/R3DLocalLights.h"	// Ronin @feature 09/10/2026 DX9: which meshes have their beam polygons hidden
+#include "W3DDevice/GameClient/R3DWaypointLines.h"	// Ronin @feature 09/11/2026 DX9: the waypoint ribbons, after the copy
 #include "Common/KindOf.h"
 #include "GameLogic/PolygonTrigger.h"			// Ronin @bugfix 29/09/2026 DX9: the water's polygons, for its reactive mask
 #include "GameLogic/TerrainLogic.h"			// Ronin @bugfix 26/10/2026 DX9: the ground under a moving decal's mark
@@ -1027,7 +1028,8 @@ static void buildWaterMask(void)
 void R3DTaa::noteOpaqueDone(void)
 {
 	// Ronin @feature 23/10/2026 DX9: the shafts' dust, after the copy below - on every path, TAA or not: to the resolve it is an effect.
-	struct DustAfter { ~DustAfter() { R3DLocalLights::drawShaftDust(); } } dustAfter;
+	// Ronin @feature 09/11/2026 DX9: the waypoint ribbons first, the same way: their arrows flow, and the resolve clamps there.
+	struct DustAfter { ~DustAfter() { R3DWaypointLines::drawGathered(); R3DLocalLights::drawShaftDust(); } } dustAfter;
 	if (!s_redirected || s_autoReact <= 0.0f || s_opaqueStamp == s_moverFrame)
 		return;
 	s_opaqueStamp = s_moverFrame;
@@ -2239,6 +2241,7 @@ void R3DTaa::shutdown(void)
 	for (Int d = 0; d < s_decalMarkCount; ++d)
 		REF_PTR_RELEASE(s_decalMarks[d].texture);
 	s_decalMarkCount = 0;
+	R3DWaypointLines::shutdown();	// Ronin @feature 09/11/2026 DX9: drawn from here (noteOpaqueDone), freed from here
 	// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask and the GPU timer.
 	if (s_moverPS != NULL) { s_moverPS->Release(); s_moverPS = NULL; }
 	REF_PTR_RELEASE(s_moverTex);

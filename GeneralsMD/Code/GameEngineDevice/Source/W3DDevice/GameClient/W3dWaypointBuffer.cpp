@@ -81,6 +81,7 @@
 #include "WW3D2/mesh.h"
 #include "WW3D2/meshmdl.h"
 #include "WW3D2/segline.h"
+#include "W3DDevice/GameClient/R3DWaypointLines.h"	// Ronin @feature 09/11/2026 DX9: waypoint ribbons
 
 
 #define MAX_DISPLAY_NODES 512
@@ -157,7 +158,12 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 
   setDefaultLineStyle();
 
-
+	// Ronin @feature 09/11/2026 DX9: waypoint ribbons - the paths go to R3DWaypointLines, drawn after the opaque
+	// scene with their own rings; 2003's pucks hide (a hidden mesh skips its render).
+	const Bool ribbons = R3DWaypointLines::getEnabled();
+	R3DWaypointLines::beginGather();
+	if( m_waypointNodeRobj )
+		m_waypointNodeRobj->Set_Hidden( ribbons ? 1 : 0 );
 
 	if( TheInGameUI->isInWaypointMode() )
 	{
@@ -205,8 +211,13 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 						}
 					}
 					//Now render the lines in one pass!
-					m_line->Set_Points( numPoints, points );
-					m_line->Render( localRinfo );
+					if( ribbons )	// Ronin @feature 09/11/2026 DX9: waypoint ribbons
+						R3DWaypointLines::addPath( points, numPoints, R3DWaypointLines::STYLE_WAYPOINTS );
+					else
+					{
+						m_line->Set_Points( numPoints, points );
+						m_line->Render( localRinfo );
+					}
 				}
 			}
 		}
@@ -306,11 +317,16 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
                     {
 					            //Now render the lines in one pass!
 
-                      m_line->Set_Color( Vector3( 0.95f, 0.5f, 0.0f ) );
-                      m_line->Set_Width( 3.0f );
+                      if ( ribbons )	// Ronin @feature 09/11/2026 DX9: waypoint ribbons
+                        R3DWaypointLines::addPath( points, numPoints, R3DWaypointLines::STYLE_ENEMY );
+                      else
+                      {
+                        m_line->Set_Color( Vector3( 0.95f, 0.5f, 0.0f ) );
+                        m_line->Set_Width( 3.0f );
 
-					            m_line->Set_Points( numPoints, points );
-					            m_line->Render( localRinfo );
+                        m_line->Set_Points( numPoints, points );
+                        m_line->Render( localRinfo );
+                      }
                     }
                   }
                   //////////////////////////////////////////////////////////////////////
@@ -520,9 +536,13 @@ void W3DWaypointBuffer::drawWaypoints(RenderInfoClass &rinfo)
 					m_waypointNodeRobj->Set_Position(Vector3(naturalRallyPoint.x,naturalRallyPoint.y,naturalRallyPoint.z));
 					WW3D::Render(*m_waypointNodeRobj,localRinfo); //The little hockey puck
 
-
-					m_line->Set_Points( numPoints, points );
-					m_line->Render( localRinfo );
+					if( ribbons )	// Ronin @feature 09/11/2026 DX9: waypoint ribbons
+						R3DWaypointLines::addPath( points, numPoints, R3DWaypointLines::STYLE_RALLY );
+					else
+					{
+						m_line->Set_Points( numPoints, points );
+						m_line->Render( localRinfo );
+					}
 
 				}
 

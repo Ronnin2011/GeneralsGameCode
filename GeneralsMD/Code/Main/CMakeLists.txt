@@ -184,6 +184,13 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/TreadRelief.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/TreadRelief.pso"
+        # Ronin @build 09/11/2026 Waypoint ribbons - the waypoint and rally lines (R3DWaypointLines).
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/WaypointRibbon.vso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/WaypointRibbon.vso"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/WaypointRibbon.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/WaypointRibbon.pso"
         # Ronin @build 26/09/2026 TAA — skinned-mesh velocity (infantry), §14 stage 2.
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/TaaVelSkin.vso"
