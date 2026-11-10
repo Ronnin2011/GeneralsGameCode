@@ -14,6 +14,8 @@
 #include "WW3D2/texture.h"
 #include "WW3D2/assetmgr.h"
 #include "Common/GlobalData.h"
+#include "W3DDevice/GameClient/R3DShadowMapState.h"	// Ronin @feature 10/11/2026 DX9: the sun's shadow map
+#include "W3DDevice/GameClient/W3DShaderManager.h"	// Ronin @feature 10/11/2026 DX9: the ground's cloud drift
 #include "W3DDevice/GameClient/R3DTreadMarks.h"
 #include <d3dx9.h>
 #include <cstring>
@@ -41,7 +43,8 @@ static DWORD s_savedStates[RELIEF_STATE_COUNT];
 static const D3DSAMPLERSTATETYPE RELIEF_SAMPLER_STATES[] = {
 	D3DSAMP_ADDRESSU, D3DSAMP_ADDRESSV, D3DSAMP_MINFILTER, D3DSAMP_MAGFILTER, D3DSAMP_MIPFILTER };
 enum { RELIEF_SAMPLER_COUNT = sizeof(RELIEF_SAMPLER_STATES) / sizeof(RELIEF_SAMPLER_STATES[0]) };
-static DWORD s_savedSamplers[RELIEF_SAMPLER_COUNT];
+static DWORD s_savedSamplers[4][RELIEF_SAMPLER_COUNT];	// s0 the relief map; s1, s2 the sun's map; s3 the clouds (Ronin @feature 10/11/2026 DX9)
+static TextureClass *s_cloudTex = NULL;					// Ronin @feature 10/11/2026 DX9: the ground's cloud shadow texture (TerrainTex.cpp)
 
 static DWORD *readShaderBlob(const char *path)
 {
@@ -83,6 +86,16 @@ static void ensureShaders(IDirect3DDevice9 *dev)
 }
 
 // "EXTnkTrack.tga" -> its relief map "EXTnkTrack_nrm.tga" (Art/Textures), loaded once; NULL when there is none.
+// Ronin @feature 10/11/2026 DX9: the 2003 cloud shadows' texture, as the sun shafts take it (R3DLocalLights); NULL when missing.
+static TextureClass *cloudTexture(void)
+{
+	if (s_cloudTex == NULL)
+		s_cloudTex = WW3DAssetManager::Get_Instance()->Get_Texture("TSCloudMed.tga");
+	if (s_cloudTex != NULL && !s_cloudTex->Is_Initialized())
+		s_cloudTex->Init();
+	return (s_cloudTex != NULL && !s_cloudTex->Is_Missing_Texture() && s_cloudTex->Peek_D3D_Texture() != NULL) ? s_cloudTex : NULL;
+}
+
 static TextureClass *reliefFor(TextureClass *track)
 {
 	if (track == NULL)
@@ -136,8 +149,9 @@ Bool R3DTreadMarks::beginRelief(DX8VertexBufferClass *vb, DX8IndexBufferClass *i
 
 	for (Int i = 0; i < RELIEF_STATE_COUNT; ++i)
 		dev->GetRenderState(RELIEF_STATES[i], &s_savedStates[i]);
-	for (Int i = 0; i < RELIEF_SAMPLER_COUNT; ++i)
-		dev->GetSamplerState(0, RELIEF_SAMPLER_STATES[i], &s_savedSamplers[i]);
+	for (DWORD st = 0; st < 4; ++st)
+		for (Int i = 0; i < RELIEF_SAMPLER_COUNT; ++i)
+			dev->GetSamplerState(st, RELIEF_SAMPLER_STATES[i], &s_savedSamplers[st][i]);
 
 	DX8Wrapper::BindLayoutFVF(D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_TEX1, "R3DTreadMarks::relief");
 	dev->SetVertexShader(s_vs);		// AFTER the layout bind - BindLayoutFVF clears the vertex shader
@@ -179,6 +193,45 @@ Bool R3DTreadMarks::beginRelief(DX8VertexBufferClass *vb, DX8IndexBufferClass *i
 	dev->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
 	dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
 	dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+
+	// Ronin @feature 10/11/2026 DX9: the sun's shadow map (s1 near, s2 far) as the terrain's receiver gets it: in a shadow the
+	// grooves show no sunlit side (TreadRelief_ps sunVisible). No map this frame (shadow maps off) = lit, as before.
+	const TerrainShadowPassState &sp = TheTerrainShadowPass;
+	const Bool sunMap  = (sp.active && sp.shadowTex != NULL) ? TRUE : FALSE;
+	const Bool twoMaps = (sunMap && sp.cascadeCount > 1.5f && sp.shadowTexFar != NULL) ? TRUE : FALSE;
+	if (sunMap)
+	{
+		dev->SetPixelShaderConstantF(204, sp.lightViewProjT, 4);
+		dev->SetPixelShaderConstantF(208, twoMaps ? sp.lightViewProjFarT : sp.lightViewProjT, 4);
+	}
+	const float mapPrm[4]  = { sunMap ? 1.0f : 0.0f, sp.depthBias, sp.texelOffset, twoMaps ? 2.0f : 1.0f };
+	const float mapPrm2[4] = { twoMaps ? sp.depthBiasFar : sp.depthBias, sp.texelWorldSize,
+							   twoMaps ? sp.texelWorldSizeFar : sp.texelWorldSize, 0.0f };
+	dev->SetPixelShaderConstantF(212, mapPrm, 1);
+	dev->SetPixelShaderConstantF(213, mapPrm2, 1);
+	dev->SetTexture(1, sunMap ? sp.shadowTex : NULL);
+	dev->SetTexture(2, sunMap ? (twoMaps ? sp.shadowTexFar : sp.shadowTex) : NULL);
+	for (DWORD st = 1; st <= 2; ++st)
+	{
+		dev->SetSamplerState(st, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);		// a depth texture: the hardware's compare
+		dev->SetSamplerState(st, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(st, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(st, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(st, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	}
+	// Ronin @feature 10/11/2026 DX9: the 2003 cloud shadows (s3), mapped as the ground's (W3DShaderManager::getCloudMapState).
+	TextureClass *clouds = cloudTexture();
+	const Bool cloudsOn = (clouds != NULL && TheGlobalData->m_useCloudMap) ? TRUE : FALSE;
+	float cloudScale = 0.0f, cloudX = 0.0f, cloudY = 0.0f;
+	W3DShaderManager::getCloudMapState(&cloudScale, &cloudX, &cloudY);
+	const float cloudPrm[4] = { cloudsOn ? 1.0f : 0.0f, cloudScale, cloudX, cloudY };
+	dev->SetPixelShaderConstantF(214, cloudPrm, 1);
+	dev->SetTexture(3, cloudsOn ? clouds->Peek_D3D_Texture() : NULL);
+	dev->SetSamplerState(3, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+	dev->SetSamplerState(3, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+	dev->SetSamplerState(3, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(3, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(3, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
 	s_open = TRUE;
 	return TRUE;
 }
@@ -207,12 +260,16 @@ void R3DTreadMarks::endRelief(void)
 	s_open = FALSE;
 	IDirect3DDevice9 *dev = DX8Wrapper::_Get_D3D_Device8();
 	dev->SetTexture(0, NULL);
+	dev->SetTexture(1, NULL);
+	dev->SetTexture(2, NULL);
+	dev->SetTexture(3, NULL);
 	dev->SetVertexShader(NULL);
 	dev->SetPixelShader(NULL);
 	for (Int i = 0; i < RELIEF_STATE_COUNT; ++i)
 		dev->SetRenderState(RELIEF_STATES[i], s_savedStates[i]);
-	for (Int i = 0; i < RELIEF_SAMPLER_COUNT; ++i)
-		dev->SetSamplerState(0, RELIEF_SAMPLER_STATES[i], s_savedSamplers[i]);
+	for (DWORD st = 0; st < 4; ++st)
+		for (Int i = 0; i < RELIEF_SAMPLER_COUNT; ++i)
+			dev->SetSamplerState(st, RELIEF_SAMPLER_STATES[i], s_savedSamplers[st][i]);
 	// The wrapper's caches no longer match the device; the decal's own Set_* calls follow. The camera stays: it was applied above.
 	DX8Wrapper::Invalidate_Cached_Render_States();
 }
@@ -222,6 +279,7 @@ void R3DTreadMarks::shutdown(void)
 	for (Int i = 0; i < s_reliefCount; ++i)
 		REF_PTR_RELEASE(s_reliefs[i].relief);
 	s_reliefCount = 0;
+	REF_PTR_RELEASE(s_cloudTex);	// Ronin @feature 10/11/2026 DX9
 	if (s_vs != NULL)
 	{
 		s_vs->Release();
