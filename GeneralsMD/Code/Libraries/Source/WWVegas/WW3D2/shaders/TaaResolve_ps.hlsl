@@ -240,6 +240,12 @@ float vacates(float4 v, float2 camPx)
     return (length(decodeVel(v) - camPx) >= need) ? 1.0f : 0.0f;
 }
 
+// Ronin @bugfix 10/11/2026 DX9: drawn here with no motion, yet to be reset once gone: a ghost (0.3) or a still decal (0.2).
+float leftUnmoved(float a)
+{
+    return ((a > 0.25f && a < 0.35f) || (a > 0.17f && a < 0.23f)) ? 1.0f : 0.0f;
+}
+
 // Ronin @feature 26/09/2026 DX9: AMD FidelityFX CAS (contrast adaptive sharpening), the non-scaling form. Sharpens less
 // where the 3x3 is already near its limits, so edges do not ring and flat areas do not grain. Clamped to the 3D viewport so
 // the border does not read the command bar's texels.
@@ -519,7 +525,7 @@ float4 resolve(float2 uv, out float3 lowBits)
     }
 
     // DEBUG 13: the mesh velocity target. Dim = nothing, GREEN = velocity, YELLOW = velocity + reactive, MAGENTA =
-    // reactive only, CYAN = stopped this frame, ORANGE = auto-reactive (an effect drew over the scene, now or last frame).
+    // reactive only, CYAN = stopped this frame or a still decal, ORANGE = auto-reactive (an effect drew over the scene, now or last frame).
     // Returned from pass 1; back to debug 0 and it recovers in a frame.
     if (g_TaaDebug.x > 12.5f && g_TaaDebug.x < 13.5f)
     {
@@ -727,7 +733,8 @@ float4 resolve(float2 uv, out float3 lowBits)
         if (wasMover > 0.5f && isHere < 0.1f)
             disocc = 1.0f;
         // Ronin @bugfix 27/09/2026 DX9: a ghost left this pixel. It has no velocity, so the mover test above never fires.
-        if (wm.a > 0.25f && wm.a < 0.35f && isHere < 0.1f)
+        // Ronin @bugfix 10/11/2026 DX9: a still decal too (0.2): the ability ring at rest, flicked away in one frame, stayed behind.
+        if (leftUnmoved(wm.a) > 0.5f && isHere < 0.1f)
             disocc = 1.0f;
 
         // Ronin @bugfix 24/09/2026 DX9: `taa disocc 2` adds the one-pixel EDGE BAND, with the right question: a mover
@@ -747,8 +754,7 @@ float4 resolve(float2 uv, out float3 lowBits)
             // a neighbour whose mesh moved away, by the same rule as above
             float wasNear = max(max(vacates(n0, camPx), vacates(n1, camPx)), max(vacates(n2, camPx), vacates(n3, camPx)));
             // Ronin @bugfix 27/09/2026 DX9: and a ghost's edge band, the preview's outline left in the jittered history.
-            if ((n0.a > 0.25f && n0.a < 0.35f) || (n1.a > 0.25f && n1.a < 0.35f) ||
-                (n2.a > 0.25f && n2.a < 0.35f) || (n3.a > 0.25f && n3.a < 0.35f)) wasNear = 1.0f;
+            if (max(max(leftUnmoved(n0.a), leftUnmoved(n1.a)), max(leftUnmoved(n2.a), leftUnmoved(n3.a))) > 0.5f) wasNear = 1.0f;
             float isNear = 0.0f;
             if (g_TaaSharpen.y > 0.5f)		// this frame's velocity is bound
             {

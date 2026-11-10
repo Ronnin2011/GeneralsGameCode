@@ -3184,8 +3184,9 @@ void R3DTaa::postRender(void)
 						dev->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
 						dev->SetSamplerState(0, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
 					}
-					// 1 = a mover (moved in the last 3 frames); 0.15 = present, still. Both keep the shadow mask off (it takes alpha < 0.1).
-					const float decalC12[4] = { decalMarkMoving(dm) ? 1.0f : 0.15f, 0.0f, 0.0f, dm.additive ? 1.0f : 0.0f };
+					// 1 = a mover (moved in the last 3 frames); 0.2 = present, still. Both keep the shadow mask off (it takes alpha < 0.1).
+					// Ronin @bugfix 10/11/2026 DX9: 0.2, not a stopped mesh's 0.15: the resolve resets where a still decal was and is gone.
+					const float decalC12[4] = { decalMarkMoving(dm) ? 1.0f : 0.2f, 0.0f, 0.0f, dm.additive ? 1.0f : 0.0f };
 					dev->SetPixelShaderConstantF(12, decalC12, 1);
 					dev->SetTexture(0, dm.texture->Peek_D3D_Texture());
 					dev->DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST, 0, GV, G * G * 2, gridIdx, D3DFMT_INDEX16, grid, sizeof(MarkVertex));
