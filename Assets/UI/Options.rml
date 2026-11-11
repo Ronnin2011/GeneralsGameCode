@@ -208,11 +208,11 @@
 						</div>
 					</div>
 					<label class="check opt-row opt-check-row">
-						<div class="opt-text"><div class="opt-label">New Lighting</div><div class="opt-desc">Lights per pixel, the night look, the sky in reflections. Off: the game's own.</div></div>
+						<div class="opt-text"><div class="opt-label">Next-Gen Lighting</div><div class="opt-desc">Lights per pixel, environment affected by the sun/moon and the ground, the sky in reflections. Off: the 2003 vanilla.</div></div>
 						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="lighting"/></div>
 					</label>
 					<label class="check opt-row opt-check-row" data-class-disabled="!lighting">
-						<div class="opt-text"><div class="opt-label">Lamps and Effect Lights</div><div class="opt-desc">The light of lamps, fires and weapons, with their beams and glows.</div></div>
+						<div class="opt-text"><div class="opt-label">Lamps and Effect Lights</div><div class="opt-desc">Ray-marched beams, per pixel lights with shadow maps on lamps, fires and weapons.</div></div>
 						<div class="opt-control"><input class="checkbox" type="checkbox" data-checked="light_effects" data-attrif-disabled="!lighting"/></div>
 					</label>
 					<label class="check opt-row opt-check-row" data-class-disabled="anti_aliasing &gt;= 2">

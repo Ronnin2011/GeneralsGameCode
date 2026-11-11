@@ -279,8 +279,23 @@ void RmlSkirmishSetupScreen::refreshFromGameState()
 		m_model.factionOptions.push_back(OptionModel{ faction.m_playerTemplate, unicodeToUtf8(faction.m_displayName), Rml::String(), faction.m_iconImage.str() });
 
 	m_model.startingCashOptions.clear();
-	for (const GameSetupStartingCashOption &cash : data.m_options.m_startingCashOptions)
-		m_model.startingCashOptions.push_back(OptionModel{ cash.m_amount, unicodeToUtf8(cash.m_label) });
+	// Ronin @feature 10/11/2026 DX9: skirmish's own cash list, $10000 to $50000 in steps of $10000 (Multiplayer.ini's 5000, 10000,
+	// 20000, 50000 stay for LAN); an amount from elsewhere stays listed, so the dropdown shows it.
+	const Int cashNow = (Int)data.m_options.m_startingCash.countMoney();
+	Bool cashListed = FALSE;
+	for (Int amount = 10000; amount <= 50000; amount += 10000)
+	{
+		UnicodeString label;
+		label.format(TheGameText->fetch("GUI:StartingMoneyFormat"), amount);
+		m_model.startingCashOptions.push_back(OptionModel{ amount, unicodeToUtf8(label) });
+		cashListed = (cashListed || amount == cashNow) ? TRUE : FALSE;
+	}
+	if (!cashListed && cashNow > 0)
+	{
+		UnicodeString label;
+		label.format(TheGameText->fetch("GUI:StartingMoneyFormat"), cashNow);
+		m_model.startingCashOptions.push_back(OptionModel{ cashNow, unicodeToUtf8(label) });
+	}
 
 	m_model.mapName = data.m_options.m_mapName.str();
 	m_model.mapDisplayName = unicodeToUtf8(data.m_options.m_mapDisplayName);
