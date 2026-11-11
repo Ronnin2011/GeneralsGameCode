@@ -264,6 +264,9 @@ inline void WaterSea_Bind(const WaterSeaInputs &in)
 	dev->SetPixelShaderConstantF(14, sunDir, 1);
 	dev->SetPixelShaderConstantF(15, sunSharp, 1);
 	dev->SetPixelShaderConstantF(16, surface, 1);
+	// Ronin @bugfix 10/11/2026 DX9: c17 = `pattern`; set every bind - TAA's night pass writes c17 too.
+	const float pattern[4]    = { t.pattern, 0.0f, 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(17, pattern, 1);
 	dev->SetPixelShaderConstantF(18, look, 1);
 	dev->SetPixelShaderConstantF(19, sheen, 1);
 

@@ -650,6 +650,7 @@ namespace
 		waterKnobCell(cols[3], t, "shore");
 		waterKnobCell(cols[3], t, "shoredepth");
 		waterKnobCell(cols[3], t, "texture");
+		waterKnobCell(cols[3], t, "pattern");	// Ronin @bugfix 10/11/2026 DX9
 		cols[4].title = "FOAM";
 		waterKnobCell(cols[4], t, "foam");
 		waterKnobCell(cols[4], t, "foamwidth");

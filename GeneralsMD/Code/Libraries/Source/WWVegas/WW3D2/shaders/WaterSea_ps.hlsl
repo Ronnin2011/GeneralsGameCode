@@ -22,6 +22,7 @@ float4 g_Eye        : register(c13);	// xyz: camera position, world
 float4 g_SunDir     : register(c14);	// xyz: toward the sun (terrain light 0), w: glitter power (`water gloss`)
 float4 g_SunColor   : register(c15);	// rgb: sun colour x glitter strength (`water spec`)
 float4 g_Surface    : register(c16);	// x: ripple strength (0 = normal maps off, 1 = as authored), y: Fresnel on, z: reflection distortion, w: F0
+float4 g_Pattern    : register(c17);	// Ronin @bugfix 10/11/2026 DX9: x: the map texture's pattern over its average colour (`pattern`)
 // Ronin @feature 29/09/2026 DX9: what makes it read as water from an RTS camera, where Fresnel leaves little reflection.
 float4 g_Look       : register(c18);	// x: body refraction, y: body shade, z: Fresnel power, w: debug view (`water view`)
 float4 g_Sheen      : register(c19);	// rgb: sun colour x sheen strength, w: sheen power
@@ -189,7 +190,10 @@ PSOutput main(PSInput input)
 
 	// Ronin @feature 29/09/2026 DX9: the body bends with the surface: the water texture is read where the normals push it.
 	// Light and shade from the normals, relative to flat water so the average brightness stays.
-	const float4 water = tex2D(s_Water, input.texUV + n.xy * g_Look.x);
+	// Ronin @bugfix 10/11/2026 DX9: its pattern over its average colour (the smallest mip): a lake keeps the map's tint without
+	// 2003's streaks showing under the ripples (Bitter Winter). `pattern` 1 = the map's texture as it was.
+	const float2 waterUV = input.texUV + n.xy * g_Look.x;
+	const float4 water = lerp(tex2Dlod(s_Water, float4(waterUV, 0.0f, 16.0f)), tex2D(s_Water, waterUV), g_Pattern.x);
 	const float  edge  = tex2D(s_Edge, input.edgeUV).a;
 	const float  shade = 1.0f + (dot(n, g_SunDir.xyz) - g_SunDir.z) * g_Look.y;
 
