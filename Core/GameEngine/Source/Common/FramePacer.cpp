@@ -208,6 +208,10 @@ Int FramePacer::getActualLogicTimeScaleFps(LogicTimeQueryFlags flags) const
 
 	if (isLogicTimeScaleEnabled())
 	{
+		// Ronin @bugfix 10/11/2026 DX9: a script's fast time (the view's time multiplier) and the debug fast mode run the logic as
+		// fast as it can, as in 2003 - the time scale would hold it at its rate.
+		if (TheTacticalView != nullptr && (TheTacticalView->getTimeMultiplier() > 1 || TheScriptEngine->isTimeFast()))
+			return RenderFpsPreset::UncappedFpsValue;
 		return getLogicTimeScaleFps();
 	}
 

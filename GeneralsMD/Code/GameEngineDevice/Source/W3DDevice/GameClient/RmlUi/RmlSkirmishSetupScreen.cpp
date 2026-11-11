@@ -334,7 +334,11 @@ void RmlSkirmishSetupScreen::show()
 	// Same read/clamp as SkirmishGameOptionsMenuInit()'s slider setup; game speed isn't part of
 	// GameInfo, so it isn't covered by refreshFromGameState()/GameSetupData.
 	SkirmishPreferences prefs;
-	m_model.gameSpeedSliderPos = max(15, min(61, prefs.getInt("FPS", TheGlobalData->m_framesPerSecondLimit)));
+	// Ronin @feature 10/11/2026 DX9: the game speed, 15-60 logic frames a second (0.5x-2x) in steps of 3 (0.1x); 2003's
+	// "unlimited" notch (61) reads as normal speed.
+	const Int savedSpeed = prefs.getInt("FPS", LOGICFRAMES_PER_SECOND);
+	const Int speed = (savedSpeed > 60) ? LOGICFRAMES_PER_SECOND : max(15, savedSpeed);
+	m_model.gameSpeedSliderPos = 15 + ((speed - 15 + 1) / 3) * 3;
 	if (m_modelHandle)
 		m_modelHandle.DirtyVariable("game_speed_slider_pos");
 
@@ -528,11 +532,8 @@ void RmlSkirmishSetupScreen::onStart(Rml::DataModelHandle, Rml::Event &, const R
 
 		case SkirmishSetupActions::STARTVALIDATION_READY:
 		{
-			Int maxFPS = m_model.gameSpeedSliderPos;
-			if (maxFPS > 60) // GREATER_NO_FPS_LIMIT
-				maxFPS = 1000;
-			if (maxFPS < 15)
-				maxFPS = 15;
+			// Ronin @feature 10/11/2026 DX9: the game speed, logic frames a second 15-60 (GameLogic::onNewGame); no "unlimited" any more.
+			const Int maxFPS = max(15, min(60, m_model.gameSpeedSliderPos));
 			SkirmishSetupActions::startGame(TheSkirmishGameInfo, maxFPS);
 			break;
 		}

@@ -904,14 +904,22 @@ bool GameLogic::onNewGame(MAYBE_UNUSED GameMessage *msg)
 	if ( msg->getArgumentCount() >= 3 )
 		rankPoints = msg->getArgument( 2 )->integer;
 
-	if ( msg->getArgumentCount() >= 4 )
+	// Ronin @feature 10/11/2026 DX9: a match draws uncapped at its game speed - the 4th argument (skirmish slider, replay), 15-60 logic
+	// frames a second (0.5x-2x); none or 2003's 1000: 30. The shell keeps 2003's tied cap; a network game runs at the network's rate.
+	if ( gameMode != GAME_SHELL && gameMode != GAME_NONE )
 	{
-		Int maxFPS = msg->getArgument( 3 )->integer;
-		if (maxFPS < 1 || maxFPS > 1000)
-			maxFPS = TheGlobalData->m_framesPerSecondLimit;
-		DEBUG_LOG(("Setting max FPS limit to %d FPS", maxFPS));
-		TheFramePacer->setFramesPerSecondLimit(maxFPS);
+		Int speedFPS = LOGICFRAMES_PER_SECOND;
+		if ( msg->getArgumentCount() >= 4 && msg->getArgument( 3 )->integer >= 15 && msg->getArgument( 3 )->integer <= 60 )
+			speedFPS = msg->getArgument( 3 )->integer;
+		DEBUG_LOG(("Game speed %d logic frames a second, drawn uncapped", speedFPS));
+		TheFramePacer->setFramesPerSecondLimit(RenderFpsPreset::UncappedFpsValue);
 		TheWritableGlobalData->m_useFpsLimit = true;
+		TheFramePacer->setLogicTimeScaleFps(speedFPS);
+		TheFramePacer->enableLogicTimeScale(TRUE);
+	}
+	else
+	{
+		TheFramePacer->enableLogicTimeScale(FALSE);
 	}
 
 	// prepare for new game

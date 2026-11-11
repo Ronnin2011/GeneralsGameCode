@@ -4388,20 +4388,36 @@ button.hq-card:hover .hq-card-title
 .su-speed
 {
 	display: flex;
+	flex-direction: column;
+	margin-bottom: 14dp;
+}
+
+/* Ronin @feature 10/11/2026 DX9: the label and the readout on one row over the slider, which takes the column's whole width */
+.su-speed .su-speed-head
+{
+	display: flex;
 	flex-direction: row;
 	align-items: center;
-	margin-bottom: 14dp;
+	margin-bottom: 6dp;
 }
 
 .su-speed .opt-label
 {
+	flex: 1 1 auto;
+	margin: 0;
+}
+
+.su-speed .su-speed-value
+{
 	flex: 0 0 auto;
-	margin: 0 16dp 0 0;
+	text-align: right;
+	font-weight: bold;
+	color: #EEF1FA;
 }
 
 .su-speed input.range
 {
-	flex: 1 1 0%;
+	width: 100%;
 }
 
 .su-chips

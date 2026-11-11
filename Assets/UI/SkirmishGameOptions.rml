@@ -141,8 +141,12 @@
 						<option data-for="opt : starting_cash_options" data-attr-value="opt.value">{{opt.label}}</option>
 					</select>
 					<div class="su-speed">
-						<div class="opt-label"><gametext key="GUI:GameSpeed"/></div>
-						<input class="range speed" type="range" min="15" max="61" step="1" data-value="game_speed_slider_pos" data-event-change="game_speed_changed" data-tooltip="GUI:AdjustGameSpeed"/>
+						<!-- Ronin @feature 10/11/2026 DX9: the game speed, 0.5x to 2x (15-60 logic frames a second, steps of 0.1x); matches draw uncapped -->
+						<div class="su-speed-head">
+							<div class="opt-label"><gametext key="GUI:GameSpeed"/></div>
+							<div class="su-speed-value">{{ game_speed_slider_pos / 30 | format(1) }}x<span data-if="game_speed_slider_pos == 30"> (normal)</span></div>
+						</div>
+						<input class="range speed" type="range" min="15" max="60" step="3" data-value="game_speed_slider_pos" data-event-change="game_speed_changed" data-tooltip="GUI:AdjustGameSpeed"/>
 					</div>
 					<label class="check" data-tooltip="TOOLTIP:LimitSuperweapons">
 						<input class="checkbox" type="checkbox" data-checked="superweapons_restricted" data-event-change="superweapons_changed"/>
