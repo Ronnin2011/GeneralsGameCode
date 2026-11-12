@@ -349,3 +349,19 @@ protected:
 };
 
 extern DX8MeshRendererClass TheDX8MeshRenderer;
+
+// Ronin @diagnostic 12/11/2026 DX9: [TRANSL] on the panel - meshes drawn faded (stealth, fades) and what they cost (docs/Materials_Work.md).
+struct TranslucentDrawStats
+{
+	unsigned	objects;		// faded drawables drawn from the scene's translucent list, every scene render
+	unsigned	overCap;		// faded drawables past that list's cap (MaxVisibleTranslucentObjects): drawn unfaded
+	unsigned	passes;			// mesh passes drawn with an opacity override
+	unsigned	shaderPasses;	// ... by our shaders; the rest on the fixed-function path
+	unsigned	skinPasses;		// ... of skinned meshes
+	unsigned	twoPassPasses;	// ... of two-pass meshes, each pass faded on its own
+	unsigned	reflectPasses;	// ... environment reflection passes
+	unsigned	sortedMeshes;	// faded meshes drawn through the sorting pool, where the override is not applied
+	double		ms;				// CPU time in RTS3DScene::flushTranslucentObjects
+	bool		enabled;
+};
+extern TranslucentDrawStats TheTranslucentStats;

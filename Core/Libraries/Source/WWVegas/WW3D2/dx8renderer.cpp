@@ -74,6 +74,7 @@
 ** Global Instance of the DX8MeshRender
 */
 DX8MeshRendererClass TheDX8MeshRenderer;
+TranslucentDrawStats TheTranslucentStats = {};	// Ronin @diagnostic 12/11/2026 DX9: [TRANSL]
 bool DX8TextureCategoryClass::m_gForceMultiply = false; // Forces opaque materials to use the multiply blend - pseudo transparent effect.  jba.
 // ----------------------------------------------------------------------------
 
@@ -2766,6 +2767,8 @@ void DX8TextureCategoryClass::Render()
 			// Ronin @perf 07/11/2026 DX9: an additive part (a rocket's flame) is drawn instanced after the sorting pool (`parts`).
 			if (!TheDX8InstanceManager.Collect_Additive_Part(renderer, mesh, lenv, vmaterial, Peek_Texture(0), shader, *world_transform))
 				renderer->Render_Sorted(mesh->Get_Base_Vertex_Offset(),mesh->Get_Bounding_Sphere());
+			if (mesh->Get_Alpha_Override() != 1.0f && !MeshClass::s_InShadowDepthPass)
+				++TheTranslucentStats.sortedMeshes;	// Ronin @diagnostic 12/11/2026 DX9: [TRANSL] - faded, but the pool draws it unfaded
 		} else {
 
 			//non-transparent mesh that will be rendered immediately.  Okay to adjust the shader/material
@@ -2823,6 +2826,16 @@ void DX8TextureCategoryClass::Render()
 							*world_transform);
 
 						mesh->Set_Shroud_Applied_In_Shader(alphaRigidPath == RIGID_RENDER_PATH_SINGLE_RIGID);
+						// Ronin @diagnostic 12/11/2026 DX9: [TRANSL] - this faded pass: the path that drew it and the kind of mesh it belongs to.
+						if (!MeshClass::s_InShadowDepthPass)
+						{
+							++TheTranslucentStats.passes;
+							TheTranslucentStats.shaderPasses += (alphaRigidPath == RIGID_RENDER_PATH_SINGLE_RIGID) ? 1u : 0u;
+							TheTranslucentStats.skinPasses += mesh->Peek_Model()->Get_Flag(MeshGeometryClass::SKIN) ? 1u : 0u;
+							TheTranslucentStats.twoPassPasses += (mesh->Peek_Model()->Get_Pass_Count() == 2) ? 1u : 0u;
+							TheTranslucentStats.reflectPasses +=
+								(Classify_Programmable_Rigid_Texture_Mapping(vmaterial) == PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_REFLECT) ? 1u : 0u;
+						}
 
 						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF, 0x60);
 						vmaterial->Set_Opacity(oldOpacity);	//restore previous value

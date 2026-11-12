@@ -572,6 +572,8 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 							drawInfo->m_flags |= DrawableInfo::ERF_IS_TRANSLUCENT;
 							m_translucentObjectsBuffer[m_translucentObjectsCount++] = robj;
 						}
+						else if (draw->getEffectiveOpacity() != 1.0f)
+							++TheTranslucentStats.overCap;	// Ronin @diagnostic 12/11/2026 DX9: [TRANSL] - past the list's cap
 						if (TheGlobalData->m_enableBehindBuildingMarkers && TheGameLogic && TheGameLogic->getShowBehindBuildingMarkers())
 						{
 							const Bool isTranslucent = (drawInfo->m_flags & DrawableInfo::ERF_IS_TRANSLUCENT) != 0;
@@ -1817,6 +1819,11 @@ void RTS3DScene::flushTranslucentObjects(RenderInfoClass & rinfo)
 
 	if (m_translucentObjectsCount)
 	{
+		// Ronin @diagnostic 12/11/2026 DX9: [TRANSL] - the faded objects and the CPU time to draw them (docs/Materials_Work.md).
+		LARGE_INTEGER translStart = {};
+		if (TheTranslucentStats.enabled)
+			QueryPerformanceCounter(&translStart);
+		TheTranslucentStats.objects += (unsigned)m_translucentObjectsCount;
 		const Int localPlayerIndex = rts::getObservedOrLocalPlayerIndex_Safe();
 
 		for (Int i=0; i<m_translucentObjectsCount; i++)
@@ -1834,6 +1841,13 @@ void RTS3DScene::flushTranslucentObjects(RenderInfoClass & rinfo)
 		WW3D::Render_And_Clear_Static_Sort_Lists(rinfo);	//draws things like water
 		rinfo.alphaOverride = 1.0f;	//disable forced alpha
 		m_translucentObjectsCount = 0;
+		if (TheTranslucentStats.enabled)
+		{
+			LARGE_INTEGER translEnd, translFreq;
+			QueryPerformanceCounter(&translEnd);
+			QueryPerformanceFrequency(&translFreq);
+			TheTranslucentStats.ms += (double)(translEnd.QuadPart - translStart.QuadPart) * 1000.0 / (double)translFreq.QuadPart;
+		}
 	}
 
 	//Reset scene ambient because we sometimes mess around with it to make objects

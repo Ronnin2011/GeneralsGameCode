@@ -38,6 +38,7 @@ public:
 		ROW_LIGHT2,		// Ronin @diagnostic 11/10/2026 DX9: its second row - the lamps and what stands in their light
 		ROW_SORT,		// Ronin @diagnostic 06/11/2026 DX9: the sorting pool's CPU time (docs/Performance_Work.md)
 		ROW_CPU,		// Ronin @diagnostic 07/11/2026 DX9: particle update / render and logic CPU time (docs/Performance_Work.md)
+		ROW_TRANSL,		// Ronin @diagnostic 12/11/2026 DX9: meshes drawn faded and their cost (docs/Materials_Work.md)
 		ROW_COUNT
 	};
 

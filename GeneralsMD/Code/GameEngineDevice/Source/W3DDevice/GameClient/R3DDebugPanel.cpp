@@ -68,6 +68,7 @@
 #include "WW3D2/dx8instancing.h"
 #include "WW3D2/statistics.h"
 #include "WW3D2/sortingrenderer.h"	// Ronin @diagnostic 06/11/2026 DX9: [SORT]
+#include "WW3D2/dx8renderer.h"		// Ronin @diagnostic 12/11/2026 DX9: [TRANSL]
 #include "WW3D2/dx8texman.h"		// Ronin @feature 08/11/2026 DX9Ex: `pool`
 #include "WW3D2/ww3d.h"
 
@@ -148,9 +149,9 @@ namespace
 	// Ronin @feature 28/09/2026 DX9: `rows` switches, defaults as W3DDisplay.cpp's old SHOW_* constants. [DRAW2] shares draw's
 	// name, so one switch drives both.
 	const char    *const ROW_NAMES[R3DDebugPanel::ROW_COUNT] =
-		{ "sr", "inst", "draw", "draw", "shadow", "perf", "depth", "terrain", "ui", "rstate", "taa", "water", "light", "light", "sort", "cpu" };
+		{ "sr", "inst", "draw", "draw", "shadow", "perf", "depth", "terrain", "ui", "rstate", "taa", "water", "light", "light", "sort", "cpu", "transl" };
 	Bool           s_rowOn[R3DDebugPanel::ROW_COUNT] =
-		{ TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE };
+		{ TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, FALSE, TRUE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE };
 	DisplayString *s_rowText[R3DDebugPanel::ROW_COUNT] = {};	// each row's string, made on first use
 	DisplayString *s_noPanel      = nullptr;
 
@@ -161,6 +162,10 @@ namespace
 	unsigned       s_drawTotal    = 0;
 	SortingRendererStats s_sortNow = {};							// Ronin @diagnostic 06/11/2026 DX9: [SORT] last frame's pool numbers
 	double         s_sortEase[SortingRendererStats::MS_COUNT] = {};	// ... its times, eased like the GPU rows
+	TranslucentDrawStats s_translNow = {};						// Ronin @diagnostic 12/11/2026 DX9: [TRANSL] last frame's numbers
+	unsigned       s_translPeak = 0;							// ... the most faded passes in a frame over the last 5 s
+	Int64          s_translPeakAt = 0;
+	double         s_translMsEase = -1.0;						// ... its CPU time, eased; below 0 = take the next frame's as it is
 	FrameCostStats s_cpuNow = {};								// Ronin @diagnostic 07/11/2026 DX9: [CPU] last frame's numbers
 	double         s_cpuEase[FrameCostStats::MS_COUNT] = {};		// ... its times, eased
 	double         s_cpuSteps = 0.0;								// ... logic steps a frame, eased
@@ -3323,6 +3328,17 @@ namespace
 		}
 		TheFrameCostStats = FrameCostStats();
 		TheFrameCostStats.enabled = (s_rowOn[R3DDebugPanel::ROW_CPU] && s_visible) ? TRUE : FALSE;
+
+		// Ronin @diagnostic 12/11/2026 DX9: [TRANSL] - this frame's faded draws, the peak over 5 s, zeroed for the next.
+		s_translNow = TheTranslucentStats;
+		if (s_translNow.passes >= s_translPeak || s_perfNow - s_translPeakAt > s_perfFreq * 5)
+		{
+			s_translPeak   = s_translNow.passes;
+			s_translPeakAt = s_perfNow;
+		}
+		s_translMsEase = (s_translMsEase < 0.0) ? s_translNow.ms : s_translMsEase * 0.9 + s_translNow.ms * 0.1;	// one frame swings too far to compare
+		TheTranslucentStats = TranslucentDrawStats();
+		TheTranslucentStats.enabled = s_rowOn[R3DDebugPanel::ROW_TRANSL] && s_visible;
 	}
 
 	// Ronin @feature 28/09/2026 DX9: sets the row's text and hands it to the panel for this frame.
@@ -3441,6 +3457,18 @@ namespace
 				(TheParticleSystemManager != nullptr) ? TheParticleSystemManager->getParticleCount() : 0u, s_fxPeak,
 				(TheGlobalData != nullptr) ? TheGlobalData->m_maxParticleCount : 0);
 			putRow(R3DDebugPanel::ROW_CPU, text, GameMakeColor(255, 160, 0, 255));
+		}
+
+		// Ronin @diagnostic 12/11/2026 DX9: faded meshes (stealth, fades): objects, their passes by path and kind, the CPU time of their
+		// pass (eased).
+		if (s_rowOn[R3DDebugPanel::ROW_TRANSL])
+		{
+			text.format(L"[TRANSL] objects=%u (over cap %u)  passes=%u (peak %u)  shader=%u old=%u  skin=%u  two-pass=%u  refl=%u"
+				L"  sorted=%u  cpu=%.2fms",
+				s_translNow.objects, s_translNow.overCap, s_translNow.passes, s_translPeak, s_translNow.shaderPasses,
+				s_translNow.passes - s_translNow.shaderPasses, s_translNow.skinPasses, s_translNow.twoPassPasses,
+				s_translNow.reflectPasses, s_translNow.sortedMeshes, (s_translMsEase < 0.0) ? 0.0 : s_translMsEase);
+			putRow(R3DDebugPanel::ROW_TRANSL, text, GameMakeColor(255, 160, 0, 255));
 		}
 
 		// Ronin @diagnostic 06/09/2026 DX9: §29j.13k. Shadow fit - texel moves with zoom, yaw and sun. No maps, no row.
