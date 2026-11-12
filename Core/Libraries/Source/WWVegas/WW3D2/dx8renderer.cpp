@@ -2659,6 +2659,12 @@ void DX8TextureCategoryClass::Render()
 		}
 #endif
 
+		// Ronin @feature 12/11/2026 DX9: a faded mesh (stealth, a fade) on our shaders - one pass, not added, no reflection; its fade travels
+		// with its draw (Set_Collect_Fade). Two passes stay on the old path until they are one shader (docs/Materials_Work.md).
+		const bool fadeOnShader = mesh->Get_Alpha_Override() != 1.0f && !MeshClass::s_InShadowDepthPass && !mesh->Is_Additive() &&
+			mesh->Peek_Model()->Get_Pass_Count() == 1 &&
+			Classify_Programmable_Rigid_Texture_Mapping(vmaterial) != PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_REFLECT;
+
 		// Ronin @bugfix 24/05/2026 DX9 R3: The single-rigid programmable fallback
 		// must obey the same mesh contract as the instanced rigid path, minus only
 		// the instance-count requirement. (selection/material override, object scale,
@@ -2683,7 +2689,7 @@ void DX8TextureCategoryClass::Render()
 			// (materialStateIsTransient, :552). That is a COLOUR failure, and the depth pass has colour
 			// writes off. Geometry and transform are snapshotted at collect time, which is all depth
 			// needs — so the shadow is identical and ~97 draws collapse into the batch.
-			(mesh->Get_Alpha_Override() == 1.0f || MeshClass::s_InShadowDepthPass) &&
+			(mesh->Get_Alpha_Override() == 1.0f || MeshClass::s_InShadowDepthPass || fadeOnShader) &&
 			Programmable_Rigid_Material_Override_Is_Supported(mesh, vmaterial) &&
 			mesh->Get_ObjectScale() == 1.0f &&
 			// Ronin @feature 25/10/2026 DX9: one pass, or two the programmable path takes whole (Programmable_Rigid_Passes_Supported).
@@ -2807,6 +2813,11 @@ void DX8TextureCategoryClass::Render()
 						DX8Wrapper::Apply_Render_State_Changes();
 						DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF,(int)((float)0x60*mesh->Get_Alpha_Override()));
 
+						// Ronin @feature 12/11/2026 DX9: collected on our shaders, the draw keeps its fade and the alpha blend itself - nothing is read
+						// later from the material changed above, so it may be deferred.
+						if (fadeOnShader)
+							TheDX8InstanceManager.Set_Collect_Fade(1.0f - mesh->Get_Alpha_Override(), theAlphaShader);
+
 						// Ronin @bugfix 19/09/2026 DX9: a SINGLE_RIGID mesh sampled the shroud in its own pixel shader;
 						// record that so Render_Material_Pass drops the fixed-function shroud overlay for it instead
 						// of darkening it a second time.
@@ -2819,11 +2830,12 @@ void DX8TextureCategoryClass::Render()
 							allowProgrammableRigidFallback,
 							// Ronin @bugfix 12/08/2026 DX9: opacity/diffuse above are restored before any
 							// deferred flush reads them — §17b.1, §23d.1.
-							true,
+							!fadeOnShader,
 							lenv,
 							vmaterial,
 							theShader,
 							*world_transform);
+						TheDX8InstanceManager.Clear_Collect_Fade();	// Ronin @feature 12/11/2026 DX9
 
 						mesh->Set_Shroud_Applied_In_Shader(alphaRigidPath == RIGID_RENDER_PATH_SINGLE_RIGID);
 						// Ronin @diagnostic 12/11/2026 DX9: [TRANSL] - this faded pass: the path that drew it and the kind of mesh it belongs to.

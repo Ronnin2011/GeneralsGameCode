@@ -118,6 +118,8 @@ VS_OUTPUT main(VS_INPUT input)
 
     output.diffuse.rgb = lerp(unlitColor, litColor, lightingEnabled);
     output.diffuse.a = lerp(unlitAlpha, litAlpha, lightingEnabled);
+    // Ronin @feature 12/11/2026 DX9: a faded draw (stealth, a fade) - its fade rides light 0's spare w (1 = gone); 0 on every other draw.
+    output.diffuse.a *= 1.0f - input.instLightDir0.w;
 
     // Ronin @feature 16/06/2026 DX9 Rigid parity (Phase 1: AFFINE_UV).
     float2 mappedUV = input.uv0;

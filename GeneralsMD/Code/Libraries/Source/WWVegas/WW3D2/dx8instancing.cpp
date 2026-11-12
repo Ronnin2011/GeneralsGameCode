@@ -1357,7 +1357,8 @@ bool DX8InstanceManagerClass::Collect_Single_Rigid(
 	rec.texGen   = texGen;
 	rec.diffuse  = diffuseTexture; // per-record: a container flush spans many texture-categories
 	rec.material = material;
-	rec.shader   = shader;         // per-record render state (blend/z/alpha-test/cull)
+	rec.shader   = m_collectFadeOn ? m_collectFadeShader : shader;	// per-record render state (blend/z/alpha-test/cull)
+	rec.fade     = m_collectFadeOn ? m_collectFade : 0.0f;	// Ronin @feature 12/11/2026 DX9: a faded mesh (Set_Collect_Fade)
 	rec.shroud   = (lightEnv == nullptr) || !lightEnv->Is_Fog_Dimmed();	// Ronin @bugfix 08/10/2026 DX9: see the flush
 	rec.baseVertex = baseVertex;	// Ronin @feature 05/11/2026 DX9: drawn from there (Render_Instanced)
 	m_pendingSingleRigidCount++;
@@ -1439,6 +1440,11 @@ bool DX8InstanceManagerClass::Single_Rigid_Order_Less(const PendingSingleRigid& 
 	// Ronin @bugfix 08/10/2026 DX9: the shroud switch (c23). Last in the key: a ghost object's records never share a draw with lit ones.
 	if (a.shroud != b.shroud) return (int)a.shroud < (int)b.shroud;
 
+	// Ronin @feature 12/11/2026 DX9: faded records share a draw with faded ones only; the fade rides the instance. Only an alpha-tested
+	// one keys on its value (the test's reference is set per fade): stealth pulses each unit on its own phase, so fades rarely match.
+	if ((a.fade > 0.0f) != (b.fade > 0.0f)) return (int)(a.fade > 0.0f) < (int)(b.fade > 0.0f);
+	if (a.fade != b.fade && a.shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_ENABLE) return a.fade < b.fade;
+
 	return false; // equal on the whole merge key -> these two can share one instanced draw
 }
 
@@ -1455,11 +1461,14 @@ bool DX8InstanceManagerClass::Single_Rigid_Records_Merge(
 
 	if (requireLightMatch) {
 		// ambient (rgb + numLights in .w) + 4x (direction, diffuse): one contiguous block in InstanceData.
-		const size_t lightingPayloadSize =
-			sizeof(a.inst.ambient) + sizeof(a.inst.lightDir0) + sizeof(a.inst.lightDiffuse0) +
+		// Ronin @feature 12/11/2026 DX9: less light 0's w - the record's fade, read per instance; the pixel shader reads only xyz.
+		const size_t ambientAndDir0 = sizeof(a.inst.ambient) + 3 * sizeof(float);
+		const size_t restOfLights =
+			sizeof(a.inst.lightDiffuse0) +
 			sizeof(a.inst.lightDir1) + sizeof(a.inst.lightDiffuse1) + sizeof(a.inst.lightDir2) +
 			sizeof(a.inst.lightDiffuse2) + sizeof(a.inst.lightDir3) + sizeof(a.inst.lightDiffuse3);
-		if (memcmp(&a.inst.ambient, &b.inst.ambient, lightingPayloadSize) != 0) {
+		if (memcmp(&a.inst.ambient, &b.inst.ambient, ambientAndDir0) != 0 ||
+			memcmp(&a.inst.lightDiffuse0, &b.inst.lightDiffuse0, restOfLights) != 0) {
 			return false;
 		}
 	}
@@ -1571,6 +1580,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	for (unsigned k = 0; k < count; ++k) {
 		PendingSingleRigid& rec = m_pendingSingleRigid[m_srOrder[k]];
 		Extract_Instance_Lighting(rec.lightEnv, rec.inst); // no device queries
+		rec.inst.lightDir0[3] = rec.fade;	// Ronin @feature 12/11/2026 DX9: the fade rides light 0's spare w (RigidInstance VS)
 		dst[k] = rec.inst;
 	}
 	m_singleRigidVB->Unlock();
@@ -1741,6 +1751,8 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	bool                 haveSpec = false;            // Ronin @feature 18/10/2026 DX9: 3b - the specular switch's c26
 	bool                 lastSpecOn = false;
 	VertexMaterialClass* lastSpecMaterial = nullptr;
+	float                lastFade = -1.0f;            // Ronin @feature 12/11/2026 DX9: -1 = set it at the next record
+	bool                 alphaRefMoved = false;
 
 	unsigned i = 0;
 	while (i < count) {
@@ -1770,6 +1782,20 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 			// Ronin @feature 25/10/2026 DX9: an added (ONE/ONE) pass leaves the sun-shade record alone - blended it would add its own
 			// to the first pass's.
 			dev->SetRenderState(D3DRS_COLORWRITEENABLE1, (rec.shader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE) ? 0 : 0x0000000F);
+			lastFade = -1.0f;	// Ronin @feature 12/11/2026 DX9: the shader reset the alpha test's reference
+		}
+
+		// Ronin @feature 12/11/2026 DX9: a faded record - the alpha test's reference lowered with its fade, as the old path did, and no sun-shade
+		// record, so the ground behind it keeps its own.
+		if (rec.fade != lastFade) {
+			if (rec.shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_ENABLE &&
+				rec.shader.Get_Src_Blend_Func() != ShaderClass::SRCBLEND_ONE_MINUS_SRC_ALPHA) {
+				DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF, (unsigned)((float)0x60 * (1.0f - rec.fade)));
+				alphaRefMoved = alphaRefMoved || (rec.fade > 0.0f);
+			}
+			dev->SetRenderState(D3DRS_COLORWRITEENABLE1,
+				(rec.fade > 0.0f || rec.shader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE) ? 0 : 0x0000000F);
+			lastFade = rec.fade;
 		}
 
 		// Per-material: upload VS material constants (c7..c13). Lights ride the stream, so the lightEnv
@@ -1948,6 +1974,8 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		s_SunShadeEnd();
 	}
 	dev->SetRenderState(D3DRS_COLORWRITEENABLE1, 0x0000000F);	// Ronin @feature 25/10/2026 DX9: as an added pass may have left it
+	if (alphaRefMoved)
+		DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF, 0x60);	// Ronin @feature 12/11/2026 DX9: as the old path leaves it
 
 	// --- Teardown ONCE -------------------------------------------------------------------------
 	dev->SetStreamSourceFreq(0, 1);

@@ -190,6 +190,9 @@ public:
 		int baseVertex = 0);	// Ronin @feature 05/11/2026 DX9: a skin's place in the shared skin buffer; 0 for a rigid mesh
 
 	void Flush_Single_Rigid();
+	// Ronin @feature 12/11/2026 DX9: while set, a collected record is faded - fade 0..1 (1 = gone), drawn with this alpha blend; the caller clears it.
+	void Set_Collect_Fade(float fade, const ShaderClass& shader) { m_collectFade = fade; m_collectFadeShader = shader; m_collectFadeOn = true; }
+	void Clear_Collect_Fade() { m_collectFadeOn = false; }
 	void Reset_Single_Rigid_Collection() { m_pendingSingleRigidCount = 0; }
 	unsigned Get_Pending_Single_Rigid_Count() const { return m_pendingSingleRigidCount; }
 
@@ -291,7 +294,13 @@ private:
 		ShaderClass              shader;    // per-record: blend/z/alpha-test/cull render state, re-applied per group
 		bool                     shroud;    // per-record: false = its light env already carries the fog (a ghost object)
 		int                      baseVertex; // Ronin @feature 05/11/2026 DX9: a skin's first vertex in the skin buffer (rigid: 0)
+		float                    fade;       // Ronin @feature 12/11/2026 DX9: 0 = opaque, 1 = gone; rides light 0's spare w to the VS
 	};
+
+	// Ronin @feature 12/11/2026 DX9: Set_Collect_Fade's fade and alpha blend for the records collected while it is on.
+	float                m_collectFade = 0.0f;
+	ShaderClass          m_collectFadeShader;
+	bool                 m_collectFadeOn = false;
 
 	enum { MAX_PENDING_SINGLE_RIGID = 4096 };
 	PendingSingleRigid   m_pendingSingleRigid[MAX_PENDING_SINGLE_RIGID];
