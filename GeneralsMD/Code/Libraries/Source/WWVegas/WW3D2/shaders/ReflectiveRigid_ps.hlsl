@@ -4,26 +4,28 @@
 // Compile: fxc /T ps_3_0 /Fo ReflectiveRigid.pso ReflectiveRigid_ps.hlsl
 // Ronin @feature 12/11/2026 DX9: and with /D REFLECTIVE_BODY=1 /Fo ReflectiveRigidBody.pso - a faded panel, its body in the same draw.
 sampler2D g_EnvSampler : register(s0); // this pass's stage-0 texture (lakedusk)
-float4    g_CameraPos  : register(c0); // world-space camera position (xyz)
-float4x4  g_View       : register(c1); // world->view; uploaded transposed (mirrors the VS g_ViewProj convention)
+// Ronin @perf 13/11/2026 DX9: RigidInstance_ps's registers where the meaning is the same (the camera c25, the shroud c23; the body's cloud,
+// lights, shadow, normal map, specular), its own past them: the batch draws a panel between rigid meshes with nothing to restore.
+float4    g_CameraPos  : register(c25); // world-space camera position (xyz)
+float4x4  g_View       : register(c56); // c56..c59: world->view; uploaded transposed (mirrors the VS g_ViewProj convention)
 // Ronin @feature 12/10/2026 DX9: lighting step 5. The map's own sky (R3DSkyCube) by the WORLD reflection vector, in place of the
 // art's one picture. g_SkyMode.x: 0 = the picture as before, 1 = the cube, 2 = the cube with the sky in every pane.
 samplerCUBE g_SkyCube  : register(s6);
-float4    g_SkyMode    : register(c6);
+float4    g_SkyMode    : register(c60);
 // Ronin @feature 18/10/2026 DX9: reflections of the ground. The lit ground map (R3DSkyCube: rgb = colour x its level light, halved;
 // a = height) and its constants (Set_Reflection_Ground).
 sampler2D g_GroundMap  : register(s7);
-float4    g_GroundUV   : register(c12);  // xy = the map's corner in the world, zw = 1 / its size
-float4    g_ReflKnobs  : register(c13);  // x = `reflectground`, y = `fresnel`
-float4    g_GroundLit  : register(c14);  // rgb = the level light the map was lit with, w = its height span
-float4    g_GroundZ    : register(c15);  // x = its lowest height, y = how far a reflection may run to the ground
+float4    g_GroundUV   : register(c61);  // xy = the map's corner in the world, zw = 1 / its size
+float4    g_ReflKnobs  : register(c62);  // x = `reflectground`, y = `fresnel`
+float4    g_GroundLit  : register(c63);  // rgb = the level light the map was lit with, w = its height span
+float4    g_GroundZ    : register(c64);  // x = its lowest height, y = how far a reflection may run to the ground
 // Ronin @feature 18/10/2026 DX9: screen-space reflections from LAST frame - TAA's history and its depth (Set_Screen_Reflection):
-// their clean view-projection (c16..c19, transposed), where their 3D view sits in them, and the march's settings.
+// their clean view-projection (c76..c79, transposed), where their 3D view sits in them, and the march's settings.
 sampler2D g_PrevColour : register(s8);
 sampler2D g_PrevDepth  : register(s9);  // linear depth over the far plane, packed into RGB (TaaDepthStore)
-float4x4  g_PrevViewProj : register(c16);
-float4    g_PrevView   : register(c20);  // xy = the 3D view's corner in those textures, zw = its size (0..1)
-float4    g_Ssr        : register(c21);  // x = on, y = the far plane, z = how far a ray runs, w = how far behind a hit may end
+float4x4  g_PrevViewProj : register(c76);
+float4    g_PrevView   : register(c80);  // xy = the 3D view's corner in those textures, zw = its size (0..1)
+float4    g_Ssr        : register(c81);  // x = on, y = the far plane, z = how far a ray runs, w = how far behind a hit may end
 // Ronin @feature 18/10/2026 DX9: the reflections' change mask - the frame before last (TAA's other history) and its camera. Where
 // the hit changed between the two, COLOR1.r marks the pane for TAA (R3DTaa::beginReflectMask). c69..c74: no other shader's.
 sampler2D g_OlderColour   : register(s10);
@@ -39,7 +41,7 @@ float4    g_ReflVel       : register(c75);  // x = both are there, yz = one texe
 // overlay is depth-compared and blackened alpha meshes at the fog edge, so it no longer runs on programmable meshes — the
 // shroud is sampled here instead, same meaning as in RigidInstance_ps. zw == 0 means the map has no shroud.
 sampler2D g_ShroudSampler : register(s5);
-float4    g_ShroudMap  : register(c5);  // xy = world offset, zw = 1/(cellSize * textureSize)
+float4    g_ShroudMap  : register(c23);  // xy = world offset, zw = 1/(cellSize * textureSize)
 // Ronin @feature 12/11/2026 DX9: REFLECTIVE_BODY (ReflectiveRigidBody.pso) - a faded reflective panel in one draw: its alpha body pass
 // composited over the reflection here, then the draw blended at its opacity (Draw_Reflective_Rigid). docs/Materials_Work.md.
 #ifdef REFLECTIVE_BODY
@@ -48,19 +50,22 @@ sampler2D g_CloudSampler      : register(s1);
 sampler2D g_BodyNormalSampler : register(s2);  // its _NRM, when it has one
 sampler2D g_ShadowSampler     : register(s3);  // the sun's shadow map, near and far cascades, as RigidInstance_ps samples them
 sampler2D g_ShadowSamplerFar  : register(s4);
-float4    g_Body              : register(c30); // x = a body to draw, y = the draw's opacity, z = cloud shadows on
+float4    g_CloudParams       : register(c0);  // x = cloud shadows on (RigidInstance_ps's)
+float4    g_BodyNormalParams  : register(c2);  // x = the normal map on, y = its strength (its)
+float4    g_BodyLights[8]     : register(c3);  // c3..c10: lights 0..3, direction towards it then colour (its)
+float4    g_BodyNumLights     : register(c11); // x = how many (its)
+float4x4  g_LightViewProj     : register(c12); // c12..c15, c16, c17, c18..c21, c22, c24: its shadow registers
+float4    g_ShadowParams      : register(c16);
+float4    g_ShadowParams2     : register(c17);
+float4x4  g_LightViewProjFar  : register(c18);
+float4    g_CascadeParams     : register(c22);
+float4    g_ShadeColour       : register(c24);
+float4    g_BodySpecular      : register(c26); // rgb = the material's specular, w = shininess; w < 0 = the switch is off (its)
+float4    g_SpecLight         : register(c27); // light 0, towards it (its)
+float4    g_SpecColour        : register(c28); // light 0's colour (its)
+float4    g_Body              : register(c30); // x = a body to draw
 float4    g_BodyLightScale    : register(c31); // rgb: the body's light = the reflection's x this + c32 (the two passes' materials)
 float4    g_BodyLightAdd      : register(c32);
-float4x4  g_LightViewProj     : register(c33); // c33..c36; the rest as RigidInstance_ps's c16, c17, c18..c21, c22, c24
-float4    g_ShadowParams      : register(c37);
-float4    g_ShadowParams2     : register(c38);
-float4x4  g_LightViewProjFar  : register(c39); // c39..c42
-float4    g_CascadeParams     : register(c43);
-float4    g_ShadeColour       : register(c44);
-float4    g_BodyNormalParams  : register(c45); // x = the normal map on, y = its strength (RigidInstance_ps's c2)
-float4    g_BodyLights[8]     : register(c46); // c46..c53: lights 0..3, direction towards it then colour (its c3..c10)
-float4    g_BodyNumLights     : register(c54); // x = how many (its c11)
-float4    g_BodySpecular      : register(c55); // rgb = the material's specular, w = shininess; w < 0 = the switch is off (its c26)
 
 // Ronin @feature 12/11/2026 DX9: the sun's shadow on the body - RigidInstance_ps's cascades, normal offset and 3x3 PCF; lit = 1 in the sun.
 float3 bodySunShade(float3 worldPos, float3 worldNormal, out float lit)
@@ -286,12 +291,12 @@ PS_OUTPUT main(PS_INPUT i)
         }
     }
     float3 cloud   = tex2D(g_CloudSampler, i.uv1).rgb;
-    body          *= (g_Body.z > 0.0f) ? cloud : float3(1.0f, 1.0f, 1.0f);
+    body          *= (g_CloudParams.x > 0.0f) ? cloud : float3(1.0f, 1.0f, 1.0f);
     float  bodyLit;
     body          *= bodySunShade(i.worldPos, i.worldNormal, bodyLit);
-    float3 bodyL   = normalize(g_BodyLights[0].xyz + float3(0.0f, 0.0f, 1.0e-5f));
+    float3 bodyL   = normalize(g_SpecLight.xyz + float3(0.0f, 0.0f, 1.0e-5f));
     if (g_BodySpecular.w >= 0.0f && dot(N, bodyL) > 0.0f)
-        body += g_BodySpecular.rgb * g_BodyLights[1].rgb * pow(saturate(dot(N, normalize(bodyL - V))), max(g_BodySpecular.w, 0.001f)) * bodyLit;
+        body += g_BodySpecular.rgb * g_SpecColour.rgb * pow(saturate(dot(N, normalize(bodyL - V))), max(g_BodySpecular.w, 0.001f)) * bodyLit;
     float  bodyA   = bodyTex.a * g_Body.x;
     reflection     = lerp(reflection, body, bodyA);
     changed       *= 1.0f - bodyA;
@@ -309,7 +314,7 @@ PS_OUTPUT main(PS_INPUT i)
     // Ronin @feature 18/10/2026 DX9: the change mask (COLOR1), by how much the pane visibly changed (target 1: TAA's mask, or none).
     PS_OUTPUT o;
 #ifdef REFLECTIVE_BODY
-    o.color = float4(reflection, g_Body.y);    // Ronin @feature 12/11/2026 DX9: the draw's opacity - the alpha blend lays it over what is behind
+    o.color = float4(reflection, i.col.a);    // Ronin @perf 13/11/2026 DX9: the vertex alpha - its fade, 1 - light 0's w (RigidInstance VS)
 #else
     o.color = float4(reflection, 1.0f);
 #endif

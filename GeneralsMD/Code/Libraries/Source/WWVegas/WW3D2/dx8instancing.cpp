@@ -685,7 +685,7 @@ void DX8InstanceManagerClass::Set_Sky_Reflection(IDirect3DCubeTexture9* cube, fl
 }
 
 // Ronin @feature 18/10/2026 DX9: reflections of the ground - pushed down by R3DLocalLights each frame, as the cube is: the ground
-// map (held the same way) and c12..c15 - its uv, the knobs, its level light and height.
+// map (held the same way) and its four constants (c61..c64 in ReflectiveRigid_ps) - its uv, the knobs, its level light and height.
 void DX8InstanceManagerClass::Set_Reflection_Ground(IDirect3DTexture9* groundMap, const float* c12to15)
 {
 	if (groundMap != nullptr)
@@ -700,7 +700,7 @@ void DX8InstanceManagerClass::Set_Reflection_Ground(IDirect3DTexture9* groundMap
 }
 
 // Ronin @feature 18/10/2026 DX9: screen-space reflections - pushed down by R3DLocalLights every frame: TAA's last frame (borrowed
-// for the frame) and c16..c21 - its view-projection, where its 3D view sits, the march's settings; the frame before, for the mask.
+// for the frame) and six constants (c76..c81) - its view-projection, where its 3D view sits, the march's settings; the frame before.
 void DX8InstanceManagerClass::Set_Screen_Reflection(IDirect3DTexture9* prevColour, IDirect3DTexture9* prevDepth, const float* c16to21,
                                                     IDirect3DTexture9* olderColour, const float* c69to74)
 {
@@ -716,6 +716,114 @@ void DX8InstanceManagerClass::Set_Screen_Reflection(IDirect3DTexture9* prevColou
 		memcpy(s_ssrOlderC, c69to74, sizeof(s_ssrOlderC));
 	else
 		memset(s_ssrOlderC, 0, sizeof(s_ssrOlderC));
+}
+
+// Ronin @perf 13/11/2026 DX9: the reflection's state that holds for a whole frame - view (c56..c59), sky (c60, s6), ground (c61..c64, s7),
+// screen-space reflections (c76..c81, s8, s9). Once per batch, or per inline draw. True = screen-space reflections are on.
+static bool Bind_Reflective_Frame_State(IDirect3DDevice9* dev, const D3DXMATRIX& dxView)
+{
+	D3DXMATRIX viewT;
+	D3DXMatrixTranspose(&viewT, &dxView);
+	dev->SetPixelShaderConstantF(56, (const float*)&viewT, 4);
+
+	const float skyC[4] = { (s_skyCube != nullptr) ? s_skyReflectMode : 0.0f, 0.0f, 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(60, skyC, 1);
+	dev->SetTexture(6, s_skyCube);
+	if (s_skyCube != nullptr) {
+		dev->SetSamplerState(6, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(6, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(6, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+	}
+
+	float groundC[16];
+	memcpy(groundC, s_reflGroundC, sizeof(groundC));
+	if (s_reflGround == nullptr)
+		groundC[4] = 0.0f;
+	dev->SetPixelShaderConstantF(61, groundC, 4);
+	dev->SetTexture(7, s_reflGround);
+	if (s_reflGround != nullptr) {
+		dev->SetSamplerState(7, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(7, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(7, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(7, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(7, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	}
+
+	const bool ssrOn = (s_ssrColour != nullptr) && (s_ssrDepth != nullptr) && !ShaderClass::Is_Backface_Culling_Inverted();
+	float ssrC[24];
+	memcpy(ssrC, s_ssrC, sizeof(ssrC));
+	if (!ssrOn)
+		ssrC[20] = 0.0f;
+	dev->SetPixelShaderConstantF(76, ssrC, 6);
+	dev->SetTexture(8, ssrOn ? s_ssrColour : nullptr);
+	dev->SetTexture(9, ssrOn ? s_ssrDepth : nullptr);
+	if (ssrOn) {
+		for (DWORD st = 8; st <= 9; ++st) {
+			const DWORD filter = (st == 9) ? D3DTEXF_POINT : D3DTEXF_LINEAR;	// the depth is packed: never blended
+			dev->SetSamplerState(st, D3DSAMP_MINFILTER, filter);
+			dev->SetSamplerState(st, D3DSAMP_MAGFILTER, filter);
+			dev->SetSamplerState(st, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+			dev->SetSamplerState(st, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+			dev->SetSamplerState(st, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+		}
+	}
+	return ssrOn;
+}
+
+// Ronin @perf 13/11/2026 DX9: the change mask's constants (c69..c74; c74.x = 1 while it is bound) and the frame before last on s10.
+static void Bind_Reflect_Mark_State(IDirect3DDevice9* dev, bool bound)
+{
+	float markC[24];
+	memcpy(markC, s_ssrOlderC, sizeof(markC));
+	markC[20] = bound ? 1.0f : 0.0f;
+	dev->SetPixelShaderConstantF(69, markC, 6);
+	dev->SetTexture(10, bound ? s_ssrOlder : nullptr);
+	if (bound) {
+		dev->SetSamplerState(10, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(10, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(10, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+		dev->SetSamplerState(10, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+		dev->SetSamplerState(10, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+	}
+}
+
+// Ronin @perf 13/11/2026 DX9: a faded panel's body - its texture on s13 (none: c30.x = 0, a faded reflection alone) and its light, the
+// reflection's through the two passes' materials (c31 x it + c32). Shared by the inline draw and the batch.
+static void Bind_Reflective_Body(IDirect3DDevice9* dev, VertexMaterialClass* envMaterial, VertexMaterialClass* bodyMaterial,
+	TextureClass* bodyTexture)
+{
+	Vector3 dif0(1.0f, 1.0f, 1.0f), dif1(1.0f, 1.0f, 1.0f), emi0(0.0f, 0.0f, 0.0f), emi1(0.0f, 0.0f, 0.0f);
+	if (envMaterial != nullptr) {
+		envMaterial->Get_Diffuse(&dif0);
+		envMaterial->Get_Emissive(&emi0);
+	}
+	if (bodyMaterial != nullptr) {
+		bodyMaterial->Get_Diffuse(&dif1);
+		bodyMaterial->Get_Emissive(&emi1);
+	}
+	const float d0[3] = { dif0.X, dif0.Y, dif0.Z };
+	const float d1[3] = { dif1.X, dif1.Y, dif1.Z };
+	const float e0[3] = { emi0.X, emi0.Y, emi0.Z };
+	const float e1[3] = { emi1.X, emi1.Y, emi1.Z };
+	float psC31[4] = { 1.0f, 1.0f, 1.0f, 0.0f };
+	float psC32[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	for (int ch = 0; ch < 3; ++ch) {
+		psC31[ch] = (d0[ch] > 0.001f) ? d1[ch] / d0[ch] : 1.0f;
+		psC32[ch] = e1[ch] - psC31[ch] * e0[ch];
+	}
+	const float psC30[4] = { (bodyTexture != nullptr) ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f };
+	dev->SetPixelShaderConstantF(30, psC30, 1);
+	dev->SetPixelShaderConstantF(31, psC31, 1);
+	dev->SetPixelShaderConstantF(32, psC32, 1);
+	if (bodyTexture != nullptr) {
+		bodyTexture->Init();	// as the batch does: after a reset a raw Peek never asks for the reload
+	}
+	dev->SetTexture(13, (bodyTexture != nullptr) ? bodyTexture->Peek_D3D_Texture() : nullptr);
+	dev->SetSamplerState(13, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(13, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(13, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+	dev->SetSamplerState(13, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+	dev->SetSamplerState(13, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
 }
 
 // Ronin @diagnostic 26/06/2026 DX9 P2: how many category flushes per frame (=> avg batch size).
@@ -869,6 +977,7 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 		inst.ambient[2] = lightingConstants.c4[2];
 		inst.ambient[3] = lightingConstants.numLights;
 		memcpy(inst.lightDir0, lightingConstants.c5, sizeof(inst.lightDir0));
+		inst.lightDir0[3] = reflFaded ? m_collectFade : 0.0f;	// Ronin @perf 13/11/2026 DX9: a faded panel's fade, as the batch writes it
 		memcpy(inst.lightDiffuse0, lightingConstants.c6, sizeof(inst.lightDiffuse0));
 		memcpy(inst.lightDir1, lightingConstants.c11, sizeof(inst.lightDir1));
 		memcpy(inst.lightDiffuse1, lightingConstants.c12, sizeof(inst.lightDiffuse1));
@@ -895,7 +1004,6 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 		m_singleRigidVB->Unlock();
 	}
 
-	bool reflCloudActive = false;	// Ronin @feature 12/11/2026 DX9: for a faded panel's body
 	{
 		const bool cloudEnabled =
 			(TheGlobalData != nullptr) &&
@@ -905,8 +1013,6 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 
 		TextureClass* rigidCloudTex = cloudEnabled ? Get_Valid_Rigid_Cloud_Texture() : nullptr;
 		const bool cloudActive = cloudEnabled && (rigidCloudTex != nullptr);
-		reflCloudActive = cloudActive;
-
 		float cloudScale = 0.0f, cloudOffsetX = 0.0f, cloudOffsetY = 0.0f;
 		if (cloudActive) {
 			W3DShaderManager::getCloudMapState(&cloudScale, &cloudOffsetX, &cloudOffsetY);
@@ -954,21 +1060,12 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 
 	}
 
-	// Ronin @feature DX9: the reflective PS reads c0 as world-space camera position; override the
-	// cloud flag the block above wrote to c0. Must be after that block and before the draw.
-	{
-		dev->SetPixelShaderConstantF(0, reflectiveCameraPosPS, 1);
-		// Ronin @feature DX9: view matrix (world->camera) so the reflective PS can sphere-map the
-		// reflection in CAMERA space (view-relative chrome look) instead of world space, which drops
-		// the reflection on camera-facing panels as you orbit. Transposed to match the VS g_ViewProj
-		// convention. Overwrites the cloud psC1/psC2 above — harmless, the reflective PS ignores cloud.
-		D3DXMATRIX reflectiveViewT;
-		D3DXMatrixTranspose(&reflectiveViewT, &dxView);
-		dev->SetPixelShaderConstantF(1, (const float*)&reflectiveViewT, 4);
-	}
+	// Ronin @perf 13/11/2026 DX9: the camera in the world on c25, RigidInstance_ps's register, as the batch sets it; the view goes with the
+	// frame's other reflection state (Bind_Reflective_Frame_State).
+	dev->SetPixelShaderConstantF(25, reflectiveCameraPosPS, 1);
 
-	// Ronin @bugfix 19/09/2026 DX9: shroud on s5 + c5, same meaning as in Flush_Single_Rigid — this pass no longer takes
-	// the depth-compared fixed-function overlay either (MeshClass::Render_Material_Pass skips it). c5.zw == 0 -> no shroud.
+	// Ronin @bugfix 19/09/2026 DX9: shroud on s5 + c23, same meaning as in Flush_Single_Rigid — this pass no longer takes
+	// the depth-compared fixed-function overlay either (MeshClass::Render_Material_Pass skips it). c23.zw == 0 -> no shroud.
 	{
 		float reflShroudOfsX = 0.0f, reflShroudOfsY = 0.0f, reflShroudSclX = 0.0f, reflShroudSclY = 0.0f;
 		TextureClass* reflShroudTex = W3DShaderManager::getShroudTexture();
@@ -978,8 +1075,9 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 			(W3DShaderManager::getShroudMapState(&reflShroudOfsX, &reflShroudOfsY,
 												 &reflShroudSclX, &reflShroudSclY) != 0);
 
-		const float reflPsC5[4] = { reflShroudOfsX, reflShroudOfsY, reflShroudSclX, reflShroudSclY };
-		dev->SetPixelShaderConstantF(5, reflPsC5, 1);
+		// Ronin @perf 13/11/2026 DX9: on c23, RigidInstance_ps's shroud register (was c5), as the batch sets it.
+		const float reflPsC23[4] = { reflShroudOfsX, reflShroudOfsY, reflShroudSclX, reflShroudSclY };
+		dev->SetPixelShaderConstantF(23, reflPsC23, 1);
 
 		if (reflShroudActive) {
 			const DWORD reflShroudFilter =
@@ -996,111 +1094,27 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 		}
 	}
 
-	// Ronin @feature 12/10/2026 DX9: lighting step 5. The map's sky cube on s6 and how to use it in c6.x (Set_Sky_Reflection);
-	// always uploaded, 0 = the art's picture on s0 as before.
-	{
-		const float reflPsC6[4] = { (s_skyCube != nullptr) ? s_skyReflectMode : 0.0f, 0.0f, 0.0f, 0.0f };
-		dev->SetPixelShaderConstantF(6, reflPsC6, 1);
-		dev->SetTexture(6, s_skyCube);
-		if (s_skyCube != nullptr) {
-			dev->SetSamplerState(6, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-			dev->SetSamplerState(6, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-			dev->SetSamplerState(6, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-		}
-	}
+	// Ronin @perf 13/11/2026 DX9: the frame's reflection state as the batch binds it (Bind_Reflective_Frame_State); the change mask round this
+	// draw (s_ReflectMaskBegin), not for a faded panel - blended at its opacity, the mark would be blended too.
+	const bool reflSsrOn = Bind_Reflective_Frame_State(dev, dxView);
+	const bool reflMark = !reflFaded && reflSsrOn && s_ReflectMaskBegin != nullptr && s_ReflectMaskEnd != nullptr && s_ReflectMaskBegin();
+	Bind_Reflect_Mark_State(dev, reflMark);
 
-	// Ronin @feature 18/10/2026 DX9: reflections of the ground - c12..c15 (Set_Reflection_Ground; none without the map), the map on s7.
-	// Screen-space reflections - c16..c21 (Set_Screen_Reflection), last frame on s8, its depth on s9; not in the water's mirror.
-	bool reflMark = false;	// Ronin @feature 18/10/2026 DX9: the reflections' change mask is bound round this draw (s_ReflectMaskBegin)
-	{
-		float reflPsC12[16];
-		memcpy(reflPsC12, s_reflGroundC, sizeof(reflPsC12));
-		if (s_reflGround == nullptr)
-			reflPsC12[4] = 0.0f;
-		dev->SetPixelShaderConstantF(12, reflPsC12, 4);
-		const bool ssrOn = (s_ssrColour != nullptr) && (s_ssrDepth != nullptr) && !ShaderClass::Is_Backface_Culling_Inverted();
-		float reflPsC16[24];
-		memcpy(reflPsC16, s_ssrC, sizeof(reflPsC16));
-		if (!ssrOn)
-			reflPsC16[20] = 0.0f;
-		dev->SetPixelShaderConstantF(16, reflPsC16, 6);
-		// Ronin @feature 18/10/2026 DX9: the reflections' change mask (COLOR1): the frame before last on s10, its c69..c74 (no other
-		// shader reads them); c74.x = 1 only while the mask is bound.
-		// Ronin @feature 12/11/2026 DX9: not for a faded panel - blended at its opacity, the mark would be blended too.
-		reflMark = !reflFaded && ssrOn && s_ReflectMaskBegin != nullptr && s_ReflectMaskEnd != nullptr && s_ReflectMaskBegin();
-		float reflPsC69[24];
-		memcpy(reflPsC69, s_ssrOlderC, sizeof(reflPsC69));
-		reflPsC69[20] = reflMark ? 1.0f : 0.0f;
-		dev->SetPixelShaderConstantF(69, reflPsC69, 6);
-		dev->SetTexture(8, ssrOn ? s_ssrColour : nullptr);
-		dev->SetTexture(9, ssrOn ? s_ssrDepth : nullptr);
-		dev->SetTexture(10, reflMark ? s_ssrOlder : nullptr);
-		if (ssrOn) {
-			for (DWORD st = 8; st <= 10; ++st) {
-				const DWORD filter = (st == 9) ? D3DTEXF_POINT : D3DTEXF_LINEAR;	// the depth is packed: never blended
-				dev->SetSamplerState(st, D3DSAMP_MINFILTER, filter);
-				dev->SetSamplerState(st, D3DSAMP_MAGFILTER, filter);
-				dev->SetSamplerState(st, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-				dev->SetSamplerState(st, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-				dev->SetSamplerState(st, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-			}
-		}
-		dev->SetTexture(7, s_reflGround);
-		if (s_reflGround != nullptr) {
-			dev->SetSamplerState(7, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-			dev->SetSamplerState(7, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-			dev->SetSamplerState(7, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
-			dev->SetSamplerState(7, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-			dev->SetSamplerState(7, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-		}
-	}
-
-	// Ronin @feature 12/11/2026 DX9: a faded panel - its body on s13, lit from the reflection's light through the two materials (c31, c32),
-	// the sun's shadow as the batch binds it (s3, s4; here c33..c44), the draw's opacity in c30.y. The caller set the alpha blend.
+	// Ronin @feature 12/11/2026 DX9: a faded panel - its body (Bind_Reflective_Body), the sun's shadow and lights on RigidInstance_ps's
+	// registers as the batch binds them (c12..c24, c3..c11, c26..c28), its normal map on s2 (c2). The opacity rides the instance.
 	TextureClass* bodyNormalMap = nullptr;	// Ronin @feature 12/11/2026 DX9: the body's _NRM, released at the teardown
 	if (reflFaded) {
-		Vector3 dif0(1.0f, 1.0f, 1.0f), dif1(1.0f, 1.0f, 1.0f), emi0(0.0f, 0.0f, 0.0f), emi1(0.0f, 0.0f, 0.0f);
-		if (material != nullptr) {
-			material->Get_Diffuse(&dif0);
-			material->Get_Emissive(&emi0);
-		}
-		if (bodyMaterial != nullptr) {
-			bodyMaterial->Get_Diffuse(&dif1);
-			bodyMaterial->Get_Emissive(&emi1);
-		}
-		const float d0[3] = { dif0.X, dif0.Y, dif0.Z };
-		const float d1[3] = { dif1.X, dif1.Y, dif1.Z };
-		const float e0[3] = { emi0.X, emi0.Y, emi0.Z };
-		const float e1[3] = { emi1.X, emi1.Y, emi1.Z };
-		float psC31[4] = { 1.0f, 1.0f, 1.0f, 0.0f };
-		float psC32[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-		for (int ch = 0; ch < 3; ++ch) {
-			psC31[ch] = (d0[ch] > 0.001f) ? d1[ch] / d0[ch] : 1.0f;
-			psC32[ch] = e1[ch] - psC31[ch] * e0[ch];
-		}
-		const float psC30[4] = { (bodyTexture != nullptr) ? 1.0f : 0.0f, 1.0f - m_collectFade, reflCloudActive ? 1.0f : 0.0f, 0.0f };
-		dev->SetPixelShaderConstantF(30, psC30, 1);
-		dev->SetPixelShaderConstantF(31, psC31, 1);
-		dev->SetPixelShaderConstantF(32, psC32, 1);
-		if (bodyTexture != nullptr) {
-			bodyTexture->Init();	// as the batch does: after a reset a raw Peek never asks for the reload
-		}
-		dev->SetTexture(13, (bodyTexture != nullptr) ? bodyTexture->Peek_D3D_Texture() : nullptr);
-		dev->SetSamplerState(13, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
-		dev->SetSamplerState(13, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
-		dev->SetSamplerState(13, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
-		dev->SetSamplerState(13, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
-		dev->SetSamplerState(13, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+		Bind_Reflective_Body(dev, material, bodyMaterial, bodyTexture);
 		if (s_shadowMapTex != nullptr) {
-			const float psC37[4] = { 1.0f, s_shadowDepthBias, s_shadowTexelOfs, s_shadowTexelOfs };
-			const float psC38[4] = { s_shadowLightDir[0], s_shadowLightDir[1], s_shadowLightDir[2], s_shadowTexelWorld };
-			const float psC43[4] = { s_shadowDepthBiasFar, s_shadowTexelWorldFar, (s_shadowMapTexFar != nullptr) ? 2.0f : 1.0f, 0.0f };
-			dev->SetPixelShaderConstantF(33, s_shadowLightVP, 4);
-			dev->SetPixelShaderConstantF(37, psC37, 1);
-			dev->SetPixelShaderConstantF(38, psC38, 1);
-			dev->SetPixelShaderConstantF(39, s_shadowLightVPFar, 4);
-			dev->SetPixelShaderConstantF(43, psC43, 1);
-			dev->SetPixelShaderConstantF(44, s_shadowShade, 1);
+			const float psC16[4] = { 1.0f, s_shadowDepthBias, s_shadowTexelOfs, s_shadowTexelOfs };
+			const float psC17[4] = { s_shadowLightDir[0], s_shadowLightDir[1], s_shadowLightDir[2], s_shadowTexelWorld };
+			const float psC22[4] = { s_shadowDepthBiasFar, s_shadowTexelWorldFar, (s_shadowMapTexFar != nullptr) ? 2.0f : 1.0f, 0.0f };
+			dev->SetPixelShaderConstantF(12, s_shadowLightVP, 4);
+			dev->SetPixelShaderConstantF(16, psC16, 1);
+			dev->SetPixelShaderConstantF(17, psC17, 1);
+			dev->SetPixelShaderConstantF(18, s_shadowLightVPFar, 4);
+			dev->SetPixelShaderConstantF(22, psC22, 1);
+			dev->SetPixelShaderConstantF(24, s_shadowShade, 1);
 			dev->SetTexture(3, s_shadowMapTex);
 			dev->SetTexture(4, (s_shadowMapTexFar != nullptr) ? s_shadowMapTexFar : s_shadowMapTex);
 			for (DWORD st = 3; st <= 4; ++st) {
@@ -1111,13 +1125,11 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 				dev->SetSamplerState(st, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 			}
 		} else {
-			const float psC37Off[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-			dev->SetPixelShaderConstantF(37, psC37Off, 1);
+			const float psC16Off[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+			dev->SetPixelShaderConstantF(16, psC16Off, 1);
 			dev->SetTexture(3, nullptr);
 			dev->SetTexture(4, nullptr);
 		}
-		// Ronin @feature 12/11/2026 DX9: the body's normal map (s2) and its lights (c45..c54), the specular switch of its pass (c55) - as the
-		// batch binds them for that pass, so the faded body is lit as the unfaded one.
 		bodyNormalMap = (bodyTexture != nullptr) ? Get_Normal_Map_For_Diffuse_Texture(bodyTexture) : nullptr;
 		if (bodyNormalMap != nullptr) {
 			dev->SetTexture(2, bodyNormalMap->Peek_D3D_Texture());
@@ -1127,26 +1139,21 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 			dev->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
 			dev->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
 		}
-		const float psC45[4] = { (bodyNormalMap != nullptr) ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
-		dev->SetPixelShaderConstantF(45, psC45, 1);
-		const float* const bodyLights[8] = { lightingConstants.c5, lightingConstants.c6, lightingConstants.c11, lightingConstants.c12,
-			lightingConstants.c15, lightingConstants.c16, lightingConstants.c17, lightingConstants.c18 };
-		for (int li = 0; li < 8; ++li) {
-			dev->SetPixelShaderConstantF(46 + li, bodyLights[li], 1);
-		}
-		const float psC54[4] = { lightingConstants.numLights, 0.0f, 0.0f, 0.0f };
-		dev->SetPixelShaderConstantF(54, psC54, 1);
-		float psC55[4] = { 0.0f, 0.0f, 0.0f, -1.0f };
+		const float psC2[4] = { (bodyNormalMap != nullptr) ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(2, psC2, 1);
+		float psC26[4] = { 0.0f, 0.0f, 0.0f, -1.0f };
 		MeshModelClass* const bodyModel = renderer->Get_Mesh_Model_Class();
 		if (bodyMaterial != nullptr && bodyModel != nullptr && bodyModel->Get_Single_Shader(1).Uses_Secondary_Gradient() != 0) {
 			Vector3 bodySpecular;
 			bodyMaterial->Get_Specular(&bodySpecular);
-			psC55[0] = bodySpecular.X;
-			psC55[1] = bodySpecular.Y;
-			psC55[2] = bodySpecular.Z;
-			psC55[3] = bodyMaterial->Get_Shininess();
+			psC26[0] = bodySpecular.X;
+			psC26[1] = bodySpecular.Y;
+			psC26[2] = bodySpecular.Z;
+			psC26[3] = bodyMaterial->Get_Shininess();
+			dev->SetPixelShaderConstantF(27, lightingConstants.c5, 1);	// light 0 towards it and its colour, as the batch's c27, c28
+			dev->SetPixelShaderConstantF(28, lightingConstants.c6, 1);
 		}
-		dev->SetPixelShaderConstantF(55, psC55, 1);
+		dev->SetPixelShaderConstantF(26, psC26, 1);
 	}
 
 	// Ronin @feature DX9: reflective pass-0 depth bias. HISTORICAL: pass-0 (programmable) wrote depth
@@ -1478,6 +1485,9 @@ bool DX8InstanceManagerClass::Collect_Single_Rigid(
 	rec.fade     = m_collectFadeOn ? m_collectFade : 0.0f;	// Ronin @feature 12/11/2026 DX9: a faded mesh (Set_Collect_Fade)
 	rec.shroud   = (lightEnv == nullptr) || !lightEnv->Is_Fog_Dimmed();	// Ronin @bugfix 08/10/2026 DX9: see the flush
 	rec.baseVertex = baseVertex;	// Ronin @feature 05/11/2026 DX9: drawn from there (Render_Instanced)
+	rec.kind         = 0;	// Ronin @perf 13/11/2026 DX9: a rigid mesh; Collect_Reflective_Rigid marks a reflective panel
+	rec.bodyTexture  = nullptr;
+	rec.bodyMaterial = nullptr;
 	m_pendingSingleRigidCount++;
 
 	// Container-constant: every mesh in a DX8RigidFVFCategoryContainer shares one FVF (one decl/VB).
@@ -1501,6 +1511,33 @@ bool DX8InstanceManagerClass::Collect_Single_Rigid(
 	return true;
 }
 
+// Ronin @perf 13/11/2026 DX9: a reflective panel's reflection pass into this batch (drawn with ReflectiveRigid.pso), or, while Set_Collect_Fade
+// is on, with its body (ReflectiveRigidBody.pso; none for a one-pass mesh). False = the caller draws it inline (Draw_Reflective_Rigid).
+bool DX8InstanceManagerClass::Collect_Reflective_Rigid(
+	DX8PolygonRendererClass* renderer,
+	DWORD geometryFVF,
+	LightEnvironmentClass* lightEnv,
+	VertexMaterialClass* material,
+	TextureClass* envTexture,
+	const Matrix3D& worldTransform,
+	const ShaderClass& shader,
+	TextureClass* bodyTexture,
+	VertexMaterialClass* bodyMaterial)
+{
+	if (m_reflectivePS == nullptr || (m_collectFadeOn && m_reflectiveBodyPS == nullptr)) {
+		return false;
+	}
+	const RigidTexGen noTexGen = {};	// the reflection's coordinates come from its pixel shader
+	if (!Collect_Single_Rigid(renderer, geometryFVF, lightEnv, material, envTexture, worldTransform, noTexGen, shader)) {
+		return false;
+	}
+	PendingSingleRigid& rec = m_pendingSingleRigid[m_pendingSingleRigidCount - 1];
+	rec.kind         = m_collectFadeOn ? 2 : 1;
+	rec.bodyTexture  = m_collectFadeOn ? bodyTexture : nullptr;
+	rec.bodyMaterial = m_collectFadeOn ? bodyMaterial : nullptr;
+	return true;
+}
+
 // Ronin @perf 30/07/2026 §16 DX9: opaque == the single-rigid gate's blend contract. Anything else in the
 // pending array is a blended diffuse overlay (ENABLE_BLENDED_RIGID collects those here too) and acts as a
 // SORT BARRIER below, so alpha compositing order stays byte-for-byte what it is today.
@@ -1516,6 +1553,9 @@ static inline bool Single_Rigid_Shader_Is_Opaque(const ShaderClass& shader)
 // PS light set only ever BREAKS a run (Single_Rigid_Records_Merge), it never reorders records.
 bool DX8InstanceManagerClass::Single_Rigid_Order_Less(const PendingSingleRigid& a, const PendingSingleRigid& b)
 {
+	// Ronin @perf 13/11/2026 DX9: the pixel shader first - a rigid mesh, a reflection, a faded panel (Collect_Reflective_Rigid).
+	if (a.kind != b.kind) return a.kind < b.kind;
+
 	// Render state (blend/z/alpha-test/cull) — the most expensive swap in the flush, so it sorts first.
 	const unsigned aBits = a.shader.Get_Bits();
 	const unsigned bBits = b.shader.Get_Bits();
@@ -1561,6 +1601,10 @@ bool DX8InstanceManagerClass::Single_Rigid_Order_Less(const PendingSingleRigid& 
 	// one keys on its value (the test's reference is set per fade): stealth pulses each unit on its own phase, so fades rarely match.
 	if ((a.fade > 0.0f) != (b.fade > 0.0f)) return (int)(a.fade > 0.0f) < (int)(b.fade > 0.0f);
 	if (a.fade != b.fade && a.shader.Get_Alpha_Test() == ShaderClass::ALPHATEST_ENABLE) return a.fade < b.fade;
+
+	// Ronin @perf 13/11/2026 DX9: a faded panel's body - its texture, and its material for the light scale.
+	if (a.bodyTexture != b.bodyTexture) return a.bodyTexture < b.bodyTexture;
+	if (a.bodyMaterial != b.bodyMaterial) return a.bodyMaterial < b.bodyMaterial;
 
 	return false; // equal on the whole merge key -> these two can share one instanced draw
 }
@@ -1870,10 +1914,50 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 	VertexMaterialClass* lastSpecMaterial = nullptr;
 	float                lastFade = -1.0f;            // Ronin @feature 12/11/2026 DX9: -1 = set it at the next record
 	bool                 alphaRefMoved = false;
+	// Ronin @perf 13/11/2026 DX9: reflective panels in the batch - the pixel shader on (0 rigid, 1 a reflection, 2 a faded panel),
+	// the reflection's frame state and change mask, the last body and normal-map source.
+	unsigned             curKind = 0;
+	bool                 reflFrameBound = false;
+	bool                 reflSsrOn = false;
+	bool                 reflMarkOn = false;
+	bool                 haveBody = false;
+	TextureClass*        lastBody = nullptr;
+	VertexMaterialClass* lastBodyMaterial = nullptr;
+	VertexMaterialClass* lastBodyEnvMaterial = nullptr;
+	TextureClass*        lastNormalSource = nullptr;
 
 	unsigned i = 0;
 	while (i < count) {
 		PendingSingleRigid& rec = m_pendingSingleRigid[m_srOrder[i]];
+
+		// Ronin @perf 13/11/2026 DX9: a change of pixel shader - a rigid mesh, a reflection, a faded panel. They share RigidInstance_ps's registers
+		// where they mean the same, so nothing is restored; target 1 holds the sun-shade record for rigid meshes, the change mask for reflections.
+		if (rec.kind != curKind) {
+			if (reflMarkOn) {
+				s_ReflectMaskEnd();
+				reflMarkOn = false;
+			}
+			if (curKind == 0 && s_SunShadeEnd != nullptr) {
+				s_SunShadeEnd();
+			}
+			if (rec.kind != 0 && !reflFrameBound) {
+				reflSsrOn = Bind_Reflective_Frame_State(dev, dxView);
+				reflFrameBound = true;
+			}
+			if (rec.kind == 1) {
+				reflMarkOn = reflSsrOn && s_ReflectMaskBegin != nullptr && s_ReflectMaskEnd != nullptr && s_ReflectMaskBegin();
+			}
+			if (rec.kind != 0) {
+				Bind_Reflect_Mark_State(dev, reflMarkOn);
+			} else if (s_SunShadeBegin != nullptr) {
+				s_SunShadeBegin();
+			}
+			curKind = rec.kind;
+			haveShader = false;
+			haveDiffuse = false;
+			haveSpec = false;
+			haveBody = false;
+		}
 
 		// Per-shader: re-apply this group's render state (blend/z/alpha-test/cull/fog). The gate
 		// guarantees opaque BLEND for merged records, but z/alpha-test/cull still vary and a container
@@ -1887,7 +1971,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 			DX8Wrapper::Apply_Render_State_Changes();
 			dev->SetVertexDeclaration(instanceDecl);
 			dev->SetVertexShader(selectedVS);
-			dev->SetPixelShader(selectedPS);
+			dev->SetPixelShader((curKind == 0) ? selectedPS : ((curKind == 1) ? m_reflectivePS : m_reflectiveBodyPS));	// Ronin @perf 13/11/2026 DX9
 			dev->SetSoftwareVertexProcessing(FALSE);
 			dev->SetStreamSourceFreq(0, D3DSTREAMSOURCE_INDEXEDDATA | 1);
 			dev->SetStreamSourceFreq(1, D3DSTREAMSOURCE_INSTANCEDATA | 1);
@@ -1898,7 +1982,8 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 			haveShader = true;
 			// Ronin @feature 25/10/2026 DX9: an added (ONE/ONE) pass leaves the sun-shade record alone - blended it would add its own
 			// to the first pass's.
-			dev->SetRenderState(D3DRS_COLORWRITEENABLE1, (rec.shader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE) ? 0 : 0x0000000F);
+			if (!reflMarkOn)	// Ronin @perf 13/11/2026 DX9: the change mask keeps its own write mask (R3DTaa::beginReflectMask)
+				dev->SetRenderState(D3DRS_COLORWRITEENABLE1, (rec.shader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE) ? 0 : 0x0000000F);
 			lastFade = -1.0f;	// Ronin @feature 12/11/2026 DX9: the shader reset the alpha test's reference
 		}
 
@@ -1910,8 +1995,9 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 				DX8Wrapper::Set_DX8_Render_State(D3DRS_ALPHAREF, (unsigned)((float)0x60 * (1.0f - rec.fade)));
 				alphaRefMoved = alphaRefMoved || (rec.fade > 0.0f);
 			}
-			dev->SetRenderState(D3DRS_COLORWRITEENABLE1,
-				(rec.fade > 0.0f || rec.shader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE) ? 0 : 0x0000000F);
+			if (!reflMarkOn)	// Ronin @perf 13/11/2026 DX9: as above
+				dev->SetRenderState(D3DRS_COLORWRITEENABLE1,
+					(rec.fade > 0.0f || rec.shader.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE) ? 0 : 0x0000000F);
 			lastFade = rec.fade;
 		}
 
@@ -1927,26 +2013,32 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 
 		// Ronin @feature 18/10/2026 DX9: 3b - the W3D specular switch (the shader's secondary gradient), lit as the 2003 fixed-function
 		// path lit it, but in light 0's colour (2003: white) x the material's specular x (N.H)^shininess. c26.w < 0: off.
-		const bool specOn = (rec.shader.Uses_Secondary_Gradient() != 0) && (rec.material != nullptr);
-		if (!haveSpec || specOn != lastSpecOn || (specOn && rec.material != lastSpecMaterial)) {
+		// Ronin @perf 13/11/2026 DX9: a faded panel's switch is its body pass's (shader and material); a reflection has none.
+		MeshModelClass* const specModel = (rec.kind == 2 && rec.bodyMaterial != nullptr) ? rec.renderer->Get_Mesh_Model_Class() : nullptr;
+		VertexMaterialClass* const specMaterial = (rec.kind == 2) ? rec.bodyMaterial : rec.material;
+		const bool specOn = (rec.kind == 0) ? ((rec.shader.Uses_Secondary_Gradient() != 0) && (rec.material != nullptr)) :
+			(specModel != nullptr && specModel->Get_Pass_Count() == 2 && specModel->Get_Single_Shader(1).Uses_Secondary_Gradient() != 0);
+		if (!haveSpec || specOn != lastSpecOn || (specOn && specMaterial != lastSpecMaterial)) {
 			float psC26[4] = { 0.0f, 0.0f, 0.0f, -1.0f };
 			if (specOn) {
 				Vector3 matSpecular;
-				rec.material->Get_Specular(&matSpecular);
+				specMaterial->Get_Specular(&matSpecular);
 				psC26[0] = matSpecular.X;
 				psC26[1] = matSpecular.Y;
 				psC26[2] = matSpecular.Z;
-				psC26[3] = rec.material->Get_Shininess();
+				psC26[3] = specMaterial->Get_Shininess();
 			}
 			dev->SetPixelShaderConstantF(26, psC26, 1);
 			lastSpecOn = specOn;
-			lastSpecMaterial = rec.material;
+			lastSpecMaterial = specMaterial;
 			haveSpec = true;
 		}
 
 		// Per-diffuse: bind the diffuse on sampler 0 and resolve/bind its optional normal map (s2).
 		// normalMapActive also decides whether this run needs identical per-instance light payloads.
-		if (!haveDiffuse || rec.diffuse != lastDiffuse) {
+		// Ronin @perf 13/11/2026 DX9: the normal map is a faded panel's body's; a reflection reads none.
+		TextureClass* const normalSource = (rec.kind == 0) ? rec.diffuse : rec.bodyTexture;
+		if (!haveDiffuse || rec.diffuse != lastDiffuse || normalSource != lastNormalSource) {
 			// Ronin @bugfix 08/10/2026 DX9: Init() first, as TextureClass::Apply does. A device reset invalidates every model
 			// texture and a raw Peek never asks for the reload: every instanced mesh drew black after one.
 			if (rec.diffuse != nullptr) {
@@ -1958,7 +2050,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 				curNormalMap->Release_Ref();
 				curNormalMap = nullptr;
 			}
-			curNormalMap = Get_Normal_Map_For_Diffuse_Texture(rec.diffuse);
+			curNormalMap = Get_Normal_Map_For_Diffuse_Texture(normalSource);
 			normalMapActive = (curNormalMap != nullptr);
 
 			const float psC2[4] = { normalMapActive ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
@@ -1975,7 +2067,17 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 				dev->SetTexture(2, nullptr);
 			}
 			lastDiffuse = rec.diffuse;
+			lastNormalSource = normalSource;
 			haveDiffuse = true;
+		}
+
+		// Ronin @perf 13/11/2026 DX9: a faded panel's body (Bind_Reflective_Body), per distinct body and reflection material.
+		if (rec.kind == 2 && (!haveBody || rec.bodyTexture != lastBody || rec.bodyMaterial != lastBodyMaterial || rec.material != lastBodyEnvMaterial)) {
+			Bind_Reflective_Body(dev, rec.material, rec.bodyMaterial, rec.bodyTexture);
+			lastBody = rec.bodyTexture;
+			lastBodyMaterial = rec.bodyMaterial;
+			lastBodyEnvMaterial = rec.material;
+			haveBody = true;
 		}
 
 		// Per-mesh texgen (treads carry a per-unit UV offset). Skip the upload when unchanged.
@@ -2052,6 +2154,7 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		}
 
 		rec.renderer->Render_Instanced(rec.baseVertex);	// Ronin @feature 05/11/2026 DX9: 0, or a skin's place in the skin buffer
+		m_reflectiveDraws += (rec.kind != 0) ? 1u : 0u;	// Ronin @perf 13/11/2026 DX9: [INST] refl= - the batch's reflective draws too
 
 		// Ronin @diagnostic 02/08/2026 DX9: Render_Instanced bypasses DX8_RECORD_RENDER, so report the
 		// draw here. One instanced draw for runLen meshes = 1 call, runLen x the polygons.
@@ -2086,6 +2189,19 @@ void DX8InstanceManagerClass::Flush_Single_Rigid()
 		m_singleRigidCursor = 0;
 	}
 
+	// Ronin @perf 13/11/2026 DX9: after reflective panels - the change mask off target 1, their stages cleared (6 and 7 are the wrapper's).
+	if (reflMarkOn) {
+		s_ReflectMaskEnd();
+	}
+	if (reflFrameBound) {
+		dev->SetTexture(6, nullptr);
+		dev->SetTexture(7, nullptr);
+		dev->SetTexture(8, nullptr);
+		dev->SetTexture(9, nullptr);
+		dev->SetTexture(10, nullptr);
+		dev->SetTexture(13, nullptr);
+		DX8Wrapper::Invalidate_Texture_State(6, 2);
+	}
 	// Ronin @feature 10/10/2026 DX9: lighting part 3 - the second target comes off before anything else draws.
 	if (s_SunShadeEnd != nullptr) {
 		s_SunShadeEnd();

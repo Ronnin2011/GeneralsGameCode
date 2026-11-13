@@ -143,6 +143,7 @@ public:
 	// All non-reflective callers are gone (they collect into the batch), so the flag and the never-read
 	// baseVertexOffset went with them. Returns false for strips and when ReflectiveRigid.pso is missing;
 	// the caller then falls through to the legacy env path.
+	// Ronin @perf 13/11/2026 DX9: now the fallback - a panel whose other pass the batch draws goes there too (Collect_Reflective_Rigid).
 	bool Draw_Reflective_Rigid(
 		DX8PolygonRendererClass* renderer,
 		DWORD geometryFVF,
@@ -193,6 +194,19 @@ public:
 		const RigidTexGen& texGen,
 		const ShaderClass& shader,
 		int baseVertex = 0);	// Ronin @feature 05/11/2026 DX9: a skin's place in the shared skin buffer; 0 for a rigid mesh
+
+	// Ronin @perf 13/11/2026 DX9: a reflective panel's reflection pass into this batch; while Set_Collect_Fade is on, with its body.
+	// False = the caller draws it inline (Draw_Reflective_Rigid).
+	bool Collect_Reflective_Rigid(
+		DX8PolygonRendererClass* renderer,
+		DWORD geometryFVF,
+		LightEnvironmentClass* lightEnv,
+		VertexMaterialClass* material,
+		TextureClass* envTexture,
+		const Matrix3D& worldTransform,
+		const ShaderClass& shader,
+		TextureClass* bodyTexture,
+		VertexMaterialClass* bodyMaterial);
 
 	void Flush_Single_Rigid();
 	// Ronin @feature 12/11/2026 DX9: while set, a collected record is faded - fade 0..1 (1 = gone), drawn with this alpha blend; the caller clears it.
@@ -301,6 +315,9 @@ private:
 		bool                     shroud;    // per-record: false = its light env already carries the fog (a ghost object)
 		int                      baseVertex; // Ronin @feature 05/11/2026 DX9: a skin's first vertex in the skin buffer (rigid: 0)
 		float                    fade;       // Ronin @feature 12/11/2026 DX9: 0 = opaque, 1 = gone; rides light 0's spare w to the VS
+		unsigned char            kind;       // Ronin @perf 13/11/2026 DX9: 0 a rigid mesh, 1 a reflection, 2 a faded panel (Collect_Reflective_Rigid)
+		TextureClass*            bodyTexture;  // ... a faded panel's body pass: its texture and material
+		VertexMaterialClass*     bodyMaterial;
 	};
 
 	// Ronin @feature 12/11/2026 DX9: Set_Collect_Fade's fade and alpha blend for the records collected while it is on.

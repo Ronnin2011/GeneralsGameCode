@@ -482,8 +482,8 @@ TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture)
 		return nullptr;
 	}
 
-	// Ronin @perf 13/11/2026 DX9: looked up once per texture (NormalMapCache) - the name lookup below cost ~1 us at every draw that asked
-	// ([REFL] on the panel). Null after a device reset until the map is back; the ref returned is the caller's, as before.
+	// Ronin @perf 13/11/2026 DX9: looked up once per texture (NormalMapCache) - the name lookup below cost ~1 us at every draw that asked.
+	// Null after a device reset until the map is back; the ref returned is the caller's, as before.
 	if (diffuseTexture->NormalMapLooked) {
 		TextureClass* const cached = diffuseTexture->NormalMapCache;
 		if (cached == nullptr) {
@@ -717,6 +717,21 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 
 		// Ronin @feature 12/11/2026 DX9: a reflective panel's body pass, for its faded draw (not used when it is not faded).
 		const bool reflBody = (rendererModel != nullptr) && renderer->Get_Pass() == 0 && Reflective_Body_In_One_Draw(rendererModel);
+		// Ronin @perf 13/11/2026 DX9: into the batch when nothing of its mesh draws inline after it - one pass, or a body the batch takes too
+		// (Reflective_Body_In_One_Draw); the flush keeps it before its body. Refused: inline as before.
+		if (rendererModel != nullptr && (rendererModel->Get_Pass_Count() == 1 || reflBody) &&
+			TheDX8InstanceManager.Collect_Reflective_Rigid(
+				renderer,
+				geometryFVF,
+				lightEnv,
+				material,
+				stage0Texture,
+				worldTransform,
+				activeShader,
+				reflBody ? rendererModel->Peek_Single_Texture(1, 0) : nullptr,
+				reflBody ? rendererModel->Peek_Single_Material(1) : nullptr)) {
+			return RIGID_RENDER_PATH_SINGLE_RIGID;
+		}
 		if (TheDX8InstanceManager.Draw_Reflective_Rigid(
 				renderer,
 				geometryFVF,
