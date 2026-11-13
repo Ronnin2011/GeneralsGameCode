@@ -602,6 +602,8 @@ bool DX8InstanceManagerClass::Load_Instance_Shader()
 static unsigned g_SR_DrawCount      = 0;          // accumulating during the current frame
 static unsigned g_SR_LastFrameCount = 0;          // total from the last COMPLETED frame (for the HUD)
 static unsigned g_SR_LastFrame      = 0xFFFFFFFFu;
+// Ronin @diagnostic 13/11/2026 DX9: true once the panel rolls the [SR] and [INST] counters, once per frame (Roll_Stats_Now).
+static bool     s_statsRolledOutside = false;
 
 // Ronin @feature 12/08/2026 DX9: §29 phase 2 — shadow map pushed down from R3DShadowMap.
 static IDirect3DBaseTexture9* s_shadowMapTex   = nullptr;
@@ -1498,7 +1500,7 @@ bool DX8InstanceManagerClass::Collect_Single_Rigid(
 	// Keep the on-screen [SR] readout accurate now that meshes route through Collect, not Draw.
 	{
 		const unsigned f = WW3D::Get_Frame_Count();
-		if (f != g_SR_LastFrame) {
+		if (!s_statsRolledOutside && f != g_SR_LastFrame) {	// Ronin @diagnostic 13/11/2026 DX9: unless the panel rolls them (Roll_Stats_Now)
 			g_SR_LastFrameCount = g_SR_DrawCount;
 			g_SR_LastFrameFlushCount = g_SR_FlushCount;
 			g_SR_LastFrame = f;
@@ -2578,10 +2580,33 @@ bool DX8InstanceManagerClass::Load_Pixel_Shader_From_File(const char* shaderPath
 // Ronin @diagnostic §14e.3 DX9: roll the instancing counters on frame change, independent of
 // Debug_Statistics::Begin/End_Statistics (bracketed from ww3d.cpp AND W3DDisplay.cpp -> it reset these
 // mid-frame, so the HUD read 0). Mirrors the [SR] counters' WW3D::Get_Frame_Count() reset.
+// Ronin @diagnostic 13/11/2026 DX9: not once the panel rolls them (Roll_Stats_Now) - WW3D's frame count ticks mid-frame (the water's
+// mirror), so a roll here sometimes kept a sliver of a frame ([INST] recs=2).
 void DX8InstanceManagerClass::Roll_Instancing_Stats_Frame()
 {
+	if (s_statsRolledOutside) {
+		return;
+	}
 	const unsigned f = WW3D::Get_Frame_Count();
 	if (f == m_instancedStatsFrame) return;
+	Snapshot_Instancing_Stats();
+	m_instancedStatsFrame = f;
+}
+
+// Ronin @diagnostic 13/11/2026 DX9: the panel's roll, once per game frame (R3DDebugPanel::update) - [INST] and [SR] then hold one whole frame.
+void DX8InstanceManagerClass::Roll_Stats_Now()
+{
+	s_statsRolledOutside = true;
+	Snapshot_Instancing_Stats();
+	g_SR_LastFrameCount      = g_SR_DrawCount;
+	g_SR_LastFrameFlushCount = g_SR_FlushCount;
+	g_SR_DrawCount  = 0;
+	g_SR_FlushCount = 0;
+}
+
+// Ronin @diagnostic 13/11/2026 DX9: this frame's counters into the last frame's, then zeroed - for both rolls above.
+void DX8InstanceManagerClass::Snapshot_Instancing_Stats()
+{
 	m_lastFrameInstancedRecords         = m_instancedRecords;
 	m_lastFrameInstancedDrawCalls       = m_instancedDrawCalls;
 	m_lastFrameInstancedMeshes          = m_instancedMeshes;
@@ -2604,7 +2629,6 @@ void DX8InstanceManagerClass::Roll_Instancing_Stats_Frame()
 	m_instancedNormalMappedMerged = 0;
 	m_instancedFlushes = 0;
 	m_reflectiveDraws = 0;
-	m_instancedStatsFrame = f;
 }
 
 // Ronin @diagnostic §14e.3 DX9: the instancing counters roll themselves now (Roll_Instancing_Stats_Frame,

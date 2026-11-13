@@ -3257,6 +3257,9 @@ namespace
 	// Ronin @feature 28/09/2026 DX9: every frame, before update() can return early - see s_drawPrev.
 	void sampleReadouts()
 	{
+		// Ronin @diagnostic 13/11/2026 DX9: [INST] and [SR] - one whole frame's counts, rolled here once per frame (Roll_Stats_Now).
+		TheDX8InstanceManager.Roll_Stats_Now();
+
 		s_drawTotal = 0;
 		for (Int i = 0; i < Debug_Statistics::DRAW_SUBSYS_COUNT; ++i)
 		{

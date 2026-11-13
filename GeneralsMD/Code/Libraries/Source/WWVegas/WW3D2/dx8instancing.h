@@ -236,9 +236,11 @@ public:
 	unsigned Get_Last_Frame_Instanced_Normal_Mapped() const { return m_lastFrameInstancedNormalMapped; }
 	unsigned Get_Last_Frame_Instanced_Normal_Mapped_Merged() const { return m_lastFrameInstancedNormalMappedMerged; }
 	unsigned Get_Last_Frame_Instanced_Flushes() const { return m_lastFrameInstancedFlushes; }
-	// Reflective env pass-0 meshes drawn INLINE this frame (Draw_Reflective_Rigid) — NOT part of the
-	// batch, so they are not in Records/Meshes/Individual. Their own line item since 01/08/2026.
+	// Ronin @diagnostic 13/11/2026 DX9: reflective env pass-0 draws this frame - inline (Draw_Reflective_Rigid) and the batch's
+	// (Collect_Reflective_Rigid), whose records count in Records/Meshes/Individual too.
 	unsigned Get_Last_Frame_Reflective_Draws() const { return m_lastFrameReflectiveDraws; }
+	// Ronin @diagnostic 13/11/2026 DX9: the panel calls this once per game frame; the counters then stop rolling on WW3D's frame count.
+	void Roll_Stats_Now();
 
 	void Begin_Frame_Statistics();
 	void End_Frame_Statistics();
@@ -360,6 +362,7 @@ private:
 	unsigned m_lastFrameReflectiveDraws;
 	unsigned m_instancedStatsFrame;      // last WW3D frame seen — self-contained roll, like the [SR] counters
 	void Roll_Instancing_Stats_Frame();  // snapshot+reset ALL instanced counters on frame change
+	void Snapshot_Instancing_Stats();    // Ronin @diagnostic 13/11/2026 DX9: the copy and reset both rolls share
 
 	// Ronin @perf 07/11/2026 DX9: the additive parts waiting for Flush_Additive_Parts. Transform and lighting are taken at collect;
 	// the geometry is the model's own arrays, copied once per model at the flush.
