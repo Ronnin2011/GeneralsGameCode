@@ -365,3 +365,5 @@ struct TranslucentDrawStats
 	bool		enabled;
 };
 extern TranslucentDrawStats TheTranslucentStats;
+// Ronin @feature 13/11/2026 DX9: stealth depth first - the faded objects' depth alone, then their colour (W3DScene).
+extern bool TheFadeDepthPass;

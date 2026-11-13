@@ -75,6 +75,7 @@
 */
 DX8MeshRendererClass TheDX8MeshRenderer;
 TranslucentDrawStats TheTranslucentStats = {};	// Ronin @diagnostic 12/11/2026 DX9: [TRANSL]
+bool TheFadeDepthPass = false;	// Ronin @feature 13/11/2026 DX9: the stealth depth pass is drawing (W3DScene, flushTranslucentObjects)
 bool DX8TextureCategoryClass::m_gForceMultiply = false; // Forces opaque materials to use the multiply blend - pseudo transparent effect.  jba.
 // ----------------------------------------------------------------------------
 
@@ -2849,12 +2850,13 @@ void DX8TextureCategoryClass::Render()
 			// Ronin @perf 07/11/2026 DX9: an additive part (a rocket's flame) is drawn instanced after the sorting pool (`parts`).
 			// Ronin @feature 13/11/2026 DX9: a faded mesh (stealth) is drawn faded by the pool - its opacity rides its node (Set_Insert_Opacity).
 			const bool fadedSorted = mesh->Get_Alpha_Override() != 1.0f && !MeshClass::s_InShadowDepthPass;
-			if (!TheDX8InstanceManager.Collect_Additive_Part(renderer, mesh, lenv, vmaterial, Peek_Texture(0), shader, *world_transform)) {
+			// Ronin @feature 13/11/2026 DX9: not in the stealth depth pass - the pool and the parts draw later, with colour; the colour pass adds it.
+			if (!TheFadeDepthPass && !TheDX8InstanceManager.Collect_Additive_Part(renderer, mesh, lenv, vmaterial, Peek_Texture(0), shader, *world_transform)) {
 				SortingRendererClass::Set_Insert_Opacity(fadedSorted ? mesh->Get_Alpha_Override() : 1.0f);
 				renderer->Render_Sorted(mesh->Get_Base_Vertex_Offset(),mesh->Get_Bounding_Sphere());
 				SortingRendererClass::Set_Insert_Opacity(1.0f);
 			}
-			if (fadedSorted)
+			if (fadedSorted && !TheFadeDepthPass)
 				++TheTranslucentStats.sortedMeshes;	// Ronin @diagnostic 12/11/2026 DX9: [TRANSL] - faded meshes the sorting pool draws
 		} else {
 
@@ -2925,7 +2927,7 @@ void DX8TextureCategoryClass::Render()
 
 						mesh->Set_Shroud_Applied_In_Shader(alphaRigidPath == RIGID_RENDER_PATH_SINGLE_RIGID);
 						// Ronin @diagnostic 12/11/2026 DX9: [TRANSL] - this faded pass: the path that drew it and the kind of mesh it belongs to.
-						if (!MeshClass::s_InShadowDepthPass)
+						if (!MeshClass::s_InShadowDepthPass && !TheFadeDepthPass)	// Ronin @feature 13/11/2026 DX9: counted in the colour pass
 						{
 							++TheTranslucentStats.passes;
 							TheTranslucentStats.shaderPasses += (alphaRigidPath == RIGID_RENDER_PATH_SINGLE_RIGID) ? 1u : 0u;

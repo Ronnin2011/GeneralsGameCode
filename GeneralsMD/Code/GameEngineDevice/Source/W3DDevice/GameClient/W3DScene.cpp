@@ -1826,18 +1826,42 @@ void RTS3DScene::flushTranslucentObjects(RenderInfoClass & rinfo)
 		TheTranslucentStats.objects += (unsigned)m_translucentObjectsCount;
 		const Int localPlayerIndex = rts::getObservedOrLocalPlayerIndex_Safe();
 
-		for (Int i=0; i<m_translucentObjectsCount; i++)
+		// Ronin @feature 13/11/2026 DX9: stealth depth first - the faded objects' depth alone (colour off), then their colour, which only their
+		// nearest surface passes: a unit and a stealthed group fade as one layer. Not in the shadow map's pass, its colour is already off.
+		for (Int fadePass = TheTerrainShadowPass.inDepthPass ? 1 : 0; fadePass < 2; ++fadePass)
 		{
-			robj=m_translucentObjectsBuffer[i];
-			draw = ((DrawableInfo *)robj->Get_User_Data())->m_drawable;
+			// Ronin @bugfix 13/11/2026 DX9: the mask as the device has it - the wrapper's cache can hold its invalidated sentinel (0x12345678),
+			// which put back read as alpha only, and nothing after the faded pass drew colour.
+			DWORD colourWrite = D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE | D3DCOLORWRITEENABLE_ALPHA;
+			if (DX8Wrapper::_Get_D3D_Device8() != nullptr)
+				DX8Wrapper::_Get_D3D_Device8()->GetRenderState(D3DRS_COLORWRITEENABLE, &colourWrite);
+			const bool staticSortLists = WW3D::Are_Static_Sort_Lists_Enabled();
+			if (fadePass == 0)
+			{
+				TheFadeDepthPass = true;	// dx8renderer leaves the sorting pool and the additive parts to the colour pass
+				DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE, 0);
+				WW3D::Enable_Static_Sort_Lists(false);	// a sorted-list mesh drawn now, depth only; listed in the colour pass
+			}
 
-			rinfo.alphaOverride = draw->getEffectiveOpacity();
+			for (Int i=0; i<m_translucentObjectsCount; i++)
+			{
+				robj=m_translucentObjectsBuffer[i];
+				draw = ((DrawableInfo *)robj->Get_User_Data())->m_drawable;
 
-			renderOneObject(rinfo, robj, localPlayerIndex);//WW3D::Render(*robj,rinfo);
+				rinfo.alphaOverride = draw->getEffectiveOpacity();
+
+				renderOneObject(rinfo, robj, localPlayerIndex);//WW3D::Render(*robj,rinfo);
+			}
+
+			//Flush all the submitted translucent objects.
+			TheDX8MeshRenderer.Flush();
+			if (fadePass == 0)
+			{
+				DX8Wrapper::Set_DX8_Render_State(D3DRS_COLORWRITEENABLE, colourWrite);
+				WW3D::Enable_Static_Sort_Lists(staticSortLists);
+				TheFadeDepthPass = false;
+			}
 		}
-
-		//Flush all the submitted translucent objects.
-		TheDX8MeshRenderer.Flush();
 		WW3D::Render_And_Clear_Static_Sort_Lists(rinfo);	//draws things like water
 		rinfo.alphaOverride = 1.0f;	//disable forced alpha
 		m_translucentObjectsCount = 0;
