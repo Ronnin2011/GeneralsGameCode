@@ -154,6 +154,7 @@ public:
 	static Int   getShadowMaskDraws(void);	// meshes drawn into the mask this frame, -1 = not drawn
 	// Ronin @diagnostic 27/09/2026 DX9: GPU ms of postRender and of the mask pass, smoothed; -1 = no timestamp queries.
 	static void  getGpuMs(float *total, float *mask);
+	static float getMaskCpuMs(void);	// Ronin @diagnostic 13/11/2026 DX9: the mask pass's CPU ms, smoothed; -1 = not drawn yet
 
 	// Ronin @feature 24/09/2026 DX9: §14 mesh motion vectors. MeshClass::Render reports every mesh it draws outside the
 	// shadow depth pass; a mesh that moved since last frame is re-drawn into the velocity target. vel - on/off.

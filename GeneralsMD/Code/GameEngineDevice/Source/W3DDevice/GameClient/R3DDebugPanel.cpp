@@ -715,6 +715,47 @@ namespace
 		printAscii(state, FALSE);
 	}
 
+	// Ronin @diagnostic 13/11/2026 DX9: `dump [label]` - the live rows as text, appended to R3DPanel.txt beside Options.ini. A file
+	// costs a fraction of a screenshot to read, and its numbers cannot be misread.
+	void cmdDump(Int argc, const AsciiString *argv)
+	{
+		if (TheGlobalData == nullptr)
+			return;
+		AsciiString label;
+		for (Int a = 1; a < argc; ++a)
+		{
+			if (a > 1)
+				label.concat(' ');
+			label.concat(argv[a].str());
+		}
+		AsciiString path = TheGlobalData->getPath_UserData();
+		path.concat("R3DPanel.txt");
+		FILE *f = fopen(path.str(), "at");
+		if (f == nullptr)
+		{
+			printAscii(AsciiString("dump: cannot open R3DPanel.txt"), TRUE);
+			return;
+		}
+		SYSTEMTIME now;
+		GetLocalTime(&now);
+		fprintf(f, "---- %s  %02d/%02d/%04d %02d:%02d:%02d  panel frame %u\n", label.isEmpty() ? "-" : label.str(), now.wDay, now.wMonth,
+			now.wYear, now.wHour, now.wMinute, now.wSecond, s_frame);
+		Int written = 0;
+		for (Int r = 0; r < R3DDebugPanel::ROW_COUNT; ++r)
+		{
+			if (s_rows[r].text == nullptr || s_frame - s_rows[r].stamp > 1)	// a command runs before or after this frame's rows
+				continue;
+			AsciiString row;
+			row.translate(s_rows[r].text->getText());
+			fprintf(f, "%s\n", row.str());
+			++written;
+		}
+		fclose(f);
+		AsciiString state;
+		state.format("dump: %d rows to R3DPanel.txt (%s)", written, label.isEmpty() ? "no label" : label.str());
+		printAscii(state, FALSE);
+	}
+
 	// Ronin @bugfix 27/09/2026 DX9: a lone word after a command must be a number. atoi read `taa margin` as 0 and switched TAA
 	// off; now it prints the usage instead.
 	Bool isWholeNumber(const char *s)
@@ -3640,7 +3681,7 @@ namespace
 			else if (maskDraws < 0)
 				gpu.format(L"%.2fms  mask=-", gpuTotal);
 			else
-				gpu.format(L"%.2fms  mask=%.2fms/%d", gpuTotal, gpuMask, maskDraws);
+				gpu.format(L"%.2fms  mask=%.2fms/%d cpu=%.2fms", gpuTotal, gpuMask, maskDraws, R3DTaa::getMaskCpuMs());
 			text.format(L"[TAA] state=%s  weight=%.2f  moving=%s  reactive=%d  skinned=%d  fx-mask=%s  untracked=%d  view=%d  gpu=%s",
 				R3DTaa::isActive() ? L"running" : L"off(MSAA)", R3DTaa::getWeight(),
 				moving.str(),
@@ -3853,6 +3894,7 @@ void R3DDebugPanel::update(void)
 		registerCommand("shutdown", "quit the game to the desktop now", cmdShutdown);
 		registerCommand("water", "water [profile sea|lake|river] | water <switch> 0|1 | water view [0..14] | water <knob> <v> | water save|load|defaults - `water` alone shows the table", cmdWater);
 		registerCommand("perf", "perf [reset] - the [PERF] run mean; reset starts it over (measure each switch state apart)", cmdPerf);
+		registerCommand("dump", "dump [label] - the readout rows as text, appended to R3DPanel.txt beside Options.ini", cmdDump);
 		registerCommand("rows", "rows [<name>|all 0|1] - list the readout rows, or switch one or all", cmdRows);
 		registerCommand("taa", "taa [0|1] | taa <knob> <v> - temporal AA; the [TAA] row shows live state", cmdTaa);
 		registerCommand("ssao", "ssao [0..3] | trees <auto|0|1> | view [0..4] | sun|bleed|colour <v> | save - quality (not saved); trees: AO on trees; view: 1 depth, 2 raw AO, 3 blurred AO, 4 the bleed; sun kept by save", cmdSsao);

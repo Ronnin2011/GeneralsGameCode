@@ -291,6 +291,7 @@ static Int   s_gpuSlot    = 0;
 static Bool  s_gpuOK      = FALSE;
 static float s_gpuTotalMs = -1.0f;
 static float s_gpuMaskMs  = -1.0f;
+static float s_cpuMaskMs  = -1.0f;	// Ronin @diagnostic 13/11/2026 DX9: the mask pass's CPU time, smoothed as the GPU's
 static Bool  s_gpuRemake  = FALSE;	// Ronin @bugfix 07/10/2026 DX9: a device reset dropped them; postRender makes them again
 
 static void gpuRelease(void)
@@ -669,6 +670,7 @@ void  R3DTaa::getGpuMs(float *total, float *mask)
 	if (total != NULL) *total = s_gpuOK ? s_gpuTotalMs : -1.0f;
 	if (mask  != NULL) *mask  = s_gpuOK ? s_gpuMaskMs  : -1.0f;
 }
+float R3DTaa::getMaskCpuMs(void)      { return s_cpuMaskMs; }
 
 
 void  R3DTaa::setWeight(float w)    { s_weight = taaKnob(w, 0.0f, 0.99f, 0.9f); s_historyValid = FALSE; }
@@ -3390,7 +3392,16 @@ void R3DTaa::postRender(void)
 	// Ronin @bugfix 27/09/2026 DX9: the moving-shadow mask - after the velocity pass (it reads the same mover list), before
 	// the resolve reads it. Timed on its own.
 	gpuMark(1);
+	LARGE_INTEGER maskStart, maskEnd, maskFreq;		// Ronin @diagnostic 13/11/2026 DX9: its CPU time, beside the GPU's
+	QueryPerformanceCounter(&maskStart);
 	renderMoverMask(dev, vp, (depthTex != NULL) ? TRUE : FALSE);
+	QueryPerformanceCounter(&maskEnd);
+	QueryPerformanceFrequency(&maskFreq);
+	if (s_moverOK && maskFreq.QuadPart > 0)
+	{
+		const float maskMs = (float)((double)(maskEnd.QuadPart - maskStart.QuadPart) * 1000.0 / (double)maskFreq.QuadPart);
+		s_cpuMaskMs = (s_cpuMaskMs < 0.0f) ? maskMs : (s_cpuMaskMs * 0.9f + maskMs * 0.1f);
+	}
 	gpuMark(2);
 
 	dev->SetTexture(0, sceneTex);
