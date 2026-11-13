@@ -150,11 +150,16 @@ public:
 		VertexMaterialClass* material,
 		TextureClass* diffuseTexture,
 		const Matrix3D& worldTransform,
-		const RigidTexGen& texGen);
+		const RigidTexGen& texGen,
+		// Ronin @feature 12/11/2026 DX9: a faded panel (Set_Collect_Fade): its alpha body pass, composited in this draw (ReflectiveRigidBody.pso).
+		TextureClass* bodyTexture = nullptr,
+		VertexMaterialClass* bodyMaterial = nullptr);
 
 	// Ronin @feature DX9: true once ReflectiveRigid.pso loaded; the reflective rigid branch checks this
 	// before routing an env-reflect pass to the per-pixel path (else it stays on legacy).
 	bool Has_Reflective_PS() const { return m_reflectivePS != nullptr; }
+	// Ronin @feature 12/11/2026 DX9: true once ReflectiveRigidBody.pso loaded (and the plain one) - a faded reflective panel is drawn whole.
+	bool Has_Reflective_Body_PS() const { return m_reflectivePS != nullptr && m_reflectiveBodyPS != nullptr; }
 
 	// Ronin @perf 07/11/2026 DX9: additive model parts (rocket flames, muzzle flashes) - sorted meshes with an additive, no-depth-write
 	// pass - collected instead of pooled, and drawn instanced by Flush_Additive_Parts after the sorting pool. Off = the pool, as before.
@@ -271,6 +276,7 @@ private:
 	IDirect3DVertexShader9* m_rigidVS;           // Ronin @feature 23/05/2026 DX9 R3: Non-instanced rigid fallback VS (with COLOR0)
 	IDirect3DVertexShader9* m_rigidVSNoColor;    // Ronin @feature 23/05/2026 DX9 R3: Non-instanced rigid fallback VS (no COLOR0)
 	IDirect3DPixelShader9* m_reflectivePS;       // Ronin @feature DX9: per-pixel env reflection PS (ReflectiveRigid.pso) for reflective pass-0
+	IDirect3DPixelShader9* m_reflectiveBodyPS;   // Ronin @feature 12/11/2026 DX9: ReflectiveRigidBody.pso - a faded panel, its body in the same draw
 	IDirect3DPixelShader9* m_additivePS;         // Ronin @perf 07/11/2026 DX9: AdditivePart.pso - texture x lit colour, for the additive parts
 
 	// Ronin @bugfix 18/02/2026 DX9: Per-FVF declaration cache (replaces single m_instanceDecl)

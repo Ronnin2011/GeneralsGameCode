@@ -354,6 +354,29 @@ static bool Programmable_Rigid_Passes_Supported(MeshModelClass* model)
 		added.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE && added.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE;
 }
 
+// Ronin @feature 12/11/2026 DX9: a reflective panel - pass 0 an opaque env reflection, pass 1 an alpha body, one texture each (the stealth
+// Comanche's body among 2,392 shipped meshes) - that a faded draw takes whole: Draw_Reflective_Rigid composites the body, pass 1 is skipped.
+static bool Reflective_Body_In_One_Draw(MeshModelClass* model)
+{
+	if (model == nullptr || model->Get_Pass_Count() != 2 || model->Get_UV_Array_Count() != 1 ||
+		!TheDX8InstanceManager.Has_Reflective_Body_PS()) {
+		return false;
+	}
+	for (int pass = 0; pass < 2; ++pass) {
+		if (model->Has_Shader_Array(pass) || model->Has_Material_Array(pass) || model->Has_Texture_Array(pass, 0) ||
+			model->Has_Texture_Array(pass, 1) || model->Peek_Single_Texture(pass, 1) != nullptr) {
+			return false;
+		}
+	}
+	const ShaderClass env  = model->Get_Single_Shader(0);
+	const ShaderClass body = model->Get_Single_Shader(1);
+	return Classify_Programmable_Rigid_Texture_Mapping(model->Peek_Single_Material(0)) == PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_REFLECT &&
+		Classify_Programmable_Rigid_Texture_Mapping(model->Peek_Single_Material(1)) == PROGRAMMABLE_RIGID_MAPPING_NONE &&
+		env.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_ONE && env.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ZERO &&
+		body.Get_Src_Blend_Func() == ShaderClass::SRCBLEND_SRC_ALPHA && body.Get_Dst_Blend_Func() == ShaderClass::DSTBLEND_ONE_MINUS_SRC_ALPHA &&
+		model->Peek_Single_Texture(1, 0) != nullptr;
+}
+
 
 // Ronin @feature 16/06/2026 DX9 Rigid parity: resolve the programmable texcoord-gen
 // state forwarded to Draw_Single_Rigid / Draw_Instanced. Phase 1 wires only AFFINE_UV
@@ -682,6 +705,9 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 		TheDX8InstanceManager.Has_Reflective_PS() &&
 		Classify_Programmable_Rigid_Texture_Mapping(material) == PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_REFLECT &&
 		shaderUsesOpaqueBlend &&
+		// Ronin @bugfix 12/11/2026 DX9: not a mesh faded on the old path (its material changed for this one draw) - this draw would write it
+		// opaque. Faded on our shaders (Set_Collect_Fade) it is drawn faded here, a panel with its body (Reflective_Body_In_One_Draw).
+		!materialStateIsTransient &&
 		((geometryFVF & D3DFVF_NORMAL) != 0) &&
 		(fvfTexCount == 1) &&
 		(stage1Texture == nullptr)) {
@@ -689,6 +715,8 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 		RigidTexGen reflectiveTexGen = {};
 		reflectiveTexGen.enabled = false; // reflective PS computes reflect(V,N) itself; no FFP UV matrix
 
+		// Ronin @feature 12/11/2026 DX9: a reflective panel's body pass, for its faded draw (not used when it is not faded).
+		const bool reflBody = (rendererModel != nullptr) && renderer->Get_Pass() == 0 && Reflective_Body_In_One_Draw(rendererModel);
 		if (TheDX8InstanceManager.Draw_Reflective_Rigid(
 				renderer,
 				geometryFVF,
@@ -696,7 +724,9 @@ static RigidRenderPathType Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 				material,
 				stage0Texture,
 				worldTransform,
-				reflectiveTexGen)) {
+				reflectiveTexGen,
+				reflBody ? rendererModel->Peek_Single_Texture(1, 0) : nullptr,
+				reflBody ? rendererModel->Peek_Single_Material(1) : nullptr)) {
 
 			#ifdef WWDEBUG
 			if (Rigid_Debug_Should_Log_Once("REFLECTIVE", texName)) {
@@ -2688,11 +2718,13 @@ void DX8TextureCategoryClass::Render()
 		}
 #endif
 
-		// Ronin @feature 12/11/2026 DX9: a faded mesh (stealth, a fade) on our shaders - one pass, not added, no reflection; its fade travels
-		// with its draw (Set_Collect_Fade). Two passes stay on the old path until they are one shader (docs/Materials_Work.md).
+		// Ronin @feature 12/11/2026 DX9: a faded mesh (stealth, a fade) on our shaders, not added; its fade travels with its draw (Set_Collect_Fade).
+		// One pass, or a reflective panel drawn whole (Reflective_Body_In_One_Draw); other two-pass meshes stay on the old path.
 		const bool fadeOnShader = mesh->Get_Alpha_Override() != 1.0f && !MeshClass::s_InShadowDepthPass && !mesh->Is_Additive() &&
-			mesh->Peek_Model()->Get_Pass_Count() == 1 &&
-			Classify_Programmable_Rigid_Texture_Mapping(vmaterial) != PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_REFLECT;
+			((mesh->Peek_Model()->Get_Pass_Count() == 1 &&
+			  (Classify_Programmable_Rigid_Texture_Mapping(vmaterial) != PROGRAMMABLE_RIGID_MAPPING_ENV_CAMERA_REFLECT ||
+			   TheDX8InstanceManager.Has_Reflective_Body_PS())) ||
+			 Reflective_Body_In_One_Draw(mesh->Peek_Model()));
 
 		// Ronin @bugfix 24/05/2026 DX9 R3: The single-rigid programmable fallback
 		// must obey the same mesh contract as the instanced rigid path, minus only
@@ -2847,10 +2879,15 @@ void DX8TextureCategoryClass::Render()
 						if (fadeOnShader)
 							TheDX8InstanceManager.Set_Collect_Fade(1.0f - mesh->Get_Alpha_Override(), theAlphaShader);
 
+						// Ronin @feature 12/11/2026 DX9: a faded reflective panel's body pass - already drawn with its reflection
+						// (Reflective_Body_In_One_Draw), so not drawn again; its shroud came with it.
+						const bool drawnWithReflection = fadeOnShader && renderer->Get_Pass() == 1 && mesh->Peek_Model()->Get_Pass_Count() == 2 &&
+							!renderer->Is_Strip();
 						// Ronin @bugfix 19/09/2026 DX9: a SINGLE_RIGID mesh sampled the shroud in its own pixel shader;
 						// record that so Render_Material_Pass drops the fixed-function shroud overlay for it instead
 						// of darkening it a second time.
-						const RigidRenderPathType alphaRigidPath = Render_Rigid_Mesh_With_Optional_Programmable_Effects(
+						const RigidRenderPathType alphaRigidPath = drawnWithReflection ? RIGID_RENDER_PATH_SINGLE_RIGID :
+							Render_Rigid_Mesh_With_Optional_Programmable_Effects(
 							renderer,
 							mesh->Get_Base_Vertex_Offset(),
 							geometryFVF,

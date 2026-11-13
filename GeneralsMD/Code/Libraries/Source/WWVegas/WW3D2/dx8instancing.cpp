@@ -396,6 +396,7 @@ DX8InstanceManagerClass::DX8InstanceManagerClass()
 	, m_rigidVSNoColor(nullptr)
 	, m_instancePS(nullptr)
 	, m_reflectivePS(nullptr)
+	, m_reflectiveBodyPS(nullptr)
 	, m_additivePS(nullptr)
 	, m_declCacheCount(0)
 	, m_geometryDeclCacheCount(0)
@@ -446,6 +447,7 @@ void DX8InstanceManagerClass::Release_Resources()
 	if (m_rigidVSNoColor) { m_rigidVSNoColor->Release(); m_rigidVSNoColor = nullptr; }
 	if (m_instancePS) { m_instancePS->Release(); m_instancePS = nullptr; }
 	if (m_reflectivePS) { m_reflectivePS->Release(); m_reflectivePS = nullptr; }
+	if (m_reflectiveBodyPS) { m_reflectiveBodyPS->Release(); m_reflectiveBodyPS = nullptr; }	// Ronin @feature 12/11/2026 DX9
 	if (m_additivePS) { m_additivePS->Release(); m_additivePS = nullptr; }	// Ronin @perf 07/11/2026 DX9: the additive parts' PS
 	m_pendingAdditiveCount = 0;
 
@@ -576,6 +578,11 @@ bool DX8InstanceManagerClass::Load_Instance_Shader()
 	if (!Load_Pixel_Shader_From_File("shaders\\ReflectiveRigid.pso", &m_reflectivePS)) {
 		WWDEBUG_SAY(("DX8InstanceManager: ReflectiveRigid.pso not loaded; reflective rigid path disabled"));
 		m_reflectivePS = nullptr;
+	}
+	// Ronin @feature 12/11/2026 DX9: the faded reflective panel in one draw. Non-fatal: without it a faded panel stays on the old path.
+	if (!Load_Pixel_Shader_From_File("shaders\\ReflectiveRigidBody.pso", &m_reflectiveBodyPS)) {
+		WWDEBUG_SAY(("DX8InstanceManager: ReflectiveRigidBody.pso not loaded; faded reflective panels stay on the old path"));
+		m_reflectiveBodyPS = nullptr;
 	}
 
 	// Ronin @perf 07/11/2026 DX9: the additive parts' PS. Non-fatal: without it they stay in the sorting pool.
@@ -732,7 +739,9 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	VertexMaterialClass* material,
 	TextureClass* diffuseTexture,
 	const Matrix3D& worldTransform,
-	const RigidTexGen& texGen)
+	const RigidTexGen& texGen,
+	TextureClass* bodyTexture,
+	VertexMaterialClass* bodyMaterial)
 {
 
 	// Ronin @bugfix 31/07/2026 §16 DX9: strips can NEVER take the programmable path. The only draw this
@@ -766,7 +775,9 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	// Ronin @feature DX9: the per-pixel env-reflection PS -- the whole reason this draw stays inline.
 	// Null means ReflectiveRigid.pso failed to load; returning false drops the mesh to the legacy env
 	// path (the caller also pre-checks Has_Reflective_PS(), this is the backstop).
-	IDirect3DPixelShader9* selectedPS = m_reflectivePS;
+	// Ronin @feature 12/11/2026 DX9: faded (Set_Collect_Fade) = the panel's body composited in this draw, the draw blended at its opacity.
+	const bool reflFaded = m_collectFadeOn;
+	IDirect3DPixelShader9* selectedPS = reflFaded ? m_reflectiveBodyPS : m_reflectivePS;
 	if (selectedVS == nullptr || selectedPS == nullptr || m_singleRigidVB == nullptr) {
 		return false;
 	}
@@ -884,6 +895,7 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 		m_singleRigidVB->Unlock();
 	}
 
+	bool reflCloudActive = false;	// Ronin @feature 12/11/2026 DX9: for a faded panel's body
 	{
 		const bool cloudEnabled =
 			(TheGlobalData != nullptr) &&
@@ -893,6 +905,7 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 
 		TextureClass* rigidCloudTex = cloudEnabled ? Get_Valid_Rigid_Cloud_Texture() : nullptr;
 		const bool cloudActive = cloudEnabled && (rigidCloudTex != nullptr);
+		reflCloudActive = cloudActive;
 
 		float cloudScale = 0.0f, cloudOffsetX = 0.0f, cloudOffsetY = 0.0f;
 		if (cloudActive) {
@@ -1013,7 +1026,8 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 		dev->SetPixelShaderConstantF(16, reflPsC16, 6);
 		// Ronin @feature 18/10/2026 DX9: the reflections' change mask (COLOR1): the frame before last on s10, its c69..c74 (no other
 		// shader reads them); c74.x = 1 only while the mask is bound.
-		reflMark = ssrOn && s_ReflectMaskBegin != nullptr && s_ReflectMaskEnd != nullptr && s_ReflectMaskBegin();
+		// Ronin @feature 12/11/2026 DX9: not for a faded panel - blended at its opacity, the mark would be blended too.
+		reflMark = !reflFaded && ssrOn && s_ReflectMaskBegin != nullptr && s_ReflectMaskEnd != nullptr && s_ReflectMaskBegin();
 		float reflPsC69[24];
 		memcpy(reflPsC69, s_ssrOlderC, sizeof(reflPsC69));
 		reflPsC69[20] = reflMark ? 1.0f : 0.0f;
@@ -1039,6 +1053,100 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 			dev->SetSamplerState(7, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
 			dev->SetSamplerState(7, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
 		}
+	}
+
+	// Ronin @feature 12/11/2026 DX9: a faded panel - its body on s13, lit from the reflection's light through the two materials (c31, c32),
+	// the sun's shadow as the batch binds it (s3, s4; here c33..c44), the draw's opacity in c30.y. The caller set the alpha blend.
+	TextureClass* bodyNormalMap = nullptr;	// Ronin @feature 12/11/2026 DX9: the body's _NRM, released at the teardown
+	if (reflFaded) {
+		Vector3 dif0(1.0f, 1.0f, 1.0f), dif1(1.0f, 1.0f, 1.0f), emi0(0.0f, 0.0f, 0.0f), emi1(0.0f, 0.0f, 0.0f);
+		if (material != nullptr) {
+			material->Get_Diffuse(&dif0);
+			material->Get_Emissive(&emi0);
+		}
+		if (bodyMaterial != nullptr) {
+			bodyMaterial->Get_Diffuse(&dif1);
+			bodyMaterial->Get_Emissive(&emi1);
+		}
+		const float d0[3] = { dif0.X, dif0.Y, dif0.Z };
+		const float d1[3] = { dif1.X, dif1.Y, dif1.Z };
+		const float e0[3] = { emi0.X, emi0.Y, emi0.Z };
+		const float e1[3] = { emi1.X, emi1.Y, emi1.Z };
+		float psC31[4] = { 1.0f, 1.0f, 1.0f, 0.0f };
+		float psC32[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+		for (int ch = 0; ch < 3; ++ch) {
+			psC31[ch] = (d0[ch] > 0.001f) ? d1[ch] / d0[ch] : 1.0f;
+			psC32[ch] = e1[ch] - psC31[ch] * e0[ch];
+		}
+		const float psC30[4] = { (bodyTexture != nullptr) ? 1.0f : 0.0f, 1.0f - m_collectFade, reflCloudActive ? 1.0f : 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(30, psC30, 1);
+		dev->SetPixelShaderConstantF(31, psC31, 1);
+		dev->SetPixelShaderConstantF(32, psC32, 1);
+		if (bodyTexture != nullptr) {
+			bodyTexture->Init();	// as the batch does: after a reset a raw Peek never asks for the reload
+		}
+		dev->SetTexture(13, (bodyTexture != nullptr) ? bodyTexture->Peek_D3D_Texture() : nullptr);
+		dev->SetSamplerState(13, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(13, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(13, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+		dev->SetSamplerState(13, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+		dev->SetSamplerState(13, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+		if (s_shadowMapTex != nullptr) {
+			const float psC37[4] = { 1.0f, s_shadowDepthBias, s_shadowTexelOfs, s_shadowTexelOfs };
+			const float psC38[4] = { s_shadowLightDir[0], s_shadowLightDir[1], s_shadowLightDir[2], s_shadowTexelWorld };
+			const float psC43[4] = { s_shadowDepthBiasFar, s_shadowTexelWorldFar, (s_shadowMapTexFar != nullptr) ? 2.0f : 1.0f, 0.0f };
+			dev->SetPixelShaderConstantF(33, s_shadowLightVP, 4);
+			dev->SetPixelShaderConstantF(37, psC37, 1);
+			dev->SetPixelShaderConstantF(38, psC38, 1);
+			dev->SetPixelShaderConstantF(39, s_shadowLightVPFar, 4);
+			dev->SetPixelShaderConstantF(43, psC43, 1);
+			dev->SetPixelShaderConstantF(44, s_shadowShade, 1);
+			dev->SetTexture(3, s_shadowMapTex);
+			dev->SetTexture(4, (s_shadowMapTexFar != nullptr) ? s_shadowMapTexFar : s_shadowMapTex);
+			for (DWORD st = 3; st <= 4; ++st) {
+				dev->SetSamplerState(st, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);	// LINEAR = hardware PCF on a depth texture
+				dev->SetSamplerState(st, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+				dev->SetSamplerState(st, D3DSAMP_MIPFILTER, D3DTEXF_NONE);
+				dev->SetSamplerState(st, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+				dev->SetSamplerState(st, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+			}
+		} else {
+			const float psC37Off[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+			dev->SetPixelShaderConstantF(37, psC37Off, 1);
+			dev->SetTexture(3, nullptr);
+			dev->SetTexture(4, nullptr);
+		}
+		// Ronin @feature 12/11/2026 DX9: the body's normal map (s2) and its lights (c45..c54), the specular switch of its pass (c55) - as the
+		// batch binds them for that pass, so the faded body is lit as the unfaded one.
+		bodyNormalMap = (bodyTexture != nullptr) ? Get_Normal_Map_For_Diffuse_Texture(bodyTexture) : nullptr;
+		if (bodyNormalMap != nullptr) {
+			dev->SetTexture(2, bodyNormalMap->Peek_D3D_Texture());
+			dev->SetSamplerState(2, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(2, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(2, D3DSAMP_MIPFILTER, D3DTEXF_LINEAR);
+			dev->SetSamplerState(2, D3DSAMP_ADDRESSU, D3DTADDRESS_WRAP);
+			dev->SetSamplerState(2, D3DSAMP_ADDRESSV, D3DTADDRESS_WRAP);
+		}
+		const float psC45[4] = { (bodyNormalMap != nullptr) ? 1.0f : 0.0f, 1.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(45, psC45, 1);
+		const float* const bodyLights[8] = { lightingConstants.c5, lightingConstants.c6, lightingConstants.c11, lightingConstants.c12,
+			lightingConstants.c15, lightingConstants.c16, lightingConstants.c17, lightingConstants.c18 };
+		for (int li = 0; li < 8; ++li) {
+			dev->SetPixelShaderConstantF(46 + li, bodyLights[li], 1);
+		}
+		const float psC54[4] = { lightingConstants.numLights, 0.0f, 0.0f, 0.0f };
+		dev->SetPixelShaderConstantF(54, psC54, 1);
+		float psC55[4] = { 0.0f, 0.0f, 0.0f, -1.0f };
+		MeshModelClass* const bodyModel = renderer->Get_Mesh_Model_Class();
+		if (bodyMaterial != nullptr && bodyModel != nullptr && bodyModel->Get_Single_Shader(1).Uses_Secondary_Gradient() != 0) {
+			Vector3 bodySpecular;
+			bodyMaterial->Get_Specular(&bodySpecular);
+			psC55[0] = bodySpecular.X;
+			psC55[1] = bodySpecular.Y;
+			psC55[2] = bodySpecular.Z;
+			psC55[3] = bodyMaterial->Get_Shininess();
+		}
+		dev->SetPixelShaderConstantF(55, psC55, 1);
 	}
 
 	// Ronin @feature DX9: reflective pass-0 depth bias. HISTORICAL: pass-0 (programmable) wrote depth
@@ -1098,6 +1206,15 @@ bool DX8InstanceManagerClass::Draw_Reflective_Rigid(
 	dev->SetTexture(8, nullptr);	// Ronin @feature 18/10/2026 DX9: the reflections' last frame - stages the wrapper does not track
 	dev->SetTexture(9, nullptr);
 	dev->SetTexture(10, nullptr);	// Ronin @feature 18/10/2026 DX9: the reflections' change mask: the frame before last, likewise
+	if (reflFaded) {	// Ronin @feature 12/11/2026 DX9: a faded panel's shadow stages (the wrapper's) and its body (s13, not the wrapper's)
+		dev->SetTexture(3, nullptr);
+		dev->SetTexture(4, nullptr);
+		DX8Wrapper::Invalidate_Texture_State(3, 2);
+		dev->SetTexture(13, nullptr);
+	}
+	if (bodyNormalMap != nullptr) {	// Ronin @feature 12/11/2026 DX9: its stage (s2) was cleared above, with the wrapper told
+		bodyNormalMap->Release_Ref();
+	}
 	if (normalMapTex != nullptr) {
 		normalMapTex->Release_Ref();
 	}

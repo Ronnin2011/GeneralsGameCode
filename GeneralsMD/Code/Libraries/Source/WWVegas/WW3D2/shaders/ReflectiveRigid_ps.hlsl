@@ -2,6 +2,7 @@
 // rigid surfaces. Replaces the FFP per-vertex env mapper. Outputs the reflection opaquely;
 // the existing pass-1 alpha-diffuse overlay composites it: lerp(reflection, diffuse, diffuse.a).
 // Compile: fxc /T ps_3_0 /Fo ReflectiveRigid.pso ReflectiveRigid_ps.hlsl
+// Ronin @feature 12/11/2026 DX9: and with /D REFLECTIVE_BODY=1 /Fo ReflectiveRigidBody.pso - a faded panel, its body in the same draw.
 sampler2D g_EnvSampler : register(s0); // this pass's stage-0 texture (lakedusk)
 float4    g_CameraPos  : register(c0); // world-space camera position (xyz)
 float4x4  g_View       : register(c1); // world->view; uploaded transposed (mirrors the VS g_ViewProj convention)
@@ -39,6 +40,69 @@ float4    g_ReflVel       : register(c75);  // x = both are there, yz = one texe
 // shroud is sampled here instead, same meaning as in RigidInstance_ps. zw == 0 means the map has no shroud.
 sampler2D g_ShroudSampler : register(s5);
 float4    g_ShroudMap  : register(c5);  // xy = world offset, zw = 1/(cellSize * textureSize)
+// Ronin @feature 12/11/2026 DX9: REFLECTIVE_BODY (ReflectiveRigidBody.pso) - a faded reflective panel in one draw: its alpha body pass
+// composited over the reflection here, then the draw blended at its opacity (Draw_Reflective_Rigid). docs/Materials_Work.md.
+#ifdef REFLECTIVE_BODY
+sampler2D g_BodySampler       : register(s13); // the body pass's texture
+sampler2D g_CloudSampler      : register(s1);
+sampler2D g_BodyNormalSampler : register(s2);  // its _NRM, when it has one
+sampler2D g_ShadowSampler     : register(s3);  // the sun's shadow map, near and far cascades, as RigidInstance_ps samples them
+sampler2D g_ShadowSamplerFar  : register(s4);
+float4    g_Body              : register(c30); // x = a body to draw, y = the draw's opacity, z = cloud shadows on
+float4    g_BodyLightScale    : register(c31); // rgb: the body's light = the reflection's x this + c32 (the two passes' materials)
+float4    g_BodyLightAdd      : register(c32);
+float4x4  g_LightViewProj     : register(c33); // c33..c36; the rest as RigidInstance_ps's c16, c17, c18..c21, c22, c24
+float4    g_ShadowParams      : register(c37);
+float4    g_ShadowParams2     : register(c38);
+float4x4  g_LightViewProjFar  : register(c39); // c39..c42
+float4    g_CascadeParams     : register(c43);
+float4    g_ShadeColour       : register(c44);
+float4    g_BodyNormalParams  : register(c45); // x = the normal map on, y = its strength (RigidInstance_ps's c2)
+float4    g_BodyLights[8]     : register(c46); // c46..c53: lights 0..3, direction towards it then colour (its c3..c10)
+float4    g_BodyNumLights     : register(c54); // x = how many (its c11)
+float4    g_BodySpecular      : register(c55); // rgb = the material's specular, w = shininess; w < 0 = the switch is off (its c26)
+
+// Ronin @feature 12/11/2026 DX9: the sun's shadow on the body - RigidInstance_ps's cascades, normal offset and 3x3 PCF; lit = 1 in the sun.
+float3 bodySunShade(float3 worldPos, float3 worldNormal, out float lit)
+{
+    float3 shade = float3(1.0f, 1.0f, 1.0f);
+    lit = 1.0f;
+    if (g_ShadowParams.x > 0.0f)
+    {
+        float3 Ns        = normalize(worldNormal);
+        float  ndotl     = dot(Ns, -g_ShadowParams2.xyz);
+        float  geo       = lerp(0.35f, 1.0f, smoothstep(0.0f, 0.35f, ndotl));
+        float4 selClip   = mul(float4(worldPos, 1.0f), g_LightViewProj);
+        float2 selUV     = selClip.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
+        float  seamUV    = g_ShadowParams.z * 2.0f * 4.0f;
+        bool   inNear    = (g_CascadeParams.z < 1.5f) || (all(selUV >= seamUV) && all(selUV <= 1.0f - seamUV));
+        float  slope     = sqrt(saturate(1.0f - ndotl * ndotl));
+        float3 samplePos = worldPos + Ns * ((inNear ? g_ShadowParams2.w : g_CascadeParams.y) * 2.0f * slope);
+        float4 clipN     = mul(float4(samplePos, 1.0f), g_LightViewProj);
+        float4 clipF     = mul(float4(samplePos, 1.0f), g_LightViewProjFar);
+        float2 uvN       = clipN.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
+        float2 uvF       = clipF.xy * float2(0.5f, -0.5f) + 0.5f + g_ShadowParams.zw;
+        float2 uv        = inNear ? uvN : uvF;
+        float  texelUV   = g_ShadowParams.z * 2.0f;
+        float  sumN = 0.0f, sumF = 0.0f;
+        [unroll]
+        for (int y = -1; y <= 1; ++y)
+        {
+            [unroll]
+            for (int x = -1; x <= 1; ++x)
+            {
+                float2 ofs = float2(x, y) * texelUV;
+                sumN += tex2Dproj(g_ShadowSampler,    float4(uvN + ofs, clipN.z - g_ShadowParams.y, 1.0f)).r;
+                sumF += tex2Dproj(g_ShadowSamplerFar, float4(uvF + ofs, clipF.z - g_CascadeParams.x, 1.0f)).r;
+            }
+        }
+        // outside the fitted map = in the sun (`< 0 || > 1`: a `!= saturate` test rounds apart)
+        lit   = (any(uv < 0.0f) || any(uv > 1.0f)) ? 1.0f : min((inNear ? sumN : sumF) * (1.0f / 9.0f), geo);
+        shade = lerp(lerp(float3(0.45f, 0.45f, 0.45f), g_ShadeColour.rgb, g_ShadeColour.w), float3(1.0f, 1.0f, 1.0f), lit);
+    }
+    return shade;
+}
+#endif
 
 struct PS_INPUT {
     float4 col         : COLOR0;
@@ -188,6 +252,50 @@ PS_OUTPUT main(PS_INPUT i)
     float lift = max(0.0f, 1.0f + g_ReflKnobs.y * 1.5f * ((1.0f - saturate(dot(N, -V))) - 0.3f));
     reflection *= lift;
     changed    *= lift;
+#ifdef REFLECTIVE_BODY
+    // Ronin @feature 12/11/2026 DX9: the body over the reflection, as its own pass blended it (by its texture's alpha) and lit as RigidInstance_ps
+    // lights that pass: normal map, clouds, the sun's shadow, the specular switch. Its vertex light is the reflection's via the two materials.
+    float4 bodyTex = tex2D(g_BodySampler, i.uv0);
+    float3 body    = bodyTex.rgb * saturate(i.col.rgb * g_BodyLightScale.rgb + g_BodyLightAdd.rgb);
+    if (g_BodyNormalParams.x > 0.0f)
+    {
+        float3 dPdx  = ddx(i.worldPos);
+        float3 dPdy  = ddy(i.worldPos);
+        float2 dUVdx = ddx(i.uv0);
+        float2 dUVdy = ddy(i.uv0);
+        float3 Cy    = cross(dPdy, N);
+        float3 Cx    = cross(N, dPdx);
+        float3 T     = Cy * dUVdx.x + Cx * dUVdy.x;
+        float3 B     = Cy * dUVdx.y + Cx * dUVdy.y;
+        float  tLen  = dot(T, T);
+        float  bLen  = dot(B, B);
+        if (tLen > 1.0e-8f && bLen > 1.0e-8f)
+        {
+            float  k     = rsqrt(max(tLen, bLen));
+            float3 nm    = tex2D(g_BodyNormalSampler, i.uv0).rgb * 2.0f - 1.0f;
+            nm.xy       *= g_BodyNormalParams.y;
+            float3 pN    = normalize(T * k * nm.x + B * k * nm.y + N * nm.z);
+            float3 delta = float3(0.0f, 0.0f, 0.0f);
+            [unroll]
+            for (int l = 0; l < 4; ++l)
+            {
+                if (g_BodyNumLights.x > (float)l)
+                    delta += (saturate(dot(pN, g_BodyLights[2 * l].xyz)) - saturate(dot(N, g_BodyLights[2 * l].xyz))) * g_BodyLights[2 * l + 1].rgb;
+            }
+            body = saturate(body + delta * bodyTex.rgb);
+        }
+    }
+    float3 cloud   = tex2D(g_CloudSampler, i.uv1).rgb;
+    body          *= (g_Body.z > 0.0f) ? cloud : float3(1.0f, 1.0f, 1.0f);
+    float  bodyLit;
+    body          *= bodySunShade(i.worldPos, i.worldNormal, bodyLit);
+    float3 bodyL   = normalize(g_BodyLights[0].xyz + float3(0.0f, 0.0f, 1.0e-5f));
+    if (g_BodySpecular.w >= 0.0f && dot(N, bodyL) > 0.0f)
+        body += g_BodySpecular.rgb * g_BodyLights[1].rgb * pow(saturate(dot(N, normalize(bodyL - V))), max(g_BodySpecular.w, 0.001f)) * bodyLit;
+    float  bodyA   = bodyTex.a * g_Body.x;
+    reflection     = lerp(reflection, body, bodyA);
+    changed       *= 1.0f - bodyA;
+#endif
 
     // Ronin @bugfix 19/09/2026 DX9: shroud in-shader now that the overlay pass no longer reaches programmable meshes.
     if (g_ShroudMap.z > 0.0f)
@@ -200,7 +308,11 @@ PS_OUTPUT main(PS_INPUT i)
 
     // Ronin @feature 18/10/2026 DX9: the change mask (COLOR1), by how much the pane visibly changed (target 1: TAA's mask, or none).
     PS_OUTPUT o;
+#ifdef REFLECTIVE_BODY
+    o.color = float4(reflection, g_Body.y);    // Ronin @feature 12/11/2026 DX9: the draw's opacity - the alpha blend lays it over what is behind
+#else
     o.color = float4(reflection, 1.0f);
+#endif
     float m = saturate((changed - g_ReflMark.z) * g_ReflMark.w);
     o.mark  = float4(m, 0.0f, m * moved, 0.0f);	// Ronin @feature 19/10/2026 DX9: blue = the mover mark
     return o;

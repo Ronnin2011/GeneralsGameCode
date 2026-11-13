@@ -119,6 +119,10 @@ if(MSVC)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/ReflectiveRigid.pso"
             "${ZEROHOUR_INSTALL_PATH}/shaders/ReflectiveRigid.pso"
+        # Ronin @build 13/11/2026 Deploy the faded reflective panel's pixel shader (ReflectiveRigid_ps.hlsl, REFLECTIVE_BODY) to shaders subfolder.
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SHADER_SOURCE_DIR}/ReflectiveRigidBody.pso"
+            "${ZEROHOUR_INSTALL_PATH}/shaders/ReflectiveRigidBody.pso"
         # Ronin @build 07/11/2026 Deploy the additive parts' pixel shader to shaders subfolder.
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${SHADER_SOURCE_DIR}/AdditivePart.pso"
