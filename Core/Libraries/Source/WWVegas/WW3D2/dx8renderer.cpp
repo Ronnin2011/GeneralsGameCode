@@ -459,6 +459,21 @@ TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture)
 		return nullptr;
 	}
 
+	// Ronin @perf 13/11/2026 DX9: looked up once per texture (NormalMapCache) - the name lookup below cost ~1 us at every draw that asked
+	// ([REFL] on the panel). Null after a device reset until the map is back; the ref returned is the caller's, as before.
+	if (diffuseTexture->NormalMapLooked) {
+		TextureClass* const cached = diffuseTexture->NormalMapCache;
+		if (cached == nullptr) {
+			return nullptr;
+		}
+		cached->Init();
+		if (cached->Peek_D3D_Texture() == nullptr) {
+			return nullptr;
+		}
+		cached->Add_Ref();
+		return cached;
+	}
+
 	const StringClass& diffuseName = diffuseTexture->Get_Texture_Name();
 	if (diffuseName.Get_Length() == 0) {
 		return nullptr;
@@ -482,6 +497,7 @@ TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture)
 	}
 
 	TextureClass* normalTex = nullptr;
+	int notThere = 0;	// Ronin @perf 13/11/2026 DX9: attempts that loaded and found no file; both = this texture has none
 	WW3DAssetManager* am = WW3DAssetManager::Get_Instance();
 	if (am != nullptr) {
 		StringClass attempt;
@@ -493,6 +509,7 @@ TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture)
 		if (normalTex != nullptr) {
 			normalTex->Init();
 			if (normalTex->Is_Missing_Texture() || normalTex->Peek_D3D_Texture() == nullptr) {
+				notThere += (normalTex->Is_Initialized() && normalTex->Is_Missing_Texture()) ? 1 : 0;
 				normalTex->Release_Ref();
 				normalTex = nullptr;
 			}
@@ -506,11 +523,23 @@ TextureClass* Get_Normal_Map_For_Diffuse_Texture(TextureClass* diffuseTexture)
 			if (normalTex != nullptr) {
 				normalTex->Init();
 				if (normalTex->Is_Missing_Texture() || normalTex->Peek_D3D_Texture() == nullptr) {
+					notThere += (normalTex->Is_Initialized() && normalTex->Is_Missing_Texture()) ? 1 : 0;
 					normalTex->Release_Ref();
 					normalTex = nullptr;
 				}
 			}
 		}
+	}
+
+	// Ronin @perf 13/11/2026 DX9: a final answer is kept on the texture - the map found (its ref held, released with the texture), or
+	// none in either format. A map still streaming in is not final: asked again next time.
+	if (normalTex != nullptr && normalTex->Is_Initialized()) {
+		normalTex->Add_Ref();
+		diffuseTexture->NormalMapCache = normalTex;
+		diffuseTexture->NormalMapLooked = true;
+	}
+	else if (normalTex == nullptr && notThere == 2) {
+		diffuseTexture->NormalMapLooked = true;
 	}
 
 	return normalTex;

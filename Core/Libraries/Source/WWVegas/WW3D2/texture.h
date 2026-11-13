@@ -396,6 +396,12 @@ public:
 
 	virtual TextureClass* As_TextureClass() override { return this; }
 
+	// Ronin @perf 13/11/2026 DX9: this texture's normal map for our rigid shaders, looked up once (Get_Normal_Map_For_Diffuse_Texture);
+	// Looked = the answer is known, none included. The map's ref is held, released with this texture.
+	TextureClass*	NormalMapCache = nullptr;
+	bool			NormalMapLooked = false;
+	virtual ~TextureClass() override { if (NormalMapCache != nullptr) NormalMapCache->Release_Ref(); }
+
 protected:
 
 	WW3DFormat				TextureFormat;
