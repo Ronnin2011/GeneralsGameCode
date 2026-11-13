@@ -360,7 +360,7 @@ struct TranslucentDrawStats
 	unsigned	skinPasses;		// ... of skinned meshes
 	unsigned	twoPassPasses;	// ... of two-pass meshes, each pass faded on its own
 	unsigned	reflectPasses;	// ... environment reflection passes
-	unsigned	sortedMeshes;	// faded meshes drawn through the sorting pool, where the override is not applied
+	unsigned	sortedMeshes;	// faded meshes drawn through the sorting pool (faded there since 13/11/2026: Set_Insert_Opacity)
 	double		ms;				// CPU time in RTS3DScene::flushTranslucentObjects
 	bool		enabled;
 };

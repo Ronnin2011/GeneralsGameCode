@@ -61,6 +61,8 @@ public:
 
 	static void Flush();
 	static void Deinit();
+	// Ronin @feature 13/11/2026 DX9: the opacity of the triangles inserted next (a faded mesh; 1 = unfaded), kept on their node.
+	static void Set_Insert_Opacity(float opacity);
 
 	static void SetMinVertexBufferSize( unsigned val );
 

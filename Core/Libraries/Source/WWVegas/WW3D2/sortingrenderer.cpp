@@ -215,6 +215,9 @@ public:
 
 
 bool SortingRendererClass::_EnableTriangleDraw=true;
+// Ronin @feature 13/11/2026 DX9: the next insert's opacity (dx8renderer sets it round Render_Sorted for a faded mesh).
+static float s_insertOpacity = 1.0f;
+void SortingRendererClass::Set_Insert_Opacity(float opacity) { s_insertOpacity = opacity; }
 static unsigned DEFAULT_SORTING_POLY_COUNT = 16384;	// (count * 3) must be less than 65536
 static unsigned DEFAULT_SORTING_VERTEX_COUNT = 32768;	// count must be less than 65536
 
@@ -325,6 +328,7 @@ public:
 	unsigned short polygon_count;			// Polygon count to process (3 indices = one polygon)
 	unsigned short min_vertex_index;		// First index used in the vb
 	unsigned short vertex_count;			// Number of vertices used in vb
+	float fade_opacity;					// Ronin @feature 13/11/2026 DX9: a faded mesh's opacity, 1 = unfaded (Set_Insert_Opacity)
 };
 
 typedef std::list<SortingNodeStruct*> SortingNodeStructList;
@@ -401,6 +405,7 @@ void SortingRendererClass::Insert_Triangles(
 	state->polygon_count=polygon_count;
 	state->min_vertex_index=min_vertex_index;
 	state->vertex_count=vertex_count;
+	state->fade_opacity = s_insertOpacity;	// Ronin @feature 13/11/2026 DX9: a faded mesh's opacity (Set_Insert_Opacity)
 
 	if (bounding_sphere.Is_Valid())
 	{
@@ -613,6 +618,20 @@ static void Apply_Render_State(RenderStateStruct& render_state)
 
 // ----------------------------------------------------------------------------
 
+// Ronin @feature 13/11/2026 DX9: a faded node's material - its opacity scaled for this run's draw (a lit mesh takes its alpha from it), then
+// put back; the vertex alpha was scaled at the copy (an unlit mesh, or one lit from its vertex colours). One of the two reaches the pixel.
+static void Apply_Node_Fade(const SortingNodeStruct* state)
+{
+	VertexMaterialClass* const material = state->sorting_state.material;
+	if (state->fade_opacity >= 1.0f || material == nullptr) {
+		return;
+	}
+	const float opacity = material->Get_Opacity();
+	material->Set_Opacity(opacity * state->fade_opacity);
+	DX8Wrapper::Apply_Render_State_Changes();	// the faded material is on the device; the next run's Set_Material puts the real one back
+	material->Set_Opacity(opacity);
+}
+
 // Ronin @perf 09/08/2026 §19b.1 DX9: is this node's blend ORDER-INDEPENDENT? Additive (ONE/ONE and
 // SRC_ALPHA/ONE) is commutative, so those triangles may be reordered relative to each other. A DEPTH
 // WRITE is never commutative and disqualifies a node regardless of blend mode. Reads ShaderClass ONLY,
@@ -715,7 +734,18 @@ void SortingRendererClass::Flush_Sorting_Pool()
 			// If you have a crash in here and "dest_verts" points to illegal memory area,
 			// it is because D3D is in illegal state, and the only known cure is rebooting.
 			// This illegal state is usually caused by Quake3-engine powered games such as MOHAA.
-			memcpy(dest_verts, src_verts, sizeof(VertexFormatXYZNDUV2)*state->vertex_count);
+			// Ronin @feature 13/11/2026 DX9: a faded node's vertices built from the source, alpha scaled (Apply_Node_Fade does its material's) -
+			// dest_verts is the locked dynamic buffer, write-combined: never read back from it, one whole write per vertex.
+			if (state->fade_opacity < 1.0f) {
+				for (unsigned v = 0; v < state->vertex_count; ++v) {
+					VertexFormatXYZNDUV2 faded = src_verts[v];
+					const unsigned alpha = (unsigned)((float)(faded.diffuse >> 24) * state->fade_opacity + 0.5f);
+					faded.diffuse = (faded.diffuse & 0x00FFFFFFu) | (alpha << 24);
+					dest_verts[v] = faded;
+				}
+			} else {
+				memcpy(dest_verts, src_verts, sizeof(VertexFormatXYZNDUV2)*state->vertex_count);
+			}
 			dest_verts += state->vertex_count;
 
 			D3DXMATRIX d3d_mtx=(D3DXMATRIX&)state->sorting_state.world*(D3DXMATRIX&)state->sorting_state.view;
@@ -884,6 +914,7 @@ void SortingRendererClass::Flush_Sorting_Pool()
 			}
 
 			Apply_Render_State(state->sorting_state);
+			Apply_Node_Fade(state);	// Ronin @feature 13/11/2026 DX9: a faded mesh's material alpha, for this run
 
 			// Ronin @diagnostic 06/11/2026 DX9: the [DRAW] bucket by blend; the merged nodes share it.
 			Debug_Statistics::Set_Draw_Subsystem(Classify_Sorted_Draw(state->sorting_state.shader));
@@ -1004,6 +1035,7 @@ void SortingRendererClass::Flush()
 			 DX8Wrapper::BindLayoutFVF(fvf, "SortingRenderer::DirectDraw");
 		 }
 
+			Apply_Node_Fade(state);	// Ronin @feature 13/11/2026 DX9: a faded mesh's material alpha
 			DX8Wrapper::Apply_Render_State_Changes();
 
 			Debug_Statistics::Set_Draw_Subsystem(Classify_Sorted_Draw(state->sorting_state.shader));
