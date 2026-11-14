@@ -2547,6 +2547,13 @@ void DX8TextureCategoryClass::Render()
 	// path self-reports through Record_Instanced_Draw and is unaffected by this scope.
 	Debug_Statistics::DrawSubsystemScope drawTag(Debug_Statistics::DRAW_SUBSYS_RIGID_FFP);
 
+	// Ronin @perf 14/11/2026 DX9: the shadow map's depth pass draws with colour off, so a category whose shader writes no depth draws nothing
+	// there - each of its meshes takes this shader's depth write (rotor discs, blended second passes). Its tasks are dropped unrendered.
+	if (MeshClass::s_InShadowDepthPass && Get_Shader().Get_Depth_Mask() == ShaderClass::DEPTH_WRITE_DISABLE) {
+		Clear_Render_List();
+		return;
+	}
+
 #ifdef WWDEBUG
 	if (!WW3D::Expose_Prelit()) {
 #endif
@@ -2851,9 +2858,7 @@ void DX8TextureCategoryClass::Render()
 			// Ronin @feature 13/11/2026 DX9: a faded mesh (stealth) is drawn faded by the pool - its opacity rides its node (Set_Insert_Opacity).
 			const bool fadedSorted = mesh->Get_Alpha_Override() != 1.0f && !MeshClass::s_InShadowDepthPass;
 			// Ronin @feature 13/11/2026 DX9: not in the stealth depth pass - the pool and the parts draw later, with colour; the colour pass adds it.
-			// Ronin @perf 14/11/2026 DX9: nor in the shadow map's depth pass when it writes no depth - colour is off there, it drew nothing (rotor discs).
-			const bool drawsNothing = MeshClass::s_InShadowDepthPass && shader.Get_Depth_Mask() == ShaderClass::DEPTH_WRITE_DISABLE;
-			if (!TheFadeDepthPass && !drawsNothing && !TheDX8InstanceManager.Collect_Additive_Part(renderer, mesh, lenv, vmaterial, Peek_Texture(0), shader, *world_transform)) {
+			if (!TheFadeDepthPass && !TheDX8InstanceManager.Collect_Additive_Part(renderer, mesh, lenv, vmaterial, Peek_Texture(0), shader, *world_transform)) {
 				SortingRendererClass::Set_Insert_Opacity(fadedSorted ? mesh->Get_Alpha_Override() : 1.0f);
 				renderer->Render_Sorted(mesh->Get_Base_Vertex_Offset(),mesh->Get_Bounding_Sphere());
 				SortingRendererClass::Set_Insert_Opacity(1.0f);
