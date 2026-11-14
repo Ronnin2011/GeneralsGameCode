@@ -2851,7 +2851,9 @@ void DX8TextureCategoryClass::Render()
 			// Ronin @feature 13/11/2026 DX9: a faded mesh (stealth) is drawn faded by the pool - its opacity rides its node (Set_Insert_Opacity).
 			const bool fadedSorted = mesh->Get_Alpha_Override() != 1.0f && !MeshClass::s_InShadowDepthPass;
 			// Ronin @feature 13/11/2026 DX9: not in the stealth depth pass - the pool and the parts draw later, with colour; the colour pass adds it.
-			if (!TheFadeDepthPass && !TheDX8InstanceManager.Collect_Additive_Part(renderer, mesh, lenv, vmaterial, Peek_Texture(0), shader, *world_transform)) {
+			// Ronin @perf 14/11/2026 DX9: nor in the shadow map's depth pass when it writes no depth - colour is off there, it drew nothing (rotor discs).
+			const bool drawsNothing = MeshClass::s_InShadowDepthPass && shader.Get_Depth_Mask() == ShaderClass::DEPTH_WRITE_DISABLE;
+			if (!TheFadeDepthPass && !drawsNothing && !TheDX8InstanceManager.Collect_Additive_Part(renderer, mesh, lenv, vmaterial, Peek_Texture(0), shader, *world_transform)) {
 				SortingRendererClass::Set_Insert_Opacity(fadedSorted ? mesh->Get_Alpha_Override() : 1.0f);
 				renderer->Render_Sorted(mesh->Get_Base_Vertex_Offset(),mesh->Get_Bounding_Sphere());
 				SortingRendererClass::Set_Insert_Opacity(1.0f);
