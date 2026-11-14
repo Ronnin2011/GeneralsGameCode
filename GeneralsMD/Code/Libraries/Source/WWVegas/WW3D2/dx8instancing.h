@@ -212,6 +212,9 @@ public:
 	// Ronin @feature 12/11/2026 DX9: while set, a collected record is faded - fade 0..1 (1 = gone), drawn with this alpha blend; the caller clears it.
 	void Set_Collect_Fade(float fade, const ShaderClass& shader) { m_collectFade = fade; m_collectFadeShader = shader; m_collectFadeOn = true; }
 	void Clear_Collect_Fade() { m_collectFadeOn = false; }
+	// Ronin @perf 14/11/2026 DX9: set round the faded objects' pass (W3DScene), whose depth goes down first: a faded record's colour lands
+	// only where it is nearest, so a texture's faded records sort like opaque ones and the same part of every building shares a draw.
+	static bool s_FadedOrderFree;
 	void Reset_Single_Rigid_Collection() { m_pendingSingleRigidCount = 0; }
 	unsigned Get_Pending_Single_Rigid_Count() const { return m_pendingSingleRigidCount; }
 

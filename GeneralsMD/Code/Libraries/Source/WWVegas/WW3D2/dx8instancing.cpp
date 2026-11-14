@@ -667,6 +667,8 @@ DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_SunShadeEnd
 // Ronin @feature 18/10/2026 DX9: the reflections' change mask - R3DTaa's, set by R3DLocalLights, round Draw_Reflective_Rigid's draw.
 DX8InstanceManagerClass::ReflectMaskBeginFunc DX8InstanceManagerClass::s_ReflectMaskBegin = nullptr;
 DX8InstanceManagerClass::SunShadeHookFunc DX8InstanceManagerClass::s_ReflectMaskEnd = nullptr;
+// Ronin @perf 14/11/2026 DX9: the faded objects' pass, depth first - their records may sort (Build_Single_Rigid_Order).
+bool DX8InstanceManagerClass::s_FadedOrderFree = false;
 
 void DX8InstanceManagerClass::Set_Shadow_Shade(const float* rgbw)
 {
@@ -1658,7 +1660,19 @@ void DX8InstanceManagerClass::Build_Single_Rigid_Order(unsigned count)
 	unsigned i = 0;
 	while (i < count) {
 		if (!Single_Rigid_Shader_Is_Opaque(recs[i].shader)) {
-			++i;      // barrier: this record draws exactly where it was collected
+			// Ronin @perf 14/11/2026 DX9: a barrier, drawn where it was collected - but in the faded pass (s_FadedOrderFree) a run of one texture's
+			// blended records sorts like an opaque run: their depth is already down, so the order changes no pixel.
+			unsigned j = i + 1;
+			while (s_FadedOrderFree && j < count && !Single_Rigid_Shader_Is_Opaque(recs[j].shader) &&
+				recs[j].kind == recs[i].kind && recs[j].shader.Get_Bits() == recs[i].shader.Get_Bits() &&
+				recs[j].diffuse == recs[i].diffuse && recs[j].bodyTexture == recs[i].bodyTexture) {
+				++j;
+			}
+			if ((j - i) > 1) {
+				std::stable_sort(m_srOrder + i, m_srOrder + j,
+					[recs](unsigned lhs, unsigned rhs) { return Single_Rigid_Order_Less(recs[lhs], recs[rhs]); });
+			}
+			i = j;
 			continue;
 		}
 		unsigned j = i + 1;

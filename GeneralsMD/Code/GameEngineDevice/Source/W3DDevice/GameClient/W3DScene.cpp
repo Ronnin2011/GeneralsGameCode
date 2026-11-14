@@ -62,6 +62,7 @@
 #include "W3DDevice/GameClient/W3DShroud.h"
 #include "WW3D2/camera.h"
 #include "WW3D2/dx8renderer.h"
+#include "WW3D2/dx8instancing.h"	// Ronin @perf 14/11/2026 DX9: the faded records' order (flushTranslucentObjects)
 #include "WW3D2/sortingrenderer.h"
 #include "WW3D2/dx8wrapper.h"
 #include "WW3D2/Renderer.h"
@@ -1826,6 +1827,10 @@ void RTS3DScene::flushTranslucentObjects(RenderInfoClass & rinfo)
 		TheTranslucentStats.objects += (unsigned)m_translucentObjectsCount;
 		const Int localPlayerIndex = rts::getObservedOrLocalPlayerIndex_Safe();
 
+		// Ronin @perf 14/11/2026 DX9: the faded objects' depth goes down first (below; the shadow map's pass draws depth alone), so the batch
+		// may sort their records by part: the same part of every building in one draw.
+		DX8InstanceManagerClass::s_FadedOrderFree = true;
+
 		// Ronin @feature 13/11/2026 DX9: stealth depth first - the faded objects' depth alone (colour off), then their colour, which only their
 		// nearest surface passes: a unit and a stealthed group fade as one layer. Not in the shadow map's pass, its colour is already off.
 		for (Int fadePass = TheTerrainShadowPass.inDepthPass ? 1 : 0; fadePass < 2; ++fadePass)
@@ -1862,6 +1867,7 @@ void RTS3DScene::flushTranslucentObjects(RenderInfoClass & rinfo)
 				TheFadeDepthPass = false;
 			}
 		}
+		DX8InstanceManagerClass::s_FadedOrderFree = false;
 		WW3D::Render_And_Clear_Static_Sort_Lists(rinfo);	//draws things like water
 		rinfo.alphaOverride = 1.0f;	//disable forced alpha
 		m_translucentObjectsCount = 0;
