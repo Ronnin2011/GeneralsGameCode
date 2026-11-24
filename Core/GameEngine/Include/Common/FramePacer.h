@@ -80,7 +80,7 @@ protected:
 	FrameRateLimit m_frameRateLimit;
 
 #if defined(GENONLINE)
-	Int getSituationCappedFramesPerSecondLimit(Int fps) const; ///< Cap rendering in the menus and on the shell map at 60 fps and without focus at the logic rate.
+	Int getSituationCappedFramesPerSecondLimit(Int fps) const; ///< Ronin @bugfix 24/11/2026 DX9: caps rendering only without focus (at the logic rate), never below the logic or network rate.
 #endif
 
 	Int m_maxFPS; ///< Maximum frames per second for rendering

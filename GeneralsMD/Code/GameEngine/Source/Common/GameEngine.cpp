@@ -985,16 +985,13 @@ void GameEngine::update()
 			VERIFY_CRC
 
 #if defined(GENONLINE)
-			// GENONLINE_NOTE: Lock the shellmap to 30fps until its issues are fixed
+			// Ronin @bugfix 24/11/2026 DX9: only an online match takes GO's limit (Ctrl +/- saves it there); elsewhere the player's
+			// limit stands, so Ctrl +/- and Ctrl+Shift +/- work in the menus, on the shell map and offline.
 			Int matchFpsLimit = 0;
 			if (GetOnlineGameHooks()->getMatchFrameRateLimit(matchFpsLimit) && TheGameLogic->isInGame() && !TheShell->isShellActive())
 			{
 				TheFramePacer->setFramesPerSecondLimit(matchFpsLimit);
 				TheWritableGlobalData->m_useFpsLimit = matchFpsLimit;
-			}
-			else
-			{
-				TheFramePacer->setFramesPerSecondLimit(LOGICFRAMES_PER_SECOND);
 			}
 #endif
 			

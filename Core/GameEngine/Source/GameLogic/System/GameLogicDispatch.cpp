@@ -922,7 +922,7 @@ bool GameLogic::onNewGame(MAYBE_UNUSED GameMessage *msg)
 		rankPoints = msg->getArgument( 2 )->integer;
 
 	// Ronin @feature 10/11/2026 DX9: a match draws uncapped at its game speed - the 4th argument (skirmish slider, replay), 15-60 logic
-	// frames a second (0.5x-2x); none or 2003's 1000: 30. The shell keeps 2003's tied cap; a network game runs at the network's rate.
+	// frames a second (0.5x-2x); none or 2003's 1000: 30. A network game runs at the network's rate.
 	if ( gameMode != GAME_SHELL && gameMode != GAME_NONE )
 	{
 		Int speedFPS = LOGICFRAMES_PER_SECOND;
@@ -932,6 +932,13 @@ bool GameLogic::onNewGame(MAYBE_UNUSED GameMessage *msg)
 		TheFramePacer->setFramesPerSecondLimit(RenderFpsPreset::UncappedFpsValue);
 		TheWritableGlobalData->m_useFpsLimit = true;
 		TheFramePacer->setLogicTimeScaleFps(speedFPS);
+		TheFramePacer->enableLogicTimeScale(TRUE);
+	}
+	// Ronin @bugfix 24/11/2026 DX9: the shell map's logic holds normal speed, so it draws at the player's limit
+	// (Ctrl +/-) without running faster.
+	else if ( gameMode == GAME_SHELL )
+	{
+		TheFramePacer->setLogicTimeScaleFps(LOGICFRAMES_PER_SECOND);
 		TheFramePacer->enableLogicTimeScale(TRUE);
 	}
 	else

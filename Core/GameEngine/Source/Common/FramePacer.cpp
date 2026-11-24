@@ -152,18 +152,10 @@ Int FramePacer::getActualFramesPerSecondLimit() const
 }
 
 #if defined(GENONLINE)
-// the most the menus and the shell map render at
-static const Int MENU_FPS_LIMIT = 60;
-
+// Ronin @bugfix 24/11/2026 DX9: the menus and the shell map draw at the player's limit too (Ctrl +/-); the shell map's
+// logic holds normal speed through the logic time scale (GameLogic::onNewGame).
 Int FramePacer::getSituationCappedFramesPerSecondLimit(Int fps) const
 {
-	// A match renders at the chosen limit, uncapped included, the menus and the shell map gain nothing from more than 60.
-	const Bool inMatch = TheGameLogic != nullptr && TheGameLogic->isInGame() && TheGameLogic->getGameMode() != GAME_SHELL;
-	if (!inMatch)
-	{
-		fps = std::min<Int>(fps, MENU_FPS_LIMIT);
-	}
-
 	// Without focus nobody watches the match at a high frame rate.
 	if (TheGameEngine != nullptr && !TheGameEngine->isActive())
 	{
