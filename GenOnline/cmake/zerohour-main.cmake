@@ -3,15 +3,11 @@
 rts_copy_modern_media_files(z_generals)
 rts_add_license_files(z_generals)
 
-include(${CMAKE_CURRENT_LIST_DIR}/vcruntime-check.cmake)
-genonline_vcruntime_check_sources(z_generals)
 include(${CMAKE_CURRENT_LIST_DIR}/version-info.cmake)
 genonline_version_info(z_generals zerohour "Generals Online client for Zero Hour")
 
 macro(genonline_zerohour_main_targets)
     set_target_properties(z_generals PROPERTIES OUTPUT_NAME "genonline_zerohour${RTS_BUILD_OUTPUT_SUFFIX}")
-
-    genonline_vcruntime_check_link(z_generals)
 
     if(WIN32)
         add_custom_command(TARGET z_generals POST_BUILD
@@ -22,6 +18,11 @@ macro(genonline_zerohour_main_targets)
                 "${CMAKE_SOURCE_DIR}/Core/GameEngine/Source/GameNetwork/GenOnline/Vendor/DiscordRPC/LICENSE.txt"
                 "$<TARGET_FILE_DIR:z_generals>/discord-rpc-LICENSE.txt"
         )
+        if(TARGET Microsoft::D3DX9)
+            add_custom_command(TARGET z_generals POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:Microsoft::D3DX9>" "$<TARGET_FILE_DIR:z_generals>"
+            )
+        endif()
 
         if(EXISTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/tools/sentry-native/sentry-crash.exe")
             # sentry's native backend runs its crash daemon as a separate process next to the game.
@@ -49,6 +50,9 @@ macro(genonline_zerohour_install)
             set(DISCORD_RPC_DIR "${CMAKE_SOURCE_DIR}/Core/GameEngine/Source/GameNetwork/GenOnline/Vendor/DiscordRPC")
             install(FILES "${DISCORD_RPC_DIR}/discord-rpc.dll" DESTINATION "${RTS_INSTALL_PREFIX_ZEROHOUR}")
             install(FILES "${DISCORD_RPC_DIR}/LICENSE.txt" DESTINATION "${RTS_INSTALL_PREFIX_ZEROHOUR}" RENAME discord-rpc-LICENSE.txt)
+            if(TARGET Microsoft::D3DX9)
+                install(FILES "$<TARGET_FILE:Microsoft::D3DX9>" DESTINATION "${RTS_INSTALL_PREFIX_ZEROHOUR}")
+            endif()
         endif()
     endif()
 endmacro()
