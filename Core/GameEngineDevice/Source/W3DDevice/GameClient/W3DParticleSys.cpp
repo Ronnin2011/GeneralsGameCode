@@ -343,17 +343,18 @@ void W3DParticleSystemManager::doParticles(RenderInfoClass &rinfo)
 		const ParticleSystemInfo::ParticleShaderType shaderType = sys->getShaderType();
 		Vector4 uvRect(0.0f, 0.0f, 1.0f, 1.0f);
 		Bool atlased = FALSE;
-		if (supportsAtlasing(*sys))
+		// Ronin @refactor 27/11/2026 DX9: upstream's atlas takes a reference (#3562), so a missing texture stays off it here.
+		if (supportsAtlasing(*sys) && texture.Peek() != nullptr)
 		{
 			// Ronin @perf 07/11/2026 DX9: the atlas answers the same for a texture all through one call; asked once.
 			const Int premultiplied = (shaderType == ParticleSystemInfo::ALPHA) ? 1 : 0;
 			if (lookup != nullptr && !lookup->located[premultiplied])
 			{
-				lookup->location[premultiplied] = m_atlas.Find_Or_Insert(texture.Peek(), premultiplied != 0);
+				lookup->location[premultiplied] = m_atlas.Find_Or_Insert(*texture.Peek(), premultiplied != 0);
 				lookup->located[premultiplied] = TRUE;
 			}
 			const TextureAtlasClass::TextureLocation location = (lookup != nullptr) ? lookup->location[premultiplied] :
-				m_atlas.Find_Or_Insert(texture.Peek(), premultiplied != 0);
+				m_atlas.Find_Or_Insert(*texture.Peek(), premultiplied != 0);
 			if (location.page != nullptr)
 			{
 				texture = location.page;

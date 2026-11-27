@@ -44,19 +44,24 @@ void TextureAtlasClass::Reset()
 	AtlasDisabled = false;
 }
 
-TextureAtlasClass::TextureLocation TextureAtlasClass::Find_Or_Insert(TextureClass* source, const bool premultiplyAlpha)
+TextureAtlasClass::TextureLocation TextureAtlasClass::Find_Or_Insert(TextureClass& source, const bool premultiplyAlpha)
 {
 	// Skip textures without name as it is required for indexing.
-	if (AtlasDisabled || source == nullptr || source->Get_Texture_Name().Is_Empty())
+	if (AtlasDisabled || source.Get_Texture_Name().Is_Empty())
 	{
 		return TextureLocation::Create_Invalid();
 	}
 
-	// Page eviction must happen early to avoid invalidating in-use packed textures in the middle of a render batch.
-	Evict_If_Out_Of_Space();
+	// If an earlier texture did not fit because all pages were full, the atlas was marked out of space.
+	// Evict the oldest page to make room, but only in a later frame: locations returned in the frame
+	// that ran out of space must stay valid until that frame ends.
+	if (OutOfSpace && OutOfSpaceFrame != WW3D::Get_Frame_Count() && !Pages.empty())
+	{
+		Evict_Oldest_Page();
+	}
 
 	TextureLocationMap& locations = TextureLocations[premultiplyAlpha ? PREMULTIPLY_ON : PREMULTIPLY_OFF];
-	TextureLocationMap::iterator it = locations.find(source->Get_Texture_Name());
+	TextureLocationMap::iterator it = locations.find(source.Get_Texture_Name());
 	if (it == locations.end())
 	{
 		// To prevent lag spikes, limit the number of textures that can be inserted (packed) per frame.
@@ -65,28 +70,22 @@ TextureAtlasClass::TextureLocation TextureAtlasClass::Find_Or_Insert(TextureClas
 			return TextureLocation::Create_Invalid();
 		}
 
-		if (!source->Is_Initialized())
+		if (!source.Is_Initialized())
 		{
-			TextureLoader::Request_Foreground_Loading(source);
+			TextureLoader::Request_Foreground_Loading(&source);
 		}
 
 		// Try to add a texture. If rejected, will be marked invalid, such that it will not get a retry until the next eviction.
 		const TextureLocation packedTexture = Pack_Texture(source, premultiplyAlpha);
-		it = locations.insert(std::make_pair(source->Get_Texture_Name(), packedTexture)).first;
+		it = locations.insert(std::make_pair(source.Get_Texture_Name(), packedTexture)).first;
 		++PacksThisFrame;
 	}
 
 	return it->second;
 }
 
-void TextureAtlasClass::Evict_If_Out_Of_Space()
+void TextureAtlasClass::Evict_Oldest_Page()
 {
-	// Evict only after a texture did not fit in an earlier frame.
-	if (!OutOfSpace || OutOfSpaceFrame == WW3D::Get_Frame_Count() || Pages.empty())
-	{
-		return;
-	}
-
 	// Forget the textures of the oldest page and the rejected ones, so that they are packed again when drawn.
 	TextureClass* evicted = Pages.front().texture.Peek();
 	for (int i = 0; i < ARRAY_SIZE(TextureLocations); ++i)
@@ -112,16 +111,16 @@ void TextureAtlasClass::Evict_If_Out_Of_Space()
 	OutOfSpace = false;
 }
 
-TextureAtlasClass::TextureLocation TextureAtlasClass::Pack_Texture(const TextureClass* source, const bool premultiplyAlpha)
+TextureAtlasClass::TextureLocation TextureAtlasClass::Pack_Texture(const TextureClass& source, const bool premultiplyAlpha)
 {
 	// A texture can be initialized without a D3D texture, e.g. with texturing disabled.
-	if (source->Peek_D3D_Texture() == nullptr)
+	if (source.Peek_D3D_Texture() == nullptr)
 	{
 		return TextureLocation::Create_Invalid();
 	}
 
-	const int width = source->Get_Width();
-	const int height = source->Get_Height();
+	const int width = source.Get_Width();
+	const int height = source.Get_Height();
 	const int cellWidth = width + 2 * TextureAtlas::PADDING;
 	const int cellHeight = height + 2 * TextureAtlas::PADDING;
 
@@ -245,20 +244,20 @@ bool TextureAtlasClass::Create_Page()
 	return true;
 }
 
-bool TextureAtlasClass::Copy_To_Cell(const TextureClass* source, TextureClass* page, const bool premultiplyAlpha, const int left, const int top)
+bool TextureAtlasClass::Copy_To_Cell(const TextureClass& source, const TextureClass* page, const bool premultiplyAlpha, const int left, const int top)
 {
-	const int sourceLevels = (int)source->Peek_D3D_Texture()->GetLevelCount();
+	const int sourceLevels = (int)source.Peek_D3D_Texture()->GetLevelCount();
 
 	// WW3D stores the address mode on the texture and applies it whenever the texture is drawn.
 	// Padding follows the source texture's wrap/clamp addressing modes.
-	const bool wrapU = source->Get_Filter().Get_U_Addr_Mode() == TextureFilterClass::TEXTURE_ADDRESS_REPEAT;
-	const bool wrapV = source->Get_Filter().Get_V_Addr_Mode() == TextureFilterClass::TEXTURE_ADDRESS_REPEAT;
+	const bool wrapU = source.Get_Filter().Get_U_Addr_Mode() == TextureFilterClass::TEXTURE_ADDRESS_REPEAT;
+	const bool wrapV = source.Get_Filter().Get_V_Addr_Mode() == TextureFilterClass::TEXTURE_ADDRESS_REPEAT;
 
 	for (int level = 0; level < TextureAtlas::MIP_LEVEL_COUNT; ++level)
 	{
 		const int padding = TextureAtlas::PADDING >> level;
-		const int width = source->Get_Width() >> level;
-		const int height = source->Get_Height() >> level;
+		const int width = source.Get_Width() >> level;
+		const int height = source.Get_Height() >> level;
 		const int x = left >> level;
 		const int y = top >> level;
 
@@ -269,7 +268,7 @@ bool TextureAtlasClass::Copy_To_Cell(const TextureClass* source, TextureClass* p
 		RefCountPtr<SurfaceClass> sourceSurface;
 		if (level < sourceLevels)
 		{
-			sourceSurface.Assign_No_Add_Ref(source->Get_Surface_Level(level));
+			sourceSurface.Assign_No_Add_Ref(source.Get_Surface_Level(level));
 			destinationSurface->Copy(x, y, 0, 0, width, height, sourceSurface.Peek());
 		}
 		else

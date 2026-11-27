@@ -27,12 +27,11 @@
 
 namespace TextureAtlas
 {
-constexpr const int PAGE_SIZE = 2304;    // Size takes into account padding for more efficient packing.
-                                         // Optimized for the commonly seen texture size 256^2.
-                                         // PAGE_SIZE = 2048 + (2048 / 256) * 2 * PADDING = 2304.
 constexpr const int MIP_LEVEL_COUNT = 5;
-constexpr const int PADDING = 1 << (MIP_LEVEL_COUNT - 1); // Pad the largest mip with a power-of-two value such that the smallest mip gets a 1 px pad.
-                                                          // For example, with 5 mips the padding per level is 16, 8, 4, 2, 1 px.
+constexpr const int PADDING = 1 << (MIP_LEVEL_COUNT - 1);    // Pad the largest mip with a power-of-two value such that the smallest mip gets a 1 px pad.
+                                                             // For example, with 5 mips the padding per level is 16, 8, 4, 2, 1 px.
+constexpr const int PAGE_SIZE = 2048 + (2048 / 256) * 2 * PADDING;    // Size takes into account padding for more efficient packing.
+                                                                      // Optimized for the commonly seen texture size 256^2.
 constexpr const int MAX_PAGES = 4;
 constexpr const int DEFAULT_MAX_PACKS_PER_FRAME = 2;    // Spreads a burst of new textures over several frames.
 static_assert(PAGE_SIZE % PADDING == 0, "Page must be sized to a multiple of padding");
@@ -51,11 +50,11 @@ class TextureAtlasClass
 {
 public:
 	explicit TextureAtlasClass(int maxPacksPerFrame = TextureAtlas::DEFAULT_MAX_PACKS_PER_FRAME)
-	  : OutOfSpace(false)
-	  , PacksThisFrame(0)
+	  : PacksThisFrame(0)
 	  , MaxPacksPerFrame(maxPacksPerFrame)
 	  , OutOfSpaceFrame(0)
 	  , PackFrame(0)
+	  , OutOfSpace(false)
 	  , AtlasDisabled(false)
 	{}
 
@@ -73,7 +72,8 @@ public:
 		}
 	};
 
-	TextureLocation Find_Or_Insert(TextureClass* source, bool premultiplyAlpha);    // Gets the page holding the texture and its uv rectangle, or a nullptr page if not found.
+	// A location is valid only during the frame it was created. Returns a nullptr page if not packed.
+	TextureLocation Find_Or_Insert(TextureClass& source, bool premultiplyAlpha);
 	void Reset();    // Release all pages.
 
 	static int Wrap_Or_Clamp(int coordinate, int size, bool wrap);
@@ -96,19 +96,19 @@ private:
 
 	typedef std::map<StringClass, TextureLocation> TextureLocationMap;
 
-	void Evict_If_Out_Of_Space();
+	void Evict_Oldest_Page();
 	bool Has_Pack_Budget();
-	TextureLocation Pack_Texture(const TextureClass* source, bool premultiplyAlpha);
+	TextureLocation Pack_Texture(const TextureClass& source, bool premultiplyAlpha);
 	bool Allocate_Cell(int width, int height, int& pageIndex, int& x, int& y);
 	bool Create_Page();
-	static bool Copy_To_Cell(const TextureClass* source, TextureClass* page, bool premultiplyAlpha, int left, int top);
+	static bool Copy_To_Cell(const TextureClass& source, const TextureClass* page, bool premultiplyAlpha, int left, int top);
 
 	std::vector<Page> Pages;
 	TextureLocationMap TextureLocations[2];    // Two keys for premultiply alpha off/on.
-	bool OutOfSpace;
 	int PacksThisFrame;
 	int MaxPacksPerFrame;
 	unsigned OutOfSpaceFrame;
 	unsigned PackFrame;
+	bool OutOfSpace;
 	bool AtlasDisabled;
 };
